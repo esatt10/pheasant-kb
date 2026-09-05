@@ -102,6 +102,17 @@ TABLE_ORDER = (
     "graph_nodes",
     "graph_edges",
     "graph_generations",
+    # The readiness plane. Both are evidence about work that already happened
+    # and neither can be re-derived: a receipt records what a caller submitted
+    # and what became of it, and nothing on the target can reconstruct a
+    # submission nobody kept. Dropping them would leave a migrated region
+    # reporting zero submissions and zero silent loss — a confident, wrong
+    # answer, which is the failure mode the whole ledger exists to prevent.
+    #
+    # `snapshot_seals` after `evaluation_snapshots`, because a seal names the
+    # manifest it sealed.
+    "ingest_receipts",
+    "snapshot_seals",
 )
 
 #: Core tables deliberately left behind, and why.

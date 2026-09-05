@@ -7,6 +7,7 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
+from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.version import __version__
 
@@ -581,6 +582,12 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         """Return runtime source lifecycle history."""
 
         return tools.get_sync_history(knowledge_base, source_name, limit, offset)
+
+    # The readiness plane's tools register from their own module: they are one
+    # bounded context, and this file is on the module ratchet. `mcp` and the
+    # `anticipated` decorator are handed over rather than imported there, so
+    # the registration is identical to the ones above it.
+    register_readiness_tools(mcp, tools, anticipated)
 
     @mcp.tool()
     @anticipated

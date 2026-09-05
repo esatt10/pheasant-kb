@@ -204,6 +204,36 @@ in it — indexing is somebody waiting, and this is a measurement.
 
 See [Retrieval performance tuning](../retrieval-tuning.md).
 
+## Stress-test readiness
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/readiness/contract` | What this build supports, with a digest a harness pins to detect the region changing shape between arms. Served whether or not `readiness.enabled` is set — answering "can this region be measured" with a 404 is indistinguishable from an old build that has no contract — and reports `readiness_enabled` so the caller can tell. |
+| POST | `/readiness/check` | Probe this region and return the go/no-go verdict per gate set. **Gated on `readiness.enabled`**, because a check writes: it submits documents to a scratch source it owns, indexes them and seals snapshots. Returns `409` when the region has not opted in. |
+| POST | `/ingest/submit` | Persist documents with an idempotency key and one receipt per item. A retry under a known key folds onto the receipt it wrote. Acceptance is not searchability. |
+| GET | `/ingest/status` | Receipts by `idempotency_key` or `submission_id`: `accepted`, `indexed`, `rejected` or `failed`. |
+| POST | `/ingest/acknowledge` | Cross the index barrier for receipts whose artifacts now exist. |
+| GET | `/ingest/reconcile` | Submitted against held, with `silent_loss` named. |
+| POST | `/snapshots/seal` | Seal the current state as a run's reference snapshot. Idempotent over an unchanged region. |
+| GET | `/snapshots` | Every snapshot this region holds, saying which are sealed. |
+| GET | `/snapshots/{snapshot_id}` | One snapshot's manifest plus a live drift verification. |
+
+`POST /search` accepts `snapshot_id`, `as_of` and `trace_id`. A pinned search is
+verified **before** the arms run and refused with `409 SNAPSHOT_DRIFTED` if the
+corpus has moved — the caller is going to attribute whatever comes back to the
+snapshot it named, so the only safe order is to establish that the name is still
+true first.
+
+Every search response carries a `lineage` block: `state` (snapshot, ranking
+bundle, memory policy, principal, `as_of`, criteria — all functions of the
+request and the region) and `timing` (`retrieval_ms`, `truncated`, `returned`).
+`retrieval_ms` is the only non-deterministic field a search returns.
+
+Refusals carry `code` and `retryable` beside the unchanged `detail` text. The
+full code table is in the readiness contract.
+
+See [Stress-test readiness](../stress-test-readiness.md).
+
 ## Assistant (grounded chat)
 
 | Method | Path | Purpose |

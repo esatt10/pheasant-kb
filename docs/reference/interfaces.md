@@ -108,6 +108,25 @@ process running the batch, which is what makes a browser talking to a replica
 that did not start the run — or a reader coming back after a restart — see the
 same thing.
 
+## Stress-test readiness
+
+| Capability | CLI | HTTP | Web UI | MCP |
+|---|---|---|---|---|
+| Capability contract | `pheasant readiness contract [--json]` | `GET /readiness/contract` | — | `get_readiness_contract` |
+| Go/no-go check | `pheasant readiness check [--gate-set X] [--out F]` | `POST /readiness/check` | — | `run_readiness_check` |
+| Submit documents with a receipt | — | `POST /ingest/submit` | — | `submit_documents` |
+| Receipt status | — | `GET /ingest/status` | — | `get_ingest_status` |
+| Cross the index barrier | — | `POST /ingest/acknowledge` | — | `acknowledge_ingest` |
+| Reconcile submissions | — | `GET /ingest/reconcile` | — | `reconcile_ingest` |
+| Seal a snapshot | — | `POST /snapshots/seal` | — | `seal_snapshot` |
+| Resolve a snapshot | — | `GET /snapshots/{id}` | — | `get_snapshot` |
+| List snapshots | — | `GET /snapshots` | — | `list_snapshots` |
+
+`pheasant readiness check` exits `0` only on a `GO` verdict — `INCOMPLETE`
+counts as a no-go, because an unchecked box and a failed one are equally
+disqualifying for a result somebody will publish. See
+[Stress-test readiness](../stress-test-readiness.md).
+
 ## Server & MCP lifecycle
 
 | Capability | CLI |

@@ -15,6 +15,7 @@ from pheasant.config.schema import PheasantConfig, SourceConfig, SourceType
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
+from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
@@ -64,7 +65,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools:
+class PheasantTools(ReadinessTools):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)

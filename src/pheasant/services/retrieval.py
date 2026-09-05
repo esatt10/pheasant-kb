@@ -30,6 +30,8 @@ is what this module returns, so the *content* is still decided once.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -67,6 +69,18 @@ class SearchRequest:
     #: Ask the arms to report what each stage did. The tuning plane's whole
     #: diagnosis is this block; see `search.explain`.
     explain: bool = False
+    #: Pin this search to a sealed snapshot. The region verifies it still
+    #: stands there and *refuses* if it does not — see `services.snapshots` for
+    #: why that is a refusal rather than time travel.
+    snapshot_id: str | None = None
+    #: The instant memory validity is evaluated at. Carried here as well as on
+    #: the memory policy so it reaches the lineage block even when the region
+    #: holds no memory at all, which is the case where a caller most needs to
+    #: be told that `as_of` did nothing.
+    as_of: str | None = None
+    #: The caller's correlation id, echoed into the lineage so a result can be
+    #: joined to the ledger row and the span that produced it.
+    trace_id: str | None = None
 
     @property
     def filtering(self) -> bool:
@@ -120,6 +134,16 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     ranking = context.searcher.ranking_parameters()
     fetch = ranking.overfetch(request.max_results, filtering=request.filtering)
 
+    # Before the arms run, not after. A pinned search whose corpus has moved
+    # must not spend the retrieval and then discard it: the caller is going to
+    # attribute whatever comes back to the snapshot it named, so the only safe
+    # order is to establish that the name is still true first.
+    snapshot = None
+    if request.snapshot_id:
+        from pheasant.services import snapshots as snapshot_service
+
+        snapshot = snapshot_service.require_current(context, request.snapshot_id)
+
     started = time.perf_counter()
     try:
         payload = context.searcher.search_context(
@@ -166,6 +190,15 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     # has not picked up the index that has it" — and those call for opposite
     # responses.
     payload["graph_generation"] = getattr(context.engine, "loaded_graph_generation", None)
+    payload["lineage"] = _lineage(
+        context,
+        request,
+        kb_id,
+        ranking=ranking,
+        snapshot=snapshot,
+        payload=payload,
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+    )
     return payload
 
 
@@ -203,3 +236,128 @@ def relevant_files(context: ServiceContext, request: FilesRequest) -> dict[str, 
             seen.add(relative_path)
             files.append(result)
     return {"files": files}
+
+
+def _query_id(kb_id: str, request: SearchRequest, snapshot_id: str | None) -> str:
+    """This query's identity: a digest over everything that decides its answer.
+
+    Content-addressed, and with no clock in it, for the reason the snapshot id
+    has none: two runs issuing the same query against the same state under the
+    same profile are *one* measurement, and an id that moved with the wall
+    clock would make them two rows that cannot be paired. A harness joins its
+    per-question operands to a Pheasant result on this.
+
+    The ranking bundle is in the digest because it changes the answer. The
+    trace id deliberately is not: it identifies the *call*, and two calls of
+    one query under one configuration must agree here or the join is useless.
+    """
+
+    digest = hashlib.blake2b(digest_size=16)
+    for part in (
+        kb_id,
+        request.query,
+        request.mode,
+        str(request.max_results),
+        snapshot_id or "",
+        request.as_of or "",
+        request.principal or "",
+        json.dumps(request.criteria_block(), sort_keys=True, default=str),
+    ):
+        digest.update(str(part).encode("utf-8"))
+        digest.update(b"\x1f")
+    return "q-" + digest.hexdigest()
+
+
+def _lineage(
+    context: ServiceContext,
+    request: SearchRequest,
+    kb_id: str,
+    *,
+    ranking: Any,
+    snapshot: dict[str, Any] | None,
+    payload: dict[str, Any],
+    elapsed_ms: float,
+) -> dict[str, Any]:
+    """Everything a result has to be attributable to, in one block.
+
+    The result rows already carried the *locator* half of this — artifact id,
+    chunk id, line span, heading path — and none of the *state* half: which
+    snapshot, which ranking bundle, which memory policy, which principal,
+    which instant. An answer that cannot name those is reproducible only by
+    somebody who happened to be watching when it was produced.
+
+    Split into `state` and `timing` on purpose. Everything under `state` is a
+    function of the request and the region, so two replicas answering one
+    pinned query agree on it exactly; `timing` is a measurement and differs
+    every call. Mixing them would make the whole block un-comparable and
+    quietly cost the property the rest of it exists for.
+    """
+
+    results = payload.get("results") or []
+    memory_policy = payload.get("memory_policy")
+    return {
+        "query_id": _query_id(kb_id, request, request.snapshot_id),
+        "knowledge_base": kb_id,
+        "state": {
+            "snapshot_id": request.snapshot_id,
+            "snapshot_current": None if snapshot is None else bool(snapshot["current"]),
+            "graph_generation": payload.get("graph_generation"),
+            "ranking": ranking.describe(),
+            "memory": {
+                # Reported even when the region has no memory, unlike
+                # `memory_policy` above: "no memory took part" is the answer a
+                # memory-off arm needs to be able to *record*, and an absent
+                # key is indistinguishable from a key nobody looked at.
+                #
+                # Asked through `memory_source`, which is the one predicate the
+                # rest of the region uses — there is no `memory.enabled` flag,
+                # and the first version of this read one. It was always False,
+                # so a region with memory fully on reported it off, and the
+                # probe that checked the field agreed with it. A flag nobody
+                # declared reads exactly like a flag nobody sets.
+                "enabled": memory_enabled(context),
+                "policy": memory_policy,
+                "steering": payload.get("memory_steering"),
+            },
+            "as_of": request.as_of,
+            "principal": request.principal,
+            "principal_groups": list(request.principal_groups or []),
+            "acl_enforced": bool(
+                getattr(getattr(context.config, "security", None), "acl_enforced", False)
+            ),
+            "criteria": payload.get("criteria") or request.criteria_block(),
+            "mode": request.mode,
+            "max_results": request.max_results,
+        },
+        "timing": {
+            "retrieval_ms": round(elapsed_ms, 3),
+            # Whether the cut is what limited the answer. A caller cannot tell
+            # "the corpus has three matches" from "you asked for three" out of
+            # a list of three, and those call for opposite next moves.
+            "truncated": len(results) >= request.max_results,
+            "returned": len(results),
+        },
+        "trace_id": request.trace_id,
+    }
+
+
+def memory_enabled(context: ServiceContext) -> bool:
+    """Whether this region has an enabled memory source.
+
+    The same question `describe_retrieval` and the memory routes ask, asked the
+    same way — through `memory_source`, with the state store passed so the
+    runtime-registry fallback applies. Memory enabled from the UI lives in the
+    registry and reaches `config.sources` only in the process that created it,
+    so a check reading the config alone would report "off" on every replica but
+    one.
+
+    Public because the readiness probes ask it too, and a predicate two callers
+    share is not an internal detail of either.
+    """
+
+    try:
+        from pheasant.memory.store import memory_source
+
+        return memory_source(context.config, context.state) is not None
+    except Exception:  # noqa: BLE001 - lineage must never break a search
+        return False

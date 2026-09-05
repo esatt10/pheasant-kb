@@ -47,6 +47,7 @@ from pheasant.search.vector_store import (
     VectorSearcher,
     vector_indexer_from_config,
 )
+from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync.connectors import (
@@ -246,6 +247,11 @@ class _PreparedItem:
     fetched: bool = False
     skipped: bool = False
     transfer_skipped: bool = False
+    #: The `readiness.corpus_denylist` pattern that refused this item. Separate
+    #: from `skipped` because an unchanged file and a refused one are both "not
+    #: indexed" and nothing like each other — a control folded into a routine
+    #: counter is one nobody can see working.
+    refused_by: str | None = None
 
 
 _PROCESS_SAFE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
@@ -1065,6 +1071,21 @@ class SyncEngine:
         """Read and parse one item without mutating authoritative state."""
 
         previous = artifacts.get(item.relative_path)
+        # Before the sha256 skip and before any bytes are read: a denylisted
+        # path is not content this region declines to *re*-index, it is content
+        # this region must never hold. Read live rather than cached, so adding
+        # a pattern applies without a restart. See `security/corpus_policy.py`.
+        denylist = corpus_policy.denylist_of(self.config)
+        refused = corpus_policy.denied_by(item.relative_path, denylist)
+        if refused:
+            return _PreparedItem(
+                position,
+                item,
+                previous,
+                skipped=True,
+                transfer_skipped=True,
+                refused_by=refused,
+            )
         if self._can_skip_before_read(mode, previous, item):
             return _PreparedItem(
                 position,
@@ -2034,6 +2055,7 @@ class SyncEngine:
             skipped = 0
             fetched = 0
             transfer_skipped = 0
+            refused: list[tuple[str, str]] = []
             embedded_chunks = 0
             indexed_bytes = 0
             changed_ids: set[str] = set()
@@ -2075,6 +2097,16 @@ class SyncEngine:
                 fetched += int(prepared.fetched)
                 skipped += int(prepared.skipped)
                 transfer_skipped += int(prepared.transfer_skipped)
+                if prepared.refused_by:
+                    # Never silent: a control whose only evidence is an absence
+                    # cannot be told from a typo in the pattern.
+                    refused.append((item.relative_path, prepared.refused_by))
+                    logger.warning(
+                        "%s: refused %s — matches readiness.corpus_denylist pattern %r",
+                        source.name,
+                        item.relative_path,
+                        prepared.refused_by,
+                    )
                 report(
                     "preparing",
                     position,
@@ -2286,6 +2318,7 @@ class SyncEngine:
                     "fetched": fetched,
                     "skipped": transfer_skipped,
                     "checkpoint": self.state.get_source_checkpoint(source.name),
+                    **corpus_policy.refusal_details(refused),
                     **details_extra,
                 },
             )

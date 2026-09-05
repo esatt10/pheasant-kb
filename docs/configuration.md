@@ -42,6 +42,7 @@ pheasant config show --effective --profile dev --config pheasant.yaml
 | `memory` | Agent-memory consolidation policy (TTL decay, supersede archiving). | Optional |
 | `assistant` | Grounded chat over the index (the UI's chat layer). Query-time only. | Optional |
 | `evaluation` | Knowledge-effectiveness measurement: cohorts, proof, ablations, gates. | Optional |
+| `readiness` | Whether an outside harness may trust this region's answers: the capability contract, the go/no-go gates, and the SLO budgets they decide against. | Optional |
 | `sources` | All indexed repositories/folders/files/URLs (incl. per-source `taxonomy`). | Yes |
 
 > **Note:** this table's row order follows `PheasantConfig`'s field order in
@@ -1232,6 +1233,59 @@ over-fetch multiplier). Every default is the value the 2026-08-03 retrieval
 overhaul measured, so a region that never opens the block ranks exactly as it
 always has. You can set them by hand and pin them; the tuning plane is a way of
 choosing them with evidence, not the only way to change them.
+
+---
+
+## `readiness` (stress-test readiness, optional)
+
+Off by default and read-only when on — except for a check, which writes to a
+scratch source it owns. This is the plane that answers whether an outside
+harness may trust this region's answers: it publishes a machine-readable
+capability contract and runs the go/no-go gates in
+[Stress-test readiness](stress-test-readiness.md).
+
+```yaml
+readiness:
+  enabled: true
+  corpus_denylist:
+    - "benchmark/*"
+    - "*.answers.json"
+  max_search_latency_ms: 5000.0
+  max_ingest_ack_ms: 30000.0
+  max_index_lag_ms: 120000.0
+  latency_probe_queries: 12
+  concurrency_probe_writers: 4
+  concurrency_probe_items: 5
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Publish the contract and allow `pheasant readiness check` / `POST /readiness/check`. The contract endpoint is served either way — answering "can this region be measured" with a 404 is indistinguishable from an old build that has none. |
+| `corpus_denylist` | `[]` | fnmatch patterns that may **never** enter the searchable corpus, tested against an item's relative path and its bare filename. A matching submission is refused with `CORPUS_DENYLISTED`. |
+| `max_search_latency_ms` | `5000.0` | p95 search latency the readiness gate accepts. |
+| `max_ingest_ack_ms` | `30000.0` | How long a submission may take to reach `accepted`. |
+| `max_index_lag_ms` | `120000.0` | How long after acceptance an item may take to become searchable. |
+| `latency_probe_queries` | `12` | Searches the latency probe issues. Below 5 it publishes nothing rather than a p95 over four searches. |
+| `concurrency_probe_writers` | `4` | Concurrent writers the swarm probe drives. |
+| `concurrency_probe_items` | `5` | Items each concurrent writer submits. |
+
+**`corpus_denylist` is enforcement, not a report.** A check that evaluation
+artifacts are absent can only run once they have been indexed, and by then they
+have been retrievable — so the write is refused. An empty list costs one truth
+test per submitted item and changes nothing else; it also means there is no
+boundary to prove, so the contamination probe reports `skipped` and the core
+gate set is **incomplete** rather than passing.
+
+**The thresholds are deliberately generous.** A performance gate cannot pass or
+fail against an unstated number, and one that is present and loose can be
+tightened from evidence where an absent one turns every latency observation
+into an argument.
+
+A region also needs two things outside this section before the gates beyond
+core can be evaluated: `security.acl_enforced: true`, without which isolation
+cannot be demonstrated, and an enabled `type: memory` source, without which
+memory has nothing to export or replay. Both report as `skipped` with the
+sentence that says what to turn on.
 
 ---
 

@@ -66,7 +66,15 @@ CEILINGS: dict[str, int] = {
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,
     "memory/store.py": 950,
-    "persistence/schema.py": 1050,
+    # Raised from 1050 for the readiness plane's two tables. Deliberate, and
+    # the one raise that is not a smell: this file *is* the DDL, so 68 lines
+    # of `CREATE TABLE` for `ingest_receipts` and `snapshot_seals` have
+    # nowhere better to be — the split this ratchet wants for `schema.py` is
+    # one module per section, which is a change to `schema_for` and
+    # `columns_of`, not to where a table is declared. The receipt ledger's
+    # *code* did move out of `state_store.py` in the same change, which is
+    # the split this test is actually asking for.
+    "persistence/schema.py": 1100,
     "persistence/state_store.py": 1800,
     "search/vector_store.py": 1400,
     "setup_wizard.py": 2200,

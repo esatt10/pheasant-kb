@@ -11,6 +11,9 @@ pheasant indexes local content for agents, so it must be conservative about path
 - Keep MCP tools limited to retrieval, sync, registration, export, and status operations.
 - Prefer read-only source mounts in Docker and Kubernetes.
 - Bind local API/UI carefully and protect enterprise ingress with cluster controls.
+- Where a corpus must exclude specific content (benchmark answer keys, evaluation
+  artifacts), enforce it with `readiness.corpus_denylist` rather than by convention —
+  it refuses the write at every door rather than detecting the leak afterwards.
 
 ## Trust model for the HTTP API
 
@@ -164,6 +167,82 @@ turn the flag off.
 - **Backup restore.** Archive members are checked for traversal *and* for
   links whose target escapes the destination, then extracted with the
   stdlib `data` filter.
+
+### Content that may never be indexed (`readiness.corpus_denylist`)
+
+Path policy answers "which paths may this process **read**". This answers a
+different question: "which paths may become **retrievable**". They are not the
+same — a benchmark answer key is a file pheasant is entitled to read and must
+never be able to return.
+
+```yaml
+readiness:
+  corpus_denylist:
+    - "benchmark/*"
+    - "*.answers.json"
+```
+
+Patterns are fnmatch, tested against both an item's relative path and its bare
+filename. Empty by default, and an empty list costs one truth test per item.
+
+**It is enforced at every door into the corpus, and that is the whole point of
+the control.** The rule is `security/corpus_policy.py`, and both write paths
+call it:
+
+| Door | Behaviour |
+|---|---|
+| `POST /ingest/submit`, `submit_documents` | Refused per item with `CORPUS_DENYLISTED` (HTTP 403), before the bytes are written. |
+| Any source the engine syncs — folder, git, upload directory, every connector | Refused per item **before the item is read**, logged at WARNING, and counted in the sync report's `refused` / `refused_total`. |
+
+The first version enforced it on submissions only. A region with a denylist
+configured therefore still indexed an answer key that arrived through a folder
+source, the UI drop zone or a git repository — while the readiness gate
+reported the boundary intact. A control on one of several doors is a door with
+a sign on it, and the general shape is worth keeping: when a rule protects
+*the corpus*, it belongs where everything enters the corpus, not where the
+first caller happened to be.
+
+**What it does not do.** Enforcement stops new arrivals; it does not remove
+content indexed before the denylist existed. `pheasant sync --mode full`
+rebuilds a source from scratch and so clears it, and
+`pheasant readiness check` scans `artifacts` directly — the
+`benchmark_contamination` gate is a statement about what this corpus holds, not
+about what this code refuses, which is why it can fail on a region whose code
+is correct.
+
+### The readiness plane writes, and only in two places
+
+`POST /readiness/check` (and `pheasant readiness check` / the
+`run_readiness_check` tool) performs real work: it submits documents, indexes
+them, seals snapshots and runs searches. Three properties bound it:
+
+- **It is opt-in.** Gated on `readiness.enabled`, which is off by default, so a
+  stranger reaching an unauthenticated port cannot start one. The *contract*
+  endpoint is deliberately not gated — answering "can this region be measured"
+  with a 404 is indistinguishable from an old build that has none — and it
+  reports `readiness_enabled` so the caller can tell.
+- **It writes only to a scratch source it owns.** Everything lands under
+  `<state_path>/uploads/__readiness__probe`, registered as an ordinary
+  `document_folder` source. No caller input reaches that path: it is derived
+  from the server's own `state_path` and a module constant. It never writes to
+  a configured source and never writes memory.
+- **It never takes `sync_lock`.** Same posture as the evaluation and tuning
+  planes, and for the same reason.
+
+`POST /ingest/submit` is a general write surface, not a readiness-only one, and
+is **not** gated on `readiness.enabled` — it is the same trust posture as
+`POST /sources/upload`, which it sits beside. Both write caller-supplied bytes
+under `<state_path>/uploads/<source>`:
+
+- The source name and every path component are reduced to a single safe
+  filename each (`ingestion/landing.py`), so `../../etc/passwd` cannot escape
+  the upload root.
+- Per-item size is bounded by `sync.limits.max_file_size_mb`; there is no
+  aggregate bound, so on an exposed deployment these are among the routes an
+  authenticating proxy must cover.
+- Receipts are written per item, which means an unexpected write is *visible*:
+  `GET /ingest/reconcile` reports what was submitted against what the region
+  holds.
 
 ## Prompt injection posture
 

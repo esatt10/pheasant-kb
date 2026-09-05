@@ -334,9 +334,14 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
             if value.__module__ != module.__name__:
                 continue
             public.add(name)
-    # `require_readable` is a guard called *by* the operations rather than an
-    # operation, and neither surface exposes it as one.
+    # Predicates called *by* the operations rather than operations themselves,
+    # and neither surface exposes either as one. They are public because a
+    # second caller legitimately shares them — `memory_enabled` answers the one
+    # question `describe_retrieval`, the memory routes and the readiness probes
+    # all have to agree on, and a private copy per caller is how a region ends
+    # up reporting memory off while it is on.
     public.discard("require_readable")
+    public.discard("memory_enabled")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

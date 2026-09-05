@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -136,6 +137,18 @@ class SearchRequest(BaseModel):
     # How this region's agent memory takes part: "auto" (default), "off",
     # "only", "prefer", or an object with scopes/subject/current_only/as_of.
     memory: dict | str | None = None
+    # Pin this search to a sealed snapshot. The region verifies it still
+    # stands there and refuses with SNAPSHOT_DRIFTED if it does not — it holds
+    # one version of its corpus, so the guarantee is that two runs naming one
+    # snapshot cannot silently have seen different corpora.
+    snapshot_id: str | None = None
+    # The instant memory validity is evaluated at, echoed into the lineage
+    # even where the region holds no memory — an arm that ran with memory off
+    # has to be able to record that it did.
+    as_of: str | None = None
+    # The caller's correlation id, echoed so a result joins to the ledger row
+    # and the span that produced it.
+    trace_id: str | None = None
 
 
 class MemoryEnableRequest(BaseModel):
@@ -696,6 +709,12 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # *bundle* is a different thing entirely — it lives in /state, not in this
     # config, and every replica picks it up on its own TTL without a restart.
     "tuning": True,
+    # Read per check, not wired into a service: a readiness run reads
+    # `config.readiness` when it starts. The one part that is *not* per-check
+    # is `corpus_denylist`, which the ingestion service reads on every
+    # submission — also per call, so also live. Nothing here is a service
+    # started at boot, which is the question this table actually asks.
+    "readiness": True,
     "storage": False,
     "server": False,
     "pheasant": False,
@@ -1552,9 +1571,26 @@ def create_app(
         "Unknown source: notes" is what a caller acts on, and an agent told
         only that something failed will retry the same call. The conformance
         test asserts both surfaces produce it identically.
+
+        ``code`` and ``retryable`` ride *beside* the text rather than inside
+        it, which is the one place the two surfaces deliberately differ. The
+        MCP SDK's `ToolError` carries a string and nothing else, so a code
+        spelled into the message would be the only way to get it across — and
+        that would change the refusal text on both surfaces to serve one of
+        them. Instead the readiness contract publishes the code table, an MCP
+        client maps the text it already has, and an HTTP client reads the field.
+        The asymmetry is here, in an adapter, where a reader can see it.
         """
 
-        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+        payload = exc.as_dict()
+        return JSONResponse(
+            status_code=exc.status,
+            content={
+                "detail": payload["error"],
+                "code": payload["code"],
+                "retryable": payload["retryable"],
+            },
+        )
 
     @app.get("/health")
     async def health() -> dict:
@@ -1886,6 +1922,13 @@ def create_app(
             metrics.render_with(sample),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
+
+    # The readiness plane's routes register from their own module. `app.py` is
+    # the module ratchet's headline, and its docstring names the fix: one
+    # router per plane, easier once the service layer exists. It does now for
+    # these operations, so this plane starts on the right side of that line
+    # rather than adding to the pile.
+    register_readiness_routes(app, config=config, services=services, engine=engine)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -3747,6 +3790,9 @@ def create_app(
                 min_score=req.min_score,
                 source_types=req.source_types,
                 exclude_source_types=req.exclude_source_types,
+                snapshot_id=req.snapshot_id,
+                as_of=req.as_of,
+                trace_id=req.trace_id,
             ),
         )
         record_retrieval(

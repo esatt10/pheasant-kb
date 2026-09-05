@@ -79,6 +79,10 @@ pheasant-kb/
 │   │                            store, runner, objective (what "better"
 │   │                            means), glossary (what every measure means),
 │   │                            health (live stage rates)
+│   ├── readiness/             ← the readiness plane: contract (what this
+│   │                            build supports, derived), probes (executable
+│   │                            demonstrations), gates (the four go/no-go
+│   │                            sets), runner (the verdict)
 │   ├── sharding.py            ← `pheasant shard plan`
 │   ├── decision.py            ← the gate vocabulary both planes share: a
 │   │                            GateSet that cannot be constructed empty
@@ -108,22 +112,28 @@ pheasant-kb/
 │   │                            schema, graph_store (file|rows), graph_rows
 │   │                            (the delta write), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
-│   │                            manifest, migrate, paths
+│   │                            receipts (what happened to what a caller
+│   │                            submitted), manifest, migrate, paths
 │   ├── services/              ← the application layer: one implementation per
 │   │                            operation, two transports. errors (refusals
-│   │                            both surfaces spell the same), retrieval,
-│   │                            graph, assistant
+│   │                            both surfaces spell the same, with a stable
+│   │                            code and a retryable flag), retrieval,
+│   │                            graph, assistant, ingestion (submission and
+│   │                            receipts), snapshots (seal and the drift
+│   │                            refusal)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools)
 │   ├── api/app.py             ← the HTTP surface
 │   ├── assistant/             ← grounded answering + workflows
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host
-│   ├── security/              ← path_policy, acl, idp
+│   ├── security/              ← path_policy (what may be read),
+│   │                            corpus_policy (what may never be indexed),
+│   │                            acl, idp
 │   ├── synapse/               ← contract publisher, events, signing
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 125 pytest modules, offline by design
+└── tests/                     ← 128 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -175,6 +185,8 @@ pheasant tune lineage                      # every configuration ever served
 pheasant tune explain [term]               # what a measure means, and does not
 pheasant tune status [--watch] | report
 python -m pheasant.evaluation.benchmark    # measure a batch against the capacity model
+pheasant readiness contract                 # what this build supports, and what it does not
+pheasant readiness check [--gate-set core]  # probe the region; exit 0 only on GO
 pheasant mcp --transport stdio
 pheasant client-config claude-code|cursor|vscode
 pheasant config show                       # resolved config after profile+YAML+--set
@@ -740,6 +752,72 @@ causes, one symptom.
   ranked lists belong. MLflow is an optional mirror of `/state`, never
   load-bearing, defaulting to a local file store.
   `docs/retrieval-tuning.md`.
+
+### Readiness
+
+`readiness.*`, off by default. Where evaluation says *how well* retrieval is
+doing and tuning says *which step is failing*, this says whether an outside
+harness may trust either answer — whether every submitted write reconciles,
+whether a result names the exact place it came from, whether an isolation
+boundary holds, and whether the region will say so in a form a machine can read
+**before** an experiment starts rather than after it has produced numbers
+nobody can defend. `decision.py`'s docstring predicted a third plane; this is
+it, and it uses `GateSet` rather than shipping a fourth copy of the `all([])`
+guard.
+
+- **The contract is derived, not written down.** Every capability names live
+  symbols, MCP tools and probes, and `capability_status` resolves them; a row
+  naming something absent reports `unsupported` with the reason.
+  `tests/test_readiness_contract.py` fails when a name goes stale. Three wrong
+  symbol names shipped in the first version and were caught by *running* a
+  check — a hand-maintained list says what somebody believed when they last
+  edited it.
+- **`supported` and `proven` are different claims.** The implementation
+  existing has never been evidence that it works in the deployment about to be
+  measured. A capability is `proven` only once a probe demonstrated it here,
+  against this corpus; with no probe run at all it is `declared_untested`.
+- **`unsupported` is a first-class answer**, and two rows use it. Corpus-level
+  `as_of`, because this region holds one version of its corpus. And
+  claim-to-claim evidence stance, because evidence is typed at the record and
+  proof levels and there is no stance edge in the graph — inventing one on a
+  rule-based footing is how concept extraction was already retired. A harness
+  needs to tell "this region cannot" from "this region did not mention it".
+- **A sealed snapshot's guarantee is a refusal, not time travel.** A search
+  pinned to a snapshot is answered from that state or it is not answered:
+  `require_current` re-derives the manifest and raises `SNAPSHOT_DRIFTED`
+  naming the sections that moved. Weaker than "ingestion cannot change a sealed
+  snapshot's results", and sufficient for what a scored experiment needs — that
+  two runs claiming one snapshot cannot silently have seen different corpora.
+  Said in the module rather than smoothed over: a reader who assumes time
+  travel will ingest during a run and call the result reproducible.
+- **A receipt answers what `artifacts` cannot.** A row's absence is the same
+  answer for "never submitted", "rejected" and "lost". One receipt per item
+  keyed by the caller's idempotency key, with `accepted` and `indexed` as
+  separate dispositions because they are separate facts; `reconcile` reports
+  `silent_loss` as receipts claiming an artifact the region does not hold,
+  never as a difference between two totals — two totals can agree while one
+  item was lost and another double-written.
+- **Contamination is refused at every door.** `readiness.corpus_denylist` is
+  enforcement, not detection: a check that benchmark artifacts are absent can
+  only run once they have been indexed, and by then they have been retrievable.
+  The rule is `security/corpus_policy.py` (layer 1, because `sync/` cannot
+  import `services/`) and both write paths call it — the submission path
+  raises `CORPUS_DENYLISTED`, the sync path refuses the item *before reading
+  it* and counts it in the report. Empty by default, one truth test per item.
+  The gate goes further and scans `artifacts`, because enforcement stops new
+  arrivals and says nothing about what was indexed before the denylist existed.
+- **A skipped probe is not a pass, and neither is a partly-skipped gate set.**
+  A verdict is tri-state: `True` only when every gate in the set was evaluated
+  *and* passed. The demo region caught the first version reporting memory as
+  PASS with three of four gates unevaluated — the `all([])` shape one level up,
+  where the empty set is not the gate list but the part nobody could run.
+- **A check writes, and only to a scratch source it owns.** It submits
+  documents to `__readiness__probe`, indexes them, seals snapshots and runs
+  searches; it never touches a configured source, never takes `sync_lock` and
+  never writes memory. `POST /readiness/check` is gated on `readiness.enabled`
+  for that reason; the *contract* is not, because a 404 there is
+  indistinguishable from an old build that has none.
+  `docs/stress-test-readiness.md`.
 
 ### Retrieval telemetry
 
@@ -1516,6 +1594,107 @@ Each of these cost real time. They are listed because the shape recurs.
   paths and the query words are in the body. Both were reverted. A change that
   cannot show a number is not an optimization, it is a diff; and one that
   touches ranking without showing a number is worse than that.
+- **A counter derived from every write measures writes, not the thing its name
+  promises.** The receipt ledger's `submissions` was supposed to prove a
+  caller's retry had been absorbed — three writes under one key, one stored
+  object, `submissions == 3`. Crossing the index barrier writes that row too,
+  and the first version counted it, so three submissions plus one
+  acknowledgement reported four: a number that moves when *the region* acts, in
+  the field a harness reads to prove *it* retried. Exactly the shape
+  `pheasant_memory_reinforcement_ratio` was already caught by, one plane over.
+  `counts_as_submission=False` on the acknowledgement, and the probe that found
+  it is now a test.
+- **A flag nobody declared reads exactly like a flag nobody set.** The retrieval
+  lineage reported `memory.enabled` by asking `config.memory.enabled`, which
+  does not exist — memory is a *source*, and `memory_source()` is the predicate
+  the rest of the region uses. `getattr(..., False)` made it always `False`, so
+  a region with memory fully on reported it off, and the probe that checked the
+  field agreed with it. Two mistakes that cancelled into a plausible answer. It
+  also has to pass the state store, because a memory source enabled from the UI
+  lives in the runtime registry and reaches `config.sources` only in the process
+  that created it — a check reading the config alone reports "off" on every
+  replica but one. The mirror of "a config flag nothing reads": a *reader* with
+  no flag is just as silent.
+- **A capability list that is written down says what somebody believed when
+  they last edited it.** The readiness contract's first version named
+  `MCPServer`, `Bundle` and `SourceType.DOCUMENT_FOLDER` — three symbols that
+  do not exist, in a document whose entire purpose is telling a harness what it
+  may rely on. All three survived review and died on the first `pheasant
+  readiness check`, because the contract resolves every name it publishes. The
+  general shape is `tests/test_config_surface_freshness.py`'s: a list that is
+  checked against the code cannot rot, and one that is not will.
+- **A digest over a *result* cannot be the id of a *shape*.** The capability
+  snapshot's digest is what a harness pins to detect the region changing
+  underneath it between arms. It was computed over the published capability
+  rows — which carry `status`, which moves with a probe outcome — so the digest
+  changed when a latency probe was a millisecond slower, and a harness watching
+  it would have seen the region "change shape" on every check. Same family as
+  the `updated_at` stamp that made a content-addressed graph generation move on
+  an unchanged corpus: an id has to be a function of exactly the thing it
+  names.
+- **A refusal code outside the table is a code nobody can act on.** MCP's
+  `ToolError` carries a string and nothing else, so the contract publishes the
+  code table and an agent maps the text it received. `ContaminationRefused`
+  lived in `services/ingestion.py` while the table is derived from
+  `services/errors.py`, so `CORPUS_DENYLISTED` — the one refusal that means
+  "this must never be in the corpus" rather than "try a smaller file" — was
+  absent from the only place a client could learn it. Found by the test that
+  asserts the table is derived rather than typed twice. A vocabulary with two
+  homes has one home nobody reads.
+- **"All the gates I could evaluate passed" is not "the gates passed".** The
+  readiness plane refuses an empty `GateSet` — `decision.py` makes that
+  structural — and then reported a gate set as **passing** when three of its
+  four gates had been *skipped*, because the one that ran passed. The empty set
+  had moved: it was no longer the gate list but the part of it nobody could
+  run. Caught on the first check against a real region, where memory and ACL
+  enforcement were both off. A verdict is tri-state now, `INCOMPLETE (1 of 4
+  gates evaluated)` is a heading rather than a caveat further down, and the
+  lesson generalises past gates: any invariant of the form "every X passed"
+  needs to know how many X there were supposed to be.
+- **A healthy region and a measurable one are different claims.** With
+  `corpus_denylist` empty there is no benchmark boundary to prove, so the
+  contamination probe skips and the *core* gate set is incomplete — on a region
+  where every probe that ran passed. That surprised the author of the test that
+  asserts it, which is the point: "nothing is wrong here" and "this is ready to
+  be measured" are separate sentences, and a plane that conflated them would
+  certify a region that had never been asked to hold an isolated experiment.
+- **Extracting a plane inverts dependencies you did not know you had — again.**
+  `services/ingestion.py` needed the placement rules in `api/uploads.py`, and a
+  service importing a transport is the upward edge `test_service_layering.py`
+  refuses. Nothing in that module was ever about HTTP — `safe_filename` defends
+  a filesystem — and it was in `api/` only because the first caller was a
+  route. It is `ingestion/landing.py` now. The same run also put three modules
+  over the size ratchet, and in every case the split the ratchet asks for was
+  the right change rather than the toll: the receipt ledger out of
+  `state_store.py`, the readiness tools out of `mcp_server/tools.py`, and the
+  readiness routes out of `api/app.py` — the last being the "one router per
+  plane" that file's own ceiling comment names as its fix.
+- **A control enforced at one of several doors is a door with a sign on it.**
+  `readiness.corpus_denylist` refuses content that may never become
+  retrievable — a benchmark answer key an experiment scores against. It was
+  enforced in `services/ingestion.submit` and nowhere else, so a region with
+  the denylist configured still indexed that file when it arrived through a
+  folder source, the UI drop zone, a git repository or any connector; and the
+  Core gate that exists to prove the boundary reported it intact, because the
+  probe only knocked on the door that was locked. Two things fixed it and both
+  generalise. The rule moved to `security/corpus_policy.py` at layer 1, because
+  the other caller is `sync/` and `sync/` cannot import `services/` — a control
+  that protects *the corpus* belongs where everything enters the corpus, not
+  where the first caller happened to be. And the probe now asserts the
+  *outcome* rather than the mechanism: it plants a file the way a folder source
+  would, and it scans `artifacts` for anything the denylist forbids, so the
+  gate is a statement about this corpus rather than about this code and can
+  fail on a region whose code is correct. Verified by deleting the enforcement
+  line and watching the check turn NO-GO — a gate nobody has seen fail is a
+  gate nobody knows works.
+- **A measured field in a response breaks every whole-payload comparison
+  downstream.** `lineage.timing.retrieval_ms` is the only non-deterministic
+  field a search returns, and adding it broke a parity test in
+  `tests/test_taxonomy.py` that compared two responses outright. Keeping it is
+  right — a harness needs retrieval latency separated from transport time — so
+  the fix was to split `state` from `timing` in the payload, and then to assert
+  in `tests/test_readiness_plane.py` that `retrieval_ms` stays the *only* such
+  field. Otherwise the next one arrives as a test quietly ignoring one more key.
 - **An incremental sync leaks a chunk node per edit. Open, pre-existing, not
   fixed here.** Chunk node ids embed the chunk's sha256, so editing a file
   produces *new* chunk nodes — and nothing removes the old ones on the
@@ -1557,5 +1736,8 @@ Each of these cost real time. They are listed because the shape recurs.
 - **Tuning:** `docs/retrieval-tuning.md` — the stage model, why re-fusion makes
   a parameter search affordable, and the gates that keep a winner from being
   promoted by its own evidence
+- **Readiness:** `docs/stress-test-readiness.md` — the capability contract, the
+  probes that turn a claim into evidence, the four go/no-go gates, and the two
+  capabilities this build declares it does not have
 - **Synapse region spec:** `docs/SYNAPSE_INTEGRATION.md`
 - **Deployment:** `docs/deployment.md`, `deploy/kubernetes/`

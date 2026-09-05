@@ -103,6 +103,7 @@ nav:
       - Memory formation: memory-formation.md
       - Knowledge effectiveness: knowledge-effectiveness.md
       - Retrieval tuning: retrieval-tuning.md
+      - Stress-test readiness: stress-test-readiness.md
       - Troubleshooting: troubleshooting.md
   - Contributor:
       - pheasant as a Synapse region (spec): SYNAPSE_INTEGRATION.md

@@ -1948,6 +1948,63 @@ class TuningSettings(ModelMixin):
 
 
 @dataclass
+class ReadinessSettings(ModelMixin):
+    """Whether this region can be *measured by somebody else*, and its limits.
+
+    A third plane, and the one the other two do not cover. The evaluation
+    plane asks how well retrieval is doing; the tuning plane asks which stage
+    is failing; this one asks whether an outside harness can trust either
+    answer — whether every submitted write reconciles, whether a result names
+    the exact place it came from, whether an isolation boundary holds, and
+    whether the region will say so in a form a machine can read.
+
+    Off by default and read-only when on, like both of its siblings. Turning
+    it on adds a contract endpoint and a checkable gate; it does not change
+    what a search returns, what an index holds, or what a sync does.
+
+    The thresholds below exist because a performance gate cannot be evaluated
+    against an unstated number. The specification this implements makes that
+    the one *missing decision* rather than a missing capability: the defaults
+    here are deliberately generous, because a threshold that is present and
+    loose can be tightened from evidence, and one that is absent turns every
+    latency observation into an argument.
+
+    See ``docs/stress-test-readiness.md``.
+    """
+
+    enabled: bool = False
+    #: Paths and filenames that may never enter the searchable corpus.
+    #: fnmatch patterns, tested against both the item's relative path and its
+    #: bare filename. Empty by default: a region with no benchmark to protect
+    #: pays one truth test per submitted item and nothing else.
+    #:
+    #: This is enforcement, not a report. A check that benchmark artifacts are
+    #: absent can only run after they have already been indexed, and by then
+    #: they have been retrievable — so the write is refused instead.
+    corpus_denylist: list[str] = field(default_factory=list)
+    #: Search latency a readiness run will accept, end to end, at p95.
+    #: Generous on purpose (see above); the gate reports the observed value
+    #: beside it either way, so tightening it is a config edit rather than a
+    #: code change.
+    max_search_latency_ms: float = 5000.0
+    #: How long after a submission a receipt may take to reach ``accepted``.
+    max_ingest_ack_ms: float = 30000.0
+    #: How long after acceptance an item may take to become searchable. The
+    #: index barrier's budget, and the number that decides whether a harness
+    #: that queries immediately is early or the region is late.
+    max_index_lag_ms: float = 120000.0
+    #: Searches a latency probe issues. Below this a p95 is a statement about
+    #: one or two queries, so the gate publishes no rate rather than a
+    #: confident one — the floor `tuning.health` already keeps.
+    latency_probe_queries: int = 12
+    #: Concurrent writers the swarm probe drives. The default is small enough
+    #: to run in a laptop container and large enough to interleave.
+    concurrency_probe_writers: int = 4
+    #: Items each concurrent writer submits.
+    concurrency_probe_items: int = 5
+
+
+@dataclass
 class PheasantConfig(ModelMixin):
     pheasant: PheasantSettings = field(default_factory=PheasantSettings)
     server: ServerSettings = field(default_factory=ServerSettings)
@@ -1963,6 +2020,7 @@ class PheasantConfig(ModelMixin):
     assistant: AssistantSettings = field(default_factory=AssistantSettings)
     evaluation: EvaluationSettings = field(default_factory=EvaluationSettings)
     tuning: TuningSettings = field(default_factory=TuningSettings)
+    readiness: ReadinessSettings = field(default_factory=ReadinessSettings)
     sources: list[SourceConfig] = field(default_factory=list)
 
     @classmethod

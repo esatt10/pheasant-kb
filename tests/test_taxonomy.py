@@ -1215,6 +1215,23 @@ def test_a_section_that_matches_nothing_returns_no_results_not_an_error(tmp_path
     assert response.json()["results"] == []
 
 
+def _deterministic(payload: dict) -> dict:
+    """A search response minus the one field that is a measurement.
+
+    `lineage.timing.retrieval_ms` is how long the arms took, so two identical
+    requests differ in it by construction. Everything else in a search
+    response is a function of the request and the region — which is a property
+    worth keeping, and `tests/test_retrieval_lineage.py` asserts that this
+    stays the *only* exception rather than the first of several.
+    """
+
+    stripped = json.loads(json.dumps(payload))
+    timing = (stripped.get("lineage") or {}).get("timing")
+    if isinstance(timing, dict):
+        timing.pop("retrieval_ms", None)
+    return stripped
+
+
 def test_omitting_the_section_is_unchanged(tmp_path: Path) -> None:
     """Parity: the filter is additive, so a request without it must return
     exactly what it returned before the filter existed."""
@@ -1223,11 +1240,11 @@ def test_omitting_the_section_is_unchanged(tmp_path: Path) -> None:
     explicit_none = client.post(
         "/search", json={"query": "breach", "mode": "hybrid", "section": None}
     ).json()
-    assert without == explicit_none
+    assert _deterministic(without) == _deterministic(explicit_none)
     blank = client.post(
         "/search", json={"query": "breach", "mode": "hybrid", "section": "  "}
     ).json()
-    assert without == blank
+    assert _deterministic(without) == _deterministic(blank)
 
 
 def test_section_matching_is_substring_and_case_insensitive() -> None:

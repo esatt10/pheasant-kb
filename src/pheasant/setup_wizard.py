@@ -1069,6 +1069,56 @@ def build_sections() -> list[Section]:
             ],
         ),
         Section(
+            id="readiness",
+            title="Stress-test readiness",
+            blurb=(
+                "Optional, off by default, and read-only when on. Publishes a "
+                "machine-readable capability contract and runs the gates an "
+                "outside harness needs before it treats this region's answers as "
+                "evidence: every submitted write reconciles, every result names "
+                "an exact source location, no forbidden content crosses an "
+                "isolation boundary. Turn it on when something other than a "
+                "person is going to measure this region."
+            ),
+            covers=("readiness",),
+            questions=[
+                Question(
+                    key="readiness.enabled",
+                    prompt="Publish a readiness contract and allow readiness checks?",
+                    help=(
+                        "Adds a contract endpoint and a checkable gate. It changes "
+                        "nothing about what a search returns or what a sync does."
+                    ),
+                    kind="bool",
+                    advanced=True,
+                ),
+                Question(
+                    key="readiness.max_search_latency_ms",
+                    prompt="Search latency budget (p95, ms)",
+                    help=(
+                        "A performance gate cannot pass or fail against an unstated "
+                        "number, so this is deliberately present and generous rather "
+                        "than absent. Tighten it once you have measured."
+                    ),
+                    kind="float",
+                    when=lambda a: bool(a.get("readiness.enabled")),
+                    advanced=True,
+                ),
+                Question(
+                    key="readiness.max_index_lag_ms",
+                    prompt="Index-lag budget (ms)",
+                    help=(
+                        "How long after acceptance an item may take to become "
+                        "searchable. The number that decides whether a harness "
+                        "querying immediately is early or the region is late."
+                    ),
+                    kind="float",
+                    when=lambda a: bool(a.get("readiness.enabled")),
+                    advanced=True,
+                ),
+            ],
+        ),
+        Section(
             id="synapse",
             title="Synapse federation",
             blurb=(

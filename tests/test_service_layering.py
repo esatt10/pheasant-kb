@@ -53,6 +53,10 @@ LAYERS: dict[str, int] = {
     # application concern rather than a domain primitive.
     "services": 2,
     "assistant": 2,
+    # The readiness plane orchestrates the service layer to establish whether
+    # this region can be measured by somebody else. Application, like
+    # `services` — it calls operations, it does not implement one.
+    "readiness": 2,
     # ...except for its model-access adapters, which are infrastructure and sit
     # below everything that orchestrates. This is not a carve-out to make the
     # test pass: `memory/synthesis.py` wants a model handle and `setup_wizard`
@@ -105,6 +109,14 @@ COMPOSITION_ROOTS = {
     "evaluation/benchmark.py",
     # Measures the MCP facade's latency, so it has to construct one.
     "memory/benchmark.py",
+    # Drives both transports to establish that they expose what the capability
+    # contract claims. Same justification as `memory/benchmark.py` and the one
+    # this set's own docstring gives: a module whose subject *is* a transport
+    # has to be able to look at it. The alternative was to assert the
+    # contract-to-facade agreement only in this suite, which proves it in CI
+    # and leaves a deployed region unable to answer the question a harness's
+    # preflight actually asks. It is asserted in both places.
+    "readiness/probes/identity.py",
 }
 
 

@@ -1840,6 +1840,34 @@ def main(argv: list[str] | None = None) -> int:
     # DuckDB itself is imported lazily, inside the functions that need it.
     from pheasant.analytics import EXPORTABLE
 
+    readiness_p = sub.add_parser(
+        "readiness",
+        help="Whether an outside harness can trust this region's answers.",
+    )
+    readiness_sub = readiness_p.add_subparsers(dest="readiness_command", required=True)
+    readiness_contract_p = readiness_sub.add_parser(
+        "contract", help="What this build supports, and what it declares unsupported."
+    )
+    readiness_contract_p.add_argument("--config", "-c", default="pheasant.yaml")
+    readiness_contract_p.add_argument("--json", action="store_true")
+    readiness_check_p = readiness_sub.add_parser(
+        "check",
+        help="Probe this region and print the go/no-go verdict per gate set.",
+    )
+    readiness_check_p.add_argument("--config", "-c", default="pheasant.yaml")
+    readiness_check_p.add_argument(
+        "--gate-set",
+        action="append",
+        dest="gate_sets",
+        choices=["core", "swarm", "memory", "tuning"],
+        help="Evaluate only this gate set. Repeatable; default is all four.",
+    )
+    readiness_check_p.add_argument("--json", action="store_true")
+    readiness_check_p.add_argument(
+        "--out",
+        help="Write the Markdown report here as well as printing the verdict.",
+    )
+
     eval_p = sub.add_parser(
         "eval", help="Build evaluation sets from what this region was really asked."
     )
@@ -2584,6 +2612,42 @@ def main(argv: list[str] | None = None) -> int:
             engine.close()
         print("Repair complete")
         return 0
+    if args.command == "readiness" and args.readiness_command == "contract":
+        from pheasant.config.loader import load_config
+        from pheasant.readiness.contract import build_contract
+
+        contract = build_contract(load_config(Path(args.config)))
+        if args.json:
+            print(json.dumps(contract, indent=2, sort_keys=True, default=str))
+            return 0
+        _print_readiness_contract(contract)
+        return 0
+    if args.command == "readiness" and args.readiness_command == "check":
+        # `PheasantTools` is the same facade the MCP surface drives, and that is
+        # the reason `cli.py` is a composition root at all: a third assembly of
+        # searcher, graph and engine is a third thing that can be assembled
+        # differently, and a readiness check has to exercise what this region
+        # actually serves.
+        from pheasant.config.loader import load_config
+        from pheasant.mcp_server.tools import PheasantTools
+        from pheasant.readiness.runner import render_report
+
+        tools = PheasantTools(load_config(Path(args.config)))
+        try:
+            report = tools.run_readiness_check(gate_sets=args.gate_sets)
+        finally:
+            tools.engine.close()
+        if args.out:
+            Path(args.out).write_text(render_report(report), encoding="utf-8")
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True, default=str))
+        else:
+            print(render_report(report))
+        # A non-zero exit for anything short of "go", `core-only` included: a
+        # green CI signal for a run whose swarm gates failed is the shape the
+        # evaluation plane's skipped-run incident already cost this codebase
+        # once.
+        return 0 if report["verdict"] == "go" else 1
     if args.command == "eval" and args.eval_command == "taxonomy":
         from pheasant.evaluation.proof import DEFAULT_TAXONOMY
 
@@ -3078,3 +3142,35 @@ def main(argv: list[str] | None = None) -> int:
 
 def app() -> None:
     raise SystemExit(main())
+
+
+def _print_readiness_contract(contract: dict) -> None:
+    """The contract as a table, failures and refusals first.
+
+    A reader running this is deciding whether to start an experiment, so what
+    they need at the top is what this region *cannot* do — the supported rows
+    are the ones they can skip.
+    """
+
+    print(f"pheasant {contract['server_version']} — {contract['knowledge_base']}")
+    print(f"contract {contract['digest']}")
+    enabled = "on" if contract["readiness_enabled"] else "off (readiness.enabled)"
+    print(f"readiness: {enabled}")
+    print()
+    unsupported = [row for row in contract["capabilities"] if row["status"] == "unsupported"]
+    if unsupported:
+        print("Declared unsupported:")
+        for row in unsupported:
+            print(f"  {row['logical']} ({row['gap']})")
+            print(f"    {row.get('detail') or row['summary']}")
+        print()
+    print(f"{'capability':<32} {'gap':<12} {'gate':<7} status")
+    for row in contract["capabilities"]:
+        if row["status"] == "unsupported":
+            continue
+        print(f"  {row['logical']:<30} {row['gap']:<12} {row['gate']:<7} {row['status']}")
+    print()
+    print("Refusal codes (an MCP client maps a refusal's text onto these):")
+    for row in contract["refusal_codes"]:
+        retry = "retryable" if row["retryable"] else "permanent"
+        print(f"  {row['code']:<26} {row['status']}  {retry}")

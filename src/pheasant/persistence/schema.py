@@ -845,6 +845,74 @@ CREATE TABLE IF NOT EXISTS graph_generations (
   node_fold TEXT NOT NULL,
   edge_fold TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- The readiness plane: receipts and seals.
+--
+-- A receipt answers a question the rest of this schema cannot: *what happened
+-- to the thing I submitted*. `artifacts` says what the region holds, which is
+-- the same answer for "you never sent it" and "you sent it and it was
+-- rejected" -- and a harness reconciling submissions against stored counts
+-- needs those to be different answers, because the first is its own bug and
+-- the second is the region's.
+--
+-- One row per submitted item, keyed by the caller's idempotency key so a
+-- retried submission folds onto the row it already wrote rather than
+-- producing a second one. `receipt_id` is a digest over (kb_id,
+-- idempotency_key) for exactly the reason `evaluation_snapshots` ids are
+-- digests: two replicas handed the same retry must write the same row without
+-- coordinating.
+CREATE TABLE IF NOT EXISTS ingest_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  kb_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  submission_id TEXT NOT NULL,
+  source_name TEXT,
+  submitted_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  -- accepted | indexed | rejected | failed. Deliberately four rather than a
+  -- boolean: `accepted` is the transport's answer and `indexed` is the index
+  -- barrier, and collapsing them is how a harness starts searching for
+  -- content the region has persisted and not yet indexed.
+  disposition TEXT NOT NULL,
+  indexed_at TEXT,
+  artifact_id TEXT,
+  content_sha256 TEXT,
+  chunk_count INTEGER,
+  -- Every write of the *same* key increments this. A count above one with an
+  -- unchanged artifact_id is the idempotency proof; a count above one with a
+  -- changed one is the bug it exists to catch.
+  submissions INTEGER NOT NULL DEFAULT 1,
+  error_code TEXT,
+  retryable INTEGER NOT NULL DEFAULT 0,
+  detail_json TEXT,
+  UNIQUE (kb_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_receipts_submission
+  ON ingest_receipts(kb_id, submission_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_receipts_disposition
+  ON ingest_receipts(kb_id, disposition);
+
+-- A sealed snapshot. The manifest itself lives in `evaluation_snapshots`,
+-- which already computes every digest capable of changing retrieval and is
+-- already content-addressed; sealing is a separate fact about one of those
+-- manifests -- that somebody has declared it the reference state for a run --
+-- and it is separate because an evaluation batch seals nothing and a sealed
+-- snapshot may outlive every run that used it.
+CREATE TABLE IF NOT EXISTS snapshot_seals (
+  snapshot_id TEXT PRIMARY KEY,
+  kb_id TEXT NOT NULL,
+  label TEXT,
+  sealed_at TEXT NOT NULL,
+  sealed_by TEXT,
+  -- The corpus digest at sealing time, lifted out of the manifest so drift can
+  -- be tested with one comparison rather than by re-reading a JSON blob.
+  corpus_digest TEXT NOT NULL,
+  manifest_digest TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_seals_kb
+  ON snapshot_seals(kb_id, sealed_at);
 """
 
 #: SQLite-only: WAL, plus the FTS5 virtual tables.

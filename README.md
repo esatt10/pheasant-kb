@@ -194,6 +194,28 @@ never touches it and stays offline.
 
 </details>
 
+### Prove it can be measured
+
+Before an experiment treats a region's answers as evidence, somebody has to
+establish that they *are* evidence: that every submitted write reconciles, that
+every result traces to an exact source location, that no forbidden content
+crosses an isolation boundary, and that a failure which moved a denominator is
+visible rather than absent.
+
+```bash
+pheasant readiness contract   # what this build supports — and what it does not
+pheasant readiness check      # probe the region; exit 0 only on GO
+```
+
+A check is executable rather than a checklist: it submits documents to a
+scratch source it owns, retries them under one idempotency key, seals a
+snapshot, ingests to make it drift, and asserts the pinned search *refuses*.
+Two capabilities are declared unsupported with their reasons, because a region
+that says what it cannot do is usable and one that overclaims wastes an
+experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
+
+→ [Stress-test readiness](docs/stress-test-readiness.md)
+
 ## What's in the box
 
 | | |
@@ -204,6 +226,7 @@ never touches it and stays offline.
 | **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. |
 | **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
 | **Measurement** | Effectiveness evaluation and per-stage retrieval tuning, both off by default and read-only when on. |
+| **Readiness** | A machine-readable capability contract and executable go/no-go gates for using this region as an experiment's substrate: ingestion receipts, sealed snapshots, per-result lineage, isolation proofs and structured refusal codes. |
 | **Operations** | Idempotent, incremental sync; SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
 | **Scale** | Optional NATS queue, gRPC preparation workers, split API/indexer/worker roles and corpus sharding—each a selectable backend, never a prerequisite. |
 
