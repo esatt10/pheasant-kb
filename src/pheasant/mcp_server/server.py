@@ -341,6 +341,8 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         memory: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
+        snapshot_id: str | None = None,
+        as_of: str | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -375,6 +377,16 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         Records a later record corrected are excluded by default; pass an
         as_of instant to ask what was believed at that time. Results that came
         from memory carry a "memory" block naming the record and its scope.
+
+        snapshot_id pins this search to a sealed snapshot: the region answers
+        from that state or refuses with SNAPSHOT_DRIFTED, naming the sections
+        that moved. It holds one version of its corpus, so the guarantee is a
+        refusal rather than time travel — two runs naming one snapshot cannot
+        silently have seen different corpora.
+
+        as_of is the instant memory validity is evaluated at, accepted here as
+        well as inside memory so it reaches the lineage block even where the
+        region holds no memory at all.
         """
 
         return tools.search_context(
@@ -394,6 +406,8 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             memory=memory,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
+            snapshot_id=snapshot_id,
+            as_of=as_of,
         )
 
     @mcp.tool()

@@ -770,6 +770,8 @@ class PheasantTools(ReadinessTools):
         memory: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
+        snapshot_id: str | None = None,
+        as_of: str | None = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -803,6 +805,19 @@ class PheasantTools(ReadinessTools):
         them back, for asking what was believed at a past instant. Hits that
         came from memory carry a ``memory`` block with the record's scope,
         subject and when it was asserted.
+
+        ``snapshot_id`` pins this search to a sealed snapshot. The region
+        verifies it still stands there and refuses with ``SNAPSHOT_DRIFTED``,
+        naming the sections that moved, if it does not — it holds one version
+        of its corpus, so the guarantee is a refusal rather than time travel:
+        two runs naming one snapshot cannot silently have seen different
+        corpora. ``seal_snapshot`` has told agents to do this since it
+        shipped; until now only the HTTP surface accepted it.
+
+        ``as_of`` is the instant memory validity is evaluated at, carried here
+        as well as inside ``memory`` so it reaches the lineage block even in a
+        region that holds no memory — which is exactly where a caller most
+        needs to be told that ``as_of`` did nothing.
         """
         self._require_knowledge_base(knowledge_base)
         # Transport adapter. The operation is `services.retrieval.search`:
@@ -827,6 +842,8 @@ class PheasantTools(ReadinessTools):
                 min_score=min_score,
                 source_types=source_types,
                 exclude_source_types=exclude_source_types,
+                snapshot_id=snapshot_id,
+                as_of=as_of,
             ),
         )
 
