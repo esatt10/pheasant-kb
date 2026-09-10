@@ -80,7 +80,7 @@ services:
       retries: 20
 
   db-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     restart: "no"
     entrypoint: ["python", "-c"]
     command:
@@ -95,7 +95,7 @@ services:
       - pheasant-exports:/exports
 
   workspace-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     restart: "no"
     user: "0:0"
     entrypoint: ["sh", "-c"]
@@ -109,7 +109,7 @@ services:
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
 
   api:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -157,7 +157,7 @@ services:
       start_period: 30s
 
   graph:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -188,7 +188,7 @@ services:
       start_period: 60s
 
   indexer:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -235,7 +235,7 @@ services:
   # is a multi-row insert per batch, and batches are 500 observations by
   # default.
   logger:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     build:
       context: ../..
     profiles: ["observability"]
@@ -270,7 +270,7 @@ services:
       start_period: 30s
 
   worker:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.6}
     build:
       context: ../..
     restart: unless-stopped

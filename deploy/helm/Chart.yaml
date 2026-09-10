@@ -2,5 +2,5 @@ apiVersion: v2
 name: pheasant
 description: Lightweight Docker-first MCP knowledge graph server
 type: application
-version: 0.12.5
-appVersion: "0.12.5"
+version: 0.12.6
+appVersion: "0.12.6"
