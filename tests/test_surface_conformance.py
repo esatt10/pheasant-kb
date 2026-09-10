@@ -75,7 +75,23 @@ def region(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     point is that the *same* state answers both surfaces.
     """
 
-    root = tmp_path_factory.mktemp("conformance")
+    return _build_region(tmp_path_factory.mktemp("conformance"))
+
+
+@pytest.fixture
+def disposable_region(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    """A region a test may move.
+
+    Every other test here reads; the shared module-scoped region is what makes
+    "the same state answers both surfaces" true. A test that has to *drift*
+    the corpus to prove a refusal cannot use it, and must not quietly leave
+    the next test a different corpus.
+    """
+
+    return _build_region(tmp_path_factory.mktemp("conformance-mutable"))
+
+
+def _build_region(root: Path) -> dict[str, Any]:
     workspace = root / "workspace"
     for relative, text in CORPUS.items():
         path = workspace / relative
@@ -178,6 +194,106 @@ def test_search_criteria_apply_identically(region: dict[str, Any]) -> None:
 
     assert _identities(over_http) == _identities(over_mcp)
     assert over_http.get("criteria") == over_mcp.get("criteria")
+
+
+def test_the_snapshot_pin_reaches_both_surfaces(region: dict[str, Any]) -> None:
+    """The seventh divergence, and the one `seal_snapshot` had already promised.
+
+    ``services.retrieval.SearchRequest`` has carried ``snapshot_id`` since the
+    readiness plane shipped, and ``/search`` passed it. ``search_context`` did
+    not accept it — while ``seal_snapshot``'s own tool description told agents
+    to "pin a search to the returned snapshot_id". An MCP agent could seal a
+    snapshot and could not use it, which is the shape this file exists for:
+    one line that landed on the surface whose caller asked first.
+    """
+
+    sealed = region["tools"].seal_snapshot(region["kb"], label="conformance")
+    snapshot_id = sealed["snapshot_id"]
+
+    over_http = _http(
+        region,
+        "post",
+        "/search",
+        json={"query": "rotation", "max_results": 3, "snapshot_id": snapshot_id},
+    )
+    over_mcp = region["tools"].search_context(
+        region["kb"], "rotation", "hybrid", 3, snapshot_id=snapshot_id
+    )
+
+    assert _identities(over_http) == _identities(over_mcp)
+    assert over_http["lineage"]["state"]["snapshot_id"] == snapshot_id
+    assert over_mcp["lineage"]["state"]["snapshot_id"] == snapshot_id
+
+
+def test_a_drifted_snapshot_is_refused_on_both_surfaces(
+    disposable_region: dict[str, Any],
+) -> None:
+    """And the refusal is the same refusal, with the same text.
+
+    A pinned search is answered from that state or it is not answered. An
+    agent told only that something failed will retry the same call; the
+    sections that moved are what it can act on.
+    """
+
+    tools = disposable_region["tools"]
+    sealed = tools.seal_snapshot(disposable_region["kb"], label="drift")
+    snapshot_id = sealed["snapshot_id"]
+
+    workspace = Path(disposable_region["config"].pheasant.workspace_root)
+    (workspace / "guide" / "arrived-later.md").write_text(
+        "# Arrived later\n\nA document the sealed snapshot never saw.\n", encoding="utf-8"
+    )
+    tools.engine.sync_source("docs", "incremental")
+    tools.engine.reload_graph()
+
+    with pytest.raises(ServiceError) as over_mcp:
+        tools.search_context(
+            disposable_region["kb"], "rotation", "hybrid", 3, snapshot_id=snapshot_id
+        )
+    response = disposable_region["client"].post(
+        "/search", json={"query": "rotation", "max_results": 3, "snapshot_id": snapshot_id}
+    )
+
+    # The *code* is the machine-readable half and must be the same on both
+    # surfaces; the message is what a reader acts on and must name the
+    # sections that moved. MCP carries a string and nothing else, so an agent
+    # maps the text onto the code the readiness contract publishes.
+    assert response.status_code >= 400
+    assert over_mcp.value.code == "SNAPSHOT_DRIFTED"
+    assert over_mcp.value.retryable is False
+    assert "corpus" in str(over_mcp.value), "the refusal names the section that moved"
+
+    body = response.json()
+    assert body["code"] == over_mcp.value.code
+    assert body["retryable"] is over_mcp.value.retryable
+
+    # The corpus sections are compared rather than the whole message. Both
+    # surfaces read one `/state`, but each holds its own engine, and only the
+    # one this test reloaded has the new graph — so the HTTP refusal names
+    # fewer `graph.*` sections. That is the same graph-reload timing the
+    # fixture equalises for the read paths, not a second refusal: what must
+    # match is the code, the retryability, and what the drift *was*.
+    assert _drifted_sections(body["detail"], "corpus.") == _drifted_sections(
+        str(over_mcp.value), "corpus."
+    ), "one refusal, naming one drift"
+
+
+def test_as_of_reaches_the_lineage_from_both_surfaces(region: dict[str, Any]) -> None:
+    """`as_of` is echoed even where the region holds no memory.
+
+    Which is exactly where a caller most needs to be told it did nothing —
+    and, until now, the surface that could not say it was the one agents use.
+    """
+
+    instant = "2020-01-01T00:00:00Z"
+    over_http = _http(
+        region, "post", "/search", json={"query": "rotation", "max_results": 3, "as_of": instant}
+    )
+    over_mcp = region["tools"].search_context(region["kb"], "rotation", "hybrid", 3, as_of=instant)
+
+    assert over_http["lineage"]["state"]["as_of"] == instant
+    assert over_mcp["lineage"]["state"]["as_of"] == instant
+    assert _identities(over_http) == _identities(over_mcp)
 
 
 def test_relevant_files_answers_identically(region: dict[str, Any]) -> None:
@@ -354,6 +470,13 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
 def test_the_tools_facade_still_exposes_every_conformed_operation() -> None:
     for _operation, (_route, tool) in CONFORMED.items():
         assert hasattr(PheasantTools, tool), f"the MCP surface lost {tool}"
+
+
+def _drifted_sections(message: str, prefix: str) -> list[str]:
+    """The sections a SNAPSHOT_DRIFTED refusal names, filtered by prefix."""
+
+    body = message.split("region: ", 1)[-1].split(" changed since", 1)[0]
+    return sorted(part.strip() for part in body.split(",") if part.strip().startswith(prefix))
 
 
 def _identities(payload: dict[str, Any]) -> list[str]:
