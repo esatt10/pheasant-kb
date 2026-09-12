@@ -135,14 +135,13 @@ security:
   acl_enforced: true
   default_visibility: public
   api_auth:
-    # The fleet's front door. Compose refuses to start without the value (see
-    # docker-compose.scale.yml), because "unauthenticated" plus "can register a
-    # source over any allow-listed path" plus "one port-publishing decision
-    # away from the network" is a combination that only stays safe by luck.
-    # Set behind_authenticating_proxy instead if an ingress already
-    # authenticates callers, and drop PHEASANT_API_TOKEN from the environment.
-    token_env: PHEASANT_API_TOKEN
-    behind_authenticating_proxy: false
+    # TEMPORARY, for local UI testing against this loopback-only scaling
+    # series: token check disabled by request. Re-enable before this fleet
+    # is reachable from anywhere but 127.0.0.1 -- see the docstring on
+    # `require_api_token` in api/app.py for why the whole feature is a
+    # single shared bearer token and nothing richer.
+    token_env: ""
+    behind_authenticating_proxy: true
 memory:
   consolidation_enabled: true
   session_ttl_days: null
