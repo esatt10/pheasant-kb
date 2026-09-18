@@ -105,6 +105,16 @@ class PheasantTools(ReadinessTools):
             searcher=self.searcher,
             graph=self.graph,
             engine=self.engine,
+            # Left to the context's config-derived fallback on purpose. The MCP
+            # server has no role of its own — it is mounted inside whatever
+            # process serves it, and the `--role api` that makes that process a
+            # serving replica is a CLI override this config does not carry — so
+            # deriving `force_local` from `server.role` here would read `all`
+            # on an api replica and put the write back on a read-only mount.
+            # Honouring the configured landing service is right wherever this
+            # runs: standalone has none and writes locally, a serving replica
+            # forwards, and an indexer forwards to an endpoint that always
+            # writes locally, which costs a hop and cannot loop.
         )
 
     def _publish_sync(

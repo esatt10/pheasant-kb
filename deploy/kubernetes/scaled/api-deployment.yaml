@@ -54,25 +54,24 @@ spec:
                 secretKeyRef:
                   name: pheasant-secrets
                   key: PHEASANT_GRAPH_SERVICE_TOKEN
+            # Manual uploads are forwarded to the indexer rather than written
+            # here, which is what keeps the /state mount below read-only. Its
+            # own value: holding it means being able to put bytes into the
+            # corpus. See the ingestion block in the ConfigMap.
+            - name: PHEASANT_INGESTION_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pheasant-secrets
+                  key: PHEASANT_INGESTION_SERVICE_TOKEN
           volumeMounts:
             - name: config
               mountPath: /config
               readOnly: true
             # Read-only: an api replica reads the graph the indexer wrote and
-            # must never write committed state. Needs ReadWriteMany — see README.
+            # must never write /state. Needs ReadWriteMany — see README.
             - name: state
               mountPath: /state
               readOnly: true
-            # The exception, and deliberately a narrow one: manual ingestion
-            # (the UI drop zone, an agent's ingest_submit, a readiness probe)
-            # lands bytes in /state/uploads and then registers that directory
-            # as an ordinary source. That is *input*, not committed state, so
-            # it gets its own claim mounted read-write here while everything
-            # the indexer is the authority on stays read-only above. Without
-            # it the drop zone fails at the first mkdir on the read-only
-            # mount, which is the only tier a browser can reach.
-            - name: uploads
-              mountPath: /state/uploads
             - name: workspace
               mountPath: /workspace
               readOnly: true
@@ -126,9 +125,6 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: pheasant-state
-        - name: uploads
-          persistentVolumeClaim:
-            claimName: pheasant-uploads
         - name: workspace
           persistentVolumeClaim:
             claimName: pheasant-workspace

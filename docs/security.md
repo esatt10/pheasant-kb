@@ -79,13 +79,22 @@ requiring every artifact to carry one first.
 
 ### One secret per boundary
 
-The fleet has three, and they must be three distinct values:
+The fleet has four, and they must be four distinct values:
 
 | Variable | Boundary |
 |---|---|
 | `PHEASANT_API_TOKEN` | callers → the region's API |
 | `PHEASANT_GRAPH_SERVICE_TOKEN` | API/MCP replicas → the internal graph API |
 | `PHEASANT_INDEX_WORKER_TOKEN` | the indexer → the preparation workers |
+| `PHEASANT_INGESTION_SERVICE_TOKEN` | API replicas → the indexer's landing service |
+
+The fourth is a **write** credential: holding it means being able to put bytes
+into the corpus. It exists because manual ingestion has to write and the
+serving tier mounts `/state` read-only, so an upload is forwarded to the tier
+that can write rather than the serving tier being given write access. Sharing
+it with the worker tier would be worse than sharing the graph token, not
+better — a worker parses bytes the indexer hands it and has no business
+choosing what the region indexes — so `serve` refuses that collision too.
 
 The shipped Compose file used to wire the graph token to the worker token's
 value. Workers are the least-trusted tier — no database, no keys, no volumes,

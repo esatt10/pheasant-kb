@@ -91,9 +91,12 @@ class ReadinessTools:
 
         if source_name != PROBE_SOURCE:
             raise ValueError(f"the readiness plane only indexes {PROBE_SOURCE}")
-        from pheasant.ingestion.landing import upload_root
-
-        directory = upload_root(Path(self.config.pheasant.state_path), source_name)
+        # Through the landing zone, for the reason the HTTP adapter states: the
+        # probe's documents are submitted through `services.ingestion`, so
+        # resolving the directory locally would both write to a mount this
+        # process may not own and register the scratch source at the wrong
+        # process's path.
+        directory = Path(self.services.landing_zone().directory(source_name))
         if not any(source.name == source_name for source in self.config.sources):
             # Registered exactly as `register_source` does it — through the
             # registry, then onto `config.sources` — rather than by a shortcut

@@ -687,7 +687,10 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     "assistant": True,
     "graph": True,
     "memory": True,
-    "ingestion": False,  # captioner/transcriber are wired at engine construction
+    # captioner/transcriber are wired at engine construction, and the landing
+    # zone is resolved once beside the serving graph — pointing a replica at a
+    # different landing service is a restart, for the same reason.
+    "ingestion": False,
     "sync": False,  # watcher/scheduler services are started at boot
     # Path policy is read per request, but ACL wiring is not -- and since
     # 35.8 neither is `api_auth`: the token is resolved once at construction
@@ -1073,6 +1076,12 @@ def create_app(
         searcher=search,
         graph=serving_graph,
         engine=engine,
+        # The same zone the drop-zone route uses. Passed explicitly rather than
+        # left to the context's fallback because this process knows its role
+        # and the service layer does not: `ingest_submit` lands bytes exactly
+        # like the drop zone does, and a surface that got one and not the other
+        # is the divergence `tests/test_surface_conformance.py` exists to catch.
+        landing=landing,
     )
 
     # Built before the lifespan so the lifespan closure can start its session
@@ -4060,41 +4069,51 @@ def create_app(
             return remote(source=source, path=path, max_nodes=max_nodes)
         by_document: dict[str, list[SectionHeading]] = {}
         seen = 0
-        for _node_id, data in graph_obj.node_map().items():
-            if data.get("type") != "heading":
-                continue
-            if source and data.get("source_id") != source:
-                continue
-            relative = str(data.get("relative_path") or "")
-            if path and relative != path:
-                continue
-            seen += 1
-            if seen > max(1, max_nodes):
-                break
-            parts = tuple(int(p) for p in (data.get("ordinal_parts") or []))
-            ordinal = (
-                Ordinal(
-                    parts=parts,
-                    series=str(data.get("ordinal_series") or ""),
-                    raw=str(data.get("number") or ""),
-                    relative=bool(data.get("ordinal_relative")),
-                    suffix=str(data.get("ordinal_suffix") or ""),
+        # `iter_nodes`, not `node_map()`: this is a whole-graph scan, and a
+        # store-backed graph's node map answers `get` and nothing else — by
+        # design, because iterating it would be a full scan wearing a dict's
+        # clothes. `iter_nodes` is the accessor that says so, and it streams on
+        # both backends, so the `break` below still stops the paging early.
+        #
+        # Under `reading()`, which both accessors have always required and this
+        # scan did not hold: on the in-memory graph it iterates the live node
+        # dict, so a concurrent sync mutating it mid-scan is a RuntimeError.
+        with graph_obj.reading():
+            for _node_id, data in graph_obj.iter_nodes():
+                if data.get("type") != "heading":
+                    continue
+                if source and data.get("source_id") != source:
+                    continue
+                relative = str(data.get("relative_path") or "")
+                if path and relative != path:
+                    continue
+                seen += 1
+                if seen > max(1, max_nodes):
+                    break
+                parts = tuple(int(p) for p in (data.get("ordinal_parts") or []))
+                ordinal = (
+                    Ordinal(
+                        parts=parts,
+                        series=str(data.get("ordinal_series") or ""),
+                        raw=str(data.get("number") or ""),
+                        relative=bool(data.get("ordinal_relative")),
+                        suffix=str(data.get("ordinal_suffix") or ""),
+                    )
+                    if parts
+                    else None
                 )
-                if parts
-                else None
-            )
-            by_document.setdefault(relative, []).append(
-                SectionHeading(
-                    line=int(data.get("start_line") or 0),
-                    level=int(data.get("level") or 1),
-                    number=data.get("number"),
-                    title=str(data.get("title") or ""),
-                    kind=str(data.get("kind") or ""),
-                    path=str(data.get("heading_path") or ""),
-                    pattern_level=int(data.get("pattern_level") or 0),
-                    ordinal=ordinal,
+                by_document.setdefault(relative, []).append(
+                    SectionHeading(
+                        line=int(data.get("start_line") or 0),
+                        level=int(data.get("level") or 1),
+                        number=data.get("number"),
+                        title=str(data.get("title") or ""),
+                        kind=str(data.get("kind") or ""),
+                        path=str(data.get("heading_path") or ""),
+                        pattern_level=int(data.get("pattern_level") or 0),
+                        ordinal=ordinal,
+                    )
                 )
-            )
 
         documents = []
         for relative in sorted(by_document):
@@ -4226,7 +4245,12 @@ def create_app(
             # An orphan is a node no edge touches. On a healthy index this is
             # near zero; a large number means enrichment did not run, or a
             # source indexed content that nothing links to.
-            orphans = [node_id for node_id in nodes if node_id not in degree]
+            #
+            # `iter_nodes`, not the `nodes` map above: that one answers `get`
+            # and nothing else on a store-backed graph, because iterating it
+            # would be a full scan disguised as a dict walk. `nodes` stays for
+            # the hub lookups below, which are the point-reads it exists for.
+            orphans = [node_id for node_id, _ in graph_obj.iter_nodes() if node_id not in degree]
             hub_rows = [
                 {
                     "node_id": node_id,

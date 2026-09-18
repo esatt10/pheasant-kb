@@ -24,11 +24,23 @@
 name: pheasant-fleet
 
 #
-# Three secrets, three boundaries, and deliberately no sharing between them:
+# Four secrets, four boundaries, and deliberately no sharing between them:
 #
 #   PHEASANT_API_TOKEN            callers -> the region's API
 #   PHEASANT_GRAPH_SERVICE_TOKEN  API/MCP replicas -> the internal graph API
 #   PHEASANT_INDEX_WORKER_TOKEN   the indexer -> the preparation workers
+#   PHEASANT_INGESTION_SERVICE_TOKEN
+#                                 API replicas -> the indexer's landing service
+#
+# The fourth is what makes manual upload work here. The api tier mounts /state
+# read-only below, so the UI drop zone and `ingest_submit` have nowhere to put
+# their bytes; rather than give the serving tier write access, an upload is
+# forwarded to the indexer, which performs the identical local write. That is
+# the same move this role already makes for indexing (publish, do not run) and
+# for graph reads (ask the service), and it is why no tier here needs a
+# writable landing mount. Holding this token means being able to put bytes into
+# the corpus, so it is its own value: `serve` refuses to start when it resolves
+# equal to the worker token, for the reason the graph token already had.
 #
 # The graph token used to be wired to the worker token's value, which read as
 # a convenience and was a trust-boundary collapse: workers are the least
@@ -42,6 +54,7 @@ x-fleet-env: &fleet-env
   PHEASANT_API_TOKEN: ${PHEASANT_API_TOKEN:?set a random API token; see deploy/compose/.env.example}
   PHEASANT_INDEX_WORKER_TOKEN: ${PHEASANT_INDEX_WORKER_TOKEN:?set a shared worker token}
   PHEASANT_GRAPH_SERVICE_TOKEN: ${PHEASANT_GRAPH_SERVICE_TOKEN:?set a graph token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
+  PHEASANT_INGESTION_SERVICE_TOKEN: ${PHEASANT_INGESTION_SERVICE_TOKEN:?set an ingestion token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
   OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GH_TOKEN: ${GH_TOKEN:-}
@@ -108,34 +121,6 @@ services:
     volumes:
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
 
-  # The drop zone, and the one place an api replica is allowed to write.
-  #
-  # Manual ingestion -- the UI drop zone, the MCP `ingest_submit` path and the
-  # readiness probe's scratch source -- lands bytes in `/state/uploads/<source>`
-  # and then registers that directory as an ordinary `document_folder` source.
-  # Everything after that is the normal pipeline, so the *only* thing manual
-  # upload needs from a deployment is a writable landing directory that the
-  # indexer can also read.
-  #
-  # It cannot be a subdirectory of `pheasant-state`, because api mounts that
-  # volume read-only and a `:ro` mount refuses writes to every path beneath it.
-  # So the landing zone is its own volume, mounted read-write at `/state/uploads`
-  # on the two tiers that need it and nowhere else. The nested mount shadows the
-  # read-only parent for exactly that subtree -- Docker mounts parents before
-  # children -- which keeps the invariant the api tier actually owes: it still
-  # cannot write the graph, the vectors, the manifests or the snapshots. It can
-  # only write *input*, which is the half the indexer was never the authority on.
-  #
-  # Same root-owned-volume problem as workspace-init, same fix.
-  uploads-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
-    restart: "no"
-    user: "0:0"
-    entrypoint: ["sh", "-c"]
-    command: ["mkdir -p /state/uploads && chown 10001:10001 /state/uploads && chmod 0755 /state/uploads"]
-    volumes:
-      - pheasant-uploads:/state/uploads
-
   api:
     image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.5}
     build:
@@ -155,8 +140,6 @@ services:
         condition: service_completed_successfully
       workspace-init:
         condition: service_completed_successfully
-      uploads-init:
-        condition: service_completed_successfully
       nats:
         condition: service_healthy
       graph:
@@ -169,13 +152,11 @@ services:
     environment: *fleet-env
     volumes:
       - ./fleet.yaml:/config/pheasant.yaml:ro
-      # Read-only: the indexer is the only writer of committed state. The API
-      # needs manifests/vectors, but graph reads go to the graph service.
+      # Read-only, and it stays that way: the indexer is the only writer of
+      # /state. The API needs manifests/vectors, graph reads go to the graph
+      # service, and manual uploads are forwarded to the indexer rather than
+      # written here — so this tier writes nothing under /state at all.
       - pheasant-state:/state:ro
-      # ...except the drop zone, which is input rather than committed state.
-      # Nested under the :ro mount above and read-write, so manual upload works
-      # on the only tier a browser or an agent can reach. See uploads-init.
-      - pheasant-uploads:/state/uploads
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
       - pheasant-memory:/memory
       # The Parquet extract, and the one volume meant to be read by
@@ -236,20 +217,12 @@ services:
         condition: service_completed_successfully
       workspace-init:
         condition: service_completed_successfully
-      uploads-init:
-        condition: service_completed_successfully
       nats:
         condition: service_healthy
     environment: *fleet-env
     volumes:
       - ./fleet.yaml:/config/pheasant.yaml:ro
       - pheasant-state:/state
-      # The same landing zone the api tier writes, at the same path, so the
-      # source an upload registers (`path: /state/uploads/<name>`) resolves to
-      # the same bytes here. Without this mount the indexer would read the
-      # empty `uploads/` inside pheasant-state and index nothing, which is a
-      # worse failure than the 500 -- it succeeds and finds no documents.
-      - pheasant-uploads:/state/uploads
       # URL-managed repositories need to clone, fetch and fast-forward here.
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
       - pheasant-memory:/memory
@@ -344,9 +317,6 @@ services:
 
 volumes:
   pheasant-state:
-  # The manual-upload landing zone. Separate from pheasant-state so the api
-  # tier can write it without being handed write access to committed state.
-  pheasant-uploads:
   pheasant-workspace:
   pheasant-memory:
   pheasant-exports:

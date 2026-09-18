@@ -50,6 +50,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from pheasant.ingestion.landing import (
     StoredUpload,
+    check_submission_bytes,
     safe_filename,
     store_upload,
     upload_root,
@@ -105,6 +106,11 @@ class LocalLandingZone:
                 directory=str(root),
                 stored=store_upload(root, relative_path, data, max_bytes=max_bytes),
             )
+        # Checked on this branch too, and that is not belt-and-braces: this is
+        # the far side of the network hop, where the size was last checked by
+        # the caller. A server that validates only what a well-behaved client
+        # already validated is not validating.
+        check_submission_bytes(relative_path, data, max_bytes)
         # Deterministic placement: a retry carrying one idempotency key means
         # one file, so it lands on the path its first attempt used and the
         # bytes are written over themselves. `landing.safe_filename` is applied
@@ -138,18 +144,11 @@ class RemoteLandingZone:
         unique: bool,
         max_bytes: int | None = None,
     ) -> LandingPlacement:
-        # Refused here rather than after a round trip. Shipping 200 MB across
-        # a cluster network to be told it is over a 100 MB limit spends the
-        # bandwidth to reach the same answer, and `store_upload` makes the
-        # same check for the same reason: accepting bytes and then deleting
-        # them still means something held them.
-        if max_bytes is not None and len(data) > max_bytes:
-            raise ValueError(
-                f"{relative_path} is {len(data) // (1024 * 1024)} MB, over the "
-                f"{max_bytes // (1024 * 1024)} MB per-file limit (sync.limits.max_file_size_mb)"
-            )
-        if not data:
-            raise ValueError(f"{relative_path} is empty")
+        # Refused here rather than after a round trip. Shipping 200 MB across a
+        # cluster network to be told it is over a 100 MB limit spends the
+        # bandwidth to reach the same answer. The far side checks again, for
+        # the opposite reason — it cannot trust that this ran.
+        check_submission_bytes(relative_path, data, max_bytes)
         payload = self.client.land(source_name, relative_path, data, unique=unique)
         return LandingPlacement(
             directory=str(payload["directory"]),

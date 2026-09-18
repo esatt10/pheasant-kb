@@ -714,6 +714,44 @@ See [Multi-modal ingest](how-to/multimodal-ingest.md) for the full walkthrough.
 `api_key_env` is the **name** of an environment variable; the key itself never
 lands in config or on disk.
 
+### `ingestion.landing_service` — manual upload in a role-split fleet
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `landing_service_url` | string \| null | `null` | Internal landing-service base URL. When set, a process that does not write committed state forwards submitted bytes here instead of writing them itself. `null` for standalone. |
+| `landing_service_token_env` | string | `PHEASANT_INGESTION_SERVICE_TOKEN` | Environment variable holding the bearer token shared by landing clients and the tier that serves the endpoint. Must differ from the worker token; `serve` refuses to start if they resolve equal. |
+| `landing_service_timeout_seconds` | float | `120.0` | Deadline per file. Generous next to the graph service's, because this carries a document body rather than a query. |
+
+Manual ingestion — the UI drop zone, an agent's `ingest_submit`, a readiness
+probe's scratch source — writes bytes into `<state_path>/uploads` and then
+registers that directory as an ordinary `document_folder` source. In a single
+container the process that accepts an upload is the process that indexes it, so
+it writes them directly and **this section does nothing**.
+
+In the [role-split fleet](how-to/worker-fleet.md) it cannot. The tier a browser
+or an agent can reach is `api`, and an api replica mounts `/state` read-only on
+purpose: the indexer is the sole writer of committed state, which is what lets N
+serving replicas read a graph one process commits. Without this setting the drop
+zone fails at the first `mkdir` with `LANDING_ZONE_UNWRITABLE`.
+
+With it, the bytes are forwarded to the indexer, which performs the identical
+local write — the same move the `api` role already makes for indexing (publish,
+do not run) and for graph reads (ask the service). **There is still no second
+ingestion path**: what crosses the network is the bytes, and what happens on the
+far side is the same local write a standalone container does.
+
+Every tier reads the same config file, so the indexer resolves a landing URL
+too — pointed at its own Service. It ignores it: a process that writes its own
+landing zone never forwards, which is also what stops the tier serving the
+endpoint from proxying to itself.
+
+Two refusals a client can branch on, and they call for opposite responses:
+
+| Code | Retryable | Means |
+|---|---|---|
+| `LANDING_ZONE_UNWRITABLE` | no | The writing process cannot write its own landing zone. An operator has to change a mount; the identical call will fail forever until they do. |
+| `LANDING_SERVICE_UNAVAILABLE` | yes | The tier that writes was unreachable or refused the hop. It may be answering now. |
+
 ---
 
 ## `graph` (knowledge-graph density)
