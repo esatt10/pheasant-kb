@@ -75,6 +75,14 @@ class ServiceContext:
     graph service is a remote proxy rather than a resident snapshot — the
     operations below have to work either way, which is why every graph
     function checks for the remote entry points first.
+
+    ``landing`` is the same idea for the write side: on a standalone install it
+    writes submitted bytes to this process's own disk, and on a serving replica
+    whose ``/state`` is read-only it forwards them to the tier that can. An
+    operation that lands a file must not care which, and must not reach for the
+    filesystem directly — that is what made manual ingestion a 500 on every
+    role-split deployment. ``None`` means "derive the local one from config",
+    so a caller that predates this keeps working.
     """
 
     config: Any
@@ -82,6 +90,16 @@ class ServiceContext:
     searcher: Any
     graph: Any = None
     engine: Any = None
+    landing: Any = None
+
+    def landing_zone(self) -> Any:
+        """The landing zone, falling back to a local one built from config."""
+
+        if self.landing is not None:
+            return self.landing
+        from pheasant.ingestion.landing_service import landing_zone_for_config
+
+        return landing_zone_for_config(self.config, force_local=True)
 
     def knowledge_base(self, requested: str | None = None) -> str:
         """The knowledge base this call addresses, refusing an unknown one.

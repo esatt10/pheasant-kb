@@ -59,10 +59,20 @@ spec:
               mountPath: /config
               readOnly: true
             # Read-only: an api replica reads the graph the indexer wrote and
-            # must never write /state. Needs ReadWriteMany — see README.
+            # must never write committed state. Needs ReadWriteMany — see README.
             - name: state
               mountPath: /state
               readOnly: true
+            # The exception, and deliberately a narrow one: manual ingestion
+            # (the UI drop zone, an agent's ingest_submit, a readiness probe)
+            # lands bytes in /state/uploads and then registers that directory
+            # as an ordinary source. That is *input*, not committed state, so
+            # it gets its own claim mounted read-write here while everything
+            # the indexer is the authority on stays read-only above. Without
+            # it the drop zone fails at the first mkdir on the read-only
+            # mount, which is the only tier a browser can reach.
+            - name: uploads
+              mountPath: /state/uploads
             - name: workspace
               mountPath: /workspace
               readOnly: true
@@ -116,6 +126,9 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: pheasant-state
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: pheasant-uploads
         - name: workspace
           persistentVolumeClaim:
             claimName: pheasant-workspace

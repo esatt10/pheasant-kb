@@ -34,6 +34,7 @@ from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter,
 from pheasant.graph.exporter import cytoscape, node_link
 from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
+from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
 from pheasant.jobs import JobRegistry
 from pheasant.persistence.paths import StatePaths
@@ -1036,6 +1037,17 @@ def create_app(
         engine.serving_graph,
         force_local=role_policy.role is not Role.API,
     )
+    # Who writes a submitted document. Keyed on whether this process writes
+    # committed state at all, rather than on `api` specifically: every other
+    # serving role mounts `/state` read-only for the same reason api does, and
+    # a role that cannot write has the same problem whether or not it is the
+    # one a browser usually talks to. `all` and `indexer` write their own, so
+    # they never forward — which is also what stops the tier serving the
+    # endpoint from proxying to itself.
+    landing = landing_zone_for_config(
+        config,
+        force_local=role_policy.role in {Role.ALL, Role.INDEXER},
+    )
     # One resolver for the whole process: the searcher ranks with it, and
     # applying a bundle invalidates it here so this replica converges at once
     # rather than on its own TTL. Every *other* replica converges on theirs,
@@ -1739,6 +1751,102 @@ def create_app(
         encoded = str(payload.get("content_base64") or "")
         if max_mb is not None and len(encoded) > int(max_mb) * 1024 * 1024 * 4 // 3 + 4:
             raise HTTPException(status_code=413, detail="indexing task exceeds max_file_size_mb")
+
+    def _authorize_landing(authorization: str | None) -> None:
+        """Its own boundary, and deliberately not one of the existing two.
+
+        Holding this token means being able to put bytes into the corpus. That
+        is not the API token (which is the region's front door, and `/internal`
+        is structurally exempt from it so a worker is never handed it) and it
+        is not the graph token (which reads the graph and writes nothing). The
+        fleet gives each boundary its own secret for the reason the shipped
+        Compose file once demonstrated by not doing it.
+        """
+
+        expected = os.environ.get(config.ingestion.landing_service_token_env or "", "")
+        if not expected:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The landing service is not configured on this process: "
+                    f"{config.ingestion.landing_service_token_env!r} is unset."
+                ),
+            )
+        scheme, _, supplied = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+            raise HTTPException(status_code=401, detail="invalid landing service token")
+
+    @app.api_route("/internal/ingestion/land", methods=["GET", "POST"])
+    async def internal_land(
+        request: Request,
+        source_name: str,
+        relative_path: str | None = None,
+        unique: bool = False,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict:
+        """Write one submitted document where committed state is writable.
+
+        This is the far side of `ingestion/landing_service.py`, and the whole
+        of what crosses the boundary: a serving replica cannot write `/state`,
+        so it forwards the bytes and this performs the identical local write.
+        `LocalLandingZone` is the same object a standalone container uses, so
+        there is one implementation of the write rather than a second ingestion
+        path — which is the property the whole module exists to protect.
+
+        ``GET`` answers where a source *would* land without writing anything,
+        because a caller registering the source needs this process's absolute
+        path rather than a guess built from its own mounts.
+        """
+
+        import anyio.to_thread
+
+        from pheasant.ingestion.landing import safe_filename
+        from pheasant.ingestion.landing_service import landing_zone_for_config
+        from pheasant.services.errors import LandingZoneUnwritable
+
+        _authorize_landing(authorization)
+        # force_local, or a process pointed at its own Service forwards in a
+        # circle. The same guard the graph service has, for the same reason.
+        zone = landing_zone_for_config(config, force_local=True)
+        name = safe_filename(source_name or "uploads", fallback="uploads")
+
+        def _resolve() -> dict:
+            try:
+                return {"directory": zone.directory(name)}
+            except OSError as exc:
+                raise LandingZoneUnwritable(name, exc) from exc
+
+        if request.method == "GET":
+            try:
+                return await anyio.to_thread.run_sync(_resolve)
+            except LandingZoneUnwritable as exc:
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+        if not relative_path:
+            raise HTTPException(status_code=422, detail="relative_path is required")
+        # Read on the event loop (genuine async I/O), write on a worker thread
+        # (blocking), exactly as `/sources/upload` splits the same work.
+        data = await request.body()
+        limits = config.sync.limits
+        max_bytes = (limits.max_file_size_mb or 0) * 1024 * 1024 or None
+
+        def _write() -> dict:
+            placement = zone.write(name, relative_path, data, unique=unique, max_bytes=max_bytes)
+            return {
+                "directory": placement.directory,
+                "path": placement.stored.path,
+                "filename": placement.stored.filename,
+                "size_bytes": placement.stored.size_bytes,
+            }
+
+        try:
+            return await anyio.to_thread.run_sync(_write)
+        except ValueError as exc:
+            # Oversized or empty: the submission's problem, and permanent.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except OSError as exc:
+            refusal = LandingZoneUnwritable(name, exc)
+            raise HTTPException(status_code=refusal.status, detail=str(refusal)) from exc
 
     @app.post("/internal/indexing/prepare")
     def remote_prepare(
@@ -2512,12 +2620,29 @@ def create_app(
         """
         import anyio.to_thread
 
-        from pheasant.api.uploads import safe_filename, store_upload, upload_root
+        from pheasant.api.uploads import safe_filename
+        from pheasant.ingestion.landing_service import LandingServiceError
+        from pheasant.services.errors import LandingZoneUnwritable
 
         if not files:
             raise HTTPException(status_code=400, detail="No files uploaded")
         name = safe_filename(source_name or "uploads", fallback="uploads")
-        directory = upload_root(Path(config.pheasant.state_path), name)
+        # Whoever can write. On a standalone container that is this process,
+        # writing exactly where it always did; on a fleet api replica, whose
+        # `/state` is read-only because the indexer is the sole writer of
+        # committed state, it is the indexer over an internal endpoint. The
+        # directory comes back from that process rather than being predicted
+        # here, because the source registered below has to point at the path
+        # the *indexer* will read during the sync.
+        try:
+            directory = Path(landing.directory(name))
+        except OSError as exc:
+            refusal = LandingZoneUnwritable(
+                Path(config.pheasant.state_path) / "uploads" / name, exc
+            )
+            raise HTTPException(status_code=refusal.status, detail=str(refusal)) from exc
+        except LandingServiceError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         limits = config.sync.limits
         max_bytes = (limits.max_file_size_mb or 0) * 1024 * 1024 or None
 
@@ -2538,17 +2663,35 @@ def create_app(
             rejected: list[dict] = []
             for filename, data in pairs:
                 try:
-                    record = store_upload(
-                        directory,
+                    placement = landing.write(
+                        name,
                         filename or "upload",
                         data,
+                        unique=True,
                         max_bytes=max_bytes,
                     )
                 except ValueError as exc:
                     # One bad file must not lose the good ones in the same drop.
+                    # A remote zone raises this for the same two reasons a local
+                    # one does, before the bytes leave this process.
                     rejected.append({"filename": filename, "error": str(exc)})
                     continue
-                stored.append(record.__dict__)
+                except OSError as exc:
+                    # Not this file's fault, and not survivable per-file: the
+                    # filesystem is the same for every item in the drop, so
+                    # rejecting them one at a time would report a mount problem
+                    # as forty bad files. `mkdir(exist_ok=True)` does not raise
+                    # on a read-only mount when the directory already exists —
+                    # EEXIST wins over EROFS — so this is genuinely reachable
+                    # even when the check above passed.
+                    refusal = LandingZoneUnwritable(directory, exc)
+                    raise HTTPException(status_code=refusal.status, detail=str(refusal)) from exc
+                except LandingServiceError as exc:
+                    # The tier that writes is unreachable or refused. 502: this
+                    # region is the caller's proxy for it, and the caller did
+                    # nothing wrong.
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                stored.append(placement.stored.__dict__)
             if not stored:
                 raise HTTPException(
                     status_code=400,

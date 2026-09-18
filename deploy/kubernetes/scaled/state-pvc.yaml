@@ -39,6 +39,40 @@ spec:
     requests:
       storage: 50Gi
 ---
+# /state/uploads: the manual-upload landing zone, and the one path an api
+# replica may write.
+#
+# It is a separate claim rather than a subdirectory of pheasant-state for a
+# reason the access modes cannot express: a volume is mounted read-only or it
+# is not, and the api tier mounts /state read-only on purpose. Splitting the
+# landing zone out is what lets the drop zone work without handing the serving
+# tier write access to the graph, the vectors, the manifests and the snapshots.
+# It is mounted read-write at /state/uploads on the api and indexer tiers only.
+#
+# ReadWriteMany is a HARD requirement here too, and for a sharper reason than
+# on pheasant-state: api replicas *write* this one, from whichever node they
+# were scheduled on, and the indexer then reads what they wrote. With
+# ReadWriteOnce the upload succeeds on one node and the indexer finds nothing.
+#
+# Small. These are documents somebody dropped in a browser, not a corpus —
+# and once indexed, the retrievable copy lives in Postgres. Size it for the
+# originals you want to keep, since deleting the source deletes them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pheasant-uploads
+  namespace: pheasant
+  labels:
+    app.kubernetes.io/name: pheasant
+    app.kubernetes.io/component: uploads
+spec:
+  accessModes:
+    - ReadWriteMany
+  # storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 10Gi
+---
 # /workspace: the corpus. Read-only in every pod, so RWX here is about
 # sharing, not contention — and unlike /state it is often better supplied by
 # a git clone init-container or an object-store sync, in which case drop this

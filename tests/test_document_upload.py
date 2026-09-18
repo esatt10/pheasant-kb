@@ -190,6 +190,58 @@ def test_an_upload_with_no_usable_files_is_a_400(loaded_config, config_path: Pat
     assert response.status_code == 400
 
 
+def test_a_read_only_landing_zone_refuses_legibly_rather_than_crashing(
+    loaded_config, config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only `/state` is a deployment fact, not a caller's mistake.
+
+    Every non-``all`` role in the fleet mounts `/state` read-only, so the drop
+    zone's first ``mkdir`` raises ``OSError`` there. Left bare that surfaces as
+    a 500 with an errno in it, which reads as a crash and tells an operator
+    nothing about the mount that caused it — the reported symptom this guard
+    exists for. The refusal has to name the fix.
+    """
+
+    # Built first: `create_app` legitimately creates its state directories, and
+    # patching before that simulates a region that never started rather than a
+    # running replica whose landing zone is read-only.
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+
+    def _read_only(*_args, **_kwargs):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(Path, "mkdir", _read_only)
+
+    response = client.post(
+        "/sources/upload",
+        files=[_file("blocked.md")],
+        data={"source_name": "uploads", "sync_now": "false", "wait": "true"},
+    )
+
+    # 503, not 500: the region is telling an operator its deployment is wrong,
+    # and not 4xx, because resubmitting a different file changes nothing.
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "Read-only file system" in detail
+    assert "/state/uploads" in detail
+
+
+def test_the_unwritable_landing_zone_refusal_is_in_the_public_code_table() -> None:
+    """A refusal an agent cannot branch on is a refusal it retries forever.
+
+    `ContaminationRefused` was once absent from the derived code table for
+    exactly this reason, so a new code owes the same check.
+    """
+
+    from pheasant.services.errors import LandingZoneUnwritable
+
+    refusal = LandingZoneUnwritable("/state/uploads/x", OSError(30, "Read-only file system"))
+    assert refusal.code == "LANDING_ZONE_UNWRITABLE"
+    assert refusal.status == 503
+    # Not retryable: an operator has to change a mount first.
+    assert refusal.retryable is False
+
+
 def test_upload_with_wait_false_returns_a_job_to_follow(loaded_config, config_path: Path) -> None:
     client = TestClient(create_app(config=loaded_config, config_path=config_path))
     response = client.post(

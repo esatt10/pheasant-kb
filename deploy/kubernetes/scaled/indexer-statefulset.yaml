@@ -67,9 +67,16 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
-            # The only writer of /state in the fleet.
+            # The only writer of committed state in the fleet.
             - name: state
               mountPath: /state
+            # The manual-upload landing zone, which the api tier also writes.
+            # Same claim, same path, so the `document_folder` source an upload
+            # registers (`path: /state/uploads/<name>`) resolves here to the
+            # bytes the api replica wrote. Without it this pod reads the empty
+            # uploads/ inside the state claim and indexes nothing.
+            - name: uploads
+              mountPath: /state/uploads
             - name: workspace
               mountPath: /workspace
               readOnly: true
@@ -117,6 +124,9 @@ spec:
         - name: state
           persistentVolumeClaim:
             claimName: pheasant-state
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: pheasant-uploads
         - name: workspace
           persistentVolumeClaim:
             claimName: pheasant-workspace

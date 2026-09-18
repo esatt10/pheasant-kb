@@ -43,13 +43,18 @@ import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
+from pheasant.ingestion.landing_service import LandingServiceError
 from pheasant.persistence import receipts as receipt_ledger
 from pheasant.security import corpus_policy
 from pheasant.services import ServiceContext
-from pheasant.services.errors import ContaminationRefused, InvalidRequest
+from pheasant.services.errors import (
+    ContaminationRefused,
+    InvalidRequest,
+    LandingServiceUnavailable,
+    LandingZoneUnwritable,
+)
 
 #: Dispositions, in the order a receipt may travel through them. `accepted` and
 #: `indexed` are a barrier, not a status gradient: `rejected` and `failed` are
@@ -120,7 +125,8 @@ def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any
     kb_id = context.knowledge_base(request.knowledge_base)
     submission_id = request.submission_id or f"sub-{uuid.uuid4().hex[:16]}"
     source_name = _safe_source_name(request.source_name)
-    directory = _submission_root(context, source_name)
+    zone = context.landing_zone()
+    directory = _submission_root(zone, source_name)
     denylist = _denylist(context.config)
     limits = getattr(getattr(context.config, "sync", None), "limits", None)
     max_bytes = (getattr(limits, "max_file_size_mb", 0) or 0) * 1024 * 1024 or None
@@ -150,14 +156,30 @@ def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any
             )
             rejected.append(receipt)
             continue
-        target = directory / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
         # Written unconditionally, and to the *same* path on a retry. Writing
         # identical bytes over identical bytes is what makes the retry free
         # downstream: the connector's sha256 comparison then skips the file
         # before reading it, which is pillar 2 doing the deduplication rather
         # than this module inventing its own.
-        target.write_bytes(item.content)
+        #
+        # Through the zone, not the filesystem: on a serving replica whose
+        # `/state` is read-only this forwards to the tier that writes, and the
+        # far side performs this identical write. ``unique=False`` because a
+        # retry carrying one idempotency key means one file — the drop zone
+        # asks for the opposite, and that difference is the whole reason the
+        # flag exists.
+        try:
+            placement = zone.write(source_name, relative, item.content, unique=False)
+        except LandingServiceError as exc:
+            raise LandingServiceUnavailable(exc) from exc
+        except OSError as exc:
+            # `mkdir(exist_ok=True)` does not raise on a read-only mount when
+            # the directory is already there — EEXIST wins over EROFS — so this
+            # is reachable even though `_submission_root` just succeeded.
+            # Raised rather than receipted per item: one unwritable filesystem
+            # is one problem, not one per document.
+            raise LandingZoneUnwritable(directory, exc) from exc
+        target = placement.stored.path
         receipt = receipt_ledger.record(
             context.state,
             kb_id=kb_id,
@@ -170,7 +192,7 @@ def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any
             content_sha256=item.sha256(),
             detail={
                 "relative_path": relative,
-                "path": str(target),
+                "path": target,
                 "agent_id": request.agent_id,
                 **item.metadata,
             },
@@ -324,10 +346,26 @@ def _safe_source_name(raw: str) -> str:
     return safe_filename(raw or "submissions", fallback="submissions")
 
 
-def _submission_root(context: ServiceContext, source_name: str) -> Path:
-    from pheasant.ingestion.landing import upload_root
+def _submission_root(zone: Any, source_name: str) -> str:
+    """The landing directory, or a refusal naming the mount that is wrong.
 
-    return upload_root(Path(context.config.pheasant.state_path), source_name)
+    Resolving it creates the directory, so this is where a read-only mount is
+    discovered — before any item is processed, which is why the whole batch
+    refuses here rather than receipting N identical failures. A landing zone
+    nobody can write is an operator's problem, and it is the same problem for
+    every item in the submission.
+
+    On a forwarding zone this is a question asked of the tier that writes, so
+    the path returned is *that* process's, which is the one a caller needs: a
+    submission's directory is where the indexer will read the files from.
+    """
+
+    try:
+        return zone.directory(source_name)
+    except LandingServiceError as exc:
+        raise LandingServiceUnavailable(exc) from exc
+    except OSError as exc:
+        raise LandingZoneUnwritable(source_name, exc) from exc
 
 
 def _placement(raw: str, existing: dict[str, Any] | None) -> str:
