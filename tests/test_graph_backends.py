@@ -667,9 +667,17 @@ def test_the_row_backend_works_on_postgres(tmp_path: Path) -> None:
         assert (nodes, edges) == rows.recount(KB), "the maintained counts disagree with a scan"
         assert nodes > 10
 
-        # An unchanged resync republishes the same id (pillar 1).
+        # An unchanged resync republishes the same id (pillar 1). Incremental,
+        # for the reason the SQLite test of this property spells out: a `full`
+        # re-index removes the source's nodes and rebuilds them, so `created_at`
+        # legitimately resets and the id moves. Asserting it across two `full`
+        # syncs is a clock race rather than a property -- it holds only while
+        # both land inside the same `utc_now()` tick, which a fast SQLite run
+        # does and a Postgres one, paying a socket round trip per statement,
+        # does not. Reproduced on both backends before it was changed: with a
+        # second between them, `full` moves the id on SQLite too.
         first = engine.graph_store.published_generation(KB)
-        engine.sync_source("docs", "full")
+        engine.sync_source("docs", "incremental")
         assert (
             engine.graph_store.published_generation(KB)["generation_id"] == (first["generation_id"])
         )
