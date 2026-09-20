@@ -658,6 +658,30 @@ class IngestionSettings(ModelMixin):
     transcriber: TranscriberSettings = field(default_factory=TranscriberSettings)
     extractor: ExtractorSettings = field(default_factory=ExtractorSettings)
 
+    #: Optional internal landing service. Manual ingestion — the UI drop zone,
+    #: an agent's ``ingest_submit``, a readiness probe's scratch source — has
+    #: to write bytes into ``<state_path>/uploads`` before the normal pipeline
+    #: can index them. In the role-split fleet the tier a browser or an agent
+    #: can reach is ``api``, which mounts ``/state`` read-only precisely
+    #: because the indexer is the sole writer of committed state. When this is
+    #: set, such a process forwards the bytes to the tier that *can* write
+    #: them instead of writing locally, so the serving tier needs no write
+    #: access anywhere.
+    #:
+    #: ``None`` — the default — keeps the local write, so a single container
+    #: and every standalone install behave exactly as they always have. The
+    #: process that *serves* this endpoint never forwards to itself.
+    landing_service_url: str | None = None
+    #: Bearer token environment variable shared by landing clients and the tier
+    #: that serves the endpoint. Its own boundary: holding it means being able
+    #: to put bytes into the corpus, which is why it is neither the API token
+    #: nor the graph token. The secret itself never belongs in YAML.
+    landing_service_token_env: str = "PHEASANT_INGESTION_SERVICE_TOKEN"
+    #: Per-file deadline. Generous next to the graph service's, because this
+    #: carries a document body rather than a query — a 100 MB upload over a
+    #: cluster network is a different order of operation from a node lookup.
+    landing_service_timeout_seconds: float = 120.0
+
 
 @dataclass
 class WatcherSettings(ModelMixin):

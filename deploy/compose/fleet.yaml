@@ -69,6 +69,21 @@ ingestion:
   extractor:
     provider: auto
     html_text: true
+  # Manual ingestion in a role-split fleet. The UI drop zone, an agent's
+  # `ingest_submit` and the readiness probe all have to write bytes into
+  # /state/uploads before the normal pipeline can index them -- and the only
+  # tier a browser or an agent can reach is `api`, which mounts /state
+  # read-only because the indexer is the sole writer of committed state.
+  #
+  # So the bytes are forwarded to the indexer, which performs the identical
+  # local write. The indexer reads this same file and ignores the setting: a
+  # process that writes its own landing zone never forwards, which is also
+  # what stops the tier serving this endpoint proxying to itself.
+  #
+  # Unset in a single container, where the process that receives an upload is
+  # the process that indexes it and there is nothing to forward to.
+  landing_service_url: http://indexer:8765
+  landing_service_token_env: PHEASANT_INGESTION_SERVICE_TOKEN
 sync:
   watcher:
     enabled: true
@@ -141,6 +156,12 @@ security:
     # away from the network" is a combination that only stays safe by luck.
     # Set behind_authenticating_proxy instead if an ingress already
     # authenticates callers, and drop PHEASANT_API_TOKEN from the environment.
+    #
+    # Turning the token off for a local UI session belongs in a private
+    # override -- `docker compose -f docker-compose.scale.yml -f my.yml`, or a
+    # fleet.yaml that is not this one -- rather than here: this file is a
+    # published artifact, and the shipped fleet is the one deployment shape
+    # that binds 0.0.0.0 by necessity.
     token_env: PHEASANT_API_TOKEN
     behind_authenticating_proxy: false
 memory:

@@ -195,11 +195,12 @@ jobs:
       # otherwise reach a user's host before it reached us.
       - name: Validate the observability profile parses
         env:
-          # Distinct values: the graph and worker tokens are two trust
-          # boundaries, and a serving process refuses to start when they match.
+          # Distinct values: these are separate trust boundaries, and a
+          # serving process refuses to start when two of them match.
           PHEASANT_API_TOKEN: ci-config-check-api
           PHEASANT_GRAPH_SERVICE_TOKEN: ci-config-check-graph
           PHEASANT_INDEX_WORKER_TOKEN: ci-config-check-worker
+          PHEASANT_INGESTION_SERVICE_TOKEN: ci-config-check-ingestion
           OPENAI_API_KEY: ci-config-check
         run: |
           docker compose -f deploy/compose/docker-compose.scale.yml \

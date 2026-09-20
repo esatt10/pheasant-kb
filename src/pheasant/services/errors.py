@@ -198,6 +198,63 @@ class RegionBusy(ServiceError):
         self.what = what
 
 
+class LandingZoneUnwritable(ServiceError):
+    """Submitted bytes have nowhere to land in this deployment.
+
+    Manual ingestion -- the UI drop zone, an agent's `ingest_submit`, a
+    readiness probe's scratch source -- writes into
+    ``<state_path>/uploads/<source>`` before anything else happens, and then
+    registers that directory as an ordinary source. A deployment that mounts
+    that path read-only fails at the first ``mkdir`` with an errno, which is
+    both unactionable and, as a bare 500, indistinguishable from a crash.
+
+    It has its own type because none of the existing ones is honest about it.
+    It is not `InvalidRequest`: the request was fine and resubmitting a smaller
+    or differently-named file changes nothing. It is not `CapabilityUnsupported`
+    either, which says *this build cannot*; this build can, and one deployment
+    of it cannot, which is the distinction an operator needs to be pointed at a
+    mount rather than at a version.
+
+    Not retryable. The identical call cannot succeed until somebody changes a
+    volume, so a harness that retries is a harness filling a log.
+    """
+
+    status = 503
+    code = "LANDING_ZONE_UNWRITABLE"
+
+    def __init__(self, directory: object, detail: object = "") -> None:
+        message = (
+            f"Cannot write the upload landing zone at {directory}: {detail}. "
+            "This region serves uploads from a path it cannot write. In the "
+            "role-split fleet the api tier mounts /state read-only, so the "
+            "landing zone needs its own read-write mount at /state/uploads on "
+            "both the api and indexer tiers -- see the `pheasant-uploads` "
+            "volume in deploy/compose/docker-compose.scale.yml."
+        )
+        super().__init__(message)
+        self.directory = str(directory)
+
+
+class LandingServiceUnavailable(ServiceError):
+    """The tier that writes submitted bytes could not be reached.
+
+    Distinct from `LandingZoneUnwritable`, and the pair is the clearest example
+    in this module of why ``retryable`` is a field rather than something a
+    caller infers. Both mean "your document is not stored". One is a mount an
+    operator has to change and will fail identically forever; this one is a
+    process that was not answering a moment ago and may be answering now. A
+    client that cannot tell them apart either gives up on a restart or hammers
+    a misconfiguration.
+    """
+
+    status = 502
+    code = "LANDING_SERVICE_UNAVAILABLE"
+    retryable = True
+
+    def __init__(self, detail: object) -> None:
+        super().__init__(f"The landing service could not store this submission: {detail}")
+
+
 class ContaminationRefused(InvalidRequest):
     """A write matching ``readiness.corpus_denylist``.
 

@@ -72,7 +72,40 @@ class _LazyNodeMap:
     endpoint, and the same handful of hub nodes are asked for over and over
     within one scan. Bounded because it lives for one scan and the scan is
     already bounded by its candidate set.
+
+    **It answers ``get`` and deliberately nothing else.** The in-memory graph's
+    ``node_map()`` is the live node dict, so a caller can iterate it, call
+    ``.items()`` on it, or test membership — and every one of those is a *full
+    scan of the region* once the graph lives behind a store. Two call sites had
+    already been written that way against the dict and crashed here with a bare
+    ``TypeError: '_LazyNodeMap' object is not iterable``, on the row backend,
+    which is the default: ``/graph/diagnostics`` iterated it and ``/taxonomy``
+    called ``.items()``.
+
+    Supplying those methods was the tempting fix and the wrong one. It would
+    make an accidental whole-graph scan *work*, silently, on the exact path the
+    row backend exists to keep off a serving replica — the same shape as every
+    other "free while it was a dict in front of you" entry in this codebase's
+    history. So they refuse, and the refusal names the accessor that is honest
+    about its cost. A caller that genuinely wants every node wants
+    :meth:`SqlGraph.iter_nodes`, which streams and says so.
+
+    **And yes, :class:`_NodeView` next door does iterate.** That is deliberate
+    rather than an oversight in one of them. ``graph.nodes`` is the general
+    read surface, shaped like the node view callers already write against, and
+    iterating a node view reads as a whole-graph pass because it is one. This
+    is ``node_map()``: a cache handed out *for one bounded scan* precisely so
+    repeated point lookups of the same hub nodes cost one query instead of
+    many. Walking it would bypass the only thing it is for and scan the region
+    anyway, so the two surfaces differ because the questions differ.
     """
+
+    #: Named in every refusal below, so the message carries the fix.
+    _WHOLE_GRAPH_HINT = (
+        "a store-backed node_map() answers get() only, because walking it is a "
+        "full scan of the region. Use graph.iter_nodes() for a whole-graph pass "
+        "(it streams, on both backends), or get() for point lookups."
+    )
 
     def __init__(self, graph: SqlGraph) -> None:
         self.graph = graph
@@ -83,6 +116,22 @@ class _LazyNodeMap:
             self._seen[key] = self.graph.rows.get_node(self.graph.kb_id, key)
         found = self._seen[key]
         return default if found is None else found
+
+    def __iter__(self) -> Any:
+        raise TypeError(self._WHOLE_GRAPH_HINT)
+
+    def items(self) -> Any:
+        raise TypeError(self._WHOLE_GRAPH_HINT)
+
+    def keys(self) -> Any:
+        raise TypeError(self._WHOLE_GRAPH_HINT)
+
+    def values(self) -> Any:
+        raise TypeError(self._WHOLE_GRAPH_HINT)
+
+    def __len__(self) -> int:
+        # Not a scan either: `number_of_nodes` is a maintained count.
+        raise TypeError(f"{self._WHOLE_GRAPH_HINT} For a count, use number_of_nodes().")
 
 
 class SqlGraph:

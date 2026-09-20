@@ -1040,12 +1040,46 @@ def test_one_variable_named_for_both_boundaries_is_refused(
     assert "two trust boundaries" in str(refusal.value)
 
 
+def test_the_landing_token_is_its_own_boundary_too(tmp_path: Path, monkeypatch: Any) -> None:
+    """A write credential shared with the least-trusted tier is worse, not better.
+
+    The landing token lets its holder put bytes into the corpus. A worker
+    parses bytes the indexer hands it and has no business choosing what the
+    region indexes, so the collision the graph token is already refused for is
+    refused here as well — by value and by variable name.
+    """
+
+    monkeypatch.setenv("PHEASANT_API_TOKEN", "api-token")
+    monkeypatch.setenv("PHEASANT_INDEX_WORKER_TOKEN", "shared-by-mistake")
+    monkeypatch.setenv("PHEASANT_GRAPH_SERVICE_TOKEN", "its-own-value")
+    monkeypatch.setenv("PHEASANT_INGESTION_SERVICE_TOKEN", "shared-by-mistake")
+    config = _fleet_config(tmp_path)
+    config.ingestion.landing_service_token_env = "PHEASANT_INGESTION_SERVICE_TOKEN"
+
+    with pytest.raises(RoleConfigurationError) as refusal:
+        validate_role(resolve_role(config, "api"), config)
+    assert "same value" in str(refusal.value)
+
+    monkeypatch.setenv("PHEASANT_INGESTION_SERVICE_TOKEN", "a-fourth-value")
+    validate_role(resolve_role(config, "api"), config)
+
+    # And the same collapse spelled in YAML rather than in the environment.
+    config.ingestion.landing_service_token_env = "PHEASANT_INDEX_WORKER_TOKEN"
+    with pytest.raises(RoleConfigurationError) as refusal:
+        validate_role(resolve_role(config, "api"), config)
+    assert "two trust boundaries" in str(refusal.value)
+
+
 @pytest.mark.parametrize(
     ("variable", "fragment"),
     [
         ("PHEASANT_DATABASE_URL", "the state database"),
         ("OPENAI_API_KEY", "provider"),
         ("PHEASANT_GRAPH_SERVICE_TOKEN", "graph-query API"),
+        # A *write* credential: holding it means being able to put bytes into
+        # the corpus. A worker parses bytes the indexer hands it and has no
+        # business choosing what the region indexes.
+        ("PHEASANT_INGESTION_SERVICE_TOKEN", "landing service"),
         ("IDP_TOKEN", "identity provider"),
     ],
 )
@@ -1060,7 +1094,12 @@ def test_a_worker_refuses_every_credential_it_can_never_use(
     hold — and it started happily.
     """
 
-    for name in ("PHEASANT_DATABASE_URL", "OPENAI_API_KEY", "PHEASANT_GRAPH_SERVICE_TOKEN"):
+    for name in (
+        "PHEASANT_DATABASE_URL",
+        "OPENAI_API_KEY",
+        "PHEASANT_GRAPH_SERVICE_TOKEN",
+        "PHEASANT_INGESTION_SERVICE_TOKEN",
+    ):
         monkeypatch.delenv(name, raising=False)
     config = _fleet_config(tmp_path, server={"host": "0.0.0.0", "role": "worker"})  # noqa: S104
     config.server.api.enabled = False

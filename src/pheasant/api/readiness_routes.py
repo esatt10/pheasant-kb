@@ -114,12 +114,17 @@ def register_readiness_routes(app: FastAPI, *, config: Any, services: Any, engin
         rather than accumulating one per run.
         """
 
-        from pheasant.ingestion.landing import upload_root
         from pheasant.readiness.probes import PROBE_SOURCE
 
         if source_name != PROBE_SOURCE:
             raise ValueError(f"the readiness plane only indexes {PROBE_SOURCE}")
-        directory = upload_root(Path(config.pheasant.state_path), source_name)
+        # Through the landing zone, not the filesystem. The probe's documents
+        # already travel that way (they go through `services.ingestion.submit`),
+        # so resolving the directory locally would ask a serving replica to
+        # `mkdir` on the read-only mount its own submissions deliberately avoid
+        # — and the scratch source would then be registered at a path the
+        # writing tier is not the one holding.
+        directory = Path(services.landing_zone().directory(source_name))
         if not any(source.name == source_name for source in config.sources):
             # Registered through the registry, exactly as `POST /sources` does
             # it. A readiness check that indexed through a private path would

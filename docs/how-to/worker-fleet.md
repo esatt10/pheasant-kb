@@ -199,15 +199,16 @@ version, and both are the *other* trade from the single container — take them
 only past the point where one container stops being enough
 ([capacity planning](capacity-planning.md)).
 
-### Three secrets, not one
+### Four secrets, not one
 
-Before either runtime: the fleet has three trust boundaries and each needs its
+Before either runtime: the fleet has four trust boundaries and each needs its
 own value.
 
 ```bash
-export PHEASANT_API_TOKEN=$(openssl rand -hex 32)            # callers -> the API
-export PHEASANT_GRAPH_SERVICE_TOKEN=$(openssl rand -hex 32)  # API -> the graph service
-export PHEASANT_INDEX_WORKER_TOKEN=$(openssl rand -hex 32)   # indexer -> the workers
+export PHEASANT_API_TOKEN=$(openssl rand -hex 32)               # callers -> the API
+export PHEASANT_GRAPH_SERVICE_TOKEN=$(openssl rand -hex 32)     # API -> the graph service
+export PHEASANT_INDEX_WORKER_TOKEN=$(openssl rand -hex 32)      # indexer -> the workers
+export PHEASANT_INGESTION_SERVICE_TOKEN=$(openssl rand -hex 32) # API -> the landing service
 ```
 
 One `openssl rand` per line, and that is the whole point. Workers are the
@@ -217,6 +218,18 @@ necessity. A value shared with the graph boundary would mean any compromised
 worker also held the credential for the internal graph API, which serves the
 whole graph. The shipped Compose file used to do exactly that; `serve` now
 **refuses to start** when the two resolve to the same value.
+
+The fourth is what makes **manual upload** work here at all, and it is worth
+knowing why it needs one. An api replica mounts `/state` read-only, because the
+indexer is the sole writer of committed state — so the UI drop zone, an agent's
+`ingest_submit` and the readiness probe have nowhere to put their bytes. They
+are forwarded to the indexer, which performs the identical local write; the
+serving tier still writes nothing. Holding that token means being able to put
+bytes into the corpus, so it is a distinct value and `serve` refuses it
+colliding with the worker token as well. It is configured by
+`ingestion.landing_service_url` — already set in `fleet.yaml` and the scaled
+ConfigMap — and is a no-op in a single container, where the process that
+accepts an upload is the one that indexes it.
 
 ### Compose
 
@@ -248,7 +261,8 @@ kubectl -n pheasant create secret generic pheasant-secrets \
   --from-literal=PHEASANT_DATABASE_URL='postgresql://…' \
   --from-literal=PHEASANT_API_TOKEN="$(openssl rand -hex 32)" \
   --from-literal=PHEASANT_INDEX_WORKER_TOKEN="$(openssl rand -hex 32)" \
-  --from-literal=PHEASANT_GRAPH_SERVICE_TOKEN="$(openssl rand -hex 32)"
+  --from-literal=PHEASANT_GRAPH_SERVICE_TOKEN="$(openssl rand -hex 32)" \
+  --from-literal=PHEASANT_INGESTION_SERVICE_TOKEN="$(openssl rand -hex 32)"
 kubectl apply -f deploy/kubernetes/scaled/
 ```
 

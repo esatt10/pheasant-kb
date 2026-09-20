@@ -224,14 +224,15 @@ jobs:
           # The advanced, scale-out and reset topologies are published artifacts too,
           # and nothing else in CI parses them. `config` resolves the image
           # references and every interpolation, so a malformed one fails here
-          # rather than on a user's host. The fleet declares its three secrets
+          # rather than on a user's host. The fleet declares its four secrets
           # as required-with-no-default on purpose; placeholders satisfy the
           # parse without pretending they are usable values. Distinct
-          # placeholders, because the graph and worker tokens are two trust
-          # boundaries and a serving process refuses to start when they match.
+          # placeholders, because these are separate trust boundaries and a
+          # serving process refuses to start when two of them match.
           PHEASANT_API_TOKEN=ci-config-check-api \
           PHEASANT_GRAPH_SERVICE_TOKEN=ci-config-check-graph \
           PHEASANT_INDEX_WORKER_TOKEN=ci-config-check-worker \
+          PHEASANT_INGESTION_SERVICE_TOKEN=ci-config-check-ingestion \
           OPENAI_API_KEY=ci-config-check \
             docker compose -f deploy/compose/docker-compose.scale.yml config --quiet
           OPENAI_API_KEY=ci-config-check \

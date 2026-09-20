@@ -78,6 +78,22 @@ data:
         remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
         remote_worker_batch_size: 8
         worker_transport: http
+    ingestion:
+      # Manual ingestion — the UI drop zone, an agent's `ingest_submit`, the
+      # readiness probe's scratch source — writes bytes before the normal
+      # pipeline can index them, and the tier a browser or an agent reaches is
+      # `api`, whose /state mount is readOnly because the indexer is the sole
+      # writer of committed state. So the bytes are forwarded to the indexer,
+      # which performs the identical local write.
+      #
+      # The indexer reads this same ConfigMap and ignores the setting: a
+      # process that writes its own landing zone never forwards, which is what
+      # keeps the tier serving this endpoint from proxying to itself.
+      #
+      # Headless Service, resolved to the pod. Nothing load-balances to an
+      # indexer, and there is deliberately one commit authority per shard.
+      landing_service_url: http://pheasant-indexer:8765
+      landing_service_token_env: PHEASANT_INGESTION_SERVICE_TOKEN
     graph:
       # The API tier keeps no full graph resident. This Service can be scaled
       # independently or deployed once per knowledge-base shard.

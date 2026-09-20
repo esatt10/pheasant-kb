@@ -257,6 +257,7 @@ def _credential_envs(config: object) -> list[tuple[str, str]]:
         (named("assistant.api_key_env"), "the chat provider"),
         (named("security.idp.api_key_env"), "the identity provider"),
         (named("graph.query_service_token_env"), "the internal graph-query API"),
+        (named("ingestion.landing_service_token_env"), "the internal landing service"),
     ]
     # `security.api_auth.token_env` is deliberately absent: that is the key to
     # this process's own front door, not a credential to somewhere else, and a
@@ -319,28 +320,54 @@ def _validate_boundary_tokens(config: object) -> None:
     carefully drawn boundary is defeated by a convenience in a deployment
     file. Two variables in the manifests is the fix; this is what keeps it
     fixed.
+
+    The landing token joined the same rule when manual ingestion stopped
+    requiring a writable ``/state`` on the serving tier. It is a *write*
+    credential — holding it means putting bytes into the corpus — which makes
+    sharing it with the least-trusted tier worse than sharing the graph token,
+    not better: a worker parses bytes it is handed by the indexer and has no
+    business choosing what the region indexes.
     """
 
-    graph_env = str(getattr(getattr(config, "graph", None), "query_service_token_env", "") or "")
     concurrency = getattr(getattr(config, "sync", None), "concurrency", None)
     worker_env = str(getattr(concurrency, "remote_worker_token_env", "") or "")
-    if not graph_env or not worker_env:
+    if not worker_env:
         return
-    if graph_env.strip() == worker_env.strip():
-        raise RoleConfigurationError(
-            f"graph.query_service_token_env and sync.concurrency.remote_worker_token_env both "
-            f"name {graph_env!r}. Those are two trust boundaries — a worker holds the second by "
-            "necessity — so one variable means any worker also holds the credential for the "
-            "internal graph-query API. Give them separate names."
-        )
-    graph_token, worker_token = _env_value(graph_env), _env_value(worker_env)
-    if graph_token and worker_token and graph_token == worker_token:
-        raise RoleConfigurationError(
-            f"{graph_env} and {worker_env} resolve to the same value. Those are two trust "
-            "boundaries: workers hold the indexing token by necessity, so sharing it hands "
-            "every worker the credential for the internal graph-query API, which serves the "
-            "whole graph. Generate a second random value for one of them."
-        )
+    ingestion = getattr(config, "ingestion", None)
+    # Every internal-service credential the *worker* tier must not also hold,
+    # as (setting, variable, what holding it would let you do). A list rather
+    # than a pair because there are two of these now and the next one should
+    # cost a line here instead of a third copy of the argument below.
+    guarded = [
+        (
+            "graph.query_service_token_env",
+            str(getattr(getattr(config, "graph", None), "query_service_token_env", "") or ""),
+            "the internal graph-query API, which serves the whole graph",
+        ),
+        (
+            "ingestion.landing_service_token_env",
+            str(getattr(ingestion, "landing_service_token_env", "") or ""),
+            "the internal landing service, which puts bytes into the corpus",
+        ),
+    ]
+    for setting, env_name, capability in guarded:
+        if not env_name:
+            continue
+        if env_name.strip() == worker_env.strip():
+            raise RoleConfigurationError(
+                f"{setting} and sync.concurrency.remote_worker_token_env both name "
+                f"{env_name!r}. Those are two trust boundaries — a worker holds the second by "
+                f"necessity — so one variable means any worker also holds the credential for "
+                f"{capability}. Give them separate names."
+            )
+        token, worker_token = _env_value(env_name), _env_value(worker_env)
+        if token and worker_token and token == worker_token:
+            raise RoleConfigurationError(
+                f"{env_name} and {worker_env} resolve to the same value. Those are two trust "
+                "boundaries: workers hold the indexing token by necessity, so sharing it hands "
+                f"every worker the credential for {capability}. Generate a second random value "
+                "for one of them."
+            )
 
 
 def _validate_serving_exposure(policy: RolePolicy, config: object) -> None:

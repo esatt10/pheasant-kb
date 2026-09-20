@@ -142,6 +142,29 @@ class StoredUpload:
     size_bytes: int
 
 
+def check_submission_bytes(name: str, data: bytes, max_bytes: int | None) -> None:
+    """Refuse bytes that may not be written, before anything writes them.
+
+    One spelling, called from three places: this module's own writer, the
+    forwarding client (which refuses before spending a cluster's bandwidth to
+    reach the same answer), and the far side of that hop (which must not trust
+    the client's check — a server that only validates what a well-behaved
+    caller already validated is not validating). Two spellings of one refusal
+    is the same defect as two implementations of one operation, one level down.
+
+    The check happens before the write, not after: accepting the bytes and then
+    deleting them still means the disk held them.
+    """
+
+    if max_bytes is not None and len(data) > max_bytes:
+        raise ValueError(
+            f"{name} is {len(data) // (1024 * 1024)} MB, over the "
+            f"{max_bytes // (1024 * 1024)} MB per-file limit (sync.limits.max_file_size_mb)"
+        )
+    if not data:
+        raise ValueError(f"{name} is empty")
+
+
 def store_upload(
     directory: Path,
     filename: str,
@@ -149,18 +172,8 @@ def store_upload(
     *,
     max_bytes: int | None = None,
 ) -> StoredUpload:
-    """Write one uploaded file, refusing anything over ``max_bytes``.
-
-    The size check happens before the write, not after: accepting the bytes and
-    then deleting them still means the disk held them.
-    """
-    if max_bytes is not None and len(data) > max_bytes:
-        raise ValueError(
-            f"{filename} is {len(data) // (1024 * 1024)} MB, over the "
-            f"{max_bytes // (1024 * 1024)} MB per-file limit (sync.limits.max_file_size_mb)"
-        )
-    if not data:
-        raise ValueError(f"{filename} is empty")
+    """Write one uploaded file, refusing anything over ``max_bytes``."""
+    check_submission_bytes(filename, data, max_bytes)
     directory.mkdir(parents=True, exist_ok=True)
     target = unique_path(directory, safe_filename(filename))
     target.write_bytes(data)

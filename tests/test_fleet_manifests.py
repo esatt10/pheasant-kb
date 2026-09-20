@@ -775,11 +775,21 @@ def test_the_compose_fleet_gives_each_boundary_its_own_secret() -> None:
     fleet_env = _compose_env(COMPOSE_FLEET, "api")
     worker_env = _compose_env(COMPOSE_FLEET, "worker")
 
-    for required in ("PHEASANT_API_TOKEN", "PHEASANT_GRAPH_SERVICE_TOKEN"):
+    for required in (
+        "PHEASANT_API_TOKEN",
+        "PHEASANT_GRAPH_SERVICE_TOKEN",
+        # The write boundary: holding it means being able to put bytes into the
+        # corpus, which is why it is not the graph token and not the API token.
+        "PHEASANT_INGESTION_SERVICE_TOKEN",
+    ):
         assert required in fleet_env
         # `${VAR:?...}` — the fleet refuses to come up rather than defaulting.
         assert fleet_env[required].startswith("unset-"), f"{required} has a default"
     assert fleet_env["PHEASANT_GRAPH_SERVICE_TOKEN"] != fleet_env["PHEASANT_INDEX_WORKER_TOKEN"]
+    assert fleet_env["PHEASANT_INGESTION_SERVICE_TOKEN"] != fleet_env["PHEASANT_INDEX_WORKER_TOKEN"]
+    assert (
+        fleet_env["PHEASANT_INGESTION_SERVICE_TOKEN"] != fleet_env["PHEASANT_GRAPH_SERVICE_TOKEN"]
+    )
 
     # And the worker still gets exactly one secret.
     assert set(worker_env) == {"PHEASANT_CONFIG", "PHEASANT_INDEX_WORKER_TOKEN"}

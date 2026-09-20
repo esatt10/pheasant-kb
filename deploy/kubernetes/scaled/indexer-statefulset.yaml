@@ -63,6 +63,14 @@ spec:
                 secretKeyRef:
                   name: pheasant-secrets
                   key: PHEASANT_INDEX_WORKER_TOKEN
+            # This tier *serves* the landing endpoint: it is the process that
+            # can write /state, so a forwarded upload is authenticated against
+            # this value here and performed as an ordinary local write.
+            - name: PHEASANT_INGESTION_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pheasant-secrets
+                  key: PHEASANT_INGESTION_SERVICE_TOKEN
           volumeMounts:
             - name: config
               mountPath: /config

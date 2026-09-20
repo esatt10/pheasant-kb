@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import yaml
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
@@ -34,6 +35,7 @@ from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter,
 from pheasant.graph.exporter import cytoscape, node_link
 from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
+from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
 from pheasant.jobs import JobRegistry
 from pheasant.persistence.paths import StatePaths
@@ -686,7 +688,10 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     "assistant": True,
     "graph": True,
     "memory": True,
-    "ingestion": False,  # captioner/transcriber are wired at engine construction
+    # captioner/transcriber are wired at engine construction, and the landing
+    # zone is resolved once beside the serving graph — pointing a replica at a
+    # different landing service is a restart, for the same reason.
+    "ingestion": False,
     "sync": False,  # watcher/scheduler services are started at boot
     # Path policy is read per request, but ACL wiring is not -- and since
     # 35.8 neither is `api_auth`: the token is resolved once at construction
@@ -1036,6 +1041,17 @@ def create_app(
         engine.serving_graph,
         force_local=role_policy.role is not Role.API,
     )
+    # Who writes a submitted document. Keyed on whether this process writes
+    # committed state at all, rather than on `api` specifically: every other
+    # serving role mounts `/state` read-only for the same reason api does, and
+    # a role that cannot write has the same problem whether or not it is the
+    # one a browser usually talks to. `all` and `indexer` write their own, so
+    # they never forward — which is also what stops the tier serving the
+    # endpoint from proxying to itself.
+    landing = landing_zone_for_config(
+        config,
+        force_local=role_policy.role in {Role.ALL, Role.INDEXER},
+    )
     # One resolver for the whole process: the searcher ranks with it, and
     # applying a bundle invalidates it here so this replica converges at once
     # rather than on its own TTL. Every *other* replica converges on theirs,
@@ -1061,6 +1077,12 @@ def create_app(
         searcher=search,
         graph=serving_graph,
         engine=engine,
+        # The same zone the drop-zone route uses. Passed explicitly rather than
+        # left to the context's fallback because this process knows its role
+        # and the service layer does not: `ingest_submit` lands bytes exactly
+        # like the drop zone does, and a surface that got one and not the other
+        # is the divergence `tests/test_surface_conformance.py` exists to catch.
+        landing=landing,
     )
 
     # Built before the lifespan so the lifespan closure can start its session
@@ -2492,115 +2514,20 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/sources/upload")
-    async def upload_documents(
-        files: Annotated[list[UploadFile], File()],
-        source_name: Annotated[str, Form()] = "uploads",
-        sync_now: Annotated[bool, Form()] = True,
-        wait: Annotated[bool, Form()] = False,
-    ) -> dict:
-        """Index documents dropped into the UI, with no filesystem setup.
-
-        The files land in a directory under ``/state/uploads`` which is
-        registered as an ordinary ``document_folder`` source — so they flow
-        through the same connector → chunk → graph pipeline as everything
-        else, get the same idempotent re-sync, and can be removed by deleting
-        the source. There is deliberately no second ingestion path.
-
-        Uploading again into the same source name adds to it rather than
-        replacing it, which is what "drop a few more files in" should mean.
-        """
-        import anyio.to_thread
-
-        from pheasant.api.uploads import safe_filename, store_upload, upload_root
-
-        if not files:
-            raise HTTPException(status_code=400, detail="No files uploaded")
-        name = safe_filename(source_name or "uploads", fallback="uploads")
-        directory = upload_root(Path(config.pheasant.state_path), name)
-        limits = config.sync.limits
-        max_bytes = (limits.max_file_size_mb or 0) * 1024 * 1024 or None
-
-        # Reading each upload's body is genuine async I/O and stays on the
-        # event loop. Everything after it — the disk write, the source
-        # registry, the audit log, and (wait=True) the whole sync pipeline —
-        # is blocking, synchronous work, so it moves onto a worker thread
-        # below. Left on the loop, one slow upload stalls every other
-        # request this process is serving: measured, a single wait=true
-        # upload delayed a *concurrently issued* GET /ready by the same ~5s
-        # the upload itself took.
-        pairs: list[tuple[str | None, bytes]] = [
-            (upload.filename, await upload.read()) for upload in files
-        ]
-
-        def _finish_upload() -> dict:
-            stored: list[dict] = []
-            rejected: list[dict] = []
-            for filename, data in pairs:
-                try:
-                    record = store_upload(
-                        directory,
-                        filename or "upload",
-                        data,
-                        max_bytes=max_bytes,
-                    )
-                except ValueError as exc:
-                    # One bad file must not lose the good ones in the same drop.
-                    rejected.append({"filename": filename, "error": str(exc)})
-                    continue
-                stored.append(record.__dict__)
-            if not stored:
-                raise HTTPException(
-                    status_code=400,
-                    detail="; ".join(item["error"] for item in rejected) or "Nothing stored",
-                )
-
-            registry = SourceRegistry(config, state)
-            existing = next((s for s in config.sources if s.name == name), None)
-            if existing is None:
-                source = _source_from_payload(
-                    {
-                        "name": name,
-                        "type": "document_folder",
-                        "path": str(directory),
-                        "description": f"Documents uploaded through the UI ({name})",
-                        # Uploads are arbitrary documents, not a code tree: the
-                        # default include list is code-shaped and would silently
-                        # drop a dropped PDF or .docx.
-                        "include": ["**/*"],
-                    }
-                )
-                registry.register_source(source)
-                config.sources = [s for s in config.sources if s.name != name]
-                config.sources.append(source)
-            audit(name, "upload_documents", {"files": [item["filename"] for item in stored]})
-
-            syncing = False
-            job_id = None
-            queued: list[str] = []
-            sync_result = None
-            if sync_now:
-                if wait:
-                    try:
-                        sync_result = _index(name, "incremental")["results"][0]
-                    except (KeyError, ValueError) as exc:
-                        raise HTTPException(status_code=400, detail=str(exc)) from exc
-                else:
-                    job_id, queued = _start_background_sync(name, "incremental")
-                    syncing = job_id is not None or bool(queued)
-            return {
-                "status": "stored",
-                "source_name": name,
-                "path": str(directory),
-                "stored": stored,
-                "rejected": rejected,
-                "syncing": syncing,
-                "job_id": job_id,
-                "queued_tasks": queued,
-                "sync_result": sync_result,
-            }
-
-        return await anyio.to_thread.run_sync(_finish_upload)
+    # Manual ingestion's two routes, in their own module: the drop zone and
+    # the internal endpoint that serves a remote landing zone. Registered here
+    # rather than beside the readiness routes because the drop zone closes
+    # over `_index` and `_start_background_sync`, which are defined above.
+    register_ingestion_routes(
+        app,
+        config=config,
+        state=state,
+        landing=landing,
+        audit=audit,
+        index=_index,
+        start_background_sync=_start_background_sync,
+        source_from_payload=_source_from_payload,
+    )
 
     @app.get("/fs/host-path")
     def fs_host_path(path: str) -> dict:
@@ -3917,41 +3844,51 @@ def create_app(
             return remote(source=source, path=path, max_nodes=max_nodes)
         by_document: dict[str, list[SectionHeading]] = {}
         seen = 0
-        for _node_id, data in graph_obj.node_map().items():
-            if data.get("type") != "heading":
-                continue
-            if source and data.get("source_id") != source:
-                continue
-            relative = str(data.get("relative_path") or "")
-            if path and relative != path:
-                continue
-            seen += 1
-            if seen > max(1, max_nodes):
-                break
-            parts = tuple(int(p) for p in (data.get("ordinal_parts") or []))
-            ordinal = (
-                Ordinal(
-                    parts=parts,
-                    series=str(data.get("ordinal_series") or ""),
-                    raw=str(data.get("number") or ""),
-                    relative=bool(data.get("ordinal_relative")),
-                    suffix=str(data.get("ordinal_suffix") or ""),
+        # `iter_nodes`, not `node_map()`: this is a whole-graph scan, and a
+        # store-backed graph's node map answers `get` and nothing else — by
+        # design, because iterating it would be a full scan wearing a dict's
+        # clothes. `iter_nodes` is the accessor that says so, and it streams on
+        # both backends, so the `break` below still stops the paging early.
+        #
+        # Under `reading()`, which both accessors have always required and this
+        # scan did not hold: on the in-memory graph it iterates the live node
+        # dict, so a concurrent sync mutating it mid-scan is a RuntimeError.
+        with graph_obj.reading():
+            for _node_id, data in graph_obj.iter_nodes():
+                if data.get("type") != "heading":
+                    continue
+                if source and data.get("source_id") != source:
+                    continue
+                relative = str(data.get("relative_path") or "")
+                if path and relative != path:
+                    continue
+                seen += 1
+                if seen > max(1, max_nodes):
+                    break
+                parts = tuple(int(p) for p in (data.get("ordinal_parts") or []))
+                ordinal = (
+                    Ordinal(
+                        parts=parts,
+                        series=str(data.get("ordinal_series") or ""),
+                        raw=str(data.get("number") or ""),
+                        relative=bool(data.get("ordinal_relative")),
+                        suffix=str(data.get("ordinal_suffix") or ""),
+                    )
+                    if parts
+                    else None
                 )
-                if parts
-                else None
-            )
-            by_document.setdefault(relative, []).append(
-                SectionHeading(
-                    line=int(data.get("start_line") or 0),
-                    level=int(data.get("level") or 1),
-                    number=data.get("number"),
-                    title=str(data.get("title") or ""),
-                    kind=str(data.get("kind") or ""),
-                    path=str(data.get("heading_path") or ""),
-                    pattern_level=int(data.get("pattern_level") or 0),
-                    ordinal=ordinal,
+                by_document.setdefault(relative, []).append(
+                    SectionHeading(
+                        line=int(data.get("start_line") or 0),
+                        level=int(data.get("level") or 1),
+                        number=data.get("number"),
+                        title=str(data.get("title") or ""),
+                        kind=str(data.get("kind") or ""),
+                        path=str(data.get("heading_path") or ""),
+                        pattern_level=int(data.get("pattern_level") or 0),
+                        ordinal=ordinal,
+                    )
                 )
-            )
 
         documents = []
         for relative in sorted(by_document):
@@ -4083,7 +4020,12 @@ def create_app(
             # An orphan is a node no edge touches. On a healthy index this is
             # near zero; a large number means enrichment did not run, or a
             # source indexed content that nothing links to.
-            orphans = [node_id for node_id in nodes if node_id not in degree]
+            #
+            # `iter_nodes`, not the `nodes` map above: that one answers `get`
+            # and nothing else on a store-backed graph, because iterating it
+            # would be a full scan disguised as a dict walk. `nodes` stays for
+            # the hub lookups below, which are the point-reads it exists for.
+            orphans = [node_id for node_id, _ in graph_obj.iter_nodes() if node_id not in degree]
             hub_rows = [
                 {
                     "node_id": node_id,

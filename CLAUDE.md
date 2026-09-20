@@ -133,7 +133,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 128 pytest modules, offline by design
+└── tests/                     ← 129 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -908,12 +908,32 @@ machines can reach with neither `security.api_auth.token_env` resolving nor
 standalone container keep starting with no configuration at all, but a pod
 binds `0.0.0.0` by necessity and the bind address is not a control there. The
 graph and worker tokens must not name one variable or resolve to one value:
-two boundaries, and workers hold the second by necessity. A `worker` refuses
-to hold a DSN, a model key, the IdP token, the graph token, a source list or a
-non-SQLite backend, and `server.api.enabled: false` is *enforced* — such a
-process answers the probes, `/metrics` and its own `/internal` routes and 404s
-the rest. `/internal/*` is exempt from the API token structurally, because
-requiring it there would hand every worker the region's front-door credential.
+two boundaries, and workers hold the second by necessity — and since the
+landing service the same is true of *its* token, which is a write credential.
+A `worker` refuses to hold a DSN, a model key, the IdP token, the graph token,
+the landing token, a source list or a non-SQLite backend, and
+`server.api.enabled: false` is *enforced* — such a process answers the probes,
+`/metrics` and its own `/internal` routes and 404s the rest. `/internal/*` is
+exempt from the API token structurally, because requiring it there would hand
+every worker the region's front-door credential.
+
+**Manual ingestion forwards rather than writing** (`ingestion/landing_service.py`,
+`ingestion.landing_service_url`, default `None`). The drop zone, `ingest_submit`
+and the readiness probe all land bytes in `<state_path>/uploads` before the
+normal pipeline sees them — and every serving role mounts `/state` read-only,
+because the indexer is the sole writer of committed state. So a process that
+does not write committed state forwards the bytes to one that does, over an
+authenticated `/internal/ingestion/land`, and the far side performs the
+identical `LocalLandingZone` write. Deliberately the same shape as
+`graph/query_service.py`, `force_local` escape included, because it is the same
+idea as the graph boundary and a second mechanism for one idea is a thing this
+codebase has paid for repeatedly. **There is still no second ingestion path**:
+what crosses the network is the bytes. Receipts, source registration and the
+sync request do *not* cross it — they are state-store writes, and the state
+store in a fleet is Postgres, which a serving replica can already write. Only
+the filesystem was ever the problem. Two refusals, split by what a caller
+should do: `LANDING_ZONE_UNWRITABLE` (not retryable — an operator must change a
+mount) and `LANDING_SERVICE_UNAVAILABLE` (retryable — the writer was down).
 
 **The graph handoff is announced, and the poll is the backstop.** Each commit
 publishes a content-addressed `generation_id` in the publication record and,
@@ -1710,6 +1730,52 @@ Each of these cost real time. They are listed because the shape recurs.
   incremental path changes what an incremental sync *does*, which is a
   correctness change with its own blast radius and deserves its own evidence
   rather than riding along with an efficiency pass.
+- **A stand-in that implements *part* of a mapping fails only on the backend
+  nobody tests, in production.** `SqlGraph.node_map()` returns a `_LazyNodeMap`
+  — a per-scan cache built for `_scan_edges`, which calls `get()` and nothing
+  else. It therefore implemented `get()` and nothing else, while the in-memory
+  graph's `node_map()` is the live node *dict*. Two endpoints had been written
+  against the dict and crashed on the row backend, which is the **default**:
+  `/graph/diagnostics` did `for node_id in nodes` (`TypeError: '_LazyNodeMap'
+  object is not iterable`) and `/taxonomy` did `.items()` (`AttributeError`).
+  Both are whole-graph endpoints the UI calls, both were 500 in every fleet
+  deployment, and the whole offline suite was blind to it for one reason worth
+  remembering: `SyncEngine.serving_graph()` hands a process that *builds* the
+  graph its own resident copy, so `role: all` — every test and every standalone
+  container — walks a dict and never constructs a `SqlGraph` at all. Only a
+  role that serves without building (`graph`, `api`) gets the store. Found by
+  running the fleet. The fix is `iter_nodes()` at both call sites, which
+  streams on both backends; the *durable* half is that `_LazyNodeMap` now
+  refuses `__iter__`/`items`/`keys`/`values`/`len` with a message naming
+  `iter_nodes()`. Supplying those methods was the tempting fix and the wrong
+  one — it would make an accidental whole-graph scan work silently on exactly
+  the serving path the row backend exists to keep free of it. `_NodeView`
+  (`graph.nodes`) does iterate, and that is not an inconsistency: a node view
+  is a whole-graph surface, while `node_map()` is a point-lookup cache whose
+  only purpose a walk would bypass. `/taxonomy` was also scanning without
+  holding `reading()`, which its own accessor's docstring has always required.
+- **A write path that assumes local disk is a feature that works only where it
+  was written.** Manual ingestion — the drop zone, `ingest_submit`, the
+  readiness probe — wrote bytes to `<state_path>/uploads` directly, which is
+  right in a single container and impossible on every serving role in the
+  fleet, all of which mount `/state` read-only *on purpose*. So the feature was
+  a 500 on the only tier a browser or an agent can reach, and the whole
+  role-split design was already telling it what to do instead: an api replica
+  does not index (it publishes), does not hold the graph (it asks the service),
+  and now does not write the landing zone (it forwards). The general shape is
+  the one `/internal/graph/query` had already established and nobody applied
+  here, because the drop zone predated roles and worked where it was written.
+  Three smaller things fell out of it. **A bare `OSError` from a mount is
+  unactionable**: `EROFS` in a 500 reads as a crash, so there are now two typed
+  refusals, split by whether retrying can ever help. **`mkdir(exist_ok=True)`
+  does not raise on a read-only mount when the directory already exists** —
+  EEXIST wins over EROFS — so guarding only the `mkdir` left a second, later
+  failure site that appears only on regions where a previous run created the
+  directory. And **an in-process test cannot simulate "this process may not
+  write" by patching the filesystem**: the first version of the end-to-end test
+  patched `Path.mkdir` globally and broke the uvicorn writing tier running in
+  the same process, failing with the *writer's* refusal. Two different state
+  paths is the honest simulation, because two mounts is what the real thing is.
 
 ---
 

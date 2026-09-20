@@ -667,9 +667,17 @@ def test_the_row_backend_works_on_postgres(tmp_path: Path) -> None:
         assert (nodes, edges) == rows.recount(KB), "the maintained counts disagree with a scan"
         assert nodes > 10
 
-        # An unchanged resync republishes the same id (pillar 1).
+        # An unchanged resync republishes the same id (pillar 1). Incremental,
+        # for the reason the SQLite test of this property spells out: a `full`
+        # re-index removes the source's nodes and rebuilds them, so `created_at`
+        # legitimately resets and the id moves. Asserting it across two `full`
+        # syncs is a clock race rather than a property -- it holds only while
+        # both land inside the same `utc_now()` tick, which a fast SQLite run
+        # does and a Postgres one, paying a socket round trip per statement,
+        # does not. Reproduced on both backends before it was changed: with a
+        # second between them, `full` moves the id on SQLite too.
         first = engine.graph_store.published_generation(KB)
-        engine.sync_source("docs", "full")
+        engine.sync_source("docs", "incremental")
         assert (
             engine.graph_store.published_generation(KB)["generation_id"] == (first["generation_id"])
         )
@@ -1091,5 +1099,100 @@ def test_reading_an_edge_does_not_parse_json_it_never_looks_at(tmp_path: Path) -
         assert attrs._parsed is not None, "a non-promoted key must still resolve"
         # And it is still a complete mapping for everything that needs one.
         assert dict(attrs)["type"] == "contains"
+    finally:
+        engine.close()
+
+
+# --------------------------------------------------------------------------
+# 9. Whole-graph endpoints, on a graph this process does not hold
+# --------------------------------------------------------------------------
+#
+# These exist because two of them were broken on the default backend and no
+# test could see it. `SyncEngine.serving_graph()` hands a process that *builds*
+# the graph its own in-memory copy, so `role: all` — which is every test above
+# and every standalone container — walks a dict and never touches `SqlGraph`.
+# Only a role that serves without building (`graph`, `api`) gets the store, and
+# that is where `/graph/diagnostics` and `/taxonomy` were raising
+# `'_LazyNodeMap' object is not iterable` and `has no attribute 'items'`.
+#
+# Found by running the fleet, not by running the suite. The parity assertion is
+# what makes it a test rather than a smoke check: the two backends must answer
+# the same, so a future divergence fails here instead of in a cluster.
+
+
+def _serving_client(tmp_path: Path, graph_format: str):
+    """An app whose serving graph is the *store*, not a resident copy."""
+
+    from fastapi.testclient import TestClient
+
+    from pheasant.api.app import create_app
+
+    engine = _synced(tmp_path, graph_format)
+    config = engine.config
+    engine.close()
+    # `graph` serves without building, which is the whole point: on `rows` this
+    # resolves to `SqlGraph` and reproduces what the fleet hit.
+    return TestClient(
+        create_app(config=config, config_path=tmp_path / "pheasant.yaml", role="graph")
+    )
+
+
+@pytest.mark.parametrize("graph_format", ["rows", "node_link_json"])
+def test_whole_graph_endpoints_answer_on_either_backend(tmp_path: Path, graph_format: str) -> None:
+    """A 500 here is what the fleet served for `/graph/diagnostics`."""
+
+    client = _serving_client(tmp_path, graph_format)
+
+    diagnostics = client.get("/graph/diagnostics", params={"top": 5})
+    assert diagnostics.status_code == 200, diagnostics.text
+    body = diagnostics.json()
+    assert body["total_nodes"] > 0
+    assert body["total_links"] > 0
+    # The field whose computation was the crash.
+    assert isinstance(body["orphan_count"], int)
+
+    taxonomy = client.get("/taxonomy", params={"max_nodes": 500})
+    assert taxonomy.status_code == 200, taxonomy.text
+    assert isinstance(taxonomy.json().get("documents"), list)
+
+
+def test_the_two_backends_diagnose_the_same_graph(tmp_path: Path) -> None:
+    """Same corpus, same answer — whichever backend served it.
+
+    Status codes alone would pass while one backend quietly reported zero
+    orphans because it could not enumerate nodes at all.
+    """
+
+    rows = _serving_client(tmp_path / "a", "rows").get("/graph/diagnostics", params={"top": 5})
+    filed = _serving_client(tmp_path / "b", "node_link_json").get(
+        "/graph/diagnostics", params={"top": 5}
+    )
+    assert rows.status_code == filed.status_code == 200
+
+    a, b = rows.json(), filed.json()
+    assert a["total_nodes"] == b["total_nodes"]
+    assert a["total_links"] == b["total_links"]
+    assert a["orphan_count"] == b["orphan_count"]
+    assert a["node_types"] == b["node_types"]
+    assert a["edge_types"] == b["edge_types"]
+
+
+def test_the_store_backed_node_map_refuses_a_whole_graph_walk(tmp_path: Path) -> None:
+    """The refusal is the fix, not an oversight.
+
+    Giving `_LazyNodeMap` the rest of the mapping protocol would make an
+    accidental full scan of the region *work*, silently, on the serving path
+    the row backend exists to keep free of it. So it refuses, and the message
+    names `iter_nodes()` — which is what both call sites now use.
+    """
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        nodes = SqlGraph(engine.state, KB).node_map()
+        # The lookup it exists for still works.
+        assert nodes.get("nope") is None
+        for attempt in (lambda: list(nodes), lambda: nodes.items(), lambda: len(nodes)):
+            with pytest.raises(TypeError, match="iter_nodes"):
+                attempt()
     finally:
         engine.close()

@@ -24,11 +24,23 @@
 name: pheasant-fleet
 
 #
-# Three secrets, three boundaries, and deliberately no sharing between them:
+# Four secrets, four boundaries, and deliberately no sharing between them:
 #
 #   PHEASANT_API_TOKEN            callers -> the region's API
 #   PHEASANT_GRAPH_SERVICE_TOKEN  API/MCP replicas -> the internal graph API
 #   PHEASANT_INDEX_WORKER_TOKEN   the indexer -> the preparation workers
+#   PHEASANT_INGESTION_SERVICE_TOKEN
+#                                 API replicas -> the indexer's landing service
+#
+# The fourth is what makes manual upload work here. The api tier mounts /state
+# read-only below, so the UI drop zone and `ingest_submit` have nowhere to put
+# their bytes; rather than give the serving tier write access, an upload is
+# forwarded to the indexer, which performs the identical local write. That is
+# the same move this role already makes for indexing (publish, do not run) and
+# for graph reads (ask the service), and it is why no tier here needs a
+# writable landing mount. Holding this token means being able to put bytes into
+# the corpus, so it is its own value: `serve` refuses to start when it resolves
+# equal to the worker token, for the reason the graph token already had.
 #
 # The graph token used to be wired to the worker token's value, which read as
 # a convenience and was a trust-boundary collapse: workers are the least
@@ -42,6 +54,7 @@ x-fleet-env: &fleet-env
   PHEASANT_API_TOKEN: ${PHEASANT_API_TOKEN:?set a random API token; see deploy/compose/.env.example}
   PHEASANT_INDEX_WORKER_TOKEN: ${PHEASANT_INDEX_WORKER_TOKEN:?set a shared worker token}
   PHEASANT_GRAPH_SERVICE_TOKEN: ${PHEASANT_GRAPH_SERVICE_TOKEN:?set a graph token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
+  PHEASANT_INGESTION_SERVICE_TOKEN: ${PHEASANT_INGESTION_SERVICE_TOKEN:?set an ingestion token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
   OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GH_TOKEN: ${GH_TOKEN:-}
@@ -139,8 +152,10 @@ services:
     environment: *fleet-env
     volumes:
       - ./fleet.yaml:/config/pheasant.yaml:ro
-      # Read-only: the indexer is the only writer of /state. The API needs
-      # manifests/vectors, but graph reads go to the graph service.
+      # Read-only, and it stays that way: the indexer is the only writer of
+      # /state. The API needs manifests/vectors, graph reads go to the graph
+      # service, and manual uploads are forwarded to the indexer rather than
+      # written here — so this tier writes nothing under /state at all.
       - pheasant-state:/state:ro
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
       - pheasant-memory:/memory
