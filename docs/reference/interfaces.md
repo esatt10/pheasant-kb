@@ -28,6 +28,7 @@ Legend: — means "not offered on this surface"; use one of the others.
 | Set up from one target (path/URL/glob) | `pheasant up <target>…` | `POST /sources/quick-add` | Sources → **+ Add source** | — |
 | List registerable source types (built-in + plugins) | — | `GET /sources/types` | Sources → Advanced… (type picker) | — |
 | Register a source (full schema) | (edit YAML) | `POST /sources` | Sources → **Advanced…** | `register_source` (`sync_now`, `wait`) |
+| Add web pages | `pheasant up <url>…`, or a `web_collection` in YAML | `POST /sources` (`type: web_collection`, `urls`) or `POST /sources/quick-add` | Sources → **+ Add source** (paste a URL), or **Advanced… → Web pages** | `register_source` (`source_type: web_collection`, `urls`; public addresses only unless `security.allow_agent_private_urls`) |
 | Update a source | (edit YAML) | `PUT /sources/{id}` | Sources → edit | — |
 | Disable a source | (edit YAML) | `POST /sources/{id}/disable` | Sources page | `disable_source` |
 | Remove a source | (edit YAML) | `DELETE /sources/{id}` | Sources page | `remove_source` |

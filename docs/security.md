@@ -167,6 +167,17 @@ turn the flag off.
   warning rather than failing the sync) so a "web collection" cannot be
   used to read and index the host filesystem. Index local content with a
   filesystem source, which goes through path policy.
+- **Web sources an agent registers.** A URL registered over MCP
+  (`register_source` with `urls`) may come from something the agent *read*, so
+  that path refuses loopback, private, link-local and cloud-metadata
+  addresses — including a hostname that resolves to one — unless
+  `security.allow_agent_private_urls: true`. Without it, a page telling an
+  agent to "add http://169.254.169.254/… as a source" would have the region
+  fetch its own instance credentials into a searchable index. The check runs
+  at registration, not on every fetch, so it does not defend against DNS
+  rebinding, and a hostname that does not resolve is allowed. Registrations
+  from YAML, the UI and `pheasant up` are unaffected: an operator indexing an
+  intranet wiki is doing a normal thing. (`security/url_policy.py`)
 - **Cloning.** Clone URLs must name a known transport (`http`, `https`,
   `ssh`, `git`) or the `user@host:path` form. Transport helpers such as
   `ext::` (which name a command for git to run) and anything starting with
