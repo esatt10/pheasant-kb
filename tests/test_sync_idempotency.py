@@ -335,6 +335,7 @@ def test_a_web_collection_resync_is_free_and_state_is_unchanged(tmp_path: Path) 
                     "name": "web-idempotency",
                     "state_path": str(tmp_path / "state"),
                     "workspace_root": str(tmp_path),
+                    "exports_path": str(tmp_path / "exports"),
                 },
                 "ingestion": {"extractor": {"html_text": True}},
                 "sources": [

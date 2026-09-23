@@ -270,6 +270,7 @@ def test_pheasant_up_writes_a_web_source_that_syncs(tmp_path: Path, site: str) -
                 "name": "up",
                 "state_path": str(tmp_path / "state"),
                 "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
             },
             "ingestion": {"extractor": {"html_text": True}},
             "sources": [page.to_source_dict()],
