@@ -1777,6 +1777,21 @@ Each of these cost real time. They are listed because the shape recurs.
   the same process, failing with the *writer's* refusal. Two different state
   paths is the honest simulation, because two mounts is what the real thing is.
 
+- **A default written for one connector is a filter on every other.** The
+  stock `include` globs (code, Markdown, config) exist to decide which files a
+  folder walk takes, and the web connector applied them to a URL *list* — so
+  every `.html` and `.pdf` URL an operator named was dropped without a word,
+  while `/blog/post` survived only because it had been renamed `post.txt`, and
+  was then indexed as raw markup because HTML was recognised by suffix alone.
+  Around it, three more doors were each shut differently: YAML with no `path`
+  raised `KeyError`, the UI form got a 400 for sending the `/unused`
+  placeholder its own catalog told it to send (the placeholder was honoured for
+  plugin types only), and `pheasant up <url>` wrote a source its own first
+  sync refused as experimental. Every connector test passed throughout,
+  because each set `include=["**/*.md"]` and served a `.md`. Found by
+  registering one real page each way in. `tests/test_web_page_registration.py`
+  walks all of them.
+
 ---
 
 ## 7. Pointers

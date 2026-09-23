@@ -75,6 +75,48 @@ any block is fetched, so a large workspace re-syncs in seconds. Page
 `created_by` / `last_edited_by` ids are captured for the upcoming
 permission-aware retrieval work.
 
+## Web pages
+
+List the URLs; nothing else is required. `path` may be omitted — the
+connector never opens it — and the connector is experimental, so it needs
+the explicit opt-in:
+
+```yaml
+ingestion:
+  extractor:
+    html_text: true            # index page text, not markup (see Document ingest)
+sources:
+  - name: fde-web
+    type: web_collection
+    urls:
+      - https://example.com/blog/forward-deployed-engineering
+      - https://example.com/about.html
+      - https://example.com/reports/2025-annual-report.pdf
+    connector:
+      allow_experimental: true
+```
+
+Every listed URL is fetched. The stock `include` globs (code, Markdown,
+config) are written for walking a folder and are **not** applied to a URL
+list; an `include` you set yourself still is, and a URL it filters out is
+logged rather than dropped silently. Excludes (including the credential
+patterns) always apply.
+
+A page served as `text/html` is extracted as HTML even when its URL has no
+extension. With `html_text: true` that means its text, without tags,
+`<script>` or `<style>` bodies. A listed `.pdf` (or other document
+format) is extracted like a local one.
+
+Re-syncs are conditional (`ETag` / `Last-Modified`) and skip unchanged
+pages. After turning `html_text` on for an existing web source, run
+`pheasant sync --source <name> --mode full` — an unchanged page is skipped
+before it is parsed, so an incremental sync keeps the old text.
+
+The same source can be added three other ways: `pheasant up <url>` (writes
+the opt-in for you), **Sources → Add** in the UI (choose *Web pages*), or
+`POST /sources` with `"type": "web_collection"`, `"path": "/unused"` and
+`"urls"`.
+
 ## A minimal source
 
 ```yaml

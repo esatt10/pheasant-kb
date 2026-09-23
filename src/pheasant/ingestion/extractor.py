@@ -77,6 +77,7 @@ import threading
 import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
 
@@ -730,10 +731,17 @@ def source_includes_documents(source: Any) -> bool:
     # indexing broad document sources with zero chunks.
     broad = {"*", "**", "**/*", "*.*", "**/*.*"}
     admitted = tuple(EXTRACTED_EXTENSIONS)
-    return any(
+    if any(
         pattern.replace("\\", "/").lower().rstrip("/") in broad
         or pattern.lower().endswith(admitted)
         for pattern in includes
+    ):
+        return True
+    # A web collection names its documents by URL rather than by glob: a
+    # listed report.pdf is as much a document source as ``**/*.pdf`` is.
+    return any(
+        urlparse(str(url)).path.lower().endswith(admitted)
+        for url in getattr(source, "urls", None) or []
     )
 
 

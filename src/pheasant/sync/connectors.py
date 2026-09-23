@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
-from pheasant.config.schema import SourceConfig
+from pheasant.config.schema import DEFAULT_INCLUDES, SourceConfig
 from pheasant.ingestion.pipeline import _match_any, utc_now, within_max_depth
 from pheasant.ingestion.walk import walk_source
 from pheasant.persistence.state_store import StateStore
@@ -295,7 +295,17 @@ class WebCollectionConnector(SourceConnector):
                 )
                 continue
             relative = _relative_url_path(url, index)
-            if not self._allows_relative_path(relative):
+            if not self._allows_url(relative):
+                # Say so: the operator named this URL, and a page dropped
+                # without a word reads as a page that was indexed and has
+                # nothing in it.
+                logger.warning(
+                    "source %s: skipping %s - %s does not match the source's include patterns %s",
+                    self.source.name,
+                    url,
+                    relative,
+                    self.source.include,
+                )
                 continue
             items.append(
                 ConnectorItem(
@@ -307,6 +317,23 @@ class WebCollectionConnector(SourceConnector):
                 )
             )
         return items
+
+    def _allows_url(self, relative: str) -> bool:
+        """Depth and excludes always apply; ``include`` only when it was chosen.
+
+        The stock ``include`` is code, Markdown and config globs - written for
+        a folder walk, where it decides which files to take. A web collection
+        has no walk: every URL was listed on purpose, so filtering the list
+        through those globs silently dropped every ``.html`` (and ``.pdf``)
+        URL while an extensionless one slipped through as ``.txt``. An
+        ``include`` the operator actually set still applies.
+        """
+
+        if list(self.source.include) != list(DEFAULT_INCLUDES):
+            return self._allows_relative_path(relative)
+        if not within_max_depth(relative, self.source.max_depth):
+            return False
+        return not _match_any(relative, self.source.exclude)
 
     def read_item(self, item: ConnectorItem) -> ConnectorPayload:
         self._require_experimental_enabled()

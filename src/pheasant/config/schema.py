@@ -113,6 +113,26 @@ class PluginSourceType(str):
 # Source types whose ``path`` is a real local directory/file (as opposed to
 # the URL/connector-backed web/api/s3 types). A relative ``path`` on one of
 # these is anchored to ``pheasant.workspace_root`` at config-load time.
+#: A source's ``include`` when none is given: code, Markdown and config. A
+#: web collection does not apply it to its URLs (see
+#: ``WebCollectionConnector``), because a listed URL was already chosen.
+DEFAULT_INCLUDES: tuple[str, ...] = (
+    "**/*.py",
+    "**/*.md",
+    "**/*.txt",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.json",
+)
+
+#: What a source whose connector never opens ``path`` carries in that field.
+#: The schema requires a path on every source; a web collection, an API or a
+#: plugin connector fetches its content elsewhere, so this is the value the
+#: API, the UI and the config loader all agree on instead of each inventing
+#: a directory.
+PLACEHOLDER_SOURCE_PATH = "/unused"
+
 FILESYSTEM_SOURCE_TYPES = frozenset(
     {
         SourceType.repository,
@@ -1422,17 +1442,7 @@ class SourceConfig(ModelMixin):
     description: str | None = None
     enabled: bool = True
     max_depth: int | None = None
-    include: list[str] = field(
-        default_factory=lambda: [
-            "**/*.py",
-            "**/*.md",
-            "**/*.txt",
-            "**/*.yaml",
-            "**/*.yml",
-            "**/*.toml",
-            "**/*.json",
-        ]
-    )
+    include: list[str] = field(default_factory=lambda: list(DEFAULT_INCLUDES))
     exclude: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
     repo: RepoSettings = field(default_factory=RepoSettings)
     chunking: ChunkingSettings = field(default_factory=ChunkingSettings)
@@ -2079,6 +2089,15 @@ class PheasantConfig(ModelMixin):
                 raw["type"] = SourceType(raw.get("type", "single_file"))
             except ValueError:
                 raw["type"] = PluginSourceType(str(raw.get("type")))
+            if raw.get("path") in (None, ""):
+                # Only a connector that reads the filesystem needs a real
+                # path; for the rest it is schema ceremony, and a missing one
+                # used to surface as a bare KeyError from the loader.
+                if raw["type"] in FILESYSTEM_SOURCE_TYPES:
+                    raise ValueError(
+                        f"source {raw.get('name')!r} (type {raw['type'].value}) needs a path"
+                    )
+                raw["path"] = PLACEHOLDER_SOURCE_PATH
             src_path = Path(raw["path"])
             # Anchor a relative filesystem source path to workspace_root so a
             # config written as `path: docs` means "<workspace_root>/docs", not

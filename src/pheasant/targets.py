@@ -54,7 +54,6 @@ TYPE_PREFIXES = {
 }
 
 MARKDOWN_INCLUDES = ["**/*.md", "**/*.markdown"]
-WEB_INCLUDES = ["**/*.html", "**/*.htm", "**/*.md", "**/*.txt"]
 GIT_COMMAND_TIMEOUT_SECONDS = 600
 
 
@@ -299,8 +298,13 @@ def _web_target(url: str, workspace: Path, *, name: str | None) -> ResolvedTarge
         # are what actually gets fetched.
         path=str((workspace / "web" / label).resolve()),
         description=f"Web collection seeded from {url}",
-        include=list(WEB_INCLUDES),
+        # No `include`: the connector admits every listed URL unless one is
+        # chosen, and a glob list here dropped the very URL being added when
+        # it was a .pdf. The experimental opt-in is the user's: naming a URL
+        # on the command line is asking for it to be fetched, and without it
+        # the first sync of the generated config failed.
         urls=[url],
+        connector={"allow_experimental": True},
         local=False,
     )
 
