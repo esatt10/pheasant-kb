@@ -1322,6 +1322,12 @@ class SecuritySettings(ModelMixin):
     idp: IdPSettings = field(default_factory=IdPSettings)
     api_auth: ApiAuthSettings = field(default_factory=ApiAuthSettings)
     allow_user_selected_source_paths: bool = True
+    #: Whether a web source registered over MCP may name a loopback, private,
+    #: link-local or otherwise non-public address. Off: an agent steered by a
+    #: page it read cannot make the region fetch (and index) internal
+    #: endpoints such as a cloud metadata service. Config, UI and `pheasant
+    #: up` registrations are unaffected. See ``security/url_policy.py``.
+    allow_agent_private_urls: bool = False
     read_only_sources: bool = True
     deny_path_traversal: bool = True
     default_exclude_secrets: bool = True
@@ -1380,6 +1386,13 @@ class SourceConnectorSettings(ModelMixin):
     # Path to a guest module (.wat text or compiled .wasm) for a sandboxed
     # connector. None uses the connector class's bundled reference guest.
     wasm_module_path: str | None = None
+    #: Web collections: the longest a listed page goes without being checked.
+    #: Each URL is revalidated on its own schedule — from
+    #: ``sources[].sync.interval_seconds`` (default one hour), doubling each
+    #: time the page is found unchanged, capped here, and reset when it
+    #: changes. The scheduler beat stays the same; a page that is not due costs
+    #: no request. See ``WebCollectionConnector``.
+    max_refresh_seconds: int = 259200
 
 
 @dataclass

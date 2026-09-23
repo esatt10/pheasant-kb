@@ -78,8 +78,8 @@ permission-aware retrieval work.
 ## Web pages
 
 List the URLs; nothing else is required. `path` may be omitted — the
-connector never opens it — and the connector is experimental, so it needs
-the explicit opt-in:
+connector never opens it. In a config file the connector needs the explicit
+experimental opt-in (the UI, `pheasant up` and the MCP tool imply it):
 
 ```yaml
 ingestion:
@@ -107,15 +107,46 @@ extension. With `html_text: true` that means its text, without tags,
 `<script>` or `<style>` bodies. A listed `.pdf` (or other document
 format) is extracted like a local one.
 
-Re-syncs are conditional (`ETag` / `Last-Modified`) and skip unchanged
-pages. After turning `html_text` on for an existing web source, run
-`pheasant sync --source <name> --mode full` — an unchanged page is skipped
-before it is parsed, so an incremental sync keeps the old text.
+### How web pages stay fresh
 
-The same source can be added three other ways: `pheasant up <url>` (writes
-the opt-in for you), **Sources → Add** in the UI (choose *Web pages*), or
-`POST /sources` with `"type": "web_collection"`, `"path": "/unused"` and
-`"urls"`.
+The scheduler beat (`sync.scheduler.interval_seconds`, 15 minutes) is shared
+by every source, but each page has its **own** revalidation schedule, kept in
+the source's checkpoint:
+
+- a page is first re-checked after `sync.interval_seconds` (default one hour);
+- each check that finds it unchanged **doubles** the wait, up to
+  `connector.max_refresh_seconds` (default three days);
+- a check that finds it changed **resets** it to the minimum, so a page being
+  edited is watched closely;
+- a `Cache-Control: max-age` the server sends is honoured as a floor, and
+  `no-cache` as "use the minimum";
+- a page that is not due costs **no request**, and a due check is conditional
+  (`ETag` / `Last-Modified`), so an unchanged page usually costs a `304`.
+
+So a stable page is fetched about twice a week and a page under active
+editing about hourly, instead of 96 times a day. `sync_source` with
+`mode: full` ignores the schedule and re-checks everything now; setting
+`sync.interval_seconds: 0` checks every page on every beat. Each sync's
+checkpoint reports `revalidated` (requests made) and `deferred` (pages left
+alone because they were not due).
+
+A web source indexed by an earlier release is re-read **once**, automatically,
+on its first sync after upgrading. Its fingerprint carries the web text
+pipeline, so pages stored as raw markup, or skipped by the old include
+globs, are re-derived. Turning `html_text` on or off re-reads web sources the
+same way; folder sources are not affected.
+
+### Other ways to add web pages
+
+- `pheasant up <url>` writes the opt-in for you;
+- **Sources → + Add source** in the UI takes a pasted URL, and
+  **Sources → Advanced… → Web pages** takes a list;
+- `POST /sources` with `"type": "web_collection"` and `"urls"` (the opt-in is
+  implied, and `path` may be `"/unused"`);
+- the MCP `register_source` tool with `source_type: "web_collection"` and
+  `urls`. Over MCP only public addresses are accepted unless
+  `security.allow_agent_private_urls: true`, because an agent can be steered
+  by what it reads into asking the region to fetch an internal endpoint.
 
 ## A minimal source
 

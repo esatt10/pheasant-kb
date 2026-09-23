@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -254,6 +255,38 @@ class FilesystemConnector(SourceConnector):
         return super().validate()
 
 
+def registration_connector(source_type: str, connector: dict[str, Any] | None) -> dict[str, Any]:
+    """The connector settings a source registered at runtime starts with.
+
+    Registering a *web collection* — from the UI's "Web pages" form or an
+    agent's ``register_source`` — is itself the request to fetch those URLs,
+    so it carries the experimental opt-in unless the caller set the flag
+    either way. Without this the form saved a source whose first sync was
+    refused, and the only fix was hand-writing connector JSON. Every other
+    type is returned unchanged: its opt-in stays an explicit act.
+    """
+
+    settings = dict(connector or {})
+    if source_type == "web_collection":
+        settings.setdefault("allow_experimental", True)
+    return settings
+
+
+def _wall_clock() -> float:
+    """Wall time, because a page's schedule has to survive a restart.
+
+    A module function so a test can move time instead of sleeping.
+    """
+
+    return time.time()
+
+
+#: A web page's first revalidation interval when its source sets no
+#: ``sync.interval_seconds``. One hour: a page being actively edited shows up
+#: within the hour, and one that is not backs off from there.
+DEFAULT_WEB_REFRESH_SECONDS = 3600
+
+
 class WebCollectionConnector(SourceConnector):
     connector_type = "web_collection"
     experimental = True
@@ -261,10 +294,14 @@ class WebCollectionConnector(SourceConnector):
     def __init__(self, source: SourceConfig, state: StateStore):
         super().__init__(source, state)
         self._seen_validators: dict[str, dict[str, Any]] = {}
+        self.revalidated = 0
+        self.deferred = 0
 
     def begin_sync(self, mode: str = "incremental") -> None:
         super().begin_sync(mode)
         self._seen_validators = {}
+        self.revalidated = 0
+        self.deferred = 0
 
     def list_items(self) -> list[ConnectorItem]:
         github_tree_urls = [
@@ -335,9 +372,58 @@ class WebCollectionConnector(SourceConnector):
             return False
         return not _match_any(relative, self.source.exclude)
 
+    # -- freshness ---------------------------------------------------------
+    #
+    # The scheduler beat (`sync.scheduler.interval_seconds`, 15 minutes by
+    # default) is the same for every source, and a web page is somebody
+    # else's server: asking every listed URL on every beat is 96 requests a
+    # day per page, most of them for pages that change monthly. So each URL
+    # carries its own schedule in the checkpoint. It is checked when it is
+    # due and not before; each check that finds it unchanged doubles the wait,
+    # up to `connector.max_refresh_seconds`; a change resets it to the minimum,
+    # so a page that is being edited is watched closely and one that is not
+    # costs a request every few days. A `max-age` the server sends is honoured
+    # as a floor. `full` ignores the schedule — it is the "check everything
+    # now" switch — and a URL with no history is fetched immediately.
+
+    def _min_refresh(self) -> float:
+        configured = self.source.sync.interval_seconds
+        return float(DEFAULT_WEB_REFRESH_SECONDS if configured is None else configured)
+
+    def _max_refresh(self) -> float:
+        return max(float(self.source.connector.max_refresh_seconds), self._min_refresh())
+
+    def _due(self, cached: dict[str, Any]) -> bool:
+        if self.sync_mode != "incremental" or self._min_refresh() <= 0:
+            return True
+        checked_at = cached.get("checked_at")
+        if not isinstance(checked_at, int | float):
+            # Written before schedules existed: no evidence of when it was
+            # last looked at, so look now and start its schedule.
+            return True
+        interval = cached.get("interval") or self._min_refresh()
+        return _wall_clock() >= float(checked_at) + float(interval)
+
+    def _schedule(
+        self, cached: dict[str, Any], *, changed: bool, max_age: float | None
+    ) -> dict[str, Any]:
+        low, high = self._min_refresh(), self._max_refresh()
+        previous = float(cached.get("interval") or low)
+        interval = low if changed else min(previous * 2, high)
+        if max_age is not None:
+            interval = max(interval, min(max_age, high))
+        return {"checked_at": _wall_clock(), "interval": max(low, interval)}
+
     def read_item(self, item: ConnectorItem) -> ConnectorPayload:
         self._require_experimental_enabled()
         cached = self._cached_validators(item.uri)
+        if not self._due(cached):
+            # Not due: no request at all. The engine keeps the artifact it
+            # already holds, exactly as it does for a 304.
+            self._seen_validators[item.uri] = cached
+            self.deferred += 1
+            raise ItemNotModified(f"not due for revalidation: {item.uri}")
+        self.revalidated += 1
         response = _urlopen(
             item.uri,
             headers=self.source.connector.headers,
@@ -347,21 +433,28 @@ class WebCollectionConnector(SourceConnector):
         )
         if response.get("not_modified"):
             # Carry validators forward so the next sync stays conditional.
-            self._seen_validators[item.uri] = cached
+            self._seen_validators[item.uri] = {
+                **cached,
+                **self._schedule(cached, changed=False, max_age=None),
+            }
             raise ItemNotModified(f"not modified (HTTP 304): {item.uri}")
-        validators = {
+        content = response["content"]
+        digest = hashlib.sha256(content).hexdigest()
+        changed = cached.get("sha256") != digest
+        self._seen_validators[item.uri] = {
             "etag": response.get("etag"),
             "last_modified": response["last_modified"],
+            "sha256": digest,
+            **self._schedule(
+                cached, changed=changed, max_age=_max_age(response.get("headers") or {})
+            ),
         }
-        if validators["etag"] or validators["last_modified"]:
-            self._seen_validators[item.uri] = validators
-        content = response["content"]
         return ConnectorPayload(
             item=item,
             content=content,
             mime_type=response["mime_type"] or item.mime_type,
             size_bytes=len(content),
-            sha256=hashlib.sha256(content).hexdigest(),
+            sha256=digest,
             mtime=response["last_modified"],
             metadata={"url": item.uri, "headers": response["headers"]},
         )
@@ -383,13 +476,37 @@ class WebCollectionConnector(SourceConnector):
                 "last_url": urls[-1] if urls else None,
                 "validators": validators,
             },
-            {"item_count": len(items), "urls": urls, "listed_at": utc_now()},
+            {
+                "item_count": len(items),
+                "urls": urls,
+                "listed_at": utc_now(),
+                # What this pass cost the sites it lists: requests made, and
+                # URLs left alone because they were not due.
+                "revalidated": self.revalidated,
+                "deferred": self.deferred,
+            },
         )
 
     def _cached_validators(self, url: str) -> dict[str, Any]:
         validators = (self._previous_cursor or {}).get("validators") or {}
         cached = validators.get(url)
         return cached if isinstance(cached, dict) else {}
+
+
+def _max_age(headers: dict[str, Any]) -> float | None:
+    """``Cache-Control: max-age`` in seconds, or ``None``; ``no-cache`` means 0."""
+
+    value = next((str(v) for k, v in headers.items() if str(k).lower() == "cache-control"), "")
+    directives = [part.strip().lower() for part in value.split(",")]
+    if any(d in {"no-cache", "no-store"} for d in directives):
+        return 0.0
+    for directive in directives:
+        if directive.startswith("max-age="):
+            try:
+                return max(0.0, float(directive.split("=", 1)[1]))
+            except ValueError:
+                return None
+    return None
 
 
 class APIConnector(SourceConnector):

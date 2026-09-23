@@ -1791,6 +1791,20 @@ Each of these cost real time. They are listed because the shape recurs.
   because each set `include=["**/*.md"]` and served a `.md`. Found by
   registering one real page each way in. `tests/test_web_page_registration.py`
   walks all of them.
+- **The same pass found the rest of the web path in the same state.** The UI
+  form hid the URL box in a collapsed section and saved sources whose first
+  sync was refused unless someone hand-wrote `{"allow_experimental": true}`;
+  MCP's `register_source` had no `urls` at all and demanded an allow-listed
+  path. And `sources[].sync.interval_seconds`, documented as a per-source
+  schedule, had **no reader** — so every listed page was re-requested on every
+  15-minute beat, 96 times a day, whether it changed monthly or never. It
+  means something now: the first interval of a per-URL schedule kept in the
+  checkpoint, doubling while a page is unchanged up to
+  `connector.max_refresh_seconds`, reset by a change. A page that is not due
+  costs no request. Registering over MCP is also the one place a URL comes
+  from something an agent *read*, so that path alone refuses non-public
+  addresses (`security/url_policy.py`); an operator indexing an intranet wiki
+  from YAML is doing a normal thing.
 
 ---
 

@@ -60,6 +60,7 @@ from pheasant.services import ServiceContext, ServiceError
 from pheasant.services import assistant as assistant_service
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
+from pheasant.sync.connectors import registration_connector
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
@@ -107,7 +108,7 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
     (
         "web_collection",
         "Web pages",
-        "A list of URLs fetched over HTTP, with ETag-based incremental sync.",
+        "A list of URLs, fetched over HTTP and re-checked per page on an adaptive schedule.",
         "unused",
     ),
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
@@ -894,6 +895,7 @@ def _source_payload(
     if isinstance(req, RegisterSourceRequest):
         payload.update({"name": req.name, "type": req.type})
         updates = req.model_dump(exclude={"sync_now", "sync_mode"}, exclude_none=True)
+        updates["connector"] = registration_connector(req.type, req.connector)
     else:
         updates = req.model_dump(exclude_unset=True)
     updates["path"] = str(resolved_path)

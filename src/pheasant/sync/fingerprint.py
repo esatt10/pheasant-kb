@@ -49,8 +49,22 @@ def _digest(payload: dict[str, Any]) -> str:
 MEMORY_TEXT_PIPELINE = "33.5-frontmatter-stripped"
 
 
-def source_fingerprint(source: SourceConfig) -> str:
-    """Fingerprint the settings that decide *what text* a source produces."""
+#: The same, for web collections. Listed URLs stopped being filtered through
+#: the folder-walk include globs, and HTML is now recognised by the served
+#: content type as well as by extension — so a page indexed before as raw
+#: markup, or never indexed at all, is wrong in the store. One full pass per
+#: web source fixes both and is then recorded, so it never recurs.
+WEB_TEXT_PIPELINE = "listed-urls-html-by-content-type"
+
+
+def source_fingerprint(source: SourceConfig, *, html_text: bool | None = None) -> str:
+    """Fingerprint the settings that decide *what text* a source produces.
+
+    ``html_text`` is the region-wide HTML extraction switch. It is folded in
+    for web collections only, where every item is a page and turning it on
+    changes all of their text; a folder source keeps its fingerprint, so
+    flipping it does not re-read every repository in the region.
+    """
 
     chunking = getattr(source, "chunking", None)
     source_type = getattr(source.type, "value", str(source.type))
@@ -74,6 +88,9 @@ def source_fingerprint(source: SourceConfig) -> str:
         # fingerprint in every deployment — re-reading a 2,000-file repository
         # to fix agent memory is a re-index nobody asked for.
         payload["text_pipeline"] = MEMORY_TEXT_PIPELINE
+    if source_type == "web_collection":
+        payload["text_pipeline"] = WEB_TEXT_PIPELINE
+        payload["html_text"] = bool(html_text)
     return _digest(payload)
 
 

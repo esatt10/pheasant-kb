@@ -11,7 +11,14 @@ from typing import Any
 import yaml
 
 from pheasant.config.loader import dump_config_yaml
-from pheasant.config.schema import PheasantConfig, SourceConfig, SourceType
+from pheasant.config.schema import (
+    FILESYSTEM_SOURCE_TYPES,
+    PLACEHOLDER_SOURCE_PATH,
+    PheasantConfig,
+    SourceConfig,
+    SourceConnectorSettings,
+    SourceType,
+)
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
@@ -28,10 +35,16 @@ from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
 from pheasant.search.sqlite_store import SearchStore
 from pheasant.security.path_policy import resolve_config_write_target, resolve_under
+from pheasant.security.url_policy import require_public_urls
 from pheasant.services import ServiceContext
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
 from pheasant.services.errors import SourceNotFound
+from pheasant.sync.connectors import (
+    ConnectorUnavailable,
+    registration_connector,
+    require_fetchable_url,
+)
 from pheasant.sync.engine import SyncEngine
 
 logger = logging.getLogger(__name__)
@@ -159,7 +172,7 @@ class PheasantTools(ReadinessTools):
         knowledge_base: str,
         name: str,
         source_type: str,
-        path: str,
+        path: str = "",
         description: str | None = None,
         enabled: bool = True,
         include: list[str] | None = None,
@@ -171,8 +184,35 @@ class PheasantTools(ReadinessTools):
         sync_now: bool = False,
         wait: bool = False,
         sync_mode: str = "incremental",
+        urls: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
+        kind = SourceType(source_type)
+        if kind not in FILESYSTEM_SOURCE_TYPES:
+            # A web collection, an API or a bucket fetches its content from
+            # elsewhere; `path` is schema ceremony it never opens. It used to
+            # be required *and* checked against the workspace allow-list, so a
+            # web source could not be registered here at all.
+            return self._register_remote_source(
+                knowledge_base,
+                name=name,
+                kind=kind,
+                path=path,
+                urls=list(urls or []),
+                description=description,
+                enabled=enabled,
+                include=include,
+                exclude=exclude,
+                taxonomy=taxonomy,
+                actor=actor,
+                transport=transport,
+                client_id=client_id,
+                sync_now=sync_now,
+                wait=wait,
+                sync_mode=sync_mode,
+            )
+        if urls:
+            raise ValueError(f"urls apply to web collections, not to a {source_type} source")
         if self.config.security.allow_user_selected_source_paths:
             resolved_path = Path(path).expanduser().resolve()
             if not resolved_path.exists():
@@ -188,11 +228,73 @@ class PheasantTools(ReadinessTools):
             )
         source = SourceConfig(
             name=name,
-            type=SourceType(source_type),
+            type=kind,
             path=resolved_path,
             description=description,
             enabled=enabled,
         )
+        return self._finish_registration(
+            knowledge_base,
+            source,
+            include=include,
+            exclude=exclude,
+            taxonomy=taxonomy,
+            actor=actor,
+            transport=transport,
+            client_id=client_id,
+            sync_now=sync_now,
+            wait=wait,
+            sync_mode=sync_mode,
+        )
+
+    def _register_remote_source(
+        self,
+        knowledge_base: str,
+        *,
+        name: str,
+        kind: SourceType,
+        path: str,
+        urls: list[str],
+        **rest: Any,
+    ) -> dict:
+        if kind == SourceType.web_collection:
+            if not urls:
+                raise ValueError("a web_collection source needs at least one URL in `urls`")
+            for url in urls:
+                try:
+                    require_fetchable_url(url)
+                except ConnectorUnavailable as exc:
+                    # A ValueError, so the MCP boundary forwards the reason
+                    # rather than reporting a bare "Error executing tool".
+                    raise ValueError(str(exc)) from exc
+            if not self.config.security.allow_agent_private_urls:
+                require_public_urls(urls)
+        source = SourceConfig(
+            name=name,
+            type=kind,
+            path=Path(path.strip() or PLACEHOLDER_SOURCE_PATH),
+            description=rest.pop("description"),
+            enabled=rest.pop("enabled"),
+            urls=urls,
+            connector=SourceConnectorSettings(**registration_connector(kind.value, None)),
+        )
+        return self._finish_registration(knowledge_base, source, **rest)
+
+    def _finish_registration(
+        self,
+        knowledge_base: str,
+        source: SourceConfig,
+        *,
+        include: list[str] | None,
+        exclude: list[str] | None,
+        taxonomy: bool,
+        actor: str,
+        transport: str,
+        client_id: str | None,
+        sync_now: bool,
+        wait: bool,
+        sync_mode: str,
+    ) -> dict:
         if include is not None:
             source.include = include
         if exclude is not None:
