@@ -39,8 +39,8 @@ from pheasant.config.schema import (
     SourceType,
 )
 from pheasant.ingestion.extractor import source_includes_documents
-from pheasant.sync.connectors import WebCollectionConnector
 from pheasant.sync.engine import SyncEngine
+from pheasant.sync.web_connector import WebCollectionConnector
 from pheasant.targets import resolve_target
 
 PAGE = (
@@ -326,7 +326,7 @@ def live_site() -> Iterator[tuple[str, _Site]]:
 class _Clock:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.now = 1_000_000.0
-        monkeypatch.setattr("pheasant.sync.connectors._wall_clock", lambda: self.now)
+        monkeypatch.setattr("pheasant.sync.web_connector._wall_clock", lambda: self.now)
 
 
 def _schedule(engine: SyncEngine, url: str) -> dict:
@@ -427,10 +427,11 @@ def test_a_web_fingerprint_carries_the_pipeline_and_html_text() -> None:
 
     web = _web_source(["https://example.com/a"])
     folder = SourceConfig(name="docs", type=SourceType.document_folder, path=Path("/workspace"))
-    assert source_fingerprint(web, html_text=True) != source_fingerprint(web, html_text=False)
+    html_on, html_off = ExtractorSettings(html_text=True), ExtractorSettings(html_text=False)
+    assert source_fingerprint(web, html_on) != source_fingerprint(web, html_off)
     # A folder's text does not change with html_text unless it holds HTML, and
     # re-reading every repository to find out is the re-index nobody asked for.
-    assert source_fingerprint(folder, html_text=True) == source_fingerprint(folder)
+    assert source_fingerprint(folder, html_on) == source_fingerprint(folder)
 
 
 def test_an_existing_web_source_is_reindexed_once(

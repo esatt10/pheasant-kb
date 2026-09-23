@@ -88,7 +88,9 @@ pheasant-kb/
 │   │                            GateSet that cannot be constructed empty
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
-│   ├── sync/                  ← engine, connectors, watcher, scheduler, locks,
+│   ├── sync/                  ← engine, connectors, web_connector (listed
+│   │                            URLs, per-page revalidation), watcher,
+│   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
 │   │                            authority ceiling), worker_pool,

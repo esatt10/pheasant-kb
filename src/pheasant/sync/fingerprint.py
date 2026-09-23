@@ -57,13 +57,14 @@ MEMORY_TEXT_PIPELINE = "33.5-frontmatter-stripped"
 WEB_TEXT_PIPELINE = "listed-urls-html-by-content-type"
 
 
-def source_fingerprint(source: SourceConfig, *, html_text: bool | None = None) -> str:
+def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     """Fingerprint the settings that decide *what text* a source produces.
 
-    ``html_text`` is the region-wide HTML extraction switch. It is folded in
-    for web collections only, where every item is a page and turning it on
-    changes all of their text; a folder source keeps its fingerprint, so
-    flipping it does not re-read every repository in the region.
+    ``extractor`` is ``ingestion.extractor``; its ``html_text`` switch is
+    folded in for web collections only, where every item is a page and
+    turning it on changes all of their text. A folder source keeps its
+    fingerprint, so flipping it does not re-read every repository in the
+    region.
     """
 
     chunking = getattr(source, "chunking", None)
@@ -90,7 +91,7 @@ def source_fingerprint(source: SourceConfig, *, html_text: bool | None = None) -
         payload["text_pipeline"] = MEMORY_TEXT_PIPELINE
     if source_type == "web_collection":
         payload["text_pipeline"] = WEB_TEXT_PIPELINE
-        payload["html_text"] = bool(html_text)
+        payload["html_text"] = bool(getattr(extractor, "html_text", False))
     return _digest(payload)
 
 

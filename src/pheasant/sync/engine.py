@@ -1922,9 +1922,7 @@ class SyncEngine:
         # that changes what the content pipeline produces must. Compare what
         # this source was last indexed with against what it is configured with
         # now; only a real difference escalates to a full pass.
-        fingerprint = source_fingerprint(
-            source, html_text=bool(self.config.ingestion.extractor.html_text)
-        )
+        fingerprint = source_fingerprint(source, self.config.ingestion.extractor)
         previous_fingerprint = self.state.get_fingerprint(SOURCE_SCOPE.format(name=source.name))
         config_changed = previous_fingerprint is not None and previous_fingerprint != fingerprint
         if config_changed and mode in {"incremental", "repair"} and not _resume_interrupted_full:

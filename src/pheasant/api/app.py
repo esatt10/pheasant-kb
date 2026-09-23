@@ -60,10 +60,10 @@ from pheasant.services import ServiceContext, ServiceError
 from pheasant.services import assistant as assistant_service
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
-from pheasant.sync.connectors import registration_connector
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
+from pheasant.sync.web_connector import registration_connector
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
