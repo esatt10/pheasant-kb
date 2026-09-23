@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 # ``pheasant`` is taken on PyPI by an unrelated project; the import root and the
 # console script are still ``pheasant``.
 name = "pheasant-kb"
-version = "0.12.6"
+version = "0.12.7"
 description = "Docker-first MCP knowledge graph indexer and agentic retrieval layer"
 readme = "README.md"
 requires-python = ">=3.11"
