@@ -25,8 +25,9 @@ from pheasant.config.schema import (
     SourceType,
 )
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.sync.connectors import ConnectorUnavailable, WebCollectionConnector
+from pheasant.sync.connectors import ConnectorUnavailable
 from pheasant.sync.engine import SyncEngine
+from pheasant.sync.web_connector import WebCollectionConnector
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -151,7 +152,11 @@ def _web_config(tmp_path: Path, urls: list[str]) -> PheasantConfig:
             path=tmp_path,
             urls=urls,
             include=["**/*.md"],
-            sync=SourceSyncSettings(on_startup=False),
+            # Every page due on every sync: these tests are about what a
+            # *check* costs (a 304, a hash comparison), not about when one is
+            # made. The per-URL schedule has its own tests in
+            # tests/test_web_page_registration.py.
+            sync=SourceSyncSettings(on_startup=False, interval_seconds=0),
             connector=SourceConnectorSettings(allow_experimental=True),
         ),
     )

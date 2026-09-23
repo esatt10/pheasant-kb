@@ -220,7 +220,7 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 
 | | |
 |---|---|
-| **Ingest** | Git repositories, folders, single files, Obsidian vaults, web collections, S3 and APIs. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
+| **Ingest** | Git repositories, folders, single files, Obsidian vaults, web pages, S3 and APIs. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
 | **Connectors** | Notion, Google Drive, Slack, Confluence and IMAP ship first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
 | **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. |

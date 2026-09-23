@@ -64,7 +64,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         knowledge_base: str,
         name: str,
         source_type: str,
-        path: str,
+        path: str = "",
         description: str | None = None,
         enabled: bool = True,
         include: list[str] | None = None,
@@ -73,8 +73,16 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         sync_now: bool = False,
         wait: bool = False,
         sync_mode: str = "incremental",
+        urls: list[str] | None = None,
     ) -> dict:
-        """Register a source path after allowlisted path validation.
+        """Register a source: a folder/file path, or web pages by URL.
+
+        Filesystem types (`document_folder`, `repository`, …) need `path`,
+        which is validated against the workspace allow-list. For web pages use
+        `source_type="web_collection"` with `urls=[...]` and no path; each
+        URL is fetched, HTML is indexed as text, and pages are re-checked on
+        their own schedule. Only public http(s) URLs are accepted here unless
+        the operator enabled `security.allow_agent_private_urls`.
 
         Set ``taxonomy`` for structured documentation (books, procedures,
         legal documents): each artifact's outline — Chapter / Article /
@@ -96,6 +104,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             sync_now=sync_now,
             wait=wait,
             sync_mode=sync_mode,
+            urls=urls,
         )
 
     @mcp.tool()

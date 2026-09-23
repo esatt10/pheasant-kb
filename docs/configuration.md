@@ -796,6 +796,7 @@ shard into several regions.
 | `read_only_sources` | bool | `true` | Prevent source mutation operations. |
 | `deny_path_traversal` | bool | `true` | Block `..` traversal and unsafe resolution. |
 | `allow_user_selected_source_paths` | bool | `true` | Let a source name any readable path, not just one under `allow_workspace_roots`. This is what makes "point it at anything" work; see the security notes on what compensates for it. |
+| `allow_agent_private_urls` | bool | `false` | Let a web source registered over MCP name a loopback, private, link-local or other non-public address. Off, so an agent cannot be steered into making the region fetch and index internal endpoints (a cloud metadata service, an admin page). Config-file, UI and `pheasant up` registrations are unaffected. |
 | `default_exclude_secrets` | bool | `true` | **Always** union `SECRET_EXCLUDES` into every filesystem source's excludes. Unlike the rest of `DEFAULT_EXCLUDES`, supplying your own `exclude` list does not drop these. |
 | `acl_enforced` | bool | `false` | Master toggle for principal-aware retrieval (Step 32.x). `false` = every pre-32 deployment stays byte-identical. When `true`, `search_context` filters candidates against each artifact's captured ACL before merge/return. |
 | `default_visibility` | string | `public` | How an un-ACL'd artifact (no connector-captured ACL, e.g. a plain filesystem source) is treated once `acl_enforced` is on: `public` keeps it searchable by anyone, `private` requires an authenticated principal. |
@@ -1515,7 +1516,7 @@ server restart.
 | `on_startup` | bool | `true` | Process source at service start. |
 | `on_file_change` | bool/string | `debounce` | File-change trigger behavior. |
 | `on_git_commit` | bool | `true` | React to git commits for this source. |
-| `interval_seconds` | int/null | `null` | Source-specific scheduled sync interval. |
+| `interval_seconds` | int/null | `null` | `web_collection`: the shortest time between checks of one page (`null` = 3600). Each page is re-checked on its own schedule, which doubles while the page is unchanged (up to `connector.max_refresh_seconds`) and resets when it changes; `0` checks every page on every scheduler beat. Other source types do not read it. |
 
 ### `sources[].taxonomy`
 
@@ -1597,7 +1598,7 @@ Experimental non-filesystem connectors are disabled until explicitly enabled per
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `allow_experimental` | bool | `false` | Required for `web_collection`, `api`, and `s3` connector execution. |
+| `allow_experimental` | bool | `false` | Required for `web_collection`, `api`, and `s3` connector execution. A web collection registered through the UI, `POST /sources`, `pheasant up <url>` or MCP `register_source` is given `true` automatically — registering it is the request to fetch it; in YAML you set it yourself. |
 | `request_timeout_seconds` | integer | `10` | HTTP/API request timeout. |
 | `headers` | map[string,string] | `{}` | Optional HTTP headers for web/API requests. |
 | `api_endpoint` | string/null | `null` | JSON item listing endpoint for `api` sources. |
@@ -1605,21 +1606,29 @@ Experimental non-filesystem connectors are disabled until explicitly enabled per
 | `api_content_field` | string | `content` | JSON field containing inline item content. |
 | `s3_bucket` | string/null | `null` | Bucket name for `s3` sources. |
 | `s3_prefix` | string | empty | Object prefix for `s3` sources. |
+| `max_refresh_seconds` | integer | `259200` | `web_collection`: the longest a page goes unchecked (3 days). See `sources[].sync.interval_seconds`. |
 
 Example `web_collection` source:
 
 ```yaml
 sources:
   - name: public-docs
-    type: web_collection
-    path: /workspace
+    type: web_collection        # no `path` needed
     urls:
-      - https://example.com/docs/overview.md
+      - https://example.com/docs/overview
+      - https://example.com/reports/2025.pdf
     connector:
       allow_experimental: true
-    include:
-      - "**/*.md"
+      max_refresh_seconds: 259200   # longest a page goes unchecked (3 days)
+    sync:
+      interval_seconds: 3600        # first re-check of a page; doubles while unchanged
 ```
+
+Every listed URL is fetched: the stock `include` globs are for folder walks
+and are not applied to a URL list (an `include` you set still is, and a URL it
+filters out is logged). A page served as `text/html` is extracted as HTML
+whatever its URL looks like. How often each page is re-checked is described
+under [Web pages](how-to/sources.md#web-pages).
 
 ---
 

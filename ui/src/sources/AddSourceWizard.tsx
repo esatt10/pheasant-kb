@@ -216,14 +216,29 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                   there is no folder to pick.
                 </p>
                 <p>{typeInfo?.description}</p>
-                <p>
-                  {type === "web_collection"
-                    ? "List the pages under URLs, in Sync and connectors."
-                    : "Point it at your account with Connector JSON, in Sync and connectors — " +
-                      "typically an api_key_env naming the environment variable that holds " +
-                      "the token. The token itself is read from the container environment and " +
-                      "never stored in your config."}
-                </p>
+                {type === "web_collection" ? (
+                  <label className="field">
+                    <span>Page URLs, one per line</span>
+                    <textarea
+                      className="text-area"
+                      value={urlsText}
+                      onChange={(e) => setUrlsText(e.target.value)}
+                      placeholder={"https://example.com/blog/post\nhttps://example.com/report.pdf"}
+                      aria-label="Page URLs"
+                    />
+                    <span className="muted small">
+                      Each page is fetched, stored as text, and re-checked on its own schedule:
+                      hourly at first, less often while it stays unchanged.
+                    </span>
+                  </label>
+                ) : (
+                  <p>
+                    Point it at your account with Connector JSON, in Sync and connectors —
+                    typically an api_key_env naming the environment variable that holds the
+                    token. The token itself is read from the container environment and never
+                    stored in your config.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -280,7 +295,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                     placeholder="unlimited"
                   />
                 </label>
-              ) : (
+              ) : type === "web_collection" ? null : (
                 <label className="field">
                   <span>API key environment variable</span>
                   <input
@@ -407,10 +422,12 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                   <input className="text-input" type="number" value={syncInterval} onChange={(e) => setSyncInterval(e.target.value)} />
                 </label>
               </div>
-              <label className="field">
-                <span>URLs</span>
-                <textarea className="text-area" value={urlsText} onChange={(e) => setUrlsText(e.target.value)} />
-              </label>
+              {type !== "web_collection" && (
+                <label className="field">
+                  <span>URLs</span>
+                  <textarea className="text-area" value={urlsText} onChange={(e) => setUrlsText(e.target.value)} />
+                </label>
+              )}
               <label className="field">
                 <span>Connector JSON</span>
                 <textarea className="text-area text-area--code" value={connectorText} onChange={(e) => setConnectorText(e.target.value)} />
@@ -466,7 +483,12 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
 
             <button
               className="btn btn--primary"
-              disabled={(needsPath && !chosen) || !name || mutation.isPending}
+              disabled={
+                (needsPath && !chosen) ||
+                (type === "web_collection" && patterns(urlsText).length === 0) ||
+                !name ||
+                mutation.isPending
+              }
               onClick={() => mutation.mutate()}
             >
               {mutation.isPending ? "Saving..." : editing ? "Save source" : "Register source"}

@@ -254,117 +254,6 @@ class FilesystemConnector(SourceConnector):
         return super().validate()
 
 
-class WebCollectionConnector(SourceConnector):
-    connector_type = "web_collection"
-    experimental = True
-
-    def __init__(self, source: SourceConfig, state: StateStore):
-        super().__init__(source, state)
-        self._seen_validators: dict[str, dict[str, Any]] = {}
-
-    def begin_sync(self, mode: str = "incremental") -> None:
-        super().begin_sync(mode)
-        self._seen_validators = {}
-
-    def list_items(self) -> list[ConnectorItem]:
-        github_tree_urls = [
-            url
-            for url in self.source.urls
-            if (urlparse(url).hostname or "").lower().removeprefix("www.") == "github.com"
-            and "/tree/" in urlparse(url).path
-        ]
-        if github_tree_urls:
-            raise ConnectorUnavailable(
-                f"source {self.source.name} was registered as a web collection, but its URL is "
-                "a GitHub repository path. Remove this source and add the GitHub /tree/ URL "
-                "again so pheasant can clone the repository and index its subfolder."
-            )
-        self._require_experimental_enabled()
-        items: list[ConnectorItem] = []
-        for index, url in enumerate(self.source.urls):
-            if not is_fetchable_url(url):
-                # Drop it here rather than at read time, so one unfetchable
-                # URL (a `file://` that would have read the host filesystem)
-                # is a skipped item and not a failed sync for every other URL
-                # in the collection.
-                logger.warning(
-                    "source %s: skipping non-fetchable URL %r (only %s are fetched)",
-                    self.source.name,
-                    url,
-                    "/".join(sorted(FETCHABLE_SCHEMES)),
-                )
-                continue
-            relative = _relative_url_path(url, index)
-            if not self._allows_relative_path(relative):
-                continue
-            items.append(
-                ConnectorItem(
-                    identity=f"web:{url}",
-                    relative_path=relative,
-                    uri=url,
-                    mime_type=mimetypes.guess_type(urlparse(url).path)[0],
-                    metadata={"url": url},
-                )
-            )
-        return items
-
-    def read_item(self, item: ConnectorItem) -> ConnectorPayload:
-        self._require_experimental_enabled()
-        cached = self._cached_validators(item.uri)
-        response = _urlopen(
-            item.uri,
-            headers=self.source.connector.headers,
-            timeout=self.source.connector.request_timeout_seconds,
-            etag=cached.get("etag"),
-            last_modified=cached.get("last_modified"),
-        )
-        if response.get("not_modified"):
-            # Carry validators forward so the next sync stays conditional.
-            self._seen_validators[item.uri] = cached
-            raise ItemNotModified(f"not modified (HTTP 304): {item.uri}")
-        validators = {
-            "etag": response.get("etag"),
-            "last_modified": response["last_modified"],
-        }
-        if validators["etag"] or validators["last_modified"]:
-            self._seen_validators[item.uri] = validators
-        content = response["content"]
-        return ConnectorPayload(
-            item=item,
-            content=content,
-            mime_type=response["mime_type"] or item.mime_type,
-            size_bytes=len(content),
-            sha256=hashlib.sha256(content).hexdigest(),
-            mtime=response["last_modified"],
-            metadata={"url": item.uri, "headers": response["headers"]},
-        )
-
-    def checkpoint_from_items(
-        self,
-        items: list[ConnectorItem],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        urls = [item.uri for item in items]
-        previous = (self._previous_cursor or {}).get("validators") or {}
-        validators: dict[str, dict[str, Any]] = {}
-        for item in items:
-            entry = self._seen_validators.get(item.uri) or previous.get(item.uri)
-            if entry:
-                validators[item.uri] = entry
-        return (
-            {
-                "item_count": len(items),
-                "last_url": urls[-1] if urls else None,
-                "validators": validators,
-            },
-            {"item_count": len(items), "urls": urls, "listed_at": utc_now()},
-        )
-
-    def _cached_validators(self, url: str) -> dict[str, Any]:
-        validators = (self._previous_cursor or {}).get("validators") or {}
-        cached = validators.get(url)
-        return cached if isinstance(cached, dict) else {}
-
-
 class APIConnector(SourceConnector):
     connector_type = "api"
     experimental = True
@@ -622,6 +511,8 @@ def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConne
     }:
         return FilesystemConnector(source, state)
     if source.type.value == "web_collection":
+        from pheasant.sync.web_connector import WebCollectionConnector
+
         return WebCollectionConnector(source, state)
     if source.type.value == "api":
         return APIConnector(source, state)

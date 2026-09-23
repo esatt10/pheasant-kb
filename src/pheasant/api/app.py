@@ -28,7 +28,13 @@ from pheasant.config.loader import (
     validate_source_paths,
 )
 from pheasant.config.profiles import profile_names
-from pheasant.config.schema import PheasantConfig, SourceConfig, SourceType
+from pheasant.config.schema import (
+    FILESYSTEM_SOURCE_TYPES,
+    PLACEHOLDER_SOURCE_PATH,
+    PheasantConfig,
+    SourceConfig,
+    SourceType,
+)
 from pheasant.deployment.roles import Role, resolve_role, validate_role
 from pheasant.deployment.roles import describe as describe_role
 from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter, DrainState
@@ -57,6 +63,7 @@ from pheasant.services import retrieval as retrieval_service
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
+from pheasant.sync.web_connector import registration_connector
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
@@ -64,7 +71,7 @@ logger = logging.getLogger(__name__)
 
 #: Stand-in for the schema's mandatory ``path`` on source types that pull from
 #: a service rather than the filesystem. Nothing ever opens it.
-PLUGIN_PLACEHOLDER_PATH = "/unused"
+PLUGIN_PLACEHOLDER_PATH = PLACEHOLDER_SOURCE_PATH
 
 #: ``(id, label, description, path_role)`` for the built-in source types, in
 #: the order a picker should show them. ``path_role`` is ``"required"`` when
@@ -101,7 +108,7 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
     (
         "web_collection",
         "Web pages",
-        "A list of URLs fetched over HTTP, with ETag-based incremental sync.",
+        "A list of URLs, fetched over HTTP and re-checked per page on an adaptive schedule.",
         "unused",
     ),
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
@@ -836,6 +843,19 @@ def _resolve_source_path(path: str, config: PheasantConfig) -> Path:
     return resolve_under(path, _allowed_roots(config))
 
 
+def _path_is_unused(type_name: str, is_builtin: bool) -> bool:
+    """Whether a source of this type never opens its ``path``.
+
+    True for every plugin type and for the built-ins whose connector fetches
+    elsewhere (``web_collection``, ``api``, ``s3``) - the types
+    ``GET /sources/types`` reports as ``path_role: unused``. Keying this on
+    "is a plugin" alone refused the placeholder that same catalog tells the UI
+    to send, so a web page could not be added from the form at all.
+    """
+
+    return not is_builtin or SourceType(type_name) not in FILESYSTEM_SOURCE_TYPES
+
+
 def _check_source_type(type_name: str) -> bool:
     """Validate a ``sources[].type`` string; return whether it is built-in.
 
@@ -875,6 +895,7 @@ def _source_payload(
     if isinstance(req, RegisterSourceRequest):
         payload.update({"name": req.name, "type": req.type})
         updates = req.model_dump(exclude={"sync_now", "sync_mode"}, exclude_none=True)
+        updates["connector"] = registration_connector(req.type, req.connector)
     else:
         updates = req.model_dump(exclude_unset=True)
     updates["path"] = str(resolved_path)
@@ -2043,11 +2064,15 @@ def create_app(
     @app.post("/sources")
     def register_source(req: RegisterSourceRequest) -> dict:
         is_builtin = _check_source_type(req.type)
-        # A plugin connector reads from its own service, not the filesystem,
-        # so the schema's mandatory path is a placeholder — don't make the
-        # caller invent a real directory to register a Notion or Slack
-        # source. A path that *is* supplied still goes through path policy.
-        if not is_builtin and req.path.strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
+        # A connector that reads from a service or the web, not the
+        # filesystem, gets a placeholder for the schema's mandatory path —
+        # don't make the caller invent a real directory to register a web
+        # page or a Notion space. A path that *is* supplied still goes
+        # through path policy.
+        if _path_is_unused(req.type, is_builtin) and req.path.strip() in {
+            "",
+            PLUGIN_PLACEHOLDER_PATH,
+        }:
             resolved = Path(PLUGIN_PLACEHOLDER_PATH)
         else:
             try:
@@ -2104,7 +2129,9 @@ def create_app(
             if req.type is not None
             else str(source.type) in {member.value for member in SourceType}
         )
-        if not is_builtin and (req.path or "").strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
+        if _path_is_unused(str(req.type or source.type), is_builtin) and (
+            req.path or ""
+        ).strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
             resolved = Path(PLUGIN_PLACEHOLDER_PATH)
         else:
             try:

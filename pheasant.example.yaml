@@ -327,6 +327,11 @@ security:
     # it shows up here at /data — then register a source under /data.
     - /data
   allow_user_selected_source_paths: true
+  # Whether a web source an AGENT registers over MCP may name a loopback,
+  # private, link-local or cloud-metadata address. Off: a page an agent read
+  # cannot talk it into making this server fetch and index internal endpoints.
+  # YAML, UI and `pheasant up` registrations are not affected.
+  allow_agent_private_urls: false
   read_only_sources: true
   deny_path_traversal: true
   default_exclude_secrets: true
@@ -888,7 +893,7 @@ sources:
       on_startup: true
       on_file_change: debounce
       on_git_commit: true
-      interval_seconds: 900
+      interval_seconds: 900   # read by web_collection sources only (see below)
 
   - name: existing-obsidian-vault
     type: obsidian_vault
@@ -953,4 +958,26 @@ sources:
     sync:
       on_startup: true
       on_file_change: debounce
+      interval_seconds: 3600  # read by web_collection sources only (see below)
+
+  # Web pages. No `path`: the connector fetches the listed URLs. Every listed
+  # URL is taken (the folder-walk `include` globs are not applied), and a page
+  # served as text/html is extracted as HTML with `ingestion.extractor.html_text`.
+  # Each page is re-checked on its own schedule: first after
+  # `sync.interval_seconds`, doubling while it is unchanged up to
+  # `connector.max_refresh_seconds`, and back to the minimum when it changes.
+  # A page that is not due costs no request. The UI, POST /sources,
+  # `pheasant up <url>` and MCP `register_source` set the experimental opt-in
+  # for you; in YAML it is explicit.
+  - name: example-web
+    type: web_collection
+    enabled: false
+    urls:
+      - https://example.com/blog/post
+      - https://example.com/reports/annual-report.pdf
+    connector:
+      allow_experimental: true
+      max_refresh_seconds: 259200
+    sync:
+      on_startup: true
       interval_seconds: 3600

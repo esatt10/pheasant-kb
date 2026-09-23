@@ -11,7 +11,13 @@ from typing import Any
 import yaml
 
 from pheasant.config.loader import dump_config_yaml
-from pheasant.config.schema import PheasantConfig, SourceConfig, SourceType
+from pheasant.config.schema import (
+    FILESYSTEM_SOURCE_TYPES,
+    PLACEHOLDER_SOURCE_PATH,
+    PheasantConfig,
+    SourceConfig,
+    SourceType,
+)
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
@@ -33,6 +39,7 @@ from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
 from pheasant.services.errors import SourceNotFound
 from pheasant.sync.engine import SyncEngine
+from pheasant.sync.web_connector import web_source_for_agent
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +166,7 @@ class PheasantTools(ReadinessTools):
         knowledge_base: str,
         name: str,
         source_type: str,
-        path: str,
+        path: str = "",
         description: str | None = None,
         enabled: bool = True,
         include: list[str] | None = None,
@@ -171,28 +178,11 @@ class PheasantTools(ReadinessTools):
         sync_now: bool = False,
         wait: bool = False,
         sync_mode: str = "incremental",
+        urls: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
-        if self.config.security.allow_user_selected_source_paths:
-            resolved_path = Path(path).expanduser().resolve()
-            if not resolved_path.exists():
-                raise ValueError(f"Path does not exist: {resolved_path}")
-        else:
-            resolved_path = resolve_under(
-                path,
-                [
-                    self.config.pheasant.workspace_root,
-                    self.config.pheasant.exports_path,
-                    *self.config.security.allow_workspace_roots,
-                ],
-            )
-        source = SourceConfig(
-            name=name,
-            type=SourceType(source_type),
-            path=resolved_path,
-            description=description,
-            enabled=enabled,
-        )
+        source = self._new_source(name, SourceType(source_type), path, list(urls or []))
+        source.description, source.enabled = description, enabled
         if include is not None:
             source.include = include
         if exclude is not None:
@@ -237,6 +227,40 @@ class PheasantTools(ReadinessTools):
             else:
                 response["job"] = self.start_sync_source(knowledge_base, source.name, sync_mode)
         return response
+
+    def _new_source(self, name: str, kind: SourceType, path: str, urls: list[str]) -> SourceConfig:
+        """The source a registration describes, before its options are applied.
+
+        A web collection, an API or a bucket fetches its content elsewhere, so
+        its `path` is ceremony it never opens; it used to be required *and*
+        allow-list checked, which made a web source unregistrable here.
+        """
+
+        if kind == SourceType.web_collection:
+            return web_source_for_agent(
+                name=name,
+                urls=urls,
+                path=path,
+                allow_private=self.config.security.allow_agent_private_urls,
+            )
+        if urls:
+            raise ValueError(f"urls apply to web collections, not to a {kind.value} source")
+        if kind not in FILESYSTEM_SOURCE_TYPES:
+            return SourceConfig(name=name, type=kind, path=Path(path or PLACEHOLDER_SOURCE_PATH))
+        if self.config.security.allow_user_selected_source_paths:
+            resolved_path = Path(path).expanduser().resolve()
+            if not resolved_path.exists():
+                raise ValueError(f"Path does not exist: {resolved_path}")
+        else:
+            resolved_path = resolve_under(
+                path,
+                [
+                    self.config.pheasant.workspace_root,
+                    self.config.pheasant.exports_path,
+                    *self.config.security.allow_workspace_roots,
+                ],
+            )
+        return SourceConfig(name=name, type=kind, path=resolved_path)
 
     def start_sync_source(
         self,

@@ -296,3 +296,74 @@ def test_a_sync_is_unchanged_when_observation_is_off(sync_engine: object) -> Non
     # observation is off, so nothing anywhere writes to them.
     assert sync_engine.state.rows("SELECT COUNT(*) AS c FROM interaction_events", ())[0]["c"] == 0
     assert sync_engine.state.rows("SELECT COUNT(*) AS c FROM log_tasks", ())[0]["c"] == 0
+
+
+def test_a_web_collection_resync_is_free_and_state_is_unchanged(tmp_path: Path) -> None:
+    """A listed web page, fetched twice, indexes once and leaves state identical.
+
+    Covers the web connector admitting every listed URL (not just the ones the
+    stock include globs happen to match) and HTML served from an extensionless
+    URL being extracted: neither may make a second sync do work.
+    """
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from pheasant.config.schema import PheasantConfig
+
+    page = b"<html><body><p>idempotent web page body</p></body></html>"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        config = PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "web-idempotency",
+                    "state_path": str(tmp_path / "state"),
+                    "workspace_root": str(tmp_path),
+                    "exports_path": str(tmp_path / "exports"),
+                },
+                "ingestion": {"extractor": {"html_text": True}},
+                "sources": [
+                    {
+                        "name": "web",
+                        "type": "web_collection",
+                        "urls": [f"{base}/post", f"{base}/about.html"],
+                        "connector": {"allow_experimental": True},
+                        "sync": {"on_startup": False},
+                    }
+                ],
+            }
+        )
+        engine = SyncEngine(config)
+        first = engine.sync_source("web", "incremental")
+        snapshot = engine.state.rows(
+            "SELECT id, sha256 FROM artifacts WHERE source_id = ? ORDER BY id", ("web",)
+        )
+        second = engine.sync_source("web", "incremental")
+        after = engine.state.rows(
+            "SELECT id, sha256 FROM artifacts WHERE source_id = ? ORDER BY id", ("web",)
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert first.indexed_artifacts == 2
+    assert second.indexed_artifacts == 0
+    assert second.skipped_artifacts == 2
+    assert [dict(r) for r in snapshot] == [dict(r) for r in after]

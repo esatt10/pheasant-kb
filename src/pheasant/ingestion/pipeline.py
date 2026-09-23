@@ -517,6 +517,18 @@ def parse_connector_payload(
             item.relative_path,
             _sidecar_for_payload(payload, EXTRACT_SIDECAR_SUFFIX),
         )
+    elif extractor is not None and _is_html(mime_type):
+        # A page served as HTML from a URL with no extension (``/blog/post``)
+        # has a ``.txt`` relative path - the artifact id is built from it, so
+        # it stays - and the suffix alone would index its raw markup, script
+        # and style bodies included. The extractor picks its reader by
+        # suffix, so it is told the format the server declared.
+        text = extract_to_text(
+            extractor,
+            payload.content,
+            f"{item.relative_path}.html",
+            _sidecar_for_payload(payload, EXTRACT_SIDECAR_SUFFIX),
+        )
     else:
         text = read_text_bytes(payload.content, item.relative_path, extractor)
     chunks, headings = _chunks_and_headings(source, text)
@@ -547,6 +559,13 @@ def _sidecar_for_payload(
     if not path:
         return None
     return _sidecar_for_path(Path(path), suffix)
+
+
+def _is_html(mime_type: str | None) -> bool:
+    return (mime_type or "").split(";", 1)[0].strip().lower() in {
+        "text/html",
+        "application/xhtml+xml",
+    }
 
 
 def _is_text_like(mime_type: str | None) -> bool:

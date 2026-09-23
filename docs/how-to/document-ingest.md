@@ -151,8 +151,14 @@ ingestion:
 ```
 
 It defaults to off because enabling it changes the indexed text, and therefore
-chunk boundaries, of an existing knowledge base. Enable it deliberately and
-re-sync with `--mode full`.
+chunk boundaries, of an existing knowledge base. Enable it deliberately. Folder
+sources keep their stored text until you re-sync them with `--mode full`; a
+`web_collection` is re-read automatically on its next sync, because
+`html_text` is part of a web source's fingerprint.
+
+A web page is recognised as HTML by the content type the server sends as well
+as by its extension, so `https://example.com/blog/post` served as `text/html`
+is extracted like `post.html`.
 
 ## Federation note
 

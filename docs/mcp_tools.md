@@ -59,7 +59,7 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | Tool | Purpose |
 |---|---|
 | `list_knowledge_bases` | Return registered knowledge bases and status. |
-| `register_source` | Add a source at runtime after path/include/exclude validation. Optional `sync_now`; `wait=false` returns a followable background job. |
+| `register_source` | Add a source at runtime after path/include/exclude validation. Optional `sync_now`; `wait=false` returns a followable background job. For web pages pass `source_type="web_collection"` and `urls=[…]` with no `path`; only public http(s) URLs are accepted unless the operator set `security.allow_agent_private_urls`. |
 | `start_sync_source` | Start one source sync and immediately return a job id. |
 | `get_job` | Read one background job's phase, counters, log tail and terminal result/error. |
 | `list_jobs` | List recent jobs, optionally active jobs only. |

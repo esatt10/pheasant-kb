@@ -88,7 +88,9 @@ pheasant-kb/
 │   │                            GateSet that cannot be constructed empty
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
-│   ├── sync/                  ← engine, connectors, watcher, scheduler, locks,
+│   ├── sync/                  ← engine, connectors, web_connector (listed
+│   │                            URLs, per-page revalidation), watcher,
+│   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
 │   │                            authority ceiling), worker_pool,
@@ -133,7 +135,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 129 pytest modules, offline by design
+└── tests/                     ← 130 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1776,6 +1778,35 @@ Each of these cost real time. They are listed because the shape recurs.
   patched `Path.mkdir` globally and broke the uvicorn writing tier running in
   the same process, failing with the *writer's* refusal. Two different state
   paths is the honest simulation, because two mounts is what the real thing is.
+
+- **A default written for one connector is a filter on every other.** The
+  stock `include` globs (code, Markdown, config) exist to decide which files a
+  folder walk takes, and the web connector applied them to a URL *list* — so
+  every `.html` and `.pdf` URL an operator named was dropped without a word,
+  while `/blog/post` survived only because it had been renamed `post.txt`, and
+  was then indexed as raw markup because HTML was recognised by suffix alone.
+  Around it, three more doors were each shut differently: YAML with no `path`
+  raised `KeyError`, the UI form got a 400 for sending the `/unused`
+  placeholder its own catalog told it to send (the placeholder was honoured for
+  plugin types only), and `pheasant up <url>` wrote a source its own first
+  sync refused as experimental. Every connector test passed throughout,
+  because each set `include=["**/*.md"]` and served a `.md`. Found by
+  registering one real page each way in. `tests/test_web_page_registration.py`
+  walks all of them.
+- **The same pass found the rest of the web path in the same state.** The UI
+  form hid the URL box in a collapsed section and saved sources whose first
+  sync was refused unless someone hand-wrote `{"allow_experimental": true}`;
+  MCP's `register_source` had no `urls` at all and demanded an allow-listed
+  path. And `sources[].sync.interval_seconds`, documented as a per-source
+  schedule, had **no reader** — so every listed page was re-requested on every
+  15-minute beat, 96 times a day, whether it changed monthly or never. It
+  means something now: the first interval of a per-URL schedule kept in the
+  checkpoint, doubling while a page is unchanged up to
+  `connector.max_refresh_seconds`, reset by a change. A page that is not due
+  costs no request. Registering over MCP is also the one place a URL comes
+  from something an agent *read*, so that path alone refuses non-public
+  addresses (`security/url_policy.py`); an operator indexing an intranet wiki
+  from YAML is doing a normal thing.
 
 ---
 
