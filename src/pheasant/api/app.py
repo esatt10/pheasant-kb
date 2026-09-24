@@ -1433,6 +1433,22 @@ def create_app(
         expected_token = api_token.encode("utf-8")
         auth_public_paths = frozenset(config.security.api_auth.public_paths or ())
 
+        def is_public_ui_request(request: Request) -> bool:
+            """Let a browser load the shell that collects the API token.
+
+            The bundle cannot contain the fleet secret: it would be visible to
+            every browser that downloads it. The shell and hashed assets are
+            therefore public, while the API calls made by that shell remain
+            bearer-authenticated. Deep-link navigation is intentionally not
+            included here because paths such as ``/sources`` are also API
+            routes; once the shell is loaded, the SPA handles those routes.
+            """
+
+            if request.method != "GET" or not getattr(request.app.state, "ui_dist", None):
+                return False
+            path = request.url.path
+            return path in {"/", "/index.html", "/pheasant.png"} or path.startswith("/assets/")
+
         @app.middleware("http")
         async def require_api_token(request, call_next):  # type: ignore[no-untyped-def]
             """A static shared bearer token, when one is configured.
@@ -1453,7 +1469,11 @@ def create_app(
             """
 
             path = request.url.path
-            if path.startswith("/internal/") or path in auth_public_paths:
+            if (
+                path.startswith("/internal/")
+                or path in auth_public_paths
+                or is_public_ui_request(request)
+            ):
                 return await call_next(request)
             scheme, _, supplied = (request.headers.get("authorization") or "").partition(" ")
             # Compared as bytes: Starlette decodes headers as latin-1, so a

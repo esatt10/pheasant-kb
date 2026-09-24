@@ -235,6 +235,37 @@ def test_removing_a_source_still_removes_all_of_it() -> None:
     assert set(survivors) == {builder.kb_id}
 
 
+def test_removing_the_last_source_prunes_its_type_hub() -> None:
+    """A type hub is structural source state, not orphaned graph content."""
+
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {"name": KB},
+            "sources": [
+                {"name": "notes-a", "type": "markdown_folder", "path": "."},
+                {"name": "notes-b", "type": "markdown_folder", "path": "."},
+                {"name": "docs", "type": "document_folder", "path": "."},
+            ],
+        }
+    )
+    builder = GraphBuilder(config)
+    for source in config.sources:
+        builder.add_source(source)
+
+    markdown_hub = f"source_type:{builder.kb_id}:markdown_folder"
+    document_hub = f"source_type:{builder.kb_id}:document_folder"
+    builder.remove_source_content("notes-a")
+    assert builder.graph.has_node(markdown_hub), "the other Markdown source still needs its hub"
+
+    builder.remove_source_content("notes-b")
+    assert not builder.graph.has_node(markdown_hub), "the last source left an orphaned type hub"
+    assert builder.graph.has_node(document_hub), "a different source type must not be pruned"
+
+    builder.remove_source_content("docs")
+    assert not builder.graph.has_node(document_hub)
+    assert set(node_id for node_id, _attrs in builder.graph.iter_nodes()) == {builder.kb_id}
+
+
 def test_removing_an_artifact_takes_its_derived_nodes_and_edges() -> None:
     """Both endpoints, as `remove_nodes_from` has always promised."""
 

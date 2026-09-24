@@ -561,6 +561,26 @@ def test_the_probes_and_metrics_stay_open(workspace: Path, monkeypatch: pytest.M
         assert client.get(path).status_code == 200
 
 
+def test_the_ui_shell_is_public_but_its_api_routes_are_not(
+    tmp_path: Path, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The browser must be able to render the token-entry control first."""
+
+    dist = tmp_path / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>ui</title>", encoding="utf-8")
+    (dist / "pheasant.png").write_bytes(b"png")
+    (assets / "app.js").write_text("console.log('ui')", encoding="utf-8")
+    monkeypatch.setenv("PHEASANT_UI_DIST", str(dist))
+    client = _authenticated(workspace, monkeypatch)
+
+    assert client.get("/").status_code == 200
+    assert client.get("/pheasant.png").status_code == 200
+    assert client.get("/assets/app.js").status_code == 200
+    assert client.get("/sources").status_code == 401
+
+
 def test_internal_routes_keep_their_own_boundary_token(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
