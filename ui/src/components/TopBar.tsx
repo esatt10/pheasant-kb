@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, getApiToken, onApiAuthChanged, onApiAuthRequired } from "../api/client";
+import { ApiTokenDialog } from "./ApiTokenDialog";
 import { HealthBadge } from "./HealthBadge";
 import { McpDialog } from "./McpDialog";
 import { useTheme } from "../hooks/useTheme";
@@ -10,6 +11,24 @@ import { PheasantMark } from "./PheasantMark";
 export function TopBar() {
   const [theme, toggleTheme] = useTheme();
   const [showMcp, setShowMcp] = useState(false);
+  const [showApiAuth, setShowApiAuth] = useState(false);
+  const [apiToken, setApiTokenState] = useState(getApiToken);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const removeRequiredListener = onApiAuthRequired(() => setShowApiAuth(true));
+    const removeChangedListener = onApiAuthChanged(() => setApiTokenState(getApiToken()));
+    return () => {
+      removeRequiredListener();
+      removeChangedListener();
+    };
+  }, []);
+
+  function onApiTokenSaved() {
+    setApiTokenState(getApiToken());
+    void queryClient.invalidateQueries();
+  }
+
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: api.overview,
@@ -75,6 +94,9 @@ export function TopBar() {
 
       <div className="topbar__right">
         <HealthBadge />
+        <button className="btn btn--small" onClick={() => setShowApiAuth(true)}>
+          {apiToken ? "API connected" : "Connect API"}
+        </button>
         <button className="btn btn--small" onClick={() => setShowMcp(true)}>
           Connect agent
         </button>
@@ -89,6 +111,12 @@ export function TopBar() {
       </div>
 
       {showMcp ? <McpDialog onClose={() => setShowMcp(false)} /> : null}
+      {showApiAuth ? (
+        <ApiTokenDialog
+          onClose={() => setShowApiAuth(false)}
+          onSaved={onApiTokenSaved}
+        />
+      ) : null}
     </header>
   );
 }

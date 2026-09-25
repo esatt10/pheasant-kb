@@ -656,6 +656,30 @@ class GraphBuilder:
                 if attrs.get("source_id") == source_name or node_id == source_node
             ]
         self.graph.remove_nodes_from(nodes)
+        self.prune_orphan_source_type_hubs()
+
+    def prune_orphan_source_type_hubs(self) -> int:
+        """Remove type hubs no remaining source reaches.
+
+        Source-type nodes are shared structural state, so they cannot carry an
+        individual ``source_id``. Pruning them from the surviving source nodes
+        prevents the last removal of a type — and an old interrupted removal —
+        from leaving a misleading graph fragment behind.
+        """
+
+        with self.graph.reading():
+            active_types: set[str] = set()
+            hubs: list[tuple[str, str | None]] = []
+            for node_id, attrs in self.graph.iter_nodes():
+                node_type = attrs.get("type")
+                source_type = attrs.get("source_type")
+                if node_type == "source" and source_type:
+                    active_types.add(str(source_type))
+                elif node_type == "source_type":
+                    hubs.append((node_id, str(source_type) if source_type else None))
+            orphans = [node_id for node_id, source_type in hubs if source_type not in active_types]
+        self.graph.remove_nodes_from(orphans)
+        return len(orphans)
 
     def remove_artifact_nodes(self, artifact_ids: list[str]) -> None:
         """Remove specific artifacts' nodes (and anything derived from them)

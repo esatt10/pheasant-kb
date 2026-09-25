@@ -61,6 +61,66 @@ import type {
 const API_BASE =
   import.meta.env.VITE_PHEASANT_API_BASE ?? (import.meta.env.DEV ? "/api" : "");
 
+const API_TOKEN_KEY = "pheasant.api.token";
+const API_AUTH_REQUIRED_EVENT = "pheasant:api-auth-required";
+const API_AUTH_CHANGED_EVENT = "pheasant:api-auth-changed";
+
+/**
+ * The fleet's front-door token belongs to the browser session, not durable
+ * storage. The UI cannot read a container environment variable, and baking a
+ * shared bearer secret into the bundle would expose it to every visitor.
+ */
+export function getApiToken(): string {
+  try {
+    return sessionStorage.getItem(API_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiToken(value: string): void {
+  const token = value.trim();
+  try {
+    if (token) sessionStorage.setItem(API_TOKEN_KEY, token);
+    else sessionStorage.removeItem(API_TOKEN_KEY);
+  } catch {
+    /* session storage may be unavailable */
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(API_AUTH_CHANGED_EVENT));
+  }
+}
+
+export function onApiAuthRequired(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = () => listener();
+  window.addEventListener(API_AUTH_REQUIRED_EVENT, handler);
+  return () => window.removeEventListener(API_AUTH_REQUIRED_EVENT, handler);
+}
+
+export function onApiAuthChanged(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = () => listener();
+  window.addEventListener(API_AUTH_CHANGED_EVENT, handler);
+  return () => window.removeEventListener(API_AUTH_CHANGED_EVENT, handler);
+}
+
+function signalApiAuthRequired(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(API_AUTH_REQUIRED_EVENT));
+  }
+}
+
+function requestHeaders(initial?: HeadersInit, json = true): Headers {
+  const headers = new Headers(initial);
+  if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const token = getApiToken();
+  if (token && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
 function numericEnv(value: unknown, fallback: number): number {
   const parsed = Number(value ?? fallback);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
@@ -87,16 +147,37 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
+/** Turn FastAPI's structured validation detail into text a person can act on. */
+function errorDetail(body: unknown, fallback: string): string {
+  if (!body || typeof body !== "object") return fallback;
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return fallback;
+
+  const messages = detail.flatMap((issue) => {
+    if (typeof issue === "string") return [issue];
+    if (!issue || typeof issue !== "object") return [];
+    const { loc, msg } = issue as { loc?: unknown; msg?: unknown };
+    if (typeof msg !== "string") return [];
+    const location = Array.isArray(loc)
+      ? loc.filter((part): part is string | number => typeof part === "string" || typeof part === "number").join(".")
+      : "";
+    return [location ? `${location}: ${msg}` : msg];
   });
+  return messages.length > 0 ? messages.join("; ") : fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const { headers: initialHeaders, ...requestInit } = init ?? {};
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...requestInit,
+    headers: requestHeaders(initialHeaders),
+  });
+  if (response.status === 401) signalApiAuthRequired();
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const body = await response.json();
-      if (body?.detail) detail = String(body.detail);
+      detail = errorDetail(await response.json(), detail);
     } catch {
       /* response had no JSON body */
     }
@@ -309,12 +390,21 @@ export const api = {
   ): Promise<ChatAnswer> => {
     const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // This body is JSON, so keep its content type. `requestHeaders` also
+      // attaches the browser session's bearer token.
+      headers: requestHeaders(),
       body: JSON.stringify(body),
       signal,
     });
+    if (response.status === 401) signalApiAuthRequired();
     if (!response.ok || !response.body) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        detail = errorDetail(await response.json(), detail);
+      } catch {
+        /* response had no JSON body */
+      }
+      throw new ApiError(detail, response.status);
     }
 
     const reader = response.body.getReader();
@@ -388,12 +478,18 @@ export const api = {
     form.append("source_name", sourceName);
     form.append("sync_now", "true");
     form.append("wait", "false");
-    const response = await fetch(`${API_BASE}/sources/upload`, { method: "POST", body: form });
+    const response = await fetch(`${API_BASE}/sources/upload`, {
+      method: "POST",
+      // Do not set Content-Type here: FormData needs the browser-generated
+      // multipart boundary. The bearer token is still added by this helper.
+      headers: requestHeaders(undefined, false),
+      body: form,
+    });
+    if (response.status === 401) signalApiAuthRequired();
     if (!response.ok) {
       let detail = `${response.status} ${response.statusText}`;
       try {
-        const body = await response.json();
-        if (body?.detail) detail = String(body.detail);
+        detail = errorDetail(await response.json(), detail);
       } catch {
         /* no JSON body */
       }
