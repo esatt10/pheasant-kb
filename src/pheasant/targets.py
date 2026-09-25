@@ -21,8 +21,6 @@ never learns a new trick.
 
 from __future__ import annotations
 
-import base64
-import os
 import re
 import shutil
 import subprocess
@@ -31,6 +29,18 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from pheasant.config.schema import SourceConfig, SourceType
+from pheasant.git_auth import (
+    git_env as _git_env,
+)
+from pheasant.git_auth import (
+    github_authentication_error as _github_authentication_error,
+)
+from pheasant.git_auth import (
+    github_token as _github_token,
+)
+from pheasant.git_auth import (
+    is_github_https_url as _is_github_https_url,
+)
 
 GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht")
 
@@ -438,103 +448,6 @@ def resolve_targets(
         used.add(target.name)
         targets.append(target)
     return targets
-
-
-#: Checked in this order because GITHUB_TOKEN is the name most users already
-#: have set (GitHub Actions' own ambient token, and the name this project's
-#: own .env.example documents); GH_TOKEN is the ``gh`` CLI's name, checked
-#: second so an environment with both prefers the more explicit one.
-GITHUB_TOKEN_ENV_CANDIDATES = ("GITHUB_TOKEN", "GH_TOKEN")
-
-
-def _github_token() -> str | None:
-    for name in GITHUB_TOKEN_ENV_CANDIDATES:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    return None
-
-
-def _is_github_https_url(url: str) -> bool:
-    """True for an HTTP(S) github.com remote — never for SSH/scp-like forms.
-
-    SSH already carries its own auth (a deploy key or agent), so a token
-    would be both useless and, if ever wired to the wrong transport, a way
-    to leak it somewhere unintended. Only HTTP(S) is subject to
-    ``http.extraHeader``.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = parsed.netloc.split("@")[-1].split(":")[0].lower()
-    return host == "github.com"
-
-
-def _github_authentication_error(result: subprocess.CompletedProcess[str]) -> bool:
-    """Whether Git failed because GitHub rejected an HTTP credential.
-
-    This is deliberately narrow: a retry without the configured token is
-    useful for a public repository when a stale token is present, but it must
-    not turn ordinary transport, path, or server failures into a second clone
-    attempt.
-    """
-
-    detail = f"{result.stderr}\n{result.stdout}".lower()
-    return any(
-        marker in detail
-        for marker in (
-            "could not read username",
-            "authentication failed",
-            "http basic: access denied",
-            "invalid username or token",
-        )
-    )
-
-
-def _git_env(clone_url: str | None = None) -> dict[str, str]:
-    """Environment for the git subprocesses this module runs.
-
-    Two things a clone must not do unattended: block on a credential prompt
-    (an interactive password prompt in a server process hangs the sync), and
-    speak a transport helper. ``protocol.allow=never`` plus explicit
-    per-protocol allowances pins the set to the ones ``validate_clone_url``
-    already accepts, so a hostile URL that slipped past parsing still has no
-    helper to reach.
-
-    When ``clone_url`` is an HTTPS github.com remote and a ``GITHUB_TOKEN``/
-    ``GH_TOKEN`` is set, a Basic-auth header is injected via
-    ``http.https://github.com/.extraheader`` — the same mechanism GitHub
-    Actions' own checkout action uses — so a private repository can be
-    cloned/fetched without a browser or a stored git credential. The token
-    reaches git only through ``GIT_CONFIG_KEY_N``/``GIT_CONFIG_VALUE_N`` env
-    vars, never through argv (invisible to a `ps`/Task Manager listing that
-    the plain URL-embedded ``https://<token>@github.com/...`` form is not)
-    and never through the URL string itself (git's own failure messages
-    quote the URL back verbatim, which would otherwise leak the token into
-    a raised ``TargetError`` — and, via the quick-add API, into an
-    unauthenticated caller's error response). Scoped to github.com
-    specifically, not a blanket credential helper, so the token is never
-    sent to an unrelated remote even if one is cloned in the same process.
-    """
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env.setdefault("GIT_ASKPASS", "")
-    configs = [
-        ("protocol.allow", "never"),
-        ("protocol.https.allow", "always"),
-        ("protocol.http.allow", "always"),
-        ("protocol.ssh.allow", "always"),
-        ("protocol.git.allow", "always"),
-    ]
-    token = _github_token() if clone_url and _is_github_https_url(clone_url) else None
-    if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        configs.append(("http.https://github.com/.extraheader", f"AUTHORIZATION: basic {basic}"))
-    env["GIT_CONFIG_COUNT"] = str(len(configs))
-    for index, (key, value) in enumerate(configs):
-        env[f"GIT_CONFIG_KEY_{index}"] = key
-        env[f"GIT_CONFIG_VALUE_{index}"] = value
-    return env
 
 
 def managed_target(source: SourceConfig) -> ResolvedTarget | None:
