@@ -99,6 +99,7 @@ nav:
       - Deployment: deployment.md
   - Explanation:
       - Architecture: architecture.md
+      - The fleet, with everything switched on: fleet-architecture.md
       - The memory system: memory-system.md
       - Memory formation: memory-formation.md
       - Knowledge effectiveness: knowledge-effectiveness.md
