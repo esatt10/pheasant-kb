@@ -39,7 +39,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: pheasant
-          image: ghcr.io/esatt10/pheasant:0.12.8
+          image: ghcr.io/esatt10/pheasant:0.12.9
           imagePullPolicy: IfNotPresent
           args: ["serve", "--role", "indexer"]
           ports:
