@@ -1,7 +1,7 @@
 deployment:
   compose:
     image_repository: ghcr.io/esatt10/pheasant
-    image_tag: 0.12.7
+    image_tag: 0.12.8
     workspace_path: .
 
 pheasant:

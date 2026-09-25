@@ -2,7 +2,7 @@ name: pheasant-advanced
 
 services:
   pheasant:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.7}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.8}
     container_name: ${PHEASANT_CONTAINER_NAME:-pheasant}
     build:
       context: ../..
