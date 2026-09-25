@@ -87,6 +87,8 @@ still valid here, resolved through the same state-registry fallback
 | GET | `/jobs` | Every job, newest first; running ones sort ahead of finished. `?active=true` for running only. |
 | GET | `/jobs/{job_id}` | One job: phase, counter, log tail, terminal outcome, and a `sources[]` breakdown. |
 | GET | `/jobs/stream` | Server-sent events, one per job update, primed with current state on connect. |
+| DELETE | `/jobs` | Dismiss every finished job notification; never cancels running work. |
+| DELETE | `/jobs/{job_id}` | Dismiss one finished job notification; returns `409` while it is running. |
 
 Every source row (`/sources`, `/overview`) also carries `syncing`, `sync_error`,
 `job` — the live job behind the boolean — and `progress`, **this source's own

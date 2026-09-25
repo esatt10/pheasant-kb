@@ -46,8 +46,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import ProxyHandler, Request, build_opener
 
 from pheasant.ingestion.pipeline import utc_now
+from pheasant.telemetry.interactions import inject_traceparent
 
 #: Terminal states. A job in any of these will never change again.
 TERMINAL = frozenset({"succeeded", "failed", "cancelled"})
@@ -76,6 +80,67 @@ RATE_SAMPLES = 30
 STALL_AFTER_SECONDS = 300.0
 
 logger = logging.getLogger(__name__)
+
+
+# The state-writing indexer owns the shared job snapshots in a fleet.  Keep
+# this route private and separate from the browser-facing ``/jobs`` surface:
+# an API replica has no write permission on the state volume by design.
+JOBS_CLEAR_PATH = "/internal/jobs/clear"
+
+
+class JobClearServiceError(RuntimeError):
+    """The indexer could not clear its persisted job notifications."""
+
+
+class JobClearServiceClient:
+    """Authenticated client for the indexer's finished-job clear endpoint."""
+
+    def __init__(
+        self,
+        base_url: str,
+        token_env: str,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token_env = token_env
+        self.timeout = max(0.1, float(timeout_seconds))
+        # Internal traffic must not be sent through an ambient HTTP proxy.
+        self._opener = build_opener(ProxyHandler({}))
+
+    def clear(self, job_id: str | None = None) -> int:
+        token = os.environ.get(self.token_env or "", "")
+        if not token:
+            raise JobClearServiceError(
+                f"The job service requires a token in environment variable {self.token_env!r}"
+            )
+        query = f"?{urlencode({'job_id': job_id})}" if job_id else ""
+        request = Request(
+            f"{self.base_url}{JOBS_CLEAR_PATH}{query}",
+            method="DELETE",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+        )
+        inject_traceparent(request.headers)
+        try:
+            with self._opener.open(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            try:
+                detail = json.loads(exc.read().decode("utf-8")).get("detail")
+            except Exception:  # pragma: no cover - a malformed upstream response
+                detail = None
+            raise JobClearServiceError(detail or exc.reason) from exc
+        except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+            raise JobClearServiceError(
+                f"job service at {self.base_url!r} could not clear finished jobs: {exc}"
+            ) from exc
+        try:
+            return int(payload["cleared"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise JobClearServiceError("job service returned an invalid response") from exc
 
 
 def _fraction(current: int, total: int | None) -> float | None:

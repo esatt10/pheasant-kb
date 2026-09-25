@@ -21,8 +21,6 @@ never learns a new trick.
 
 from __future__ import annotations
 
-import base64
-import os
 import re
 import shutil
 import subprocess
@@ -31,6 +29,18 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from pheasant.config.schema import SourceConfig, SourceType
+from pheasant.git_auth import (
+    git_env as _git_env,
+)
+from pheasant.git_auth import (
+    github_authentication_error as _github_authentication_error,
+)
+from pheasant.git_auth import (
+    github_token as _github_token,
+)
+from pheasant.git_auth import (
+    is_github_https_url as _is_github_https_url,
+)
 
 GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht")
 
@@ -440,82 +450,6 @@ def resolve_targets(
     return targets
 
 
-#: Checked in this order because GITHUB_TOKEN is the name most users already
-#: have set (GitHub Actions' own ambient token, and the name this project's
-#: own .env.example documents); GH_TOKEN is the ``gh`` CLI's name, checked
-#: second so an environment with both prefers the more explicit one.
-GITHUB_TOKEN_ENV_CANDIDATES = ("GITHUB_TOKEN", "GH_TOKEN")
-
-
-def _github_token() -> str | None:
-    for name in GITHUB_TOKEN_ENV_CANDIDATES:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    return None
-
-
-def _is_github_https_url(url: str) -> bool:
-    """True for an HTTP(S) github.com remote — never for SSH/scp-like forms.
-
-    SSH already carries its own auth (a deploy key or agent), so a token
-    would be both useless and, if ever wired to the wrong transport, a way
-    to leak it somewhere unintended. Only HTTP(S) is subject to
-    ``http.extraHeader``.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = parsed.netloc.split("@")[-1].split(":")[0].lower()
-    return host == "github.com"
-
-
-def _git_env(clone_url: str | None = None) -> dict[str, str]:
-    """Environment for the git subprocesses this module runs.
-
-    Two things a clone must not do unattended: block on a credential prompt
-    (an interactive password prompt in a server process hangs the sync), and
-    speak a transport helper. ``protocol.allow=never`` plus explicit
-    per-protocol allowances pins the set to the ones ``validate_clone_url``
-    already accepts, so a hostile URL that slipped past parsing still has no
-    helper to reach.
-
-    When ``clone_url`` is an HTTPS github.com remote and a ``GITHUB_TOKEN``/
-    ``GH_TOKEN`` is set, a Basic-auth header is injected via
-    ``http.https://github.com/.extraheader`` — the same mechanism GitHub
-    Actions' own checkout action uses — so a private repository can be
-    cloned/fetched without a browser or a stored git credential. The token
-    reaches git only through ``GIT_CONFIG_KEY_N``/``GIT_CONFIG_VALUE_N`` env
-    vars, never through argv (invisible to a `ps`/Task Manager listing that
-    the plain URL-embedded ``https://<token>@github.com/...`` form is not)
-    and never through the URL string itself (git's own failure messages
-    quote the URL back verbatim, which would otherwise leak the token into
-    a raised ``TargetError`` — and, via the quick-add API, into an
-    unauthenticated caller's error response). Scoped to github.com
-    specifically, not a blanket credential helper, so the token is never
-    sent to an unrelated remote even if one is cloned in the same process.
-    """
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env.setdefault("GIT_ASKPASS", "")
-    configs = [
-        ("protocol.allow", "never"),
-        ("protocol.https.allow", "always"),
-        ("protocol.http.allow", "always"),
-        ("protocol.ssh.allow", "always"),
-        ("protocol.git.allow", "always"),
-    ]
-    token = _github_token() if clone_url and _is_github_https_url(clone_url) else None
-    if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        configs.append(("http.https://github.com/.extraheader", f"AUTHORIZATION: basic {basic}"))
-    env["GIT_CONFIG_COUNT"] = str(len(configs))
-    for index, (key, value) in enumerate(configs):
-        env[f"GIT_CONFIG_KEY_{index}"] = key
-        env[f"GIT_CONFIG_VALUE_{index}"] = value
-    return env
-
-
 def managed_target(source: SourceConfig) -> ResolvedTarget | None:
     """Rehydrate the clone recipe persisted under ``sources[].repo``."""
 
@@ -550,6 +484,34 @@ def _run_git(destination: Path, args: list[str], clone_url: str) -> subprocess.C
             f"git {' '.join(args[:2])} timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s "
             f"for {destination}"
         ) from exc
+    if (
+        result.returncode != 0
+        and _is_github_https_url(clone_url)
+        and _github_token()
+        and _github_authentication_error(result)
+    ):
+        try:
+            anonymous_result = subprocess.run(
+                ["git", "-C", str(destination), *args],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+                # No URL means _git_env does not inject the configured token.
+                env=_git_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TargetError(
+                f"anonymous git {' '.join(args[:2])} timed out after "
+                f"{GIT_COMMAND_TIMEOUT_SECONDS}s for {destination}"
+            ) from exc
+        if anonymous_result.returncode == 0:
+            return anonymous_result
+        raise TargetError(
+            f"git {' '.join(args[:2])} failed for {destination}: GitHub rejected the configured "
+            "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
+            "or use an SSH remote for a private repository"
+        )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "git command failed").strip()
         raise TargetError(f"git {' '.join(args[:2])} failed for {destination}: {detail}")
@@ -703,24 +665,25 @@ def fetch_target(target: ResolvedTarget) -> str | None:
             )
         return f"{target.name}: reusing existing clone at {source_path}"
     destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "git",
+        "clone",
+        "--quiet",
+        # Knowledge indexing needs the checked-out tree, not the repository's
+        # entire history. A depth-one clone preserves tracked commit evidence
+        # while avoiding huge history packs.
+        "--depth",
+        "1",
+        "--no-tags",
+        *(["--branch", target.clone_ref, "--single-branch"] if target.clone_ref else []),
+        "--",
+        clone_url,
+        str(destination),
+    ]
     try:
         result = subprocess.run(
             # `--` ends option parsing, so nothing after it can be read as a flag.
-            [
-                "git",
-                "clone",
-                "--quiet",
-                # Knowledge indexing needs the checked-out tree, not the
-                # repository's entire history. A depth-one clone preserves
-                # tracked commit evidence while avoiding huge history packs.
-                "--depth",
-                "1",
-                "--no-tags",
-                *(["--branch", target.clone_ref, "--single-branch"] if target.clone_ref else []),
-                "--",
-                clone_url,
-                str(destination),
-            ],
+            command,
             capture_output=True,
             text=True,
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
@@ -730,6 +693,37 @@ def fetch_target(target: ResolvedTarget) -> str | None:
         raise TargetError(
             f"git clone timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s for {target.name!r}"
         ) from exc
+    if (
+        result.returncode != 0
+        and _is_github_https_url(clone_url)
+        and _github_token()
+        and _github_authentication_error(result)
+        # Git normally removes a failed clone directory. Do not remove an
+        # unexpected path just to attempt the anonymous fallback.
+        and not destination.exists()
+    ):
+        try:
+            anonymous_result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+                # No URL means _git_env does not inject the configured token.
+                env=_git_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TargetError(
+                "anonymous git clone timed out after "
+                f"{GIT_COMMAND_TIMEOUT_SECONDS}s for {target.name!r}"
+            ) from exc
+        if anonymous_result.returncode == 0:
+            result = anonymous_result
+        else:
+            raise TargetError(
+                f"could not clone {target.clone_url}: GitHub rejected the configured "
+                "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
+                "or use an SSH remote for a private repository"
+            )
     if result.returncode != 0:
         raise TargetError(
             f"could not clone {target.clone_url}: {result.stderr.strip() or 'git clone failed'}"

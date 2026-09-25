@@ -403,6 +403,30 @@ def test_finished_job_notifications_can_be_cleared(loaded_config, config_path: P
     assert [job["id"] for job in listing["jobs"]] == [active.id]
 
 
+def test_finished_job_clear_delegates_to_the_indexer_service(
+    loaded_config, config_path: Path
+) -> None:
+    """An API replica cannot unlink its read-only shared job snapshots itself."""
+
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+
+    class ClearService:
+        def __init__(self) -> None:
+            self.ids: list[str | None] = []
+
+        def clear(self, job_id: str | None = None) -> int:
+            self.ids.append(job_id)
+            return 2
+
+    service = ClearService()
+    client.app.state.job_clear_service = service
+    finished = client.app.state.jobs.create("sync", "Indexed docs", ["docs"])
+    client.app.state.jobs.finish(finished.id)
+
+    assert client.delete("/jobs").json() == {"cleared": 3}
+    assert service.ids == [None]
+
+
 def test_the_stream_route_is_registered_before_the_job_id_route(
     loaded_config, config_path: Path
 ) -> None:

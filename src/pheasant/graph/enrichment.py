@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -21,6 +22,12 @@ ENRICHED_EDGE_TYPES = {
     "derived_from",
     "mentions",
 }
+
+# PostgreSQL B-tree keys are bounded, while a URL, citation, or generated
+# import string is not. Keep two maximum-size enrichment IDs comfortably below
+# the graph-edge primary-key limit after the knowledge-base and edge fields are
+# included too.
+MAX_ENRICHMENT_NODE_ID_LENGTH = 512
 
 STOPWORDS = {
     "about",
@@ -879,7 +886,12 @@ def _reference_label(value: str) -> str:
 
 
 def _node_id(prefix: str, *parts: str) -> str:
-    return prefix + ":" + ":".join(_slug_part(part) for part in parts if part)
+    node_id = prefix + ":" + ":".join(_slug_part(part) for part in parts if part)
+    if len(node_id) <= MAX_ENRICHMENT_NODE_ID_LENGTH:
+        return node_id
+    digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:16]
+    suffix = f":sha256={digest}"
+    return node_id[: MAX_ENRICHMENT_NODE_ID_LENGTH - len(suffix)].rstrip(":-._") + suffix
 
 
 def _slug_part(value: str) -> str:

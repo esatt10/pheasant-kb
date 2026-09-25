@@ -37,6 +37,10 @@ In a role-split fleet, indexers write these job snapshots atomically under
 why the Jobs tray and Sources rows continue to show live progress even though
 the process serving the UI never performs indexing itself.
 
+The API mount remains read-only. When a user clears a finished notification,
+the API clears its local cards and asks the authenticated indexer to remove the
+persisted snapshot; active work is never cancelled.
+
 `GET /jobs` carries the same records under each job's `sources`, plus a
 job-level `progress` rollup.
 

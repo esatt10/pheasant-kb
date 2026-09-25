@@ -55,6 +55,11 @@ symbol:pheasant-codebase:src/pheasant/cli.py:PheasantCli.main
 commit:pheasant-codebase:6f2a9c1
 ```
 
+For an unbounded enrichment value such as a generated URL or citation, normal
+IDs remain unchanged until they reach the storage-safe limit. Longer values
+keep their source and prefix context and end in a deterministic
+`:sha256=<digest>` suffix; the original reference remains in node attributes.
+
 ## Required provenance
 
 Nodes and search results should record source ID, knowledge base ID, relative path, content hash, indexed timestamp, branch, commit, and parser/rule provenance when available.

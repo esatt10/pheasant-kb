@@ -128,12 +128,11 @@ CREATE TABLE IF NOT EXISTS artifact_terms (
 -- 1.5+ hours.
 CREATE INDEX IF NOT EXISTS idx_artifact_terms_artifact_id
   ON artifact_terms(artifact_id);
--- Retained for the historical concept rows: `WHERE node_type='concept'
--- GROUP BY node_id, ... COUNT(DISTINCT artifact_id)`. Without it, that
--- query is an unindexed scan + sort over the whole table — measured at
--- 10+ minutes and still not finished on a 1.27M-row table.
-CREATE INDEX IF NOT EXISTS idx_artifact_terms_node_lookup
-  ON artifact_terms(node_type, node_id, artifact_id);
+-- Historical concept rollups filter on type. `node_id` can be an arbitrary
+-- parser-produced identifier, which may exceed PostgreSQL's B-tree key limit;
+-- keep the selective, bounded columns indexed instead.
+CREATE INDEX IF NOT EXISTS idx_artifact_terms_type_artifact
+  ON artifact_terms(node_type, artifact_id);
 CREATE TABLE IF NOT EXISTS sync_events (
   id TEXT PRIMARY KEY,
   source_id TEXT,

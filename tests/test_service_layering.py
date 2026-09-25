@@ -90,6 +90,9 @@ LAYERS: dict[str, int] = {
     "analytics": 1,
     "capacity": 1,
     "evalset": 1,
+    # Root-level Git subprocess policy used by target materialization. It has
+    # no transport concerns and imports no higher-level pheasant package.
+    "git_auth": 1,
     "jobs": 1,
     "sharding": 1,
     # Config *generators*, not request handlers: they emit a YAML file or a
