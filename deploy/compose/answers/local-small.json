@@ -51,7 +51,7 @@
   "sync.scheduler.enabled": true,
   "sync.scheduler.interval_seconds": 900,
   "sync.limits.max_files": 50000,
-  "sync.limits.max_file_size_mb": 25,
+  "sync.limits.max_file_size_mb": 1024,
   "sync.limits.max_total_mb": 4096,
   "sync.limits.follow_symlinks": false,
   "sync.concurrency.max_parallel_sources": 1,

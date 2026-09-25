@@ -136,10 +136,10 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
           ) : null}
 
           <details className="upload-fallback">
-            <summary>…or upload files instead</summary>
+            <summary>…or upload files or a ZIP instead</summary>
             <p className="muted small" style={{ margin: "8px 0" }}>
-              No path, no mount. The files become a normal source and are indexed the
-              same way.
+              No path, no mount. Files and ZIP archives become a normal source;
+              supported files inside ZIP folders are indexed separately.
             </p>
             <UploadDrop
               onUploaded={() => {

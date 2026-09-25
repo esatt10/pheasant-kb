@@ -204,7 +204,7 @@ sync:
   # these numbers, or sync once with --full-scan.
   limits:
     max_files: 50000        # matching files, after include/exclude
-    max_file_size_mb: 25    # skip any single file larger than this
+    max_file_size_mb: 1024  # skip any single file larger than this (1 GiB)
     max_total_mb: 4096      # total matched content
     follow_symlinks: false  # home dirs are full of links that escape or loop
   startup:

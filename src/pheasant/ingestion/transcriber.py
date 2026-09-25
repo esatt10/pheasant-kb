@@ -187,9 +187,11 @@ def source_includes_audio(source: Any) -> bool:
     operator explicitly adds e.g. ``**/*.wav`` to a source's includes.
     """
 
-    from pheasant.ingestion.content_types import AUDIO_EXTENSIONS
+    from pheasant.ingestion.content_types import AUDIO_EXTENSIONS, source_includes_zip
 
     includes = list(getattr(source, "include", None) or [])
+    if source_includes_zip(source):
+        return True
     broad = {"*", "**", "**/*", "*.*", "**/*.*"}
     return any(
         pattern.replace("\\", "/").lower().rstrip("/") in broad

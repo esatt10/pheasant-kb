@@ -857,7 +857,8 @@ def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
         assert config.search.wasm_relationship_search is True
         assert config.graph.wasm_cross_source_resolution is True
         assert config.graph.memory_entity_bridging is True
-        assert config.assistant.model == "gpt-5.6-luna"
+        assert config.assistant.model == "gpt-6-luna"
+        assert config.ingestion.captioner.model == "gpt-6-luna"
         assert config.assistant.workflow == "agentic"
         assert config.search.default_mode == "hybrid"
         assert config.assistant.retrieval.expand_graph is True

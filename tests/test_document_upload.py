@@ -14,6 +14,7 @@ Acceptance:
 from __future__ import annotations
 
 import io
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,24 @@ def test_uploaded_documents_become_a_searchable_source(loaded_config, config_pat
     # And it went through the ordinary pipeline, so it is searchable.
     hits = client.post("/search", json={"query": "kestrel migration", "mode": "text"}).json()
     assert "kestrel" in str(hits).lower()
+
+
+def test_uploaded_zip_indexes_nested_supported_files(loaded_config, config_path: Path) -> None:
+    archive_data = io.BytesIO()
+    with zipfile.ZipFile(archive_data, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("handbook/guides/overview.md", "# Overview\n\nThe cedar relay is ready.\n")
+        archive.writestr("handbook/unsupported.bin", b"ignored")
+
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+    response = client.post(
+        "/sources/upload",
+        files=[("files", ("handbook.zip", io.BytesIO(archive_data.getvalue()), "application/zip"))],
+        data={"source_name": "zip-uploads", "sync_now": "true", "wait": "true"},
+    )
+
+    assert response.status_code == 200, response.text
+    hits = client.post("/search", json={"query": "cedar relay", "mode": "text"}).json()
+    assert "handbook.zip/handbook/guides/overview.md" in str(hits)
 
 
 def test_a_second_upload_adds_to_the_same_source(loaded_config, config_path: Path) -> None:

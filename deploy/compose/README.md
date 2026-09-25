@@ -7,7 +7,7 @@ stored in YAML.
 | Profile | State and coordination | Search/assistant | Intended size |
 |---|---|---|---|
 | `local-small.yaml` | Local SQLite, no broker or workers | BM25/text search and extractive answers; MCP and durable memory remain enabled | Laptop, offline, small corpus |
-| `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and the `gpt-5.6-luna` agentic workflow | One capable workstation/container |
+| `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and the `gpt-6-luna` agentic workflow | One capable workstation/container |
 | `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Vector + graph + hybrid assistant fanout with adaptive concurrency; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
 
 `worker.yaml` is the deliberately minimal trust-boundary config for the

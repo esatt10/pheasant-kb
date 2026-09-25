@@ -744,9 +744,9 @@ class SyncLimitsSettings(ModelMixin):
 
     #: Matching files, after include/exclude. A large monorepo is ~100k.
     max_files: int | None = 50_000
-    #: Skip any single file bigger than this — a 2 GB model checkpoint or
+    #: Skip any single file bigger than this — a multi-gigabyte model checkpoint or
     #: database dump has no business in a text index and would be read whole.
-    max_file_size_mb: int | None = 25
+    max_file_size_mb: int | None = 1024
     #: Total matched content. Chunking and embedding both scale off this.
     max_total_mb: int | None = 4096
     #: Symlinks are not followed by default: a home directory routinely
@@ -774,8 +774,9 @@ class SyncConcurrencySettings(ModelMixin):
     #: Files per request to a remote worker. A batch amortizes the request
     #: overhead and carries one deadline for the group, but every task in it
     #: holds its file's bytes in memory on both sides — so this is a memory
-    #: knob as much as a throughput one. Eight is small enough that the
-    #: default 25 MB file limit cannot surprise a worker.
+    #: knob as much as a throughput one. With a 1 GiB file limit, a batch of
+    #: eight can hold 8 GiB before parser overhead, so keep it low for large
+    #: documents.
     remote_worker_batch_size: int = 8
     #: ``http`` (stdlib, no extra) or ``grpc`` (needs the ``[grpc]`` extra).
     #: Retry, failover, breakers and deadlines are transport-independent, so
