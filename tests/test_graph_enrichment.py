@@ -6,6 +6,24 @@ from pheasant.mcp_server.tools import PheasantTools
 from tests.conftest import result_items, run_sync
 
 
+def test_pathological_enrichment_node_ids_are_bounded_and_deterministic() -> None:
+    from pheasant.graph.enrichment import MAX_ENRICHMENT_NODE_ID_LENGTH, _node_id
+
+    ordinary = _node_id("external_reference", "kb", "source", "url", "example.com/readme")
+    assert ordinary == "external_reference:kb:source:url:example.com-readme"
+
+    reference = "https://example.test/" + "very-long-reference/" * 500
+    first = _node_id("external_reference", "kb", "source", "url", reference)
+    second = _node_id("external_reference", "kb", "source", "url", reference)
+    different = _node_id("external_reference", "kb", "source", "url", reference + "other")
+
+    assert len(first) <= MAX_ENRICHMENT_NODE_ID_LENGTH
+    assert first.startswith("external_reference:kb:source:url:")
+    assert ":sha256=" in first
+    assert first == second
+    assert first != different
+
+
 def test_full_sync_creates_enriched_graph_nodes_and_edges(
     workspace_copy: Path,
     loaded_config: object,

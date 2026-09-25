@@ -470,6 +470,27 @@ def _is_github_https_url(url: str) -> bool:
     return host == "github.com"
 
 
+def _github_authentication_error(result: subprocess.CompletedProcess[str]) -> bool:
+    """Whether Git failed because GitHub rejected an HTTP credential.
+
+    This is deliberately narrow: a retry without the configured token is
+    useful for a public repository when a stale token is present, but it must
+    not turn ordinary transport, path, or server failures into a second clone
+    attempt.
+    """
+
+    detail = f"{result.stderr}\n{result.stdout}".lower()
+    return any(
+        marker in detail
+        for marker in (
+            "could not read username",
+            "authentication failed",
+            "http basic: access denied",
+            "invalid username or token",
+        )
+    )
+
+
 def _git_env(clone_url: str | None = None) -> dict[str, str]:
     """Environment for the git subprocesses this module runs.
 
@@ -550,6 +571,34 @@ def _run_git(destination: Path, args: list[str], clone_url: str) -> subprocess.C
             f"git {' '.join(args[:2])} timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s "
             f"for {destination}"
         ) from exc
+    if (
+        result.returncode != 0
+        and _is_github_https_url(clone_url)
+        and _github_token()
+        and _github_authentication_error(result)
+    ):
+        try:
+            anonymous_result = subprocess.run(
+                ["git", "-C", str(destination), *args],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+                # No URL means _git_env does not inject the configured token.
+                env=_git_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TargetError(
+                f"anonymous git {' '.join(args[:2])} timed out after "
+                f"{GIT_COMMAND_TIMEOUT_SECONDS}s for {destination}"
+            ) from exc
+        if anonymous_result.returncode == 0:
+            return anonymous_result
+        raise TargetError(
+            f"git {' '.join(args[:2])} failed for {destination}: GitHub rejected the configured "
+            "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
+            "or use an SSH remote for a private repository"
+        )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "git command failed").strip()
         raise TargetError(f"git {' '.join(args[:2])} failed for {destination}: {detail}")
@@ -703,24 +752,25 @@ def fetch_target(target: ResolvedTarget) -> str | None:
             )
         return f"{target.name}: reusing existing clone at {source_path}"
     destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "git",
+        "clone",
+        "--quiet",
+        # Knowledge indexing needs the checked-out tree, not the repository's
+        # entire history. A depth-one clone preserves tracked commit evidence
+        # while avoiding huge history packs.
+        "--depth",
+        "1",
+        "--no-tags",
+        *(["--branch", target.clone_ref, "--single-branch"] if target.clone_ref else []),
+        "--",
+        clone_url,
+        str(destination),
+    ]
     try:
         result = subprocess.run(
             # `--` ends option parsing, so nothing after it can be read as a flag.
-            [
-                "git",
-                "clone",
-                "--quiet",
-                # Knowledge indexing needs the checked-out tree, not the
-                # repository's entire history. A depth-one clone preserves
-                # tracked commit evidence while avoiding huge history packs.
-                "--depth",
-                "1",
-                "--no-tags",
-                *(["--branch", target.clone_ref, "--single-branch"] if target.clone_ref else []),
-                "--",
-                clone_url,
-                str(destination),
-            ],
+            command,
             capture_output=True,
             text=True,
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
@@ -730,6 +780,37 @@ def fetch_target(target: ResolvedTarget) -> str | None:
         raise TargetError(
             f"git clone timed out after {GIT_COMMAND_TIMEOUT_SECONDS}s for {target.name!r}"
         ) from exc
+    if (
+        result.returncode != 0
+        and _is_github_https_url(clone_url)
+        and _github_token()
+        and _github_authentication_error(result)
+        # Git normally removes a failed clone directory. Do not remove an
+        # unexpected path just to attempt the anonymous fallback.
+        and not destination.exists()
+    ):
+        try:
+            anonymous_result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+                # No URL means _git_env does not inject the configured token.
+                env=_git_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TargetError(
+                "anonymous git clone timed out after "
+                f"{GIT_COMMAND_TIMEOUT_SECONDS}s for {target.name!r}"
+            ) from exc
+        if anonymous_result.returncode == 0:
+            result = anonymous_result
+        else:
+            raise TargetError(
+                f"could not clone {target.clone_url}: GitHub rejected the configured "
+                "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
+                "or use an SSH remote for a private repository"
+            )
     if result.returncode != 0:
         raise TargetError(
             f"could not clone {target.clone_url}: {result.stderr.strip() or 'git clone failed'}"

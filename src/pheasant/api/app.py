@@ -43,7 +43,7 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
-from pheasant.jobs import JobRegistry
+from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServiceError, JobRegistry
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
@@ -1267,6 +1267,17 @@ def create_app(
     # as their process-local jobs.
     app.state.jobs = JobRegistry(shared_path=paths.state / "jobs")
     jobs = app.state.jobs
+    # The API tier sees shared progress snapshots but mounts their directory
+    # read-only.  Its finished-job clear operation therefore asks the writable
+    # indexer to remove those snapshots, while still clearing any local cards.
+    app.state.job_clear_service = (
+        JobClearServiceClient(
+            str(config.ingestion.landing_service_url),
+            str(config.ingestion.landing_service_token_env),
+        )
+        if role_policy.role is Role.API and config.ingestion.landing_service_url
+        else None
+    )
     # Content-addressed results for `/internal/indexing/prepare-batch`, so a
     # coordinator's retry after a timeout is a lookup rather than a second
     # parse. Bounded and LRU: a worker serving a 50k-file source must not
@@ -3710,7 +3721,14 @@ def create_app(
 
     @app.delete("/jobs")
     def clear_finished_jobs() -> dict:
-        return {"cleared": jobs.clear()}
+        cleared = jobs.clear()
+        service = app.state.job_clear_service
+        if service is not None:
+            try:
+                cleared += service.clear()
+            except JobClearServiceError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"cleared": cleared}
 
     @app.delete("/jobs/{job_id}")
     def clear_job(job_id: str) -> dict:
@@ -3719,6 +3737,41 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
         if job["active"]:
             raise HTTPException(status_code=409, detail="A running job cannot be cleared")
+        cleared = jobs.clear(job_id)
+        service = app.state.job_clear_service
+        if service is not None:
+            try:
+                cleared += service.clear(job_id)
+            except JobClearServiceError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"cleared": cleared}
+
+    def _authorize_job_clear_service(authorization: str | None) -> None:
+        """Authorize the API-to-indexer notification-clear boundary."""
+
+        if role_policy.role is not Role.INDEXER:
+            raise HTTPException(status_code=404, detail="job clear service is not enabled")
+        expected = os.environ.get(config.ingestion.landing_service_token_env or "", "")
+        if not expected:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The job clear service is not configured on this process: "
+                    f"{config.ingestion.landing_service_token_env!r} is unset."
+                ),
+            )
+        scheme, _, supplied = (authorization or "").partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+            raise HTTPException(status_code=401, detail="invalid job clear service token")
+
+    @app.delete(JOBS_CLEAR_PATH)
+    def internal_clear_finished_jobs(
+        job_id: str | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict:
+        """Remove terminal shared snapshots where the state volume is writable."""
+
+        _authorize_job_clear_service(authorization)
         return {"cleared": jobs.clear(job_id)}
 
     @app.get("/jobs/{job_id}")

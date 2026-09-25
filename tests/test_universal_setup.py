@@ -224,6 +224,106 @@ def test_fetch_target_passes_the_clone_url_through_to_git_env(
     assert captured["cmd"][1:6] == ["clone", "--quiet", "--depth", "1", "--no-tags"]
 
 
+def test_fetch_target_retries_a_public_github_repository_without_a_rejected_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale token must not make an otherwise public URL uncloneable."""
+
+    from pheasant.targets import ResolvedTarget, fetch_target
+
+    monkeypatch.setenv("GITHUB_TOKEN", "stale-token")
+    monkeypatch.setattr("pheasant.targets.shutil.which", lambda _name: "/usr/bin/git")
+    calls: list[dict] = []
+
+    class FailedResult:
+        returncode = 128
+        stderr = (
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+        )
+        stdout = ""
+
+    class SuccessfulResult:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "env": kwargs["env"]})
+        if len(calls) == 1:
+            return FailedResult()
+        Path(cmd[-1]).mkdir(parents=True)
+        return SuccessfulResult()
+
+    monkeypatch.setattr("pheasant.targets.subprocess.run", fake_run)
+    target = ResolvedTarget(
+        name="public-repo",
+        type="repository",
+        path=str(tmp_path / "public-repo"),
+        description="test",
+        clone_url="https://github.com/owner/public-repo.git",
+    )
+
+    fetch_target(target)
+
+    assert len(calls) == 2
+    first_pairs = {
+        calls[0]["env"][f"GIT_CONFIG_KEY_{i}"]: calls[0]["env"][f"GIT_CONFIG_VALUE_{i}"]
+        for i in range(int(calls[0]["env"]["GIT_CONFIG_COUNT"]))
+    }
+    second_pairs = {
+        calls[1]["env"][f"GIT_CONFIG_KEY_{i}"]: calls[1]["env"][f"GIT_CONFIG_VALUE_{i}"]
+        for i in range(int(calls[1]["env"]["GIT_CONFIG_COUNT"]))
+    }
+    assert "http.https://github.com/.extraheader" in first_pairs
+    assert "http.https://github.com/.extraheader" not in second_pairs
+
+
+def test_managed_fetch_retries_a_public_github_repository_without_a_rejected_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale token also must not block a subsequent managed refresh."""
+
+    from pheasant.targets import _run_git
+
+    monkeypatch.setenv("GITHUB_TOKEN", "stale-token")
+    calls: list[dict] = []
+
+    class FailedResult:
+        returncode = 128
+        stderr = "fatal: Authentication failed"
+        stdout = ""
+
+    class SuccessfulResult:
+        returncode = 0
+        stderr = ""
+        stdout = "fetched\n"
+
+    def fake_run(cmd, **kwargs):
+        calls.append({"cmd": cmd, "env": kwargs["env"]})
+        return FailedResult() if len(calls) == 1 else SuccessfulResult()
+
+    monkeypatch.setattr("pheasant.targets.subprocess.run", fake_run)
+
+    result = _run_git(
+        tmp_path,
+        ["fetch", "--prune", "origin"],
+        "https://github.com/owner/public-repo.git",
+    )
+
+    assert result.stdout == "fetched\n"
+    assert len(calls) == 2
+    first_pairs = {
+        calls[0]["env"][f"GIT_CONFIG_KEY_{i}"]: calls[0]["env"][f"GIT_CONFIG_VALUE_{i}"]
+        for i in range(int(calls[0]["env"]["GIT_CONFIG_COUNT"]))
+    }
+    second_pairs = {
+        calls[1]["env"][f"GIT_CONFIG_KEY_{i}"]: calls[1]["env"][f"GIT_CONFIG_VALUE_{i}"]
+        for i in range(int(calls[1]["env"]["GIT_CONFIG_COUNT"]))
+    }
+    assert "http.https://github.com/.extraheader" in first_pairs
+    assert "http.https://github.com/.extraheader" not in second_pairs
+
+
 def test_local_shapes_are_classified(tmp_path: Path, roots) -> None:
     clone_root, workspace = roots
     vault = tmp_path / "vault"
