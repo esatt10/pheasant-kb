@@ -2,14 +2,100 @@
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from pheasant.config.loader import load_config
+from pheasant.config.schema import PheasantConfig
 from pheasant.persistence.graph_store import GraphStore
+from pheasant.search.hybrid import HybridSearch
+from pheasant.search.sqlite_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
+
+
+def test_mixed_zip_members_keep_stable_ids_and_searchable_content(tmp_path: Path) -> None:
+    """A direct ZIP source exposes nested mixed files, then resyncs each independently."""
+
+    from tests.test_document_extraction import HANDBOOK
+
+    archive_path = tmp_path / "bundle.zip"
+
+    def write_archive(note: str) -> None:
+        with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("notes/start.md", f"# Start\n\n{note}\n")
+            archive.writestr("docs/handbook.pdf", HANDBOOK.read_bytes())
+            archive.writestr("images/diagram.png", b"image-fixture")
+            archive.writestr("audio/meeting.mp3", b"audio-fixture")
+            archive.writestr("misc/unsupported.dat", b"ignored")
+            archive.writestr("../escape.md", b"unsafe")
+            archive.writestr("private/answer.md", b"Must not enter the index")
+
+    write_archive("The orchid service is running.")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "zip-acceptance",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "ingestion": {"extractor": {"provider": "builtin"}},
+            "sync": {"concurrency": {"file_executor": "process", "max_parallel_files": 2}},
+            "readiness": {"corpus_denylist": ["private/*"]},
+            "sources": [
+                {
+                    "name": "bundle",
+                    "type": "single_file",
+                    "path": str(archive_path),
+                    "include": ["bundle.zip"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        first = engine.sync_source("bundle", "full")
+        assert first.indexed_artifacts == 4
+        assert first.details["refused"][0]["relative_path"] == "bundle.zip/private/answer.md"
+        assert engine.extractor is not None
+        assert engine.captioner is not None
+        assert engine.transcriber is not None
+        expected = {
+            "bundle.zip/notes/start.md",
+            "bundle.zip/docs/handbook.pdf",
+            "bundle.zip/images/diagram.png",
+            "bundle.zip/audio/meeting.mp3",
+        }
+        artifact_rows = engine.state.rows(
+            "SELECT id, relative_path FROM artifacts WHERE source_id=?", ("bundle",)
+        )
+        assert {row["relative_path"] for row in artifact_rows} == expected
+        ids = {row["relative_path"]: row["id"] for row in artifact_rows}
+        assert ids["bundle.zip/notes/start.md"] == (
+            "file:bundle:bundle.zip/notes/start.md:branch=none"
+        )
+        search = HybridSearch(SearchStore(engine.state), vector=None)
+        hits = search.search_context(
+            config.knowledge_base_id, "ZEBRAFISH", mode="text", max_results=10
+        )["results"]
+        assert any(hit.get("relative_path") == "bundle.zip/docs/handbook.pdf" for hit in hits)
+
+        again = engine.sync_source("bundle", "incremental")
+        assert again.indexed_artifacts == 0
+        write_archive("The orchid service was updated.")
+        changed = engine.sync_source("bundle", "incremental")
+        assert changed.indexed_artifacts == 1
+        assert {
+            row["relative_path"]: row["id"]
+            for row in engine.state.rows(
+                "SELECT id, relative_path FROM artifacts WHERE source_id=?", ("bundle",)
+            )
+        } == ids
+    finally:
+        engine.close()
 
 
 def test_full_sync_is_idempotent_for_sample_repository(sync_engine: object) -> None:

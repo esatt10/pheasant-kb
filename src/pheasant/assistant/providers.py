@@ -79,7 +79,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         # that cannot see this one gets a 404 model_not_found, which the chat
         # surface reports verbatim rather than silently substituting.
         # Override with assistant.model.
-        default_model="gpt-5.6-luna",
+        default_model="gpt-6-luna",
         default_base_url="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         key_hint="sk-…",
@@ -193,13 +193,16 @@ def _anthropic(
 def _openai(
     base: str, key: str, model: str, system: str, prompt: str, max_tokens: int, timeout: float
 ) -> str:
+    # GPT-6 Luna rejects the legacy cap. Other OpenAI-compatible endpoints
+    # keep their existing spelling and the error-driven retry below.
+    token_field = "max_completion_tokens" if model == "gpt-6-luna" else "max_tokens"
     payload: dict = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": max_tokens,
+        token_field: max_tokens,
     }
     headers = {"authorization": f"Bearer {key}"}
     url = f"{base}/chat/completions"
@@ -207,7 +210,7 @@ def _openai(
         data = _http_json(url, payload, headers, timeout)
     except ProviderError as exc:
         # Reasoning-era models renamed the output cap and reject the old key.
-        if "max_tokens" not in str(exc):
+        if "max_tokens" not in payload or "max_tokens" not in str(exc):
             raise
         payload.pop("max_tokens")
         payload["max_completion_tokens"] = max_tokens

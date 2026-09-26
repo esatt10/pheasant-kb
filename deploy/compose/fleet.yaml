@@ -58,7 +58,7 @@ search:
 ingestion:
   captioner:
     provider: openai-spec
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
   transcriber:
@@ -100,7 +100,7 @@ sync:
     interval_seconds: 900
   limits:
     max_files: null
-    max_file_size_mb: 100
+    max_file_size_mb: 1024
     max_total_mb: null
     follow_symlinks: false
   concurrency:
@@ -177,7 +177,7 @@ memory:
 assistant:
   enabled: true
   provider: openai
-  model: gpt-5.6-luna
+  model: gpt-6-luna
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   allow_session_keys: false

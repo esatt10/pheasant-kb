@@ -725,6 +725,10 @@ def source_includes_documents(source: Any) -> bool:
     asserts the two sets agree.
     """
     includes = list(getattr(source, "include", None) or [])
+    from pheasant.ingestion.content_types import source_includes_zip
+
+    if source_includes_zip(source):
+        return True
     # ``**/*`` is the explicit "this folder may contain anything" form used
     # by setup/up and uploads.  Treating it as admitting documents keeps the
     # handler-build gate aligned with the filesystem walk instead of silently

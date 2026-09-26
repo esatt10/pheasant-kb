@@ -26,7 +26,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "sk-ant-…",
     ),
     "openai": ProviderSpec(
-        "openai", "OpenAI", "gpt-5.6-luna", "https://api.openai.com/v1", "OPENAI_API_KEY", "sk-…"
+        "openai", "OpenAI", "gpt-6-luna", "https://api.openai.com/v1", "OPENAI_API_KEY", "sk-…"
     ),
     "gemini": ProviderSpec(
         "gemini",

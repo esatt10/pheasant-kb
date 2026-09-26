@@ -458,7 +458,7 @@ class RemotePrepareRequest(BaseModel):
 
 #: Tasks a worker will accept in one batch. Every task holds its file's bytes
 #: in memory, so this is a memory bound, not a politeness limit: at the
-#: 25 MB-per-file default a 64-task batch is already a 1.6 GB worst case, and
+#: 1 GiB-per-file default a 64-task batch is already a 64 GiB worst case, and
 #: the coordinator's own default batch is far smaller.
 MAX_PREPARE_BATCH = 64
 

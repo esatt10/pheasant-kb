@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
+def source_includes_zip(source: object) -> bool:
+    """An explicit ZIP include may contain any supported file type."""
+
+    return any(
+        str(pattern).replace("\\", "/").lower().rstrip("/").endswith(".zip")
+        for pattern in getattr(source, "include", ()) or ()
+    )
+
+
 TEXT_EXTENSIONS = {
     ".py",
     ".md",

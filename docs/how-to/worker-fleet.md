@@ -147,9 +147,9 @@ so it is a real contract you can implement a worker against in any language.
 
 `remote_worker_batch_size` amortizes per-request overhead, but every task in a
 batch holds its file's bytes in memory on **both** sides. With the default
-25 MB file limit, a batch of 8 is a 200 MB worst case per in-flight batch, and
-there are `max_parallel_files` of those. Raise it for a corpus of small files;
-leave it alone if your sources contain large documents.
+1 GiB file limit, a batch of 8 can be an 8 GiB worst case per in-flight batch,
+and there are `max_parallel_files` of those. Raise it for a corpus of small
+files; leave it alone if your sources contain large documents.
 
 ## Queue the backlog
 

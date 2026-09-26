@@ -12,6 +12,18 @@ through the normal chunk → embed → graph path like any other file.
 | RTF | `.rtf` | Must carry the `{\rtf` signature to be read |
 | EPUB | `.epub` | Read in **spine order**, not filename order |
 
+ZIP archives in filesystem-backed sources can contain any mix of supported
+text, code, documents, images and audio in nested directories. Each supported
+member is indexed separately under a path such as `bundle.zip/guides/start.pdf`;
+the archive itself is not a searchable document. ZIPs are read in place, without
+extracting files to disk. Nested ZIPs and unsupported extensions are skipped.
+The source's include/exclude patterns apply to member paths. Explicitly
+including `**/*.zip` admits every supported member in an archive; including
+only `**/*.pdf` admits PDF members. The configured individual file limit
+applies to both the compressed archive and every member; ZIP members retain a
+1 GiB safety ceiling even with `full_scan`. When enabled, source total-size
+and count limits also bound archive expansion. Encrypted ZIP members are skipped.
+
 Not supported: `.pages`, `.numbers`, `.key`, `.odt`/`.ods`/`.odp`, and
 pre-Word-97 `.doc`. Those extensions are not accepted at all, so they are
 skipped rather than indexed empty.

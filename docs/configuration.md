@@ -451,7 +451,7 @@ disable that limit.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `max_files` | integer\|null | `50000` | Matching files, after include/exclude. |
-| `max_file_size_mb` | integer\|null | `25` | Skip any single file larger than this. Skipped files are reported, not fatal. |
+| `max_file_size_mb` | integer\|null | `1024` | Skip any single file larger than this (1024 MiB / 1 GiB). Skipped files are reported, not fatal. |
 | `max_total_mb` | integer\|null | `4096` | Total matched content. |
 | `follow_symlinks` | bool | `false` | Home directories routinely contain links that escape the root or loop. |
 
@@ -1344,7 +1344,7 @@ default and works fully offline.
 |---|---|---|---|
 | `enabled` | bool | `true` | `false` makes `/assistant/chat` return 403. |
 | `provider` | str | `auto` | `auto` \| `anthropic` \| `openai` \| `gemini` \| `none`. `auto` picks the first provider whose key env var is set, in the order Anthropic → OpenAI → Gemini. |
-| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-5.6-luna`, `gemini-2.5-flash`). |
+| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-6-luna`, `gemini-2.5-flash`). |
 | `base_url` | str \| null | `null` | Point at a gateway or self-hosted OpenAI-spec endpoint. |
 | `api_key_env` | str \| null | `null` | Read the key from a differently-named variable. Defaults to the provider's own (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). |
 | `allow_session_keys` | bool | `true` | Let a UI user paste a key for their browser session. Held in server memory behind an opaque token — never written to config, `/state`, or logs; dropped on expiry, revoke, or restart. Set `false` to require the env var. |

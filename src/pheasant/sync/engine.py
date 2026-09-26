@@ -1076,7 +1076,9 @@ class SyncEngine:
         # this region must never hold. Read live rather than cached, so adding
         # a pattern applies without a restart. See `security/corpus_policy.py`.
         denylist = corpus_policy.denylist_of(self.config)
-        refused = corpus_policy.denied_by(item.relative_path, denylist)
+        refused = corpus_policy.denied_by(item.relative_path, denylist) or corpus_policy.denied_by(
+            item.metadata.get("archive_member", ""), denylist
+        )
         if refused:
             return _PreparedItem(
                 position,
@@ -1176,6 +1178,14 @@ class SyncEngine:
         """
 
         previous = artifacts.get(item.relative_path)
+        denylist = corpus_policy.denylist_of(self.config)
+        refused = corpus_policy.denied_by(item.relative_path, denylist) or corpus_policy.denied_by(
+            item.metadata.get("archive_member", ""), denylist
+        )
+        if refused:
+            return _PreparedItem(
+                position, item, previous, skipped=True, transfer_skipped=True, refused_by=refused
+            ), None
         if self._can_skip_before_read(mode, previous, item):
             return _PreparedItem(
                 position, item, previous, skipped=True, transfer_skipped=True
@@ -1344,6 +1354,7 @@ class SyncEngine:
             connector.connector_type == "filesystem"
             and mode != "repair"
             and not bool(getattr(source.taxonomy, "enabled", False))
+            and not any("archive_member" in item.metadata for item in items)
             and all(_process_safe_text_path(item.relative_path) for item in items)
         )
         process_safe = requested_executor == "process" and plain_text_source
