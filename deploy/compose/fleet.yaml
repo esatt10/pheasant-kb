@@ -103,6 +103,9 @@ sync:
     max_file_size_mb: 1024
     max_total_mb: null
     follow_symlinks: false
+  source_processing:
+    chunk_max_chars: 2000
+    taxonomy_enabled: true
   concurrency:
     max_parallel_sources: 4
     max_parallel_files: 16

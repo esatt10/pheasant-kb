@@ -16,6 +16,47 @@ from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
 
 
+def test_fleet_processing_policy_reindexes_once_when_enabled(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "guide.md").write_text(
+        "# Guide\n\n## First Section\n"
+        + ("A sentence about falcons. " * 200)
+        + "\n## Second Section\nA sentence about cranes.\n",
+        encoding="utf-8",
+    )
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "processing-policy",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [{"name": "guide", "type": "document_folder", "path": str(corpus)}],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        assert engine.sync_source("guide", "full").indexed_artifacts == 1
+        assert engine.sync_source("guide", "incremental").indexed_artifacts == 0
+
+        config.sync.source_processing.chunk_max_chars = 2000
+        config.sync.source_processing.taxonomy_enabled = True
+        assert engine.sync_source("guide", "incremental").indexed_artifacts == 1
+        chunks = engine.state.rows("SELECT text, heading_path FROM chunks ORDER BY chunk_index", ())
+        assert chunks
+        assert all(len(row["text"]) <= 2000 for row in chunks)
+        assert any(row["heading_path"] for row in chunks)
+        assert engine.sync_source("guide", "incremental").indexed_artifacts == 0
+
+        config.sync.source_processing.taxonomy_enabled = False
+        assert engine.sync_source("guide", "incremental").indexed_artifacts == 1
+        assert engine.sync_source("guide", "incremental").indexed_artifacts == 0
+    finally:
+        engine.close()
+
+
 def test_mixed_zip_members_keep_stable_ids_and_searchable_content(tmp_path: Path) -> None:
     """A direct ZIP source exposes nested mixed files, then resyncs each independently."""
 

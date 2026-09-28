@@ -874,6 +874,8 @@ def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
     assert any(source.type.value == "memory" for source in advanced.sources)
     assert not any(source.type.value == "memory" for source in fleet.sources)
     assert fleet.ingestion.extractor.provider == "auto"
+    assert fleet.sync.source_processing.chunk_max_chars == 2000
+    assert fleet.sync.source_processing.taxonomy_enabled is True
     assert fleet.search.embeddings.rate_limit_max_wait_seconds == 900.0
 
     assert advanced.storage.backend == "sqlite"

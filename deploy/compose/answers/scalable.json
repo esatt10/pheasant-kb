@@ -73,6 +73,8 @@
   "sync.limits.max_file_size_mb": 1024,
   "sync.limits.max_total_mb": null,
   "sync.limits.follow_symlinks": false,
+  "sync.source_processing.chunk_max_chars": 2000,
+  "sync.source_processing.taxonomy_enabled": true,
   "sync.concurrency.max_parallel_sources": 4,
   "sync.concurrency.max_parallel_files": 16,
   "sync.concurrency.max_parallel_embeddings": 8,

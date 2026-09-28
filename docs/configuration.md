@@ -35,7 +35,7 @@ pheasant config show --effective --profile dev --config pheasant.yaml
 | `storage` | Database/graph/manifests locations and state limits. | Yes |
 | `search` | Retrieval modes and ranking behavior. | Yes |
 | `ingestion` | Turning binary/markup files (documents, images, audio) into indexable text. | Optional |
-| `sync` | Watcher, git polling, schedule, idempotency, and concurrency behavior. | Yes |
+| `sync` | Watcher, git polling, schedule, source processing, idempotency, and concurrency behavior. | Yes |
 | `graph` | Knowledge-graph density (concept-node threshold, WASM acceleration). | Optional |
 | `security` | Path allowlisting, source-read protections, and ACL enforcement. | Strongly recommended |
 | `synapse` | Federation into a Synapse fleet (contract publishing, signing). | Optional, standalone-safe |
@@ -456,6 +456,22 @@ disable that limit.
 | `follow_symlinks` | bool | `false` | Home directories routinely contain links that escape the root or loop. |
 
 A source can override the whole block with `sources[].limits`.
+
+### Fleet-wide source processing (`sync.source_processing`)
+
+These optional overrides apply to **every source at indexing time**, including
+sources added later through the UI, API, or MCP. They take precedence over a
+source's own `chunking.max_chars` and `taxonomy.enabled`. `null` leaves the
+per-source setting unchanged, so standalone behavior is unchanged.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `chunk_max_chars` | integer\|null | `null` | Override the maximum characters per chunk. Must exceed the source's overlap. |
+| `taxonomy_enabled` | bool\|null | `null` | Enable or disable structural heading extraction across all sources. Can mistake numbered prose for headings. |
+
+Changing either setting invalidates the affected source's index; its next
+incremental sync escalates to a full pass. The fleet preset sets `2000` and
+`true`, respectively.
 
 **A source over budget indexes nothing.** A partial index would be
 non-deterministic, and silently indexing the first N files of a home

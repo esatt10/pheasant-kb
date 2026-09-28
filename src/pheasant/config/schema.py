@@ -822,11 +822,20 @@ class SyncQueueSettings(ModelMixin):
 
 
 @dataclass
+class SourceProcessingSettings(ModelMixin):
+    """Optional region-wide overrides for every source's indexing pipeline."""
+
+    chunk_max_chars: int | None = None
+    taxonomy_enabled: bool | None = None
+
+
+@dataclass
 class SyncSettings(ModelMixin):
     watcher: WatcherSettings = field(default_factory=WatcherSettings)
     git: GitSettings = field(default_factory=GitSettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     limits: SyncLimitsSettings = field(default_factory=SyncLimitsSettings)
+    source_processing: SourceProcessingSettings = field(default_factory=SourceProcessingSettings)
     concurrency: SyncConcurrencySettings = field(default_factory=SyncConcurrencySettings)
     queue: SyncQueueSettings = field(default_factory=SyncQueueSettings)
 
@@ -2148,7 +2157,7 @@ class PheasantConfig(ModelMixin):
     ) -> SourceConfig:
         """The source as the sync path should actually see it.
 
-        Two deployment-wide policies are folded in here rather than at every
+        Three deployment-wide policies are folded in here rather than at every
         call site, because the connector API takes only ``(source, state)``
         and third-party plugins must keep working unchanged:
 
@@ -2158,6 +2167,8 @@ class PheasantConfig(ModelMixin):
           wholesale — which used to drop every credential pattern silently.
         * ``sync.limits`` fills in a per-source budget when the source does
           not carry its own.
+        * ``sync.source_processing`` overrides chunk size and taxonomy when
+          configured, including for sources registered after startup.
 
         ``max_depth`` overrides the source's own depth for this call, and
         ``full_scan`` means "I know what I am asking for": no depth cap and
@@ -2166,6 +2177,16 @@ class PheasantConfig(ModelMixin):
         import copy
 
         resolved = copy.deepcopy(source)
+        processing = self.sync.source_processing
+        if processing.chunk_max_chars is not None:
+            if processing.chunk_max_chars <= resolved.chunking.overlap_chars:
+                raise ValueError(
+                    "sync.source_processing.chunk_max_chars must exceed "
+                    f"{source.name}'s chunking.overlap_chars"
+                )
+            resolved.chunking.max_chars = processing.chunk_max_chars
+        if processing.taxonomy_enabled is not None:
+            resolved.taxonomy.enabled = processing.taxonomy_enabled
         if self.security.default_exclude_secrets:
             existing = list(resolved.exclude or [])
             for pattern in SECRET_EXCLUDES:

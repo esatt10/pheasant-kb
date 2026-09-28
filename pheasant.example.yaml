@@ -207,6 +207,10 @@ sync:
     max_file_size_mb: 1024  # skip any single file larger than this (1 GiB)
     max_total_mb: 4096      # total matched content
     follow_symlinks: false  # home dirs are full of links that escape or loop
+  # Optional fleet-wide overrides. Null keeps each source's own settings.
+  source_processing:
+    chunk_max_chars: null
+    taxonomy_enabled: null
   startup:
     full_validation: true
     repair_missing_indexes: true

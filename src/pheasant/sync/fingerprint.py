@@ -83,6 +83,17 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
             "overlap_chars": getattr(chunking, "overlap_chars", None),
         },
     }
+    taxonomy = source.taxonomy
+    if taxonomy.enabled:
+        # Off is omitted so existing non-taxonomy sources keep their stored
+        # fingerprint. Enabling it changes chunk boundaries and graph nodes;
+        # every on/off or rule change therefore requires a full source pass.
+        payload["taxonomy"] = {
+            "max_depth": taxonomy.max_depth,
+            "detect": taxonomy.detect,
+            "graph_nodes": taxonomy.graph_nodes,
+            "split_on_sections": taxonomy.split_on_sections,
+        }
     if source_type == "memory":
         # Scoped to memory on purpose. Every other source's text pipeline is
         # unchanged, and adding this key unconditionally would invalidate every

@@ -10,6 +10,12 @@ stored in YAML.
 | `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and the `gpt-6-luna` agentic workflow | One capable workstation/container |
 | `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Vector + graph + hybrid assistant fanout with adaptive concurrency; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
 
+The fleet applies 2,000-character chunks and structural taxonomy extraction to
+all sources, including UI uploads. PDF and Office text extraction is already
+included in the universal image; taxonomy is a built-in indexing setting, not
+a separate package extra. A change to either processing setting causes a full
+source pass on the next sync.
+
 `worker.yaml` is the deliberately minimal trust-boundary config for the
 fleet's stateless gRPC workers. It has no source list, database DSN, OpenAI key,
 MCP server, or UI.
