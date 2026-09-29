@@ -1889,6 +1889,14 @@ Each of these cost real time. They are listed because the shape recurs.
   `embedded_in`, not on "no figures": an image whose own caption matches the
   question is a figure of itself, and the first version of the check blamed
   that correct answer.
+- **An `except` whose reason stopped being true catches only what it was not
+  written for.** `_sync_all_queued` swallowed every publish failure at debug
+  as "already queued" — right when a duplicate `INSERT` raised, and dead once
+  the local queue re-armed through `ON CONFLICT` and JetStream deduped on a
+  publish id. From then on the only thing reaching it was a broker refusing
+  the task, and a sync with NATS's storage gone indexed nothing and reported
+  success. It is an ERROR and a `queue_unavailable` result now. Found while
+  running the fleet, by a log that should have said something and did not.
 
 ---
 

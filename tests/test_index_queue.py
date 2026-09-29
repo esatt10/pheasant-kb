@@ -418,6 +418,47 @@ def test_a_failing_source_is_dead_lettered_not_retried_forever(tmp_path: Path) -
         store.close()
 
 
+def test_a_broker_that_refuses_a_task_is_reported_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed publish used to be logged at debug as "already queued".
+
+    No backend raises for a duplicate, so the exception was always the broker
+    refusing the task -- found with NATS's storage deleted under it, where the
+    sync reported success having indexed nothing. The refused source is now a
+    result with its own status and an error log; the others still run.
+    """
+
+    original = LocalQueue.publish
+
+    def refuse_src1(self: LocalQueue, task: IndexTask) -> IndexTask:
+        if task.source_id == "src1":
+            raise ConnectionError("stream storage unavailable")
+        return original(self, task)
+
+    monkeypatch.setattr(LocalQueue, "publish", refuse_src1)
+    config = _config(tmp_path, state_name="refused", sources=3, queue={"enabled": True})
+    engine = SyncEngine(config)
+    try:
+        with caplog.at_level("INFO", logger="pheasant.sync.engine"):
+            results = engine.sync_all("full")
+        status = engine.state.get_source("src1")
+    finally:
+        engine.close()
+
+    assert [r.source_id for r in results] == ["src0", "src1", "src2"]
+    refused = results[1]
+    assert refused.status == "queue_unavailable"
+    assert "stream storage unavailable" in refused.details["error"]
+    assert [r.indexed_artifacts > 0 for r in (results[0], results[2])] == [True, True]
+    assert status["last_status"] == "queue_unavailable"
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert any("src1" in r.getMessage() for r in errors)
+    assert any(
+        "Queued 2 of 3" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records
+    )
+
+
 def test_one_failing_source_does_not_stop_the_others(tmp_path: Path) -> None:
     """Exactly what the in-memory list could not do."""
 

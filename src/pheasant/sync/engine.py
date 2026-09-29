@@ -626,6 +626,12 @@ class SyncEngine:
             return graph.number_of_nodes(), graph.number_of_edges()
         return self.graph_store.counts(self.config.knowledge_base_id)
 
+    def _not_indexed(self, source_name: str, status: str, details: dict) -> SyncResult:
+        """A source that was not indexed this run, and says why rather than reporting zero."""
+
+        self.state.mark_source_status(source_name, status)
+        return SyncResult(source_name, 0, 0, *self._graph_counts(), status, details)
+
     #: Above this many changed nodes, rebuild the FTS index wholesale instead
     #: of deleting each stale row individually. `node_id` on graph_nodes_fts
     #: is UNINDEXED (it's read-only lookup data, not searched), so a batched
@@ -979,6 +985,7 @@ class SyncEngine:
             return source_progress
 
         published = 0
+        unqueued: list[SyncResult] = []
         for source in sources:
             digest = hashlib.sha256(
                 f"{self.config.knowledge_base_id}\0{source.name}\0{mode}".encode()
@@ -990,12 +997,18 @@ class SyncEngine:
                 payload={"max_depth": max_depth, "full_scan": bool(full_scan)},
                 max_attempts=max(1, int(settings.max_attempts or 1)),
             )
+            # No backend raises for a duplicate, so this is the broker refusing
+            # the task. It was logged at debug as "already queued", and the
+            # drain then found nothing while the sync reported success.
             try:
                 queue.publish(task)
                 published += 1
-            except Exception as exc:  # noqa: BLE001 - an existing task is not an error
-                logger.debug("Index task for %s already queued (%s)", source.name, exc)
-        logger.info("Queued %d of %d source(s) for indexing", published, len(sources))
+            except Exception as exc:  # noqa: BLE001 - one source's failure is reported, not fatal
+                logger.error("Could not queue %s for indexing: %s", source.name, exc, exc_info=True)
+                details = {"error": f"could not queue the index task: {exc}", "task_id": task.id}
+                unqueued.append(self._not_indexed(source.name, "queue_unavailable", details))
+        log = logger.info if published == len(sources) else logger.warning
+        log("Queued %d of %d source(s) for indexing", published, len(sources))
 
         def run(task: Any) -> SyncResult:
             return self.sync_source(
@@ -1024,7 +1037,9 @@ class SyncEngine:
                 ]
                 results = [item for future in futures for item in future.result()]
         order = {source.name: position for position, source in enumerate(sources)}
-        return sorted(results, key=lambda result: order.get(result.source_id, len(order)))
+        return sorted(
+            [*results, *unqueued], key=lambda result: order.get(result.source_id, len(order))
+        )
 
     def _prepare_item(
         self,
@@ -1979,14 +1994,8 @@ class SyncEngine:
             # the operator sees *why* nothing was indexed instead of a clean
             # zero. (validate() only runs in validate_only mode.)
             if source.type in FILESYSTEM_SOURCE_TYPES and not source.path.exists():
-                self.state.mark_source_status(source.name, "path_missing")
-                graph_nodes, graph_edges = self._graph_counts()
-                return SyncResult(
+                return self._not_indexed(
                     source.name,
-                    0,
-                    0,
-                    graph_nodes,
-                    graph_edges,
                     "path_missing",
                     {
                         "connector_type": connector.connector_type,
@@ -2005,14 +2014,8 @@ class SyncEngine:
                 # rather than indexing a prefix of it: a partial index is
                 # non-deterministic, and the operator needs to make a choice
                 # (narrow it, or ask for it explicitly with full_scan).
-                self.state.mark_source_status(source.name, "limit_exceeded")
-                graph_nodes, graph_edges = self._graph_counts()
-                return SyncResult(
+                return self._not_indexed(
                     source.name,
-                    0,
-                    0,
-                    graph_nodes,
-                    graph_edges,
                     "limit_exceeded",
                     {
                         "connector_type": connector.connector_type,
