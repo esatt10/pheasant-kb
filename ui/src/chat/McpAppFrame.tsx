@@ -11,7 +11,9 @@ import { useAppliedTheme } from "../hooks/useTheme";
  * sandboxed iframe, and this component speaks the *host* half of the MCP Apps
  * protocol (2026-01-26): it answers `ui/initialize`, delivers the result as
  * `ui/notifications/tool-result`, proxies `tools/call get_image` to `/media`
- * (so an image is read under the region's ACL exactly as over MCP), resizes
+ * (so an image is read under the region's ACL exactly as over MCP) and
+ * `tools/call create_visual` to `/assistant/visual` (the view's "Redraw as"),
+ * resizes
  * on `ui/notifications/size-changed`, and turns `ui/message` — "tell me more
  * about this node" — into the next question in the conversation.
  *
@@ -20,7 +22,7 @@ import { useAppliedTheme } from "../hooks/useTheme";
  *
  * `sandbox="allow-scripts"` without `allow-same-origin` gives the frame an
  * opaque origin: it cannot read this page, its storage, or the API token, and
- * it can reach the region only through the three messages answered below.
+ * it can reach the region only through the messages answered below.
  */
 
 const PROTOCOL_VERSION = "2026-01-26";
@@ -93,19 +95,31 @@ export function McpAppFrame({
         case "tools/call": {
           const name = String(params.name ?? "");
           const args = (params.arguments ?? {}) as Record<string, unknown>;
-          if (name !== "get_image" || typeof args.node_id !== "string") {
-            fail(message.id, `tool ${name} is not available in this host`);
-            return;
-          }
           try {
-            const image = await api.mediaBase64(args.node_id);
-            reply(message.id, { content: [{ type: "image", ...image }] });
+            if (name === "get_image" && typeof args.node_id === "string") {
+              const image = await api.mediaBase64(args.node_id);
+              reply(message.id, { content: [{ type: "image", ...image }] });
+              return;
+            }
+            if (name === "create_visual" && typeof args.request === "string") {
+              // "Redraw as": the same passages in another shape, through the
+              // same operation MCP's create_visual calls.
+              const drawn = await api.visualize({
+                request: args.request,
+                node_ids: Array.isArray(args.node_ids) ? args.node_ids.map(String) : [],
+                kind: typeof args.kind === "string" ? args.kind : null,
+              });
+              reply(message.id, { content: [], structuredContent: drawn });
+              return;
+            }
           } catch (error) {
             reply(message.id, {
               isError: true,
               content: [{ type: "text", text: (error as Error).message }],
             });
+            return;
           }
+          fail(message.id, `tool ${name} is not available in this host`);
           return;
         }
         case "ui/message": {

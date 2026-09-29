@@ -22,6 +22,64 @@ from __future__ import annotations
 from typing import Any
 
 MAX_FIGURES = 8
+#: The graph stores ``chunk.text[:180]`` as a chunk's summary
+#: (``GraphBuilder``), so a caption read from it is cut wherever character
+#: 180 fell — mid-clause, in practice.
+SUMMARY_CHARS = 180
+#: How much of an image's own text a caption shows.
+CAPTION_CHARS = 400
+
+
+def tidy_caption(text: str, *, truncated: bool = False, limit: int = CAPTION_CHARS) -> str:
+    """A caption that ends where a reader expects one to.
+
+    Cut at the last sentence end inside ``limit`` when there is one late
+    enough to keep most of the text, else at a word boundary, and say it was
+    cut with an ellipsis. ``truncated`` marks text that was already cut
+    upstream (a graph summary), which needs the same treatment at any length.
+    """
+
+    text = " ".join(str(text or "").split())
+    if not text or (len(text) <= limit and not truncated):
+        return text
+    cut = text[:limit]
+    boundary = max(cut.rfind(". "), cut.rfind("; "))
+    if boundary >= len(cut) * 0.5:
+        return cut[: boundary + 1].rstrip(";") + " …"
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(" ,;:") + " …"
+
+
+def with_full_captions(state: Any, figures: list[dict]) -> list[dict]:
+    """Replace graph-summary captions with each image's own indexed text.
+
+    The graph holds a 180-character summary; the state store holds the text
+    the captioner (or an authored sidecar) produced, whole. Every serving
+    role can read the state store, so this is one small query for up to
+    :data:`MAX_FIGURES` images. Best-effort: without a state store, or on any
+    failure, the tidied summary stands.
+    """
+
+    if state is None or not figures:
+        return figures
+    ids = [str(f["node_id"]) for f in figures if f.get("node_id")]
+    if not ids:
+        return figures
+    try:
+        rows = state.rows(
+            "SELECT artifact_id, text FROM chunks WHERE chunk_index=0 AND artifact_id IN ("
+            + ",".join("?" for _ in ids)
+            + ")",
+            tuple(ids),
+        )
+    except Exception:  # pragma: no cover - a caption is never load-bearing
+        return figures
+    texts = {str(row["artifact_id"]): str(row["text"] or "") for row in rows}
+    for figure in figures:
+        text = texts.get(str(figure.get("node_id")))
+        if text and text.strip():
+            figure["caption"] = tidy_caption(text)
+    return figures
 
 
 def collect_figures(graph: Any, node_ids: list[str], limit: int = MAX_FIGURES) -> list[dict]:
@@ -42,7 +100,8 @@ def collect_figures(graph: Any, node_ids: list[str], limit: int = MAX_FIGURES) -
             if any(data.get("type") == "has_chunk" for data in edge_map.values()):
                 chunk = attrs_of(target) or {}
                 if chunk.get("summary"):
-                    return " ".join(str(chunk["summary"]).split())
+                    summary = str(chunk["summary"])
+                    return tidy_caption(summary, truncated=len(summary) >= SUMMARY_CHARS)
         return ""
 
     figures: dict[str, dict[str, Any]] = {}

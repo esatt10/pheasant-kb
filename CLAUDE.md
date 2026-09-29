@@ -133,7 +133,9 @@ pheasant-kb/
 │   │                            assistant_routes, readiness_routes, …)
 │   ├── assistant/             ← grounded answering + workflows: answering
 │   │                            (around every workflow), routing (depth,
-│   │                            visual), conversation, longform, visuals
+│   │                            visual, shape), conversation, longform,
+│   │                            visuals, visual_specs (the shape grammar),
+│   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host
 │   ├── security/              ← path_policy (what may be read),
@@ -143,7 +145,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 138 pytest modules, offline by design
+└── tests/                     ← 139 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -854,11 +856,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   **re-searched, never fetched by the ids a caller sends** (that would bypass
   ACL), and earlier answers reach the prompt with `[n]` stripped. No history
   is a byte-identical prompt, asserted.
-- **A visual is grounded or declined.** The model returns a spec whose every
-  node and edge `cites` passages; `assistant.visuals.validate_spec` drops
-  unknown citations, marks uncited elements `inferred`, and declines a
-  mostly-inferred diagram. No model: the graph's own edges. Never markup from
-  model output — renderers draw from the spec; Mermaid is an escaped export.
+- **A visual is grounded or declined, in any shape.** The model returns a
+  spec in one of fourteen kinds (`assistant.visual_specs`: flow, sequence,
+  hierarchy, mindmap, concept, cycle, timeline, swimlane, layers, groups,
+  table, quadrant, chart, canvas) whose every node, edge, lane and table cell
+  `cites` passages; `validate_spec` drops unknown citations, marks uncited
+  elements `inferred`, marks a chart value no cited passage states as
+  unverified, and declines a mostly-inferred visual. The question names the
+  shape (routing) or the model picks; `visual.redraw` lets a viewer redraw the
+  same passages as another kind through `create_visual`. It reads the whole
+  documents the answer read (`answering.visual_documents`), never 500-character
+  previews. No model: the graph's own edges. Never markup from model output —
+  each kind has a renderer in the view; Mermaid/Markdown are escaped exports.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
@@ -1889,6 +1898,17 @@ Each of these cost real time. They are listed because the shape recurs.
   `embedded_in`, not on "no figures": an image whose own caption matches the
   question is a figure of itself, and the first version of the check blamed
   that correct answer.
+- **A second consumer of evidence gets the evidence the first one got, or it
+  draws a different picture.** The answer's prompt read whole documents
+  (`hydrate_citations`); the diagram built beside it called `build_prompt`
+  without them, so it read each passage's 500-character search preview. A
+  five-step process whose steps started past character 500 came out as three
+  boxes — correctly grounded, which is what made it convincing: every element
+  cited a passage, and the grounding share was 100%. `visual_documents` hands
+  every visual path (inline, deferred, on-demand, redraw) the same reassembly.
+  Found by looking at a demo screenshot of a pipeline with two steps missing;
+  `tests/test_visual_shapes.py` asserts step five reaches the prompt and fails
+  with the hydration stubbed out.
 - **An `except` whose reason stopped being true catches only what it was not
   written for.** `_sync_all_queued` swallowed every publish failure at debug
   as "already queued" — right when a duplicate `INSERT` raised, and dead once

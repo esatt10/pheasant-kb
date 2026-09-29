@@ -572,7 +572,10 @@ def run_checks(fleet: Fleet, report: Report) -> None:
     # The UI, against a replica, through the hosted MCP App.
     ui = ui_check(api[0], token)
     if ui is not None:
-        report.check("UI: the hosted MCP App shows the image through the token-guarded API", *ui)
+        report.check(
+            "UI: an inline figure, and a diagram redrawn as a timeline in the hosted MCP App",
+            *ui,
+        )
 
     problems = []
     for name in ("indexer", "graph", "api1", "api2", "worker"):
@@ -646,19 +649,40 @@ def ui_check(base: str, token: str) -> tuple[bool, str] | None:
         page.goto(base + "/")
         box = page.get_by_label("Ask a question")
         box.wait_for(timeout=30000)
-        box.fill("show me the deploy topology image")
-        box.press("Enter")
-        page.wait_for_selector("iframe.mcp-app-frame", timeout=120000)
-        frame = page.frame_locator("iframe.mcp-app-frame").first
-        frame.locator("img").first.wait_for(timeout=60000)
-        src = frame.locator("img").first.get_attribute("src") or ""
+
+        def ask(question: str, answers: int) -> None:
+            box.fill(question)
+            box.press("Enter")
+            page.wait_for_function(
+                f"document.querySelectorAll('.msg__meta').length >= {answers}", timeout=120000
+            )
+
+        # A figure the answer names is shown inline, fetched through the
+        # token-guarded /media; the gallery below does not repeat it.
+        ask("show me the deploy topology image", 1)
+        inline = page.locator(".answer-figure img").first
+        inline.wait_for(timeout=60000)
+        inline_src = inline.get_attribute("src") or ""
+        repeated = page.locator(".msg").last.locator("iframe.mcp-app-frame").count()
+
+        # A drawn diagram in the hosted MCP App, then "Redraw as → Timeline":
+        # the frame asks its host for create_visual, the host calls
+        # /assistant/visual with the token, and the same passages come back in
+        # another shape.
+        ask("draw a diagram of the release process", 2)
+        frame = page.frame_locator("iframe.mcp-app-frame").last
+        frame.locator("svg .node").first.wait_for(timeout=60000)
+        frame.get_by_role("button", name="Timeline").click()
+        frame.locator("svg .marker").first.wait_for(timeout=60000)
+        redrawn = frame.locator("h1").first.text_content() or ""
         page.screenshot(
             path=str(Path(os.environ.get("FLEET_SHOTS", "/tmp")) / "fleet-ui.png"), full_page=True
         )
         browser.close()
         return (
-            src.startswith("data:image/png;base64,") and not errors,
-            f"img={src[:22]} errors={errors}",
+            inline_src.startswith("blob:") and repeated == 0 and not errors,
+            f"inline={inline_src[:5]} gallery_frames={repeated} redrawn={redrawn!r} "
+            f"errors={errors}",
         )
 
 

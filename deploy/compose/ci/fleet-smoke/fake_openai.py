@@ -85,7 +85,7 @@ def reply_for(system: str, prompt: str) -> tuple[str, str]:
         heading = prompt.split("Section to write:", 1)[-1].splitlines()[0].strip()
         cites = "".join(f"[{n}]" for n in numbers[:2])
         return "section", f"{heading}: grounded in the passages shown {cites}."
-    if "into a small diagram" in system:
+    if "into ONE visual" in system:
         found = passages(prompt)[:5] or [(1, "source")]
         nodes = [
             {"id": f"n{i}", "label": title[:40], "cites": [n]} for i, (n, title) in enumerate(found)

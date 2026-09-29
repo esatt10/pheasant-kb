@@ -7,7 +7,7 @@ can also make yourself:
 |---|---|---|
 | **intent** | `knowledge` · `procedural` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)) |
 | **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned |
-| **visual** | `none` · `diagram` · `image` | rules; or pinned |
+| **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned |
 
 None of them costs a model call to decide. The rules are deterministic, so an
 offline region and a connected one read a question the same way, and the
@@ -76,31 +76,77 @@ without clearing the thread, and **New conversation** clears both.
 
 ## Visuals
 
-Ask for one ("draw a diagram of the release process", "visualize how
-retrieval fuses its arms") or use **Draw a diagram** under an answer — for
+Ask for one in whatever shape suits the question — "draw the release process
+for a new engineer", "make a timeline of the incidents", "create a table
+comparing the three rollout options", "an org chart of the teams", "plot the
+error budgets by service" — or use **Draw a diagram** under an answer: for
 all its cited passages, or ◇ next to one source for *that passage only*. Over
-the API it is `visual: "diagram"` on a chat request, or on demand:
+the API it is `visual: "diagram"` (or a shape name, `visual: "timeline"`) on
+a chat request, or on demand:
 
 ```json
 POST /assistant/visual
-{"request": "the release process", "node_ids": ["chunk:docs:release.md:…"]}
+{"request": "the release process", "node_ids": ["chunk:docs:release.md:…"], "kind": "swimlane"}
 ```
 
-A visual is **grounded or it is declined**. The model returns a small diagram
-spec — nodes and edges, each listing the passages (`cites`) that support it —
-and pheasant checks it the way it checks `[n]` markers: a citation to a
-passage that was not given is dropped, an element left with none is kept but
-marked `inferred` (drawn dashed), and a diagram that is mostly inference is
-declined with a reason rather than drawn. With no model connected, the
-diagram is the graph's own edges between the cited sources, grounded by
-construction. `visual.mermaid` is the same diagram as Mermaid text, for
-hosts that render it and for copying out. The model never writes markup:
-every renderer draws from the spec.
+### Shapes
 
-`kind` is `flow`, `sequence`, `hierarchy`, `concept` or `timeline`, chosen by
-the model unless you pass one. In a streamed answer the text arrives first and
-the visual follows as its own `visual` event, so a reader never waits for the
-picture to read the answer.
+One spec grammar (`assistant/visual_specs.py`) covers fourteen shapes. The
+question names one ("a timeline of", "as a table", "swim lanes", "2x2") or
+leaves it to the model, and everyday names map onto the vocabulary ("org
+chart" → `hierarchy`, "venn" → `groups`, "bar chart" → `chart`):
+
+| kind | draws | reads, beyond cited nodes and edges |
+|---|---|---|
+| `flow` | a process or pipeline; turns top-down when it would not fit | node `shape`: box, round, pill, diamond, cylinder, hexagon, ellipse, circle, note |
+| `sequence` | actors exchanging messages, in order | edges are the messages |
+| `hierarchy` | a tree: part-of, reports-to, breakdown | edges parent → child |
+| `mindmap` | one idea radiating out | the first node is the centre |
+| `concept` | how ideas relate, as a network | labelled edges |
+| `cycle` | a loop | node order is the loop |
+| `timeline` | ordered or dated events | node `when` |
+| `swimlane` | a process across owners | `groups` are the lanes |
+| `layers` | a stack, top first | `groups` are the layers |
+| `groups` | things sorted into categories | `groups` are the categories |
+| `table` | a comparison | nodes are rows; `columns` and `cells` |
+| `quadrant` | a 2×2 positioning | `axes`; node `x`/`y` in 0..1 |
+| `chart` | numbers the passages state, bar or line | node `value`; `unit` |
+| `canvas` | anything else, laid out freely | node `x`/`y` in 0..100 and `shape` |
+
+A **viewpoint** in the request ("for a new engineer", "from the operator's
+side") decides what the model includes and how it labels it, and is shown on
+the visual.
+
+### Grounded or declined
+
+The model returns a spec, never markup, and pheasant checks it the way it
+checks `[n]` markers. Every element a reader could take as a claim — node,
+edge, lane, table cell — lists the passages (`cites`) that support it; a
+citation to a passage that was not given is dropped, an element left with
+none is kept but marked `inferred` (drawn dashed), and a visual that is
+mostly inference is declined with a reason rather than drawn. **Numbers get
+one check more:** a chart value that appears in none of its cited passages
+is marked unverified and drawn dashed, whatever the model says it cites.
+
+The model reads the **whole documents** the answer read, not their search
+previews — a process whose later steps sit past the first 500 characters is
+drawn with all of them. With no model connected the visual is the graph's own
+edges between the cited sources, grounded by construction (as a concept map,
+and it says so if you asked for another shape).
+
+`visual.mermaid` is the same visual as Mermaid text where Mermaid has the
+shape (flowchart, sequence, mindmap, timeline, quadrantChart, xychart);
+`visual.markdown` is a table as Markdown. In a streamed answer the text
+arrives first and the visual follows as its own `visual` event.
+
+### Redraw as another shape
+
+Every drawn visual carries `visual.redraw` — the request, the passages it
+was drawn from and the shapes available. The view shows a **Redraw as** row;
+choosing one calls `create_visual` with the same `node_ids` and the new
+`kind`, so switching a flow to a timeline changes the shape and never the
+evidence. Over MCP, an agent does the same by passing `visual.redraw.node_ids`
+back to `create_visual`.
 
 ## Figures: images your documents reference
 
@@ -138,8 +184,10 @@ nothing it had before.
 
 The view is one self-contained file (`mcp_server/apps/knowledge_view.html`):
 no network, no CDN, and nothing from a result is ever parsed as HTML. It
-reaches back to the region only through the host (`tools/call get_image`),
-so an image is read under the same ACL over MCP as over HTTP. Clicking a
+reaches back to the region only through the host — `tools/call get_image`
+for an image, `tools/call create_visual` to redraw — so both are read under
+the same ACL over MCP as over HTTP. An answer that already shows a figure
+inline does not repeat it in the image gallery below. Clicking a
 diagram node sends `ui/message` — "tell me more about …" — which the host
 may turn into the next turn.
 

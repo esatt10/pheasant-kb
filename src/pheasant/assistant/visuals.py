@@ -18,8 +18,16 @@ not resolve is dropped, an element with no surviving citation is kept but
 marked ``inferred`` (the renderers draw it dashed), and a diagram that is
 mostly inference is **declined** with the reason, because a confident picture
 of guesses is worse than no picture. Rendering is the viewer's job, from data;
-:func:`to_mermaid` is a text export for hosts that render Mermaid and for
-copying out.
+``assistant.visual_export`` turns a spec into Mermaid (or a Markdown table)
+for hosts that render those and for copying out.
+
+The spec is not one picture type. A process is a flow, but "a timeline of
+the incidents", "compare the three options", "an org chart of the teams" or
+"plot the error budgets" are different shapes of the same evidence, and
+``assistant.visual_specs`` is their shared grammar: fourteen kinds over one
+core of cited nodes and edges, down to a free ``canvas`` for anything the
+named kinds do not cover. The request picks the shape (or pins it), and the
+same passages can be redrawn in another one without a new search.
 
 With no model connected, :func:`graph_diagram` draws what the index itself
 recorded — the graph's own edges between the cited documents and what they
@@ -32,39 +40,67 @@ import json
 import re
 from typing import Any
 
-KINDS = ("flow", "sequence", "hierarchy", "concept", "timeline")
-MAX_NODES = 30
-MAX_EDGES = 60
-MAX_LABEL = 80
+from pheasant.assistant import visual_specs
+from pheasant.assistant.visual_export import to_markdown, to_mermaid
+from pheasant.assistant.visual_specs import KINDS, MAX_NODES, normalize_kind
+
+__all__ = ["KINDS", "MAX_NODES", "build_diagram", "declined", "graph_diagram", "validate_spec"]
+
 #: Below this share of cited elements a diagram is declined. Half, not more:
 #: a process diagram legitimately has a start and an end nobody wrote down,
 #: but a diagram that is mostly inference is a guess with arrows.
 MIN_GROUNDED = 0.5
 
-_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 DIAGRAM_SYSTEM = """You turn retrieved passages from a private knowledge base \
-into a small diagram that answers the user's request. You draw ONLY what the \
-passages support.
+into ONE visual that answers the user's request, in whatever shape or from \
+whatever viewpoint they asked for. You draw ONLY what the passages support.
 
 Reply with JSON only, no prose:
-{"kind": "flow", "title": "short title",
- "nodes": [{"id": "n1", "label": "short label", "cites": [1], "group": ""}],
- "edges": [{"from": "n1", "to": "n2", "label": "", "cites": [2]}],
- "summary": "one sentence saying what the diagram shows"}
+{"kind": "flow", "title": "short title", "viewpoint": "",
+ "summary": "one sentence saying what the visual shows",
+ "nodes": [{"id": "n1", "label": "short label", "cites": [1]}],
+ "edges": [{"from": "n1", "to": "n2", "label": "", "cites": [2]}]}
+
+Kinds — pick the one the request names or implies; if none fits, use \
+"canvas" and place the nodes yourself:
+- "flow": a process or pipeline. Node "shape" may be box, round, pill, \
+diamond (a decision), cylinder (a store), hexagon, ellipse, note.
+- "sequence": actors exchanging messages; nodes are actors, edges IN ORDER \
+are the messages.
+- "hierarchy": a tree (part-of, reports-to, breakdown); edges parent->child.
+- "mindmap": the FIRST node is the central idea; edges parent->child.
+- "concept": how ideas relate, as a network; any labelled edges.
+- "cycle": a loop; nodes in loop order (edges optional).
+- "timeline": ordered events; each node has "when" (a date or phase).
+- "swimlane": a process across owners; "groups": [{"id": "g1", "label": \
+"Team", "cites": [1]}] and each node has "group": "g1"; edges as in flow.
+- "layers": a stack, top layer first; "groups" are the layers, nodes sit \
+in them via "group".
+- "groups": things sorted into categories; "groups" are the categories.
+- "table": a comparison; nodes are the rows, "columns": [{"id": "c1", \
+"label": "..."}], "cells": [{"row": "n1", "column": "c1", "text": "...", \
+"cites": [1]}].
+- "quadrant": a 2x2; "axes": {"x": {"label": "", "low": "", "high": ""}, \
+"y": {...}} and each node has "x" and "y" between 0 and 1.
+- "chart": numbers stated in the passages; each node has a numeric "value"; \
+"chart": "bar" or "line"; optional "unit" and "axes": {"y": {"label": ""}}.
+- "canvas": anything else; each node has "x" and "y" from 0 to 100 and a \
+"shape".
 
 Rules:
-- "kind": "flow" for a process or pipeline, "sequence" for actors exchanging \
-messages over time (nodes are the actors, edges in order are the messages), \
-"hierarchy" for part-of or containment, "concept" for how ideas relate, \
-"timeline" for dated or ordered events.
+- A "viewpoint" the user asks for ("for a new engineer", "from the \
+operator's side") decides what you include and how you label it; say it in \
+"viewpoint".
 - 3 to 15 nodes. Labels of at most six words, using the passages' own names \
-for files, components, commands and steps.
-- EVERY node and edge lists in "cites" the passage numbers [n] that support \
-it. Never cite a number that was not given. If nothing supports an element, \
-leave it out.
-- Do not add steps, components or relationships the passages do not state."""
+for files, components, commands and steps. Node "detail" may add one short \
+sentence.
+- EVERY node, edge, group and cell lists in "cites" the passage numbers [n] \
+that support it. Never cite a number that was not given. If nothing \
+supports an element, leave it out.
+- A chart value must be a number the cited passage states; never compute \
+or estimate one.
+- Do not add steps, components, relationships or numbers the passages do \
+not state."""
 
 
 def build_diagram(
@@ -74,15 +110,20 @@ def build_diagram(
     *,
     prompt: str,
     kind: str | None = None,
-    max_output_tokens: int = 1200,
+    evidence: dict[int, str] | None = None,
+    max_output_tokens: int = 1600,
 ) -> dict[str, Any]:
     """Ask the model for a spec and validate it. Never raises.
 
     ``prompt`` is the passage block the answering step already built — the
-    diagram reads exactly the evidence the answer read.
+    visual reads exactly the evidence the answer read. ``kind`` pins a shape
+    (a vocabulary kind or an alias such as "org chart"); without it the model
+    picks the one the request implies. ``evidence`` (passage number → text)
+    lets chart values be checked against what the passages state.
     """
 
-    hint = f"\nUse kind: {kind}." if kind in KINDS else ""
+    pinned = normalize_kind(kind)
+    hint = f"\nUse kind: {pinned}." if pinned else ""
     raw = llm.try_complete(
         DIAGRAM_SYSTEM + hint,
         f"{prompt}\n\nDraw: {request}",
@@ -91,62 +132,29 @@ def build_diagram(
     parsed = _parse_json(raw)
     if parsed is None:
         return declined("the model did not return a diagram")
-    return validate_spec(parsed, citations, source="model")
+    if pinned:
+        # The caller asked for this shape; a model that answered in another
+        # one does not get to overrule the reader.
+        parsed["kind"] = pinned
+    return validate_spec(parsed, citations, source="model", evidence=evidence)
 
 
 def validate_spec(
-    spec: dict[str, Any], citations: list[dict], *, source: str = "model"
+    spec: dict[str, Any],
+    citations: list[dict],
+    *,
+    source: str = "model",
+    evidence: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """Check a spec against the citations it claims. Deterministic."""
 
     valid = {int(c["index"]) for c in citations if c.get("index") is not None}
-    kind = str(spec.get("kind") or "flow").lower()
-    if kind not in KINDS:
-        kind = "flow"
+    kind = normalize_kind(spec.get("kind")) or "flow"
+    checked = visual_specs.check(spec, valid, kind=kind, evidence=evidence)
+    if isinstance(checked, str):
+        return declined(checked)
 
-    nodes: list[dict[str, Any]] = []
-    known: set[str] = set()
-    for raw_node in (spec.get("nodes") or [])[: MAX_NODES * 2]:
-        if not isinstance(raw_node, dict):
-            continue
-        node_id = str(raw_node.get("id") or "").strip()
-        label = _label(raw_node.get("label"))
-        if not _ID_RE.match(node_id) or node_id in known or not label:
-            continue
-        cites = _cites(raw_node.get("cites"), valid)
-        node = {"id": node_id, "label": label, "cites": cites, "inferred": not cites}
-        group = _label(raw_node.get("group"), 40)
-        if group:
-            node["group"] = group
-        nodes.append(node)
-        known.add(node_id)
-        if len(nodes) >= MAX_NODES:
-            break
-
-    edges: list[dict[str, Any]] = []
-    for raw_edge in (spec.get("edges") or [])[: MAX_EDGES * 2]:
-        if not isinstance(raw_edge, dict):
-            continue
-        source_id = str(raw_edge.get("from") or "").strip()
-        target_id = str(raw_edge.get("to") or "").strip()
-        if source_id not in known or target_id not in known or source_id == target_id:
-            continue
-        cites = _cites(raw_edge.get("cites"), valid)
-        edges.append(
-            {
-                "from": source_id,
-                "to": target_id,
-                "label": _label(raw_edge.get("label"), 40),
-                "cites": cites,
-                "inferred": not cites,
-            }
-        )
-        if len(edges) >= MAX_EDGES:
-            break
-
-    if len(nodes) < 2:
-        return declined("fewer than two elements could be drawn from the passages")
-    elements = nodes + edges
+    elements = visual_specs.elements(checked)
     cited = sum(1 for element in elements if not element["inferred"])
     ratio = cited / len(elements)
     if ratio < MIN_GROUNDED:
@@ -157,12 +165,14 @@ def validate_spec(
     used = sorted({n for element in elements for n in element["cites"]})
     diagram = {
         "kind": kind,
-        "title": _label(spec.get("title"), 120) or "Diagram",
-        "summary": _label(spec.get("summary"), 300),
-        "nodes": nodes,
-        "edges": edges,
+        "title": visual_specs.label(spec.get("title"), 120) or "Diagram",
+        "summary": visual_specs.label(spec.get("summary"), 300),
+        **{key: value for key, value in checked.items() if key != "kind"},
     }
-    return {
+    viewpoint = visual_specs.label(spec.get("viewpoint"), 80)
+    if viewpoint:
+        diagram["viewpoint"] = viewpoint
+    visual: dict[str, Any] = {
         "type": "diagram",
         "status": "ok",
         "source": source,
@@ -171,6 +181,10 @@ def validate_spec(
         "grounding": {"cited": cited, "inferred": len(elements) - cited, "ratio": ratio},
         "mermaid": to_mermaid(diagram),
     }
+    markdown = to_markdown(diagram)
+    if markdown:
+        visual["markdown"] = markdown
+    return visual
 
 
 def declined(reason: str, **extra: Any) -> dict[str, Any]:
@@ -227,66 +241,6 @@ def graph_diagram(citations: list[dict], facts: list[dict]) -> dict[str, Any]:
         "edges": edges,
     }
     return validate_spec(spec, citations, source="graph")
-
-
-def to_mermaid(diagram: dict[str, Any]) -> str:
-    """The diagram as Mermaid text. Labels are escaped; nothing is executable."""
-
-    nodes = diagram.get("nodes") or []
-    edges = diagram.get("edges") or []
-    if diagram.get("kind") == "sequence":
-        lines = ["sequenceDiagram"]
-        for node in nodes:
-            lines.append(f"    participant {node['id']} as {_mermaid_text(node['label'])}")
-        for edge in edges:
-            arrow = "-->>" if edge.get("inferred") else "->>"
-            label = _mermaid_text(edge.get("label") or " ")
-            lines.append(f"    {edge['from']}{arrow}{edge['to']}: {label}")
-        return "\n".join(lines)
-    direction = "LR" if diagram.get("kind") in {"flow", "timeline"} else "TD"
-    lines = [f"flowchart {direction}"]
-    for node in nodes:
-        lines.append(f'    {node["id"]}["{_mermaid_text(node["label"])}"]')
-    for edge in edges:
-        arrow = "-.->" if edge.get("inferred") else "-->"
-        label = edge.get("label")
-        if label:
-            lines.append(f"    {edge['from']} {arrow}|{_mermaid_text(label)}| {edge['to']}")
-        else:
-            lines.append(f"    {edge['from']} {arrow} {edge['to']}")
-    inferred = [node["id"] for node in nodes if node.get("inferred")]
-    if inferred:
-        lines.append("    classDef inferred stroke-dasharray: 4 3")
-        lines.append(f"    class {','.join(inferred)} inferred")
-    return "\n".join(lines)
-
-
-def _mermaid_text(text: str) -> str:
-    # Quotes, brackets, pipes and angle brackets are Mermaid syntax or HTML;
-    # entity-encode the first and drop the rest rather than let a label close
-    # a node early or smuggle markup into a renderer.
-    cleaned = re.sub(r"[\[\]{}()<>|;`]", " ", str(text))
-    return cleaned.replace('"', "#quot;").strip() or " "
-
-
-def _label(value: Any, limit: int = MAX_LABEL) -> str:
-    text = _CONTROL_RE.sub(" ", str(value or "")).strip()
-    text = " ".join(text.split())
-    return text[:limit]
-
-
-def _cites(value: Any, valid: set[int]) -> list[int]:
-    if not isinstance(value, list):
-        value = [value] if value is not None else []
-    out: list[int] = []
-    for item in value:
-        try:
-            number = int(str(item).strip("[] "))
-        except (TypeError, ValueError):
-            continue
-        if number in valid and number not in out:
-            out.append(number)
-    return out
 
 
 def _parse_json(raw: str | None) -> dict | None:

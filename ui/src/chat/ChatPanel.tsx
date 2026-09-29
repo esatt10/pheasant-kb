@@ -395,7 +395,13 @@ function AnswerTurn({
     onSuccess: setDrawn,
   });
   const cited = answer.citations.filter((citation) => citation.used);
-  const visual = drawn?.visual ?? answer.visual ?? null;
+  const chosen = drawn?.visual ?? answer.visual ?? null;
+  // An image gallery repeats nothing the answer already shows inline: the
+  // figures the text names are drawn in place, so only the rest belong here.
+  const visual =
+    chosen?.type === "images" && (chosen.figures ?? []).every((figure) => figure.shown)
+      ? null
+      : chosen;
   const visualCitations = drawn ? drawn.citations : answer.citations;
   return (
     <div className="msg">
@@ -409,18 +415,11 @@ function AnswerTurn({
       </div>
       {visual ? (
         <div className="msg__visual">
-          {visual.note ? <div className="muted">{visual.note}</div> : null}
           <McpAppFrame
             result={{ visual, citations: visualCitations, figures: answer.figures ?? [] }}
             onAsk={onAsk}
             title={visual.diagram?.title ?? "Visual"}
           />
-          {visual.mermaid ? (
-            <details className="msg__mermaid">
-              <summary>Mermaid source</summary>
-              <pre>{visual.mermaid}</pre>
-            </details>
-          ) : null}
         </div>
       ) : null}
       {answer.citations.length > 0 ? (

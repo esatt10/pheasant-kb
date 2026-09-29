@@ -11,7 +11,8 @@
   iframe for `ask_knowledge_base`, `create_visual` and `get_image`, and
   pheasant's own UI hosts the very same file for its chat. It renders from the
   tool result the host sends (`ui/notifications/tool-result`) and can call back
-  only through the host (`tools/call get_image`), so every byte it shows came
+  only through the host (`tools/call get_image`, and `tools/call create_visual`
+  to redraw the same passages in another shape), so every byte it shows came
   through a tool the region already ACL-checks.
 
   Nothing from the result is ever parsed as markup: text goes in through
@@ -37,19 +38,62 @@
   .chip { display: inline-block; min-width: 1.4em; padding: 0 4px; margin: 0 1px; border-radius: 8px;
     background: var(--chip); color: var(--accent); font-size: 11px; text-align: center; cursor: default; }
   .figure { margin: 10px 0; }
-  .figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+  /* A 2x screenshot shown at its natural size is twice the size it was
+     drawn at; cap the height and let a click open it at full size. */
+  .figure img { max-width: 100%; max-height: 320px; width: auto; height: auto; cursor: zoom-in;
+    border: 1px solid var(--line); border-radius: 6px; }
+  .figure img.full { max-height: none; cursor: zoom-out; }
   .figure figcaption { color: var(--muted); font-size: 12.5px; }
   .sources { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
   .sources li { font-size: 12.5px; }
   .diagram { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--bg); }
+    background: var(--bg); padding: 4px 0; }
+  .diagram > svg { display: block; margin: 0 auto; width: 100%; height: auto; }
+  .visual { margin-top: 12px; }
+  .visual__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .badge { font-size: 11.5px; color: var(--accent); background: var(--chip); border-radius: 10px;
+    padding: 1px 8px; }
+  .redraw { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+  .pill { font: 12px system-ui, sans-serif; color: var(--fg); background: var(--node);
+    border: 1px solid var(--line); border-radius: 12px; padding: 2px 10px; cursor: pointer; }
+  .pill:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .pill:disabled { opacity: .6; cursor: default; }
+  details.source summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  .vtable { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .vtable th, .vtable td { border: 1px solid var(--line); padding: 6px 8px; text-align: left;
+    vertical-align: top; }
+  .vtable thead th { background: var(--node); }
+  .vtable .inferred { border-style: dashed; color: var(--muted); }
+  .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+    padding: 10px; }
+  .group { border: 1.2px solid var(--accent); border-radius: 10px; padding: 8px; }
+  .group.inferred { border-style: dashed; border-color: var(--inferred); }
+  .group__title { font-weight: 600; margin-bottom: 6px; }
+  .group__items { display: flex; flex-wrap: wrap; gap: 6px; }
+  .item { background: var(--node); border: 1px solid var(--line); border-radius: 8px;
+    padding: 2px 8px; font-size: 12.5px; }
+  .item.inferred { border-style: dashed; color: var(--muted); }
   .declined { color: var(--warn); }
   svg text { fill: var(--fg); font: 12px system-ui, sans-serif; }
-  svg .node rect { fill: var(--node); stroke: var(--accent); stroke-width: 1.2; }
-  svg .node.inferred rect { stroke: var(--inferred); stroke-dasharray: 4 3; }
+  svg .node > :first-child { fill: var(--node); stroke: var(--accent); stroke-width: 1.2; }
+  svg .node.inferred > :first-child { stroke: var(--inferred); stroke-dasharray: 4 3; }
+  svg .axis, svg .tick { stroke: var(--muted); stroke-width: 1.2; }
+  svg .tick { stroke: var(--line); }
+  svg .grid { stroke: var(--line); stroke-width: 1; }
+  svg .plot { fill: none; stroke: var(--line); }
+  svg .marker, svg .point circle, svg .bar circle { fill: var(--accent); }
+  svg .marker.inferred, svg .point.inferred circle { fill: var(--inferred); }
+  svg .bar rect { fill: var(--accent); opacity: .85; }
+  svg .bar.inferred rect { fill: none; stroke: var(--inferred); stroke-dasharray: 4 3; }
+  svg .series { fill: none; stroke: var(--accent); stroke-width: 2; }
+  svg .band { fill: var(--node); stroke: var(--line); opacity: .7; }
+  svg .band.inferred { stroke-dasharray: 4 3; }
+  svg .band-label, svg .when { font-weight: 600; fill: var(--muted); font-size: 12px; }
+  svg .axis-label, svg .value { fill: var(--muted); font-size: 11.5px; }
   svg .edge path, svg .edge line { stroke: var(--muted); stroke-width: 1.2; fill: none; }
   svg .edge.inferred path, svg .edge.inferred line { stroke-dasharray: 4 3; }
-  svg .edge text { fill: var(--muted); font-size: 11px; }
+  svg .edge text, svg .edge-label { fill: var(--muted); font-size: 11px; }
+  svg .edge-label { paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
   svg .cite { fill: var(--accent); font-size: 10px; }
   svg .lifeline { stroke: var(--line); stroke-dasharray: 3 3; }
   button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
@@ -178,7 +222,13 @@
     const bits = [route.intent, route.depth && route.depth + " answer"].filter(Boolean);
     if (bits.length) root.append(el("p", { class: "muted" }, bits.join(" · ")));
     renderText(payload.answer, citations, figures, root);
-    if (payload.visual && payload.visual.status) renderVisual(payload.visual, citations);
+    if (payload.visual && payload.visual.status) {
+      const visual = payload.visual.type === "images"
+        ? { ...payload.visual, figures: (payload.visual.figures || []).map((f) => ({ ...f,
+            shown: (figures.find((g) => g.figure === f.figure) || f).shown })) }
+        : payload.visual;
+      renderVisual(visual, citations);
+    }
     renderSources(citations);
   }
 
@@ -255,10 +305,10 @@
     request("tools/call", { name: "get_image", arguments: { node_id: figure.node_id } })
       .then((result) => {
         const image = (result && result.content || []).find((block) => block.type === "image");
-        holder.firstChild.replaceWith(image
-          ? el("img", { src: `data:${image.mimeType};base64,${image.data}`,
-              alt: figure.caption || figure.alt || figure.relative_path || "figure" })
-          : el("p", { class: "muted" }, "Image unavailable."));
+        const img = image ? el("img", { src: `data:${image.mimeType};base64,${image.data}`,
+          alt: figure.caption || figure.alt || figure.relative_path || "figure" }) : null;
+        if (img) img.addEventListener("click", () => { img.classList.toggle("full"); reportSize(); });
+        holder.firstChild.replaceWith(img || el("p", { class: "muted" }, "Image unavailable."));
         reportSize();
       })
       .catch(() => { holder.firstChild.replaceWith(el("p", { class: "muted" }, "Image unavailable.")); });
@@ -276,31 +326,106 @@
   }
 
   // ---------------------------------------------------------------- visuals
-  function renderVisual(visual, citations) {
+  //
+  // A visual is a spec (assistant.visual_specs): cited nodes and edges plus
+  // the few fields a shape needs. Each kind has a renderer below; all of them
+  // build SVG or DOM node by node and put every label in through textContent.
+
+  const KIND_LABELS = {
+    flow: "Flow", sequence: "Sequence", hierarchy: "Tree", mindmap: "Mind map",
+    concept: "Concept map", cycle: "Cycle", timeline: "Timeline", swimlane: "Swimlanes",
+    layers: "Layers", groups: "Groups", table: "Table", quadrant: "2×2", chart: "Chart",
+    canvas: "Canvas",
+  };
+  const RENDERERS = {
+    flow: flowSvg, hierarchy: (d) => layeredSvg(d, false),
+    sequence: sequenceSvg, mindmap: mindmapSvg, concept: conceptSvg, cycle: cycleSvg,
+    timeline: timelineSvg, swimlane: swimlaneSvg, layers: layersSvg, groups: groupsView,
+    table: tableView, quadrant: quadrantSvg, chart: chartSvg, canvas: canvasSvg,
+  };
+
+  function renderVisual(visual, citations, into) {
+    into = into || root;
+    const holder = el("section", { class: "visual" });
+    into.append(holder);
+    drawVisual(holder, visual, citations);
+  }
+
+  function drawVisual(holder, visual, citations) {
+    holder.replaceChildren();
     if (visual.status === "pending") {
-      root.append(el("p", { class: "muted" }, "Drawing the visual…"));
+      holder.append(el("p", { class: "muted" }, "Drawing the visual…"));
       return;
     }
     if (visual.status !== "ok") {
-      root.append(el("p", { class: "declined" }, "No visual: " + (visual.reason || "declined")));
+      holder.append(el("p", { class: "declined" }, "No visual: " + (visual.reason || "declined")));
       return;
     }
     if (visual.type === "images") {
-      for (const figure of visual.figures || []) root.append(figureBlock(figure.figure, visual.figures));
+      // An answer already shows the figures it names inline; the gallery is
+      // for the ones it did not.
+      const figures = (visual.figures || []).filter((f) => !f.shown);
+      for (const figure of figures) holder.append(figureBlock(figure.figure, visual.figures));
       return;
     }
-    const diagram = visual.diagram;
-    root.append(el("h1", {}, diagram.title || "Diagram"));
-    if (diagram.summary) root.append(el("p", { class: "muted" }, diagram.summary));
-    const holder = el("div", { class: "diagram" });
-    holder.append(diagram.kind === "sequence" ? sequenceSvg(diagram) : layeredSvg(diagram));
-    root.append(holder);
+    const diagram = visual.diagram || {};
+    const head = el("div", { class: "visual__head" }, el("h1", {}, diagram.title || "Diagram"));
+    if (diagram.viewpoint) head.append(el("span", { class: "badge" }, "Viewpoint: " + diagram.viewpoint));
+    holder.append(head);
+    if (visual.note) holder.append(el("p", { class: "muted" }, visual.note));
+    if (diagram.summary) holder.append(el("p", { class: "muted" }, diagram.summary));
+    const draw = RENDERERS[diagram.kind] || RENDERERS.flow;
+    const body = el("div", { class: "diagram" });
+    try { body.append(draw(diagram)); }
+    catch (_) { body.append(layeredSvg(diagram, true)); }
+    holder.append(body);
     const grounding = visual.grounding || {};
-    root.append(el("p", { class: "muted" },
+    holder.append(el("p", { class: "muted" },
       `${grounding.cited || 0} of ${(grounding.cited || 0) + (grounding.inferred || 0)} elements ` +
       `cite a passage; dashed ones do not. Source: ${visual.source === "graph"
         ? "the index's own graph edges" : "the model, checked against the passages"}.`));
+    if (visual.redraw) holder.append(redrawBar(holder, visual, citations));
+    const source = visual.mermaid ? ["Mermaid", visual.mermaid]
+      : visual.markdown ? ["Markdown", visual.markdown] : null;
+    if (source) {
+      holder.append(el("details", { class: "source" }, el("summary", {}, source[0] + " source"),
+        el("pre", {}, el("code", {}, source[1]))));
+    }
   }
+
+  // The same passages, another shape: create_visual with this visual's own
+  // node ids, so a redraw cannot quietly change what it is a picture of.
+  function redrawBar(holder, visual, citations) {
+    const redraw = visual.redraw;
+    const current = (visual.diagram || {}).kind;
+    const bar = el("div", { class: "redraw" }, el("span", { class: "muted" }, "Redraw as"));
+    for (const kind of redraw.kinds || Object.keys(KIND_LABELS)) {
+      if (kind === current || !KIND_LABELS[kind]) continue;
+      const button = el("button", { class: "pill", type: "button" }, KIND_LABELS[kind]);
+      button.addEventListener("click", () => {
+        for (const other of bar.querySelectorAll("button")) other.disabled = true;
+        button.textContent = KIND_LABELS[kind] + "…";
+        request("tools/call", { name: "create_visual", arguments: {
+          knowledge_base: redraw.knowledge_base, request: redraw.request,
+          node_ids: redraw.node_ids, kind,
+        } }).then((result) => {
+          const payload = payloadOf(result || {});
+          if (!payload.visual) throw new Error((result && result.content && result.content[0]
+            && result.content[0].text) || "no visual returned");
+          drawVisual(holder, payload.visual, payload.citations || citations);
+          reportSize();
+        }).catch((error) => {
+          for (const other of bar.querySelectorAll("button")) other.disabled = false;
+          button.textContent = KIND_LABELS[kind];
+          bar.append(el("span", { class: "declined" }, " " + (error.message || "could not redraw")));
+        });
+      });
+      bar.append(button);
+    }
+    return bar;
+  }
+
+  // ---------------------------------------------------------------- shapes
 
   function arrowDefs() {
     const defs = svg("defs");
@@ -311,13 +436,148 @@
     return defs;
   }
 
-  function measure(label) { return Math.min(220, Math.max(70, 7.2 * label.length + 24)); }
+  function canvasOf(width, height, title) {
+    const canvas = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
+      "aria-label": title || "diagram" });
+    // Fit the frame, but never below 70% of the drawn size: past that the
+    // labels stop being readable, and scrolling a wide diagram beats squinting.
+    canvas.style.maxWidth = width + "px";
+    canvas.style.minWidth = Math.round(width * 0.7) + "px";
+    canvas.append(arrowDefs());
+    return canvas;
+  }
 
-  // Layered left-to-right (flow, timeline) or top-down (hierarchy, concept)
-  // layout: longest-path ranks over the acyclic part of the graph, so a
-  // process reads in order. Deterministic: node order breaks every tie.
-  function layeredSvg(diagram) {
-    const horizontal = diagram.kind === "flow" || diagram.kind === "timeline";
+  function wrap(label, max) {
+    max = max || 22;
+    const words = String(label || "").split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const word of words) {
+      if (line && (line + " " + word).length > max) { lines.push(line); line = word; }
+      else line = line ? line + " " + word : word;
+    }
+    if (line) lines.push(line);
+    if (lines.length > 3) { lines.length = 3; lines[2] = lines[2].replace(/.{0,2}$/, "…"); }
+    return lines;
+  }
+
+  function sizeOf(node) {
+    const lines = wrap(node.label);
+    let w = Math.min(210, Math.max(84, 7 * Math.max(...lines.map((l) => l.length)) + 30));
+    let h = 20 + lines.length * 15;
+    const shape = node.shape || "box";
+    if (shape === "circle") { w = h = Math.max(w * 0.9, h + 24); }
+    else if (shape === "ellipse") { w += 24; h += 14; }
+    else if (shape === "diamond") { w *= 1.25; h *= 1.6; }
+    else if (shape === "hexagon") { w += 20; }
+    else if (shape === "cylinder") { h += 12; }
+    return { w: Math.round(w), h: Math.round(h), lines };
+  }
+
+  function shapeOf(kind, box) {
+    const { x, y, w, h } = box;
+    const cx = x + w / 2, cy = y + h / 2;
+    switch (kind) {
+      case "round": return svg("rect", { x, y, width: w, height: h, rx: 12 });
+      case "pill": return svg("rect", { x, y, width: w, height: h, rx: h / 2 });
+      case "ellipse": return svg("ellipse", { cx, cy, rx: w / 2, ry: h / 2 });
+      case "circle": return svg("circle", { cx, cy, r: Math.min(w, h) / 2 });
+      case "diamond": return svg("polygon", { points: `${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}` });
+      case "hexagon": return svg("polygon", { points:
+        `${x + 14},${y} ${x + w - 14},${y} ${x + w},${cy} ${x + w - 14},${y + h} ${x + 14},${y + h} ${x},${cy}` });
+      case "cylinder": return svg("path", { d:
+        `M${x},${y + 7} a${w / 2},7 0 0,0 ${w},0 a${w / 2},7 0 0,0 ${-w},0 v${h - 14} ` +
+        `a${w / 2},7 0 0,0 ${w},0 v${-(h - 14)}` });
+      case "note": return svg("path", { d:
+        `M${x},${y} h${w - 12} l12,12 v${h - 12} h${-w} z` });
+      default: return svg("rect", { x, y, width: w, height: h, rx: 6 });
+    }
+  }
+
+  // One node: its shape, its wrapped label, its citations, a tooltip, and a
+  // click that asks the conversation to go deeper (the host decides).
+  function drawNode(canvas, node, box, lines) {
+    const group = svg("g", { class: "node" + (node.inferred ? " inferred" : "") });
+    box.shape = node.shape;
+    group.append(shapeOf(node.shape, box));
+    lines = lines || wrap(node.label);
+    const top = box.y + box.h / 2 - (lines.length - 1) * 7.5 + 4;
+    lines.forEach((line, i) => {
+      const text = svg("text", { x: box.x + box.w / 2, y: top + i * 15, "text-anchor": "middle" });
+      text.textContent = line;
+      group.append(text);
+    });
+    if (node.cites && node.cites.length && box.w >= 60) {
+      const cite = svg("text", { class: "cite", x: box.x + box.w - 3, y: box.y + 10, "text-anchor": "end" });
+      cite.textContent = node.cites.map((n) => `[${n}]`).join("");
+      group.append(cite);
+    }
+    const title = svg("title");
+    title.textContent = (node.inferred ? `${node.label} (not cited)` : `${node.label} — sources ${node.cites.join(", ")}`)
+      + (node.detail ? `\n${node.detail}` : "");
+    group.append(title);
+    group.style.cursor = "pointer";
+    group.addEventListener("click", () => request("ui/message", {
+      role: "user", content: { type: "text", text: `Tell me more about ${node.label}` },
+    }).catch(() => {}));
+    canvas.append(group);
+    return group;
+  }
+
+  // Where the straight line between two box centres leaves shape ``a``.
+  function border(a, b) {
+    const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
+    const dx = bx - ax, dy = by - ay;
+    if (!dx && !dy) return [ax, ay];
+    const rx = a.w / 2, ry = a.h / 2;
+    let scale;
+    if (a.shape === "ellipse" || a.shape === "circle") {
+      const r = a.shape === "circle" ? Math.min(rx, ry) : null;
+      scale = 1 / Math.sqrt((dx / (r || rx)) ** 2 + (dy / (r || ry)) ** 2);
+    } else if (a.shape === "diamond") {
+      scale = 1 / (Math.abs(dx) / rx + Math.abs(dy) / ry);
+    } else {
+      scale = Math.min(Math.abs(rx / (dx || 1e-9)), Math.abs(ry / (dy || 1e-9)));
+    }
+    return [ax + dx * scale, ay + dy * scale];
+  }
+
+  function drawEdge(canvas, edge, a, b, options) {
+    options = options || {};
+    const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") });
+    let d, mx, my;
+    if (options.path) { [d, mx, my] = options.path; }
+    else {
+      const [x1, y1] = border(a, b), [x2, y2] = border(b, a);
+      d = `M${x1},${y1} L${x2},${y2}`; mx = (x1 + x2) / 2; my = (y1 + y2) / 2;
+    }
+    group.append(svg("path", { d, "marker-end": options.arrow === false ? "" : "url(#arrow)" }));
+    if (edge.label) {
+      // On top of everything, with a halo: a label a box covers is a claim
+      // nobody can read.
+      const text = svg("text", { class: "edge-label", x: mx, y: my - 5, "text-anchor": "middle" });
+      text.textContent = edge.label;
+      canvas.append(text);
+    }
+    const title = svg("title");
+    title.textContent = edge.inferred ? "not cited" : `sources ${(edge.cites || []).join(", ")}`;
+    group.append(title);
+    // Under the nodes, over everything else (lane bands included).
+    canvas.insertBefore(group, canvas.querySelector("g.node"));
+    return group;
+  }
+
+  function fit(boxes, pad) {
+    pad = pad === undefined ? 16 : pad;
+    return {
+      w: Math.ceil(Math.max(...boxes.map((b) => b.x + b.w)) + pad),
+      h: Math.ceil(Math.max(...boxes.map((b) => b.y + b.h)) + pad),
+    };
+  }
+
+  // Longest-path ranks over the forward edges: a process reads in order.
+  // Deterministic — node order breaks every tie.
+  function ranks(diagram) {
     const nodes = diagram.nodes;
     const index = new Map(nodes.map((node, i) => [node.id, i]));
     const rank = new Map(nodes.map((node) => [node.id, 0]));
@@ -329,98 +589,463 @@
       }
       if (!changed) break;
     }
+    return rank;
+  }
+
+  function layeredSvg(diagram, horizontal) {
+    const rank = ranks(diagram);
     const layers = [];
-    for (const node of nodes) (layers[rank.get(node.id)] ||= []).push(node);
-    const gapMain = 70, gapCross = 26, height = 38;
-    const pos = new Map();
+    for (const node of diagram.nodes) (layers[rank.get(node.id)] ||= []).push(node);
+    const gapMain = horizontal ? 48 : 52, gapCross = 22;
+    const pos = new Map(), sizes = new Map(diagram.nodes.map((n) => [n.id, sizeOf(n)]));
     let main = 16;
+    const extent = [];
     for (const layer of layers) {
       if (!layer) continue;
-      const widest = Math.max(...layer.map((node) => measure(node.label)));
-      let cross = 16;
+      let cross = 0, widest = 0;
       for (const node of layer) {
-        const width = measure(node.label);
-        pos.set(node.id, horizontal
-          ? { x: main + (widest - width) / 2, y: cross, w: width, h: height }
-          : { x: cross, y: main, w: width, h: height });
-        cross += (horizontal ? height : width) + gapCross;
+        const size = sizes.get(node.id);
+        widest = Math.max(widest, horizontal ? size.w : size.h);
+        cross += (horizontal ? size.h : size.w) + gapCross;
       }
-      main += (horizontal ? widest : height) + gapMain;
+      extent.push(cross);
+      let at = 16;
+      for (const node of layer) {
+        const size = sizes.get(node.id);
+        pos.set(node.id, horizontal
+          ? { x: main + (widest - size.w) / 2, y: at, w: size.w, h: size.h }
+          : { x: at, y: main + (widest - size.h) / 2, w: size.w, h: size.h });
+        at += (horizontal ? size.h : size.w) + gapCross;
+      }
+      main += widest + gapMain;
     }
-    const boxes = [...pos.values()];
-    const width = Math.max(...boxes.map((b) => b.x + b.w)) + 16;
-    const totalHeight = Math.max(...boxes.map((b) => b.y + b.h)) + 16;
-    const canvas = svg("svg", { width, height: totalHeight, viewBox: `0 0 ${width} ${totalHeight}`,
-      role: "img", "aria-label": diagram.title || "diagram" });
-    canvas.append(arrowDefs());
+    // Centre each layer across the widest one, so a tree reads as a tree.
+    const widestLayer = Math.max(...extent);
+    let li = 0;
+    for (const layer of layers) {
+      if (!layer) continue;
+      const shift = (widestLayer - extent[li++]) / 2;
+      for (const node of layer) { const b = pos.get(node.id); if (horizontal) b.y += shift; else b.x += shift; }
+    }
+    const size = fit([...pos.values()]);
+    const canvas = canvasOf(size.w, size.h, diagram.title);
+    for (const node of diagram.nodes) drawNode(canvas, node, pos.get(node.id), sizes.get(node.id).lines);
     for (const edge of diagram.edges) {
       const a = pos.get(edge.from), b = pos.get(edge.to);
       if (!a || !b) continue;
+      const back = rank.get(edge.to) <= rank.get(edge.from);
+      if (back) { drawEdge(canvas, edge, a, b); continue; }
       const [x1, y1, x2, y2] = horizontal
         ? [a.x + a.w, a.y + a.h / 2, b.x, b.y + b.h / 2]
         : [a.x + a.w / 2, a.y + a.h, b.x + b.w / 2, b.y];
-      const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") });
-      const bend = horizontal ? `C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2}` : `C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2}`;
-      group.append(svg("path", { d: `M${x1},${y1} ${bend} ${x2},${y2}`, "marker-end": "url(#arrow)" }));
-      if (edge.label) {
-        const text = svg("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 4, "text-anchor": "middle" });
-        text.textContent = edge.label;
-        group.append(text);
-      }
-      canvas.append(group);
+      const bend = horizontal ? `C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2}`
+        : `C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2}`;
+      drawEdge(canvas, edge, a, b, { path: [`M${x1},${y1} ${bend} ${x2},${y2}`, (x1 + x2) / 2, (y1 + y2) / 2] });
     }
+    return canvas;
+  }
+
+  // Left to right reads best, until it does not fit: a flow too wide for the
+  // frame at a readable scale turns top-down rather than scrolling sideways.
+  function flowSvg(diagram) {
+    const across = layeredSvg(diagram, true);
+    const room = Math.max(320, root.clientWidth - 8);
+    return Number(across.getAttribute("width")) * 0.7 > room ? layeredSvg(diagram, false) : across;
+  }
+
+  function sequenceSvg(diagram) {
+    const lane = 160, top = 20, step = 38;
+    const nodes = diagram.nodes;
+    const x = new Map(nodes.map((node, i) => [node.id, 20 + i * lane + lane / 2]));
+    const width = 40 + nodes.length * lane;
+    const height = top + 60 + diagram.edges.length * step + 20;
+    const canvas = canvasOf(width, height, diagram.title);
     for (const node of nodes) {
-      const box = pos.get(node.id);
-      const group = svg("g", { class: "node" + (node.inferred ? " inferred" : "") });
-      group.append(svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h, rx: 7 }));
-      const text = svg("text", { x: box.x + box.w / 2, y: box.y + box.h / 2 + 4, "text-anchor": "middle" });
-      text.textContent = node.label;
-      group.append(text);
-      if (node.cites && node.cites.length) {
-        const cite = svg("text", { class: "cite", x: box.x + box.w - 4, y: box.y + 11, "text-anchor": "end" });
-        cite.textContent = node.cites.map((n) => `[${n}]`).join("");
-        group.append(cite);
+      const cx = x.get(node.id), size = sizeOf(node);
+      canvas.append(svg("line", { class: "lifeline", x1: cx, y1: top + size.h, x2: cx, y2: height - 10 }));
+      drawNode(canvas, node, { x: cx - size.w / 2, y: top, w: size.w, h: size.h }, size.lines);
+    }
+    diagram.edges.forEach((edge, i) => {
+      const y = top + 76 + i * step, x1 = x.get(edge.from), x2 = x.get(edge.to);
+      const labelled = { ...edge, label: `${i + 1}. ${edge.label || ""}` + (edge.cites.length ? ` [${edge.cites.join("][")}]` : "") };
+      drawEdge(canvas, labelled, null, null, { path: [`M${x1},${y} L${x2},${y}`, (x1 + x2) / 2, y] });
+    });
+    return canvas;
+  }
+
+  function treeOf(diagram) {
+    const nodes = diagram.nodes;
+    const children = new Map(nodes.map((n) => [n.id, []]));
+    const parent = new Map();
+    for (const edge of diagram.edges) {
+      if (edge.to === nodes[0].id || parent.has(edge.to)) continue;
+      parent.set(edge.to, edge.from);
+      children.get(edge.from).push(edge.to);
+    }
+    // Anything unreached hangs off the root, rather than off the page.
+    const seen = new Set([nodes[0].id]);
+    const stack = [nodes[0].id];
+    while (stack.length) for (const c of children.get(stack.pop())) if (!seen.has(c)) { seen.add(c); stack.push(c); }
+    for (const n of nodes) if (!seen.has(n.id)) { children.get(nodes[0].id).push(n.id); parent.set(n.id, nodes[0].id); seen.add(n.id); }
+    return { children, parent };
+  }
+
+  function mindmapSvg(diagram) {
+    const nodes = diagram.nodes, byId = new Map(nodes.map((n) => [n.id, n]));
+    const { children } = treeOf(diagram);
+    const leaves = new Map();
+    const count = (id, guard) => {
+      if (guard.has(id)) return 1; guard.add(id);
+      const kids = children.get(id) || [];
+      const total = kids.length ? kids.reduce((sum, k) => sum + count(k, guard), 0) : 1;
+      leaves.set(id, total);
+      return total;
+    };
+    count(nodes[0].id, new Set());
+    const center = new Map([[nodes[0].id, [0, 0]]]);
+    const place = (id, from, to, depth) => {
+      let at = from;
+      for (const kid of children.get(id) || []) {
+        if (center.has(kid)) continue;
+        const span = (to - from) * (leaves.get(kid) || 1) / (leaves.get(id) || 1);
+        const angle = at + span / 2, radius = 170 * depth;
+        center.set(kid, [Math.cos(angle) * radius, Math.sin(angle) * radius * 0.72]);
+        place(kid, at, at + span, depth + 1);
+        at += span;
       }
+    };
+    place(nodes[0].id, -Math.PI / 2, Math.PI * 1.5, 1);
+    const sizes = new Map(nodes.map((n) => [n.id, sizeOf({ ...n, shape: n.shape || (n === nodes[0] ? "ellipse" : "pill") })]));
+    let boxes = nodes.map((n) => { const [x, y] = center.get(n.id); const s = sizes.get(n.id); return [n.id, { x: x - s.w / 2, y: y - s.h / 2, w: s.w, h: s.h }]; });
+    const minX = Math.min(...boxes.map(([, b]) => b.x)), minY = Math.min(...boxes.map(([, b]) => b.y));
+    const pos = new Map(boxes.map(([id, b]) => [id, { ...b, x: b.x - minX + 16, y: b.y - minY + 16 }]));
+    const size = fit([...pos.values()]);
+    const canvas = canvasOf(size.w, size.h, diagram.title);
+    for (const n of nodes) drawNode(canvas, { ...n, shape: n.shape || (n === nodes[0] ? "ellipse" : "pill") }, pos.get(n.id), sizes.get(n.id).lines);
+    for (const edge of diagram.edges) {
+      const a = pos.get(edge.from), b = pos.get(edge.to);
+      if (a && b) drawEdge(canvas, edge, a, b, { arrow: false });
+    }
+    for (const [kid, list] of children) for (const c of list) {
+      if (!diagram.edges.some((e) => e.from === kid && e.to === c)) drawEdge(canvas, { inferred: false, cites: [] }, pos.get(kid), pos.get(c), { arrow: false });
+    }
+    return canvas;
+  }
+
+  // A deterministic force layout: nodes start on a circle and settle, the
+  // same way on every render, so a concept map does not move between views.
+  function conceptSvg(diagram) {
+    const nodes = diagram.nodes, n = nodes.length;
+    const sizes = new Map(nodes.map((node) => [node.id, sizeOf(node)]));
+    const area = Math.max(360, 120 * Math.sqrt(n)) ** 2 * 1.4, k = Math.sqrt(area / n);
+    const p = nodes.map((_, i) => [Math.cos(2 * Math.PI * i / n) * k, Math.sin(2 * Math.PI * i / n) * k]);
+    const index = new Map(nodes.map((node, i) => [node.id, i]));
+    let temperature = k;
+    for (let step = 0; step < 300; step++) {
+      const force = p.map(() => [0, 0]);
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const dx = p[i][0] - p[j][0], dy = p[i][1] - p[j][1], d = Math.max(1, Math.hypot(dx, dy));
+        const f = k * k / d;
+        force[i][0] += dx / d * f; force[i][1] += dy / d * f;
+        force[j][0] -= dx / d * f; force[j][1] -= dy / d * f;
+      }
+      for (const edge of diagram.edges) {
+        const i = index.get(edge.from), j = index.get(edge.to);
+        const dx = p[i][0] - p[j][0], dy = p[i][1] - p[j][1], d = Math.max(1, Math.hypot(dx, dy));
+        const f = d * d / k;
+        force[i][0] -= dx / d * f; force[i][1] -= dy / d * f;
+        force[j][0] += dx / d * f; force[j][1] += dy / d * f;
+      }
+      for (let i = 0; i < n; i++) {
+        const d = Math.max(1, Math.hypot(force[i][0], force[i][1]));
+        p[i][0] += force[i][0] / d * Math.min(d, temperature);
+        p[i][1] += force[i][1] / d * Math.min(d, temperature);
+      }
+      temperature *= 0.985;
+    }
+    // Stretch the settled layout into a readable box, each axis on its own:
+    // a chain settles into a thin diagonal, which at its natural extent is
+    // either a long scroll or, fitted to the frame, text too small to read.
+    const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const boxW = Math.max(520, 150 * Math.sqrt(n) * 1.5), boxH = Math.max(300, boxW * 0.55);
+    const pos = new Map(nodes.map((node, i) => {
+      const s = sizes.get(node.id);
+      const cx = 16 + 110 + (x1 > x0 ? (p[i][0] - x0) / (x1 - x0) : 0.5) * boxW;
+      const cy = 16 + 30 + (y1 > y0 ? (p[i][1] - y0) / (y1 - y0) : 0.5) * boxH;
+      return [node.id, { x: cx - s.w / 2, y: cy - s.h / 2, w: s.w, h: s.h }];
+    }));
+    const size = fit([...pos.values()]);
+    const canvas = canvasOf(size.w, size.h, diagram.title);
+    for (const node of nodes) drawNode(canvas, node, pos.get(node.id), sizes.get(node.id).lines);
+    for (const edge of diagram.edges) drawEdge(canvas, edge, pos.get(edge.from), pos.get(edge.to));
+    return canvas;
+  }
+
+  function cycleSvg(diagram) {
+    const nodes = diagram.nodes, n = nodes.length;
+    const sizes = nodes.map((node) => sizeOf({ ...node, shape: node.shape || "round" }));
+    const radius = Math.max(130, n * 42);
+    const centre = radius + Math.max(...sizes.map((s) => s.w)) / 2 + 16;
+    const pos = new Map(nodes.map((node, i) => {
+      const angle = -Math.PI / 2 + 2 * Math.PI * i / n;
+      const s = sizes[i];
+      return [node.id, { x: centre + Math.cos(angle) * radius - s.w / 2, y: centre * 0.85 + Math.sin(angle) * radius * 0.8 - s.h / 2, w: s.w, h: s.h }];
+    }));
+    const size = fit([...pos.values()]);
+    const canvas = canvasOf(size.w, size.h, diagram.title);
+    nodes.forEach((node, i) => drawNode(canvas, { ...node, shape: node.shape || "round" }, pos.get(node.id), sizes[i].lines));
+    const edges = diagram.edges.length ? diagram.edges
+      : nodes.map((node, i) => ({ from: node.id, to: nodes[(i + 1) % n].id, label: "", cites: [], inferred: false }));
+    for (const edge of edges) {
+      const a = pos.get(edge.from), b = pos.get(edge.to);
+      const [x1, y1] = border(a, b), [x2, y2] = border(b, a);
+      const cx = (x1 + x2) / 2 + ((x1 + x2) / 2 - centre) * 0.25, cy = (y1 + y2) / 2 + ((y1 + y2) / 2 - centre * 0.85) * 0.25;
+      drawEdge(canvas, edge, a, b, { path: [`M${x1},${y1} Q${cx},${cy} ${x2},${y2}`, cx, cy] });
+    }
+    return canvas;
+  }
+
+  function timelineSvg(diagram) {
+    const nodes = diagram.nodes;
+    const sizes = nodes.map((node) => sizeOf(node));
+    const step = Math.max(150, ...sizes.map((s) => s.w + 18));
+    const width = 40 + step * nodes.length, axis = 150, height = 300;
+    const canvas = canvasOf(width, height, diagram.title);
+    canvas.append(svg("line", { class: "axis", x1: 16, y1: axis, x2: width - 16, y2: axis, "marker-end": "url(#arrow)" }));
+    nodes.forEach((node, i) => {
+      const cx = 20 + step * i + step / 2, above = i % 2 === 0, s = sizes[i];
+      canvas.append(svg("circle", { class: "marker" + (node.inferred ? " inferred" : ""), cx, cy: axis, r: 6 }));
+      const box = { x: cx - s.w / 2, y: above ? axis - 34 - s.h : axis + 34, w: s.w, h: s.h };
+      canvas.append(svg("line", { class: "tick", x1: cx, y1: axis, x2: cx, y2: above ? box.y + box.h : box.y }));
+      drawNode(canvas, node, box, s.lines);
+      if (node.when) {
+        const when = svg("text", { class: "when", x: cx, y: above ? axis + 20 : axis - 12, "text-anchor": "middle" });
+        when.textContent = node.when;
+        canvas.append(when);
+      }
+    });
+    return canvas;
+  }
+
+  function lanesOf(diagram) {
+    const lanes = (diagram.groups || []).map((g) => ({ ...g }));
+    const known = new Set(lanes.map((g) => g.id));
+    for (const node of diagram.nodes) {
+      const id = node.group || "";
+      if (!known.has(id)) { known.add(id); lanes.push({ id, label: id || "Other", cites: [], inferred: false, implicit: true }); }
+    }
+    return lanes.filter((lane) => diagram.nodes.some((n) => (n.group || "") === lane.id));
+  }
+
+  function bandLabel(canvas, lane, x, y, w, h) {
+    canvas.append(svg("rect", { class: "band" + (lane.inferred && !lane.implicit ? " inferred" : ""), x, y, width: w, height: h, rx: 6 }));
+    const text = svg("text", { class: "band-label", x: x + 10, y: y + 18 });
+    text.textContent = lane.label + (lane.cites && lane.cites.length ? ` [${lane.cites.join("][")}]` : "");
+    canvas.append(text);
+  }
+
+  function swimlaneSvg(diagram) {
+    const lanes = lanesOf(diagram), rank = ranks(diagram);
+    const sizes = new Map(diagram.nodes.map((n) => [n.id, sizeOf(n)]));
+    // Lane names sit inside their bands, above the nodes, so the lanes need
+    // no label column of their own.
+    const column = Math.max(...[...sizes.values()].map((s) => s.w)) + 44, labelWidth = 20;
+    const pos = new Map();
+    let y = 12;
+    const bands = [];
+    for (const lane of lanes) {
+      const members = diagram.nodes.filter((n) => (n.group || "") === lane.id);
+      const stacks = new Map();
+      let tallest = 0;
+      for (const node of members) {
+        const r = rank.get(node.id), s = sizes.get(node.id), at = stacks.get(r) || 0;
+        pos.set(node.id, { x: labelWidth + r * column + (column - 44 - s.w) / 2, y: y + 30 + at, w: s.w, h: s.h });
+        stacks.set(r, at + s.h + 14);
+        tallest = Math.max(tallest, at + s.h);
+      }
+      bands.push([lane, y, tallest + 46]);
+      y += tallest + 58;
+    }
+    const width = labelWidth + (Math.max(...[...rank.values()]) + 1) * column;
+    const canvas = canvasOf(width, y, diagram.title);
+    for (const [lane, top, h] of bands) bandLabel(canvas, lane, 6, top, width - 12, h);
+    for (const node of diagram.nodes) drawNode(canvas, node, pos.get(node.id), sizes.get(node.id).lines);
+    for (const edge of diagram.edges) drawEdge(canvas, edge, pos.get(edge.from), pos.get(edge.to));
+    return canvas;
+  }
+
+  function layersSvg(diagram) {
+    const lanes = lanesOf(diagram), width = 720;
+    const sizes = new Map(diagram.nodes.map((n) => [n.id, sizeOf(n)]));
+    const pos = new Map();
+    let y = 10;
+    const bands = [];
+    for (const lane of lanes) {
+      const members = diagram.nodes.filter((n) => (n.group || "") === lane.id);
+      let x = 170, rowTop = y + 12, rowHeight = 0;
+      for (const node of members) {
+        const s = sizes.get(node.id);
+        if (x + s.w > width - 16) { x = 170; rowTop += rowHeight + 12; rowHeight = 0; }
+        pos.set(node.id, { x, y: rowTop, w: s.w, h: s.h });
+        x += s.w + 14; rowHeight = Math.max(rowHeight, s.h);
+      }
+      const h = rowTop + rowHeight + 12 - y;
+      bands.push([lane, y, h]);
+      y += h + 8;
+    }
+    const canvas = canvasOf(width, y + 4, diagram.title);
+    for (const [lane, top, h] of bands) {
+      bandLabel(canvas, lane, 6, top, width - 12, h);
+    }
+    for (const node of diagram.nodes) drawNode(canvas, node, pos.get(node.id), sizes.get(node.id).lines);
+    for (const edge of diagram.edges) drawEdge(canvas, edge, pos.get(edge.from), pos.get(edge.to));
+    return canvas;
+  }
+
+  function chips(cites) {
+    return (cites || []).map((n) => el("span", { class: "chip" }, String(n)));
+  }
+
+  function groupsView(diagram) {
+    const grid = el("div", { class: "groups" });
+    for (const lane of lanesOf(diagram)) {
+      const box = el("div", { class: "group" + (lane.inferred && !lane.implicit ? " inferred" : "") },
+        el("div", { class: "group__title" }, lane.label, ...chips(lane.cites)));
+      const list = el("div", { class: "group__items" });
+      for (const node of diagram.nodes.filter((n) => (n.group || "") === lane.id)) {
+        const item = el("span", { class: "item" + (node.inferred ? " inferred" : ""),
+          title: node.detail || (node.inferred ? "not cited" : "sources " + node.cites.join(", ")) },
+          node.label, ...chips(node.cites));
+        list.append(item);
+      }
+      box.append(list);
+      grid.append(box);
+    }
+    return grid;
+  }
+
+  function tableView(diagram) {
+    const columns = diagram.columns || [];
+    const cells = new Map((diagram.cells || []).map((c) => [c.row + "\u0000" + c.column, c]));
+    const table = el("table", { class: "vtable" });
+    const head = el("tr", {}, el("th", {}, ""));
+    for (const column of columns) head.append(el("th", {}, column.label));
+    table.append(el("thead", {}, head));
+    const body = el("tbody");
+    for (const row of diagram.nodes) {
+      const tr = el("tr", {}, el("th", { class: row.inferred ? "inferred" : "" }, row.label, ...chips(row.cites)));
+      for (const column of columns) {
+        const cell = cells.get(row.id + "\u0000" + column.id);
+        tr.append(cell
+          ? el("td", { class: cell.inferred ? "inferred" : "" }, cell.text, ...chips(cell.cites))
+          : el("td", { class: "muted" }, "—"));
+      }
+      body.append(tr);
+    }
+    table.append(body);
+    return table;
+  }
+
+  function axisText(canvas, text, x, y, anchor, extra) {
+    if (!text) return;
+    const node = svg("text", { class: "axis-label", x, y, "text-anchor": anchor || "middle", ...(extra || {}) });
+    node.textContent = text;
+    canvas.append(node);
+  }
+
+  function quadrantSvg(diagram) {
+    const size = 440, left = 70, top = 16, width = left + size + 150, height = top + size + 60;
+    const axes = diagram.axes || {}, x = axes.x || {}, y = axes.y || {};
+    const canvas = canvasOf(width, height, diagram.title);
+    canvas.append(svg("rect", { class: "plot", x: left, y: top, width: size, height: size }));
+    canvas.append(svg("line", { class: "tick", x1: left + size / 2, y1: top, x2: left + size / 2, y2: top + size }));
+    canvas.append(svg("line", { class: "tick", x1: left, y1: top + size / 2, x2: left + size, y2: top + size / 2 }));
+    axisText(canvas, x.low, left, top + size + 18, "start");
+    axisText(canvas, x.high, left + size, top + size + 18, "end");
+    axisText(canvas, x.label, left + size / 2, top + size + 40);
+    axisText(canvas, y.low, left - 8, top + size, "end");
+    axisText(canvas, y.high, left - 8, top + 12, "end");
+    axisText(canvas, y.label, 16, top + size / 2, "middle", { transform: `rotate(-90 16 ${top + size / 2})` });
+    for (const node of diagram.nodes) {
+      if (node.x === undefined || node.y === undefined) continue;
+      const cx = left + node.x * size, cy = top + (1 - node.y) * size;
+      const group = svg("g", { class: "point" + (node.inferred ? " inferred" : "") });
+      group.append(svg("circle", { cx, cy, r: 6 }));
+      const label = svg("text", { x: cx + 10, y: cy + 4 });
+      label.textContent = node.label + (node.cites.length ? ` [${node.cites.join("][")}]` : "");
+      group.append(label);
       const title = svg("title");
-      title.textContent = node.inferred ? `${node.label} (not cited)` : `${node.label} — sources ${node.cites.join(", ")}`;
+      title.textContent = node.detail || node.label;
       group.append(title);
-      // Ask the conversation to go deeper on one element; the host decides.
-      group.style.cursor = "pointer";
-      group.addEventListener("click", () => request("ui/message", {
-        role: "user", content: { type: "text", text: `Tell me more about ${node.label}` },
-      }).catch(() => {}));
       canvas.append(group);
     }
     return canvas;
   }
 
-  function sequenceSvg(diagram) {
-    const lane = 150, top = 20, step = 36;
-    const nodes = diagram.nodes;
-    const x = new Map(nodes.map((node, i) => [node.id, 20 + i * lane + lane / 2]));
-    const width = 40 + nodes.length * lane;
-    const height = top + 44 + diagram.edges.length * step + 20;
-    const canvas = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
-      "aria-label": diagram.title || "sequence diagram" });
-    canvas.append(arrowDefs());
-    for (const node of nodes) {
-      const cx = x.get(node.id), w = measure(node.label);
-      const group = svg("g", { class: "node" + (node.inferred ? " inferred" : "") });
-      group.append(svg("rect", { x: cx - w / 2, y: top, width: w, height: 30, rx: 6 }));
-      const text = svg("text", { x: cx, y: top + 19, "text-anchor": "middle" });
-      text.textContent = node.label;
-      group.append(text);
-      canvas.append(group, svg("line", { class: "lifeline", x1: cx, y1: top + 30, x2: cx, y2: height - 10 }));
+  function niceMax(value) {
+    if (value <= 0) return 1;
+    const power = 10 ** Math.floor(Math.log10(value)), unit = value / power;
+    return (unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 5 ? 5 : 10) * power;
+  }
+
+  function chartSvg(diagram) {
+    const nodes = diagram.nodes, line = diagram.chart === "line";
+    const values = nodes.map((n) => n.value), low = Math.min(0, ...values);
+    const high = niceMax(Math.max(...values.map(Math.abs), 0)), span = high - low || 1;
+    const left = 64, top = 16, plot = 260, slot = Math.max(64, ...nodes.map((n) => Math.min(150, 7 * n.label.length / 2 + 20)));
+    const width = left + slot * nodes.length + 20, height = top + plot + 70;
+    const canvas = canvasOf(width, height, diagram.title);
+    const yOf = (v) => top + plot - (v - low) / span * plot;
+    for (let i = 0; i <= 4; i++) {
+      const v = low + span * i / 4, yy = yOf(v);
+      canvas.append(svg("line", { class: "grid", x1: left, y1: yy, x2: width - 16, y2: yy }));
+      axisText(canvas, (+v.toPrecision(3)).toString(), left - 8, yy + 4, "end");
     }
-    diagram.edges.forEach((edge, i) => {
-      const y = top + 58 + i * step, x1 = x.get(edge.from), x2 = x.get(edge.to);
-      const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") });
-      group.append(svg("line", { x1, y1: y, x2, y2: y, "marker-end": "url(#arrow)" }));
-      const text = svg("text", { x: (x1 + x2) / 2, y: y - 5, "text-anchor": "middle" });
-      text.textContent = `${i + 1}. ${edge.label || ""}` + (edge.cites.length ? ` [${edge.cites.join("][")}]` : "");
-      group.append(text);
+    const yLabel = ((diagram.axes || {}).y || {}).label || diagram.unit || "";
+    axisText(canvas, yLabel, 14, top + plot / 2, "middle", { transform: `rotate(-90 14 ${top + plot / 2})` });
+    const points = [];
+    nodes.forEach((node, i) => {
+      const cx = left + slot * i + slot / 2, yy = yOf(node.value), zero = yOf(0);
+      const group = svg("g", { class: "bar" + (node.inferred ? " inferred" : "") });
+      if (line) group.append(svg("circle", { cx, cy: yy, r: 5 }));
+      else group.append(svg("rect", { x: cx - slot * 0.32, y: Math.min(yy, zero), width: slot * 0.64, height: Math.max(1, Math.abs(zero - yy)), rx: 3 }));
+      points.push(`${cx},${yy}`);
+      const value = svg("text", { class: "value", x: cx, y: Math.min(yy, zero) - 6, "text-anchor": "middle" });
+      value.textContent = `${node.value}${diagram.unit ? " " + diagram.unit : ""}` + (node.cites.length ? ` [${node.cites.join("][")}]` : "");
+      group.append(value);
+      wrap(node.label, Math.max(8, Math.floor(slot / 7))).slice(0, 2).forEach((part, j) => {
+        const text = svg("text", { x: cx, y: top + plot + 18 + j * 14, "text-anchor": "middle" });
+        text.textContent = part;
+        group.append(text);
+      });
+      const title = svg("title");
+      title.textContent = node.unverified_value ? "this value was not found in its cited passage"
+        : node.inferred ? "not cited" : "sources " + node.cites.join(", ");
+      group.append(title);
       canvas.append(group);
     });
+    if (line) canvas.insertBefore(svg("polyline", { class: "series", points: points.join(" ") }), canvas.children[1] || null);
+    return canvas;
+  }
+
+  function canvasSvg(diagram) {
+    const width = 760, height = 480;
+    const sizes = new Map(diagram.nodes.map((n) => [n.id, sizeOf(n)]));
+    const pos = new Map();
+    diagram.nodes.forEach((node, i) => {
+      const s = sizes.get(node.id);
+      const [fx, fy] = node.x !== undefined ? [node.x, node.y]
+        : [0.12 + 0.76 * ((i % 4) / 3), 0.15 + 0.7 * (Math.floor(i / 4) / Math.max(1, Math.ceil(diagram.nodes.length / 4) - 1))];
+      pos.set(node.id, { x: 20 + fx * (width - 40) - s.w / 2, y: 20 + fy * (height - 40) - s.h / 2, w: s.w, h: s.h });
+    });
+    const boxes = [...pos.values()];
+    const minX = Math.min(0, ...boxes.map((b) => b.x - 12)), minY = Math.min(0, ...boxes.map((b) => b.y - 12));
+    for (const b of boxes) { b.x -= minX; b.y -= minY; }
+    const size = fit(boxes);
+    const canvas = canvasOf(size.w, size.h, diagram.title);
+    for (const node of diagram.nodes) drawNode(canvas, node, pos.get(node.id), sizes.get(node.id).lines);
+    for (const edge of diagram.edges) drawEdge(canvas, edge, pos.get(edge.from), pos.get(edge.to));
     return canvas;
   }
 })();

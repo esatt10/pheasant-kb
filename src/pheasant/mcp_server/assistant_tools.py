@@ -241,9 +241,11 @@ def register_assistant_tools(
         depth is "short" (a direct answer; the default), "medium" (a few
         sections) or "long" (an outlined, sectioned write-up). Leave it unset
         to let the question decide ("in detail" reads as long, "briefly" as
-        short). visual is "diagram" (a diagram whose every element cites a
-        passage), "image" (images the cited documents show) or "none"; unset
-        reads it off the question ("draw…", "show me the figure…"). A host
+        short). visual is "diagram" (a visual whose every element cites a
+        passage), "image" (images the cited documents show), "none", or a
+        shape to draw the diagram as (any create_visual kind, e.g.
+        "timeline", "table", "mindmap"); unset reads it off the question
+        ("draw…", "a timeline of…", "show me the figure…"). A host
         that supports MCP Apps renders the result; the JSON is complete
         without one. Figures appear in the answer as [fig:n] markers and in
         "figures"; fetch one with get_image.
@@ -287,20 +289,31 @@ def register_assistant_tools(
         principal_groups: list[str] | None = None,
         source_name: str | None = None,
     ) -> dict:
-        """Draw a diagram grounded in the knowledge base, or show its images.
+        """Draw a visual grounded in the knowledge base, in any shape, or show its images.
 
-        request says what to draw ("the release process", "how retrieval
-        fuses its arms"). node_ids (up to 12 chunk or file ids, e.g. from a
-        search_context hit or an answer's citations) draws from exactly those
-        passages — "visualize this passage"; without them the region searches
-        for the request. kind is "flow", "sequence", "hierarchy", "concept",
-        "timeline", or "image" to show the images those passages hold.
+        request says what to draw and from what viewpoint ("the release
+        process for a new engineer", "compare the three rollout options").
+        node_ids (up to 12 chunk or file ids, e.g. from a search_context hit
+        or an answer's citations) draws from exactly those passages —
+        "visualize this passage", or redraw the same evidence in another
+        shape; without them the region searches for the request.
 
-        Every node and edge in visual.diagram lists the passage numbers
-        ("cites") that support it; an element nothing supports is marked
-        "inferred", and a diagram that is mostly inference is declined with a
-        reason rather than drawn. visual.mermaid is the same diagram as
-        Mermaid text. With no model connected the diagram is built from the
+        kind picks the shape: "flow", "sequence", "hierarchy" (tree / org
+        chart), "mindmap", "concept" (network), "cycle", "timeline",
+        "swimlane", "layers" (stack), "groups" (categories), "table"
+        (comparison), "quadrant" (2x2), "chart" (bar or line, from numbers the
+        passages state), "canvas" (free layout, any node shapes), or "image"
+        to show the images those passages hold. Common names work too ("org
+        chart", "venn", "2x2", "bar chart"). Unset, the request decides.
+
+        Every node, edge, lane and table cell in visual.diagram lists the
+        passage numbers ("cites") that support it; an element nothing
+        supports is marked "inferred", a chart value no cited passage states
+        is marked unverified, and a visual that is mostly inference is
+        declined with a reason rather than drawn. visual.mermaid is the same
+        visual as Mermaid text where Mermaid has the shape (visual.markdown
+        for a table); visual.redraw carries the node_ids to redraw it as
+        another kind. With no model connected the visual is built from the
         graph edges the index recorded between those passages.
         """
 

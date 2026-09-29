@@ -550,15 +550,21 @@ export interface AnswerVisual {
   note?: string;
   source?: "model" | "graph";
   diagram?: {
+    /** One of the vocabulary's shapes (`assistant.visual_specs.KINDS`). */
     kind: string;
     title: string;
     summary: string;
+    viewpoint?: string;
     nodes: DiagramNode[];
     edges: DiagramEdge[];
   };
-  mermaid?: string;
+  mermaid?: string | null;
+  /** A table visual as Markdown. */
+  markdown?: string;
   grounding?: { cited: number; inferred: number; ratio: number };
   figures?: Figure[];
+  /** What the view needs to redraw the same passages in another shape. */
+  redraw?: { request: string; node_ids: string[]; knowledge_base: string | null; kinds: string[] };
 }
 
 /** `POST /assistant/visual`: a visual on demand, with the evidence it drew on. */

@@ -96,6 +96,7 @@ def visual_for(
     figures: list[dict],
     llm: Any,
     kind: str | None = None,
+    documents: dict | None = None,
 ) -> dict | None:
     """The visual a route asked for, built from the answer's own evidence.
 
@@ -103,6 +104,12 @@ def visual_for(
     from the same passages the answer read (a model spec, validated) or, with
     no model, from the graph edges between the cited sources. ``None`` when no
     visual was asked for.
+
+    ``documents`` are the whole files behind the citations
+    (:func:`visual_documents`). Without them the model sees each passage's
+    search preview, which is 500 characters — a five-step process whose
+    steps start past that is drawn as three steps, or as five with two
+    invented.
     """
 
     if visual == "image":
@@ -111,27 +118,106 @@ def visual_for(
         # Asked to be shown a picture the corpus does not hold. Drawing one
         # from the same passages is more useful than nothing, and it is still
         # grounded — but the payload says it was drawn, not found.
-        drawn = _diagram(question, citations, facts, llm, kind if kind != "image" else None)
+        drawn = _diagram(
+            question, citations, facts, llm, kind if kind != "image" else None, documents
+        )
         drawn["fallback_from"] = "image"
         drawn["note"] = "none of the cited sources shows an image; drawn from the passages instead"
         return drawn
     if visual != "diagram":
         return None
-    return _diagram(question, citations, facts, llm, kind)
+    return _diagram(question, citations, facts, llm, kind, documents)
 
 
 def _diagram(
-    question: str, citations: list[dict], facts: list[dict], llm: Any, kind: str | None
+    question: str,
+    citations: list[dict],
+    facts: list[dict],
+    llm: Any,
+    kind: str | None,
+    documents: dict | None = None,
 ) -> dict:
     from pheasant.assistant import visuals
+    from pheasant.assistant.visual_specs import normalize_kind
 
     if not citations:
         return visuals.declined("no passages to draw from")
     if llm is None:
-        return visuals.graph_diagram(citations, facts)
+        drawn = visuals.graph_diagram(citations, facts)
+        wanted = normalize_kind(kind)
+        if drawn.get("status") == "ok" and wanted and wanted != "concept":
+            drawn["note"] = (
+                f"drawn as a concept map from the index's own links; a {wanted} "
+                "needs a connected model to read the passages"
+            )
+        return drawn
+    documents = documents or {}
+    evidence = {
+        int(c["index"]): (
+            documents[c["index"]].text if c["index"] in documents else str(c.get("snippet") or "")
+        )
+        for c in citations
+        if c.get("index") is not None
+    }
     return visuals.build_diagram(
-        question, citations, llm, prompt=build_prompt(question, citations, facts), kind=kind
+        question,
+        citations,
+        llm,
+        prompt=build_prompt(question, citations, facts, documents),
+        kind=kind,
+        evidence=evidence,
     )
+
+
+def visual_documents(
+    citations: list[dict],
+    *,
+    state: Any,
+    knowledge_base: str,
+    graph: Any = None,
+    config: Any = None,
+    options: dict | None = None,
+) -> dict:
+    """The whole files behind ``citations``, as the answer's prompt read them.
+
+    The same reassembly the workflows do (``chat.hydrate_citations``), so a
+    visual and the answer it rides with read identical evidence. Needs only
+    the state store — a deferred or on-demand visual has no retriever of its
+    own. Best-effort: ``{}`` falls back to the passages' previews.
+    """
+
+    if state is None or not citations:
+        return {}
+    from pheasant.assistant.chat import hydrate_citations
+    from pheasant.assistant.retrieval import PheasantRetriever
+
+    retriever = PheasantRetriever(
+        search=None, knowledge_base=knowledge_base, graph=graph, state=state, config=config
+    )
+    return hydrate_citations(retriever, citations, options)
+
+
+def redraw_handle(request: str, citations: list[dict], knowledge_base: str | None) -> dict:
+    """What a viewer needs to redraw the same passages in another shape.
+
+    ``create_visual`` with these passages and a different ``kind`` — on MCP
+    or HTTP — draws the same evidence without a new search, so switching a
+    flow to a timeline cannot quietly change what it is a picture of.
+    """
+
+    from pheasant.assistant.visual_specs import KINDS
+
+    node_ids: list[str] = []
+    for citation in citations:
+        node_id = citation.get("chunk_id") or citation.get("node_id")
+        if node_id and str(node_id) not in node_ids:
+            node_ids.append(str(node_id))
+    return {
+        "request": request,
+        "node_ids": node_ids[:12],
+        "knowledge_base": knowledge_base,
+        "kinds": list(KINDS),
+    }
 
 
 def answer_question(
@@ -233,8 +319,10 @@ def answer_question(
     # "auto" (or nothing) leaves it to the router.
     if depth and str(depth).lower() in routing.DEPTHS:
         merged_options["depth"] = str(depth).lower()
-    visual_route, visual_why, visual_by = routing.classify_visual(
-        question, visual or merged_options.get("visual")
+    visual_pin = visual or merged_options.get("visual")
+    visual_route, visual_why, visual_by = routing.classify_visual(question, visual_pin)
+    shape, shape_why = (
+        routing.classify_shape(question, visual_pin) if visual_route == "diagram" else (None, "")
     )
 
     turns = conversation.normalize_history(history)
@@ -289,6 +377,9 @@ def answer_question(
     route["visual"] = visual_route
     route.setdefault("why", {})["visual"] = visual_why
     route.setdefault("decided_by", {})["visual"] = visual_by
+    route["shape"] = shape
+    if shape_why:
+        route["why"]["shape"] = shape_why
     routing.record_route(route)
 
     payload = {
@@ -326,25 +417,53 @@ def answer_question(
         if defer_visual:
             payload["visual"] = {"type": visual_route, "status": "pending"}
         else:
-            attach_visual(payload, llm=llm)
+            draws = visual_route == "diagram" or (visual_route == "image" and not figures)
+            attach_visual(
+                payload,
+                llm=llm,
+                documents=visual_documents(
+                    result.citations,
+                    state=state,
+                    knowledge_base=knowledge_base,
+                    graph=graph,
+                    config=config,
+                    options=merged_options,
+                )
+                if draws and llm is not None
+                else None,
+                knowledge_base=knowledge_base,
+            )
     return payload
 
 
-def attach_visual(payload: dict, *, llm: Any, kind: str | None = None) -> dict | None:
+def attach_visual(
+    payload: dict,
+    *,
+    llm: Any,
+    kind: str | None = None,
+    documents: dict | None = None,
+    knowledge_base: str | None = None,
+) -> dict | None:
     """Build the visual a payload's route asked for, record the step, return it."""
     import time
 
     route = payload.get("route") or {}
     started = time.perf_counter()
+    citations = payload.get("citations") or []
     visual = visual_for(
         str(payload.get("question") or ""),
         str(route.get("visual") or "none"),
-        citations=payload.get("citations") or [],
+        citations=citations,
         facts=payload.get("facts") or [],
         figures=payload.get("figures") or [],
         llm=llm,
-        kind=kind,
+        kind=kind or route.get("shape"),
+        documents=documents,
     )
+    if visual is not None and visual.get("type") == "diagram" and citations:
+        visual["redraw"] = redraw_handle(
+            str(payload.get("question") or ""), citations, knowledge_base
+        )
     payload["visual"] = visual
     from pheasant.assistant.routing import record_visual
 

@@ -289,6 +289,7 @@ EDGE_PHRASES = {
     "similar_to": "is similar to",
     "links_to": "links to",
     "derived_from": "is derived from",
+    "embeds": "shows the image",
 }
 
 # Object-first phrasing, for surfaces that lead with the concept and name the
@@ -301,6 +302,7 @@ EDGE_PHRASES_PASSIVE = {
     "similar_to": "similar to",
     "links_to": "linked from",
     "derived_from": "source of",
+    "embeds": "shown in",
 }
 
 

@@ -702,7 +702,7 @@ class PheasantRetriever:
         without figures, never to an error.
         """
         from pheasant.assistant.answering import number_figures
-        from pheasant.graph.figures import collect_figures
+        from pheasant.graph.figures import collect_figures, with_full_captions
 
         node_ids: list[str] = []
         for citation in citations:
@@ -710,7 +710,7 @@ class PheasantRetriever:
             if node_id and node_id not in node_ids:
                 node_ids.append(str(node_id))
         try:
-            found = collect_figures(self.graph, node_ids, limit)
+            found = with_full_captions(self.state, collect_figures(self.graph, node_ids, limit))
         except Exception:  # pragma: no cover - figures are never load-bearing
             logger.debug("could not collect figures", exc_info=True)
             return []

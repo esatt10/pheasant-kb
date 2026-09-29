@@ -12,7 +12,10 @@ the axis was left on ``auto``:
   ``assistant.longform``).
 * **visual** — ``none``, ``diagram`` (a grounded diagram built from the cited
   passages, ``assistant.visuals``) or ``image`` (show the images the corpus
-  itself holds and its documents reference).
+  itself holds and its documents reference). A diagram also carries a
+  **shape** when the request names one — "a timeline of", "as a table",
+  "an org chart of" — out of the fourteen in ``assistant.visual_specs``, and
+  the ``visual`` pin accepts a shape name in place of ``diagram``.
 
 Neither axis costs a model call to decide. That is the performance half of
 the design: routing is a regex over the question plus a field in the JSON the
@@ -24,6 +27,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from pheasant.assistant.visual_specs import normalize_kind
 
 DEPTHS = ("short", "medium", "long")
 VISUALS = ("none", "diagram", "image")
@@ -94,7 +99,52 @@ _IMAGE = re.compile(
 # Not a bare "visual": "configure Visual Studio" is not a request for a picture.
 _DIAGRAM = re.compile(
     r"\b(?:draw|diagram|flow ?chart|visuali[sz]e|a visual|visual (?:of|for|explaining|"
-    r"showing)|sketch|map out|mind ?map|sequence diagram|chart the|graph of how|picture of how)\b"
+    r"showing)|sketch|map out|mind ?map|sequence diagram|chart the|graph of how|picture of how|"
+    r"plot|org ?chart|swim ?lane|infographic|venn diagram|concept map|quadrant|2x2)\b"
+)
+_SHAPE_NOUN = (
+    r"(?:timeline|table|chart|graph|mind ?map|matrix|tree|hierarchy|venn|canvas|"
+    r"comparison|breakdown|lifecycle|cycle|stack)"
+)
+# A shape noun is a request for a picture only when something says so: a
+# making verb and a subject ("create a table comparing the three options"),
+# or a conversion ("show it as a timeline"). "How do I create a table in
+# Postgres" has the verb and the noun and is a question about SQL.
+_MADE_SHAPE = re.compile(
+    r"\b(?:make|create|build|generate|produce|render|give me|draw up|put together|lay out)\b"
+    r"(?: (?:me|us))? (?:a|an|the)?\s?(?:[\w-]+ ){0,3}" + _SHAPE_NOUN + r"s? "
+    r"(?:of|comparing|showing|for|explaining|summari[sz]ing|covering|across|by|that|"
+    r"with|from)\b"
+    r"|\b(?:as|into) (?:a|an) (?:[\w-]+ ){0,2}" + _SHAPE_NOUN + r"\b"
+)
+#: The shape a request names, in order: the first rule that matches wins, so
+#: the specific phrases ("sequence diagram", "mind map") are tried before the
+#: general ones ("diagram", "map"). Only consulted once a visual was asked for.
+_SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (kind, re.compile(pattern))
+    for kind, pattern in (
+        ("sequence", r"\bsequence diagram|message flow|interaction diagram|who calls whom"),
+        ("mindmap", r"\bmind ?map"),
+        ("swimlane", r"\bswim ?lanes?|who does what|(?:per|by|across) (?:team|owner|role)s?\b"),
+        ("timeline", r"\btimeline|chronolog|over time\b|history of"),
+        ("quadrant", r"\bquadrant|\b2x2\b|two[- ]by[- ]two"),
+        ("hierarchy", r"\bhierarch|\btree\b|org(?:ani[sz]ation(?:al)?)? ?chart|breakdown|taxonomy"),
+        (
+            "chart",
+            r"\b(?:bar|line|column) ?(?:chart|graph)|\bplot\b|histogram|\bchart (?:of|the|showing)",
+        ),
+        (
+            "table",
+            r"\btable\b|side[- ]by[- ]side|tabulate|comparison (?:matrix|grid)"
+            r"|\bcompar(?:e|ing|ison)\b",
+        ),
+        ("cycle", r"\b(?:life ?)?cycle\b|\bloop\b|circular"),
+        ("layers", r"\blayers?\b|layered|\bstack\b"),
+        ("groups", r"\bcategor|\bcluster|group(?:ed|s)? by|\bvenn|overlap"),
+        ("concept", r"\bconcept map|relationships? between|how .{1,40} relate|network of|\bmap of"),
+        ("canvas", r"\bfree[- ]?form|\bcanvas\b"),
+        ("flow", r"\bflow ?chart|\bprocess\b|pipeline|workflow|\bsteps\b"),
+    )
 )
 
 
@@ -105,6 +155,9 @@ class Route:
     intent: str = "knowledge"
     depth: str = "short"
     visual: str = "none"
+    #: The shape a diagram was asked to take (``assistant.visual_specs``), or
+    #: ``None`` for "whichever fits" — the model then picks.
+    shape: str | None = None
     #: One line per axis saying why, for the classify step and the payload.
     why: dict[str, str] = field(default_factory=dict)
     #: ``rule`` / ``planner`` / ``pinned`` per axis.
@@ -115,6 +168,7 @@ class Route:
             "intent": self.intent,
             "depth": self.depth,
             "visual": self.visual,
+            "shape": self.shape,
             "why": dict(self.why),
             "decided_by": dict(self.decided_by),
         }
@@ -149,12 +203,33 @@ def classify_visual(question: str, configured: Any = None) -> tuple[str, str, st
     pinned = _pinned(configured, VISUALS)
     if pinned:
         return pinned, "pinned by the caller", "pinned"
+    if normalize_kind(configured):
+        # ``visual: "timeline"`` is a diagram, drawn as a timeline.
+        return "diagram", "pinned by the caller", "pinned"
     text = " ".join((question or "").lower().split())
     if _IMAGE.search(text):
         return "image", "asks to see an image the corpus holds", "rule"
-    if _DIAGRAM.search(text):
+    if _DIAGRAM.search(text) or _MADE_SHAPE.search(text):
         return "diagram", "asks for a diagram or visual", "rule"
     return "none", "no visual requested", "rule"
+
+
+def classify_shape(question: str, configured: Any = None) -> tuple[str | None, str]:
+    """``(kind, why)`` — the shape a requested diagram should take, or ``None``.
+
+    A shape named in the ``visual`` pin wins; otherwise the question's own
+    words. ``None`` means the request names no shape and the model picks the
+    one that fits, which is right far more often than a default would be.
+    """
+
+    pinned = normalize_kind(configured)
+    if pinned:
+        return pinned, "pinned by the caller"
+    text = " ".join((question or "").lower().split())
+    for kind, pattern in _SHAPES:
+        if pattern.search(text):
+            return kind, f"asks for a {kind}"
+    return None, "no shape named; the model picks"
 
 
 def route_question(
@@ -175,6 +250,8 @@ def route_question(
     route.visual, route.why["visual"], route.decided_by["visual"] = classify_visual(
         question, visual
     )
+    if route.visual == "diagram":
+        route.shape, route.why["shape"] = classify_shape(question, visual)
     return route
 
 

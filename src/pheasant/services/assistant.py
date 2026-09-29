@@ -178,7 +178,7 @@ def visualize(
         )
 
     from pheasant.assistant import answering, chat
-    from pheasant.graph.figures import collect_figures
+    from pheasant.graph.figures import collect_figures, with_full_captions
 
     if request.node_ids:
         citations = _named_citations(context, request)
@@ -199,17 +199,31 @@ def visualize(
         citations = chat.build_citations(found.get("results") or [], MAX_VISUAL_PASSAGES)
     node_ids = [str(c["node_id"]) for c in citations if c.get("node_id")]
     facts = chat.collect_facts(context.graph, node_ids, 12)
-    figures = answering.number_figures(collect_figures(context.graph, node_ids), citations)
+    figures = answering.number_figures(
+        with_full_captions(context.state, collect_figures(context.graph, node_ids)), citations
+    )
     kind = (request.kind or "").strip().lower() or None
+    llm = answering.resolve_llm(context.config, credential, env)
     visual = answering.visual_for(
         text,
         "image" if kind == "image" else "diagram",
         citations=citations,
         facts=facts,
         figures=figures,
-        llm=answering.resolve_llm(context.config, credential, env),
+        llm=llm,
         kind=kind,
+        documents=answering.visual_documents(
+            citations,
+            state=context.state,
+            knowledge_base=kb_id,
+            graph=context.graph,
+            config=context.config,
+        )
+        if llm is not None
+        else None,
     )
+    if visual is not None and visual.get("type") == "diagram" and citations:
+        visual["redraw"] = answering.redraw_handle(text, citations, kb_id)
     from pheasant.assistant.routing import record_visual
 
     record_visual(visual)
@@ -289,9 +303,24 @@ def render_visual(
     picture is drawn from exactly the evidence the answer was written from.
     """
 
-    from pheasant.assistant.answering import attach_visual, resolve_llm
+    from pheasant.assistant.answering import attach_visual, resolve_llm, visual_documents
 
-    return attach_visual(payload, llm=resolve_llm(context.config, credential, env))
+    llm = resolve_llm(context.config, credential, env)
+    kb_id = context.knowledge_base(payload.get("knowledge_base"))
+    return attach_visual(
+        payload,
+        llm=llm,
+        documents=visual_documents(
+            payload.get("citations") or [],
+            state=context.state,
+            knowledge_base=kb_id,
+            graph=context.graph,
+            config=context.config,
+        )
+        if llm is not None
+        else None,
+        knowledge_base=kb_id,
+    )
 
 
 #: One line per retrieval knob, so a UI (or an agent reading
