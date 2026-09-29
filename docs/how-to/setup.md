@@ -94,6 +94,9 @@ its tested runtime default as **Recommended** plus **Custom model ID**. For
 `provider: auto`, setup displays the currently resolved provider and exact
 default from available environment keys, while keeping `assistant.model: null`.
 When no key is available it reports that extractive answers only are available.
+For agentic workflows, `assistant.retrieval.grader_model` can use a different
+model for evidence sufficiency checks; `assistant.model` still plans retrieval
+and writes the final answer.
 
 Document extraction is enabled by source include globs; PDF and DOCX files are
 handled by the existing extractor. OCR is intentionally not a setup option:

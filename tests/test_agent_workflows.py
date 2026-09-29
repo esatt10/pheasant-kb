@@ -320,6 +320,95 @@ def test_agentic_stops_at_the_round_budget(agentic) -> None:
     assert result.answer, "must still answer with whatever it has"
 
 
+def test_agentic_uses_luna_to_grade_and_sol_to_answer(agentic, monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_complete(provider, *, model, system, **kwargs):
+        calls.append((model, system))
+        if "plan retrieval" in system:
+            return json.dumps({"queries": ["hash"], "modes": ["hybrid"]})
+        if "judge whether" in system:
+            return json.dumps({"sufficient": True})
+        return "A grounded summary [1]."
+
+    monkeypatch.setattr("pheasant.assistant.llm.complete", fake_complete)
+    llm = LLM(provider="openai", api_key="test-key", model="gpt-6-sol")
+    result = agentic.run(
+        WorkflowRequest(question="hash", options={"grader_model": "gpt-6-luna"}),
+        _retriever(),
+        llm,
+    )
+
+    assert result.model == "gpt-6-sol"
+    assert result.answer == "A grounded summary [1]."
+    assert [model for model, _system in calls] == ["gpt-6-sol", "gpt-6-luna", "gpt-6-sol"]
+
+
+def test_agentic_audit_reports_configured_modes_usage_and_seconds(agentic, monkeypatch) -> None:
+    """A planner cannot silently drop a fleet-configured search arm."""
+
+    def fake_http(_url, payload, _headers, _timeout):
+        system = payload["messages"][0]["content"]
+        if "plan retrieval" in system:
+            text, input_tokens, output_tokens = (
+                json.dumps({"queries": ["hash"], "modes": ["hybrid", "vector"]}),
+                101,
+                11,
+            )
+        elif "judge whether" in system:
+            text, input_tokens, output_tokens = json.dumps({"sufficient": True}), 202, 22
+        else:
+            text, input_tokens, output_tokens = "A grounded answer [1].", 303, 33
+        return {
+            "choices": [{"message": {"content": text}}],
+            "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens},
+        }
+
+    monkeypatch.setattr(providers_module, "_http_json", fake_http)
+    search = _FakeSearch()
+    result = agentic.run(
+        WorkflowRequest(
+            question="hash",
+            options={"retrieval_modes": ["hybrid", "vector", "graph"]},
+        ),
+        _retriever(search),
+        LLM(provider="openai", api_key="test-key", model="gpt-6-sol"),
+    )
+
+    assert {mode for _query, mode in search.calls} == {"hybrid", "vector", "graph"}
+    assert "hybrid, vector, graph" in next(s.detail for s in result.steps if s.name == "retrieve")
+    for name, expected in {"plan": (101, 11), "grade": (202, 22), "synthesize": (303, 33)}.items():
+        step = next(s for s in result.steps if s.name == name)
+        assert (step.input_tokens, step.output_tokens) == expected
+    assert all(
+        step.duration_seconds is not None and step.duration_seconds >= 0 for step in result.steps
+    )
+    assert next(s for s in result.steps if s.name == "retrieve").input_tokens == 0
+
+
+def test_agentic_marks_unreported_provider_usage_unknown(agentic, monkeypatch) -> None:
+    def fake_http(_url, payload, _headers, _timeout):
+        system = payload["messages"][0]["content"]
+        if "plan retrieval" in system:
+            text = json.dumps({"queries": ["hash"]})
+        elif "judge whether" in system:
+            text = json.dumps({"sufficient": True})
+        else:
+            text = "A grounded answer [1]."
+        return {"choices": [{"message": {"content": text}}]}
+
+    monkeypatch.setattr(providers_module, "_http_json", fake_http)
+    result = agentic.run(
+        WorkflowRequest(question="hash"),
+        _retriever(),
+        LLM(provider="openai", api_key="test-key", model="gpt-6-sol"),
+    )
+    for step in result.steps:
+        if step.name in {"plan", "grade", "synthesize"}:
+            assert step.input_tokens is None
+            assert step.output_tokens is None
+
+
 def test_agentic_verifies_citations(agentic) -> None:
     """A model citing a passage it was never given must not reach the UI."""
     llm = _ScriptedLLM(
@@ -432,6 +521,9 @@ def test_chat_can_select_a_workflow_per_request(loaded_config, workspace_copy: P
 
     assert body["workflow"] == "simple"
     assert body["steps"], "the trace must reach the client"
+    assert body["steps"][0]["duration_seconds"] >= 0
+    assert body["steps"][0]["input_tokens"] == 0
+    assert body["steps"][0]["output_tokens"] == 0
 
 
 def test_a_broken_custom_workflow_cannot_break_chat(loaded_config) -> None:

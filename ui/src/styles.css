@@ -963,6 +963,21 @@ select.text-input {
   gap: 6px;
 }
 
+.sources-strip__toggle {
+  align-self: center;
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.sources-strip__toggle:hover {
+  color: var(--text-soft);
+}
+
 .source-chip {
   display: inline-flex;
   align-items: center;
@@ -2048,9 +2063,25 @@ select.text-input {
   overflow-wrap: anywhere;
 }
 
-.trace__count {
+.trace__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  justify-content: flex-end;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .trace__list li {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .trace__metrics {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
 }
 
 /* --------------------------------------------------------------- meters */

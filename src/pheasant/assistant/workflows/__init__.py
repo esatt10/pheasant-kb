@@ -86,6 +86,9 @@ class WorkflowStep:
     name: str
     detail: str
     passages: int = 0
+    duration_seconds: float | None = None
+    input_tokens: int | None = 0
+    output_tokens: int | None = 0
 
 
 @dataclass

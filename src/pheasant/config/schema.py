@@ -939,20 +939,23 @@ class RetrievalSettings(ModelMixin):
     """
 
     #: plan → retrieve → grade turns before answering with what is in hand.
-    max_rounds: int | None = 2
+    max_rounds: int | None = 3
     #: Passages fetched per query per search mode.
-    per_query_results: int | None = 6
+    per_query_results: int | None = 8
     #: Total passages offered to the synthesis step.
-    max_context_passages: int | None = 10
+    max_context_passages: int | None = 12
     #: Search modes to fan out over. "vector" is dropped automatically when
     #: no vector index is built, so leaving it on is safe.
     retrieval_modes: list[str] | None = field(default_factory=lambda: ["text", "vector"])
     #: Walk the graph out of the best hits for structurally-related material.
     expand_graph: bool | None = True
-    expand_depth: int | None = 1
-    expand_per_node: int | None = 3
+    expand_depth: int | None = 2
+    expand_per_node: int | None = 4
     #: Ask the model to grade its own evidence before answering.
     grade_evidence: bool | None = True
+    #: Optional model for evidence sufficiency checks; the assistant model
+    #: still plans retrieval and writes the final answer.
+    grader_model: str | None = None
     #: Drop [n] markers that do not resolve to a real citation.
     verify_citations: bool | None = True
     #: Graph facts surfaced alongside the answer.

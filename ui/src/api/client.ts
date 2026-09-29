@@ -247,7 +247,7 @@ export const api = {
           : undefined,
       })}`,
     ),
-  graphNeighbors: (nodeId: string, depth = 1, edgeTypes?: string[]) =>
+  graphNeighbors: (nodeId: string, depth = 2, edgeTypes?: string[]) =>
     request<NeighborsResponse>(
       `/graph/neighbors${qs({ node_id: nodeId, depth, edge_types: edgeTypes?.join(",") })}`,
     ),

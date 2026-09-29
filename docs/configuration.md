@@ -1383,14 +1383,15 @@ typed home, which is what makes them validated, editable from the UI
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `max_rounds` | int \| null | `2` | plan → retrieve → grade turns before answering with what is in hand. `1` disables the re-plan loop. |
-| `per_query_results` | int \| null | `6` | Passages fetched per query per search mode. |
-| `max_context_passages` | int \| null | `10` | Total passages offered to the answering step. |
+| `max_rounds` | int \| null | `3` | plan → retrieve → grade turns before answering with what is in hand. `1` disables the re-plan loop. |
+| `per_query_results` | int \| null | `8` | Passages fetched per query per search mode. |
+| `max_context_passages` | int \| null | `12` | Total passages offered to the answering step. |
 | `retrieval_modes` | list \| null | `["text", "vector"]` | Modes to fan out over. `vector` is dropped automatically when no vector index is built, so leaving it on is safe. |
 | `expand_graph` | bool \| null | `true` | Walk the graph out of the best hits, reaching documents that share no vocabulary with the question. |
-| `expand_depth` | int \| null | `1` | Hops to walk when expanding. |
-| `expand_per_node` | int \| null | `3` | Neighbours taken per expanded node. |
+| `expand_depth` | int \| null | `2` | Hops to walk when expanding. |
+| `expand_per_node` | int \| null | `4` | Neighbours taken per expanded node. |
 | `grade_evidence` | bool \| null | `true` | Ask the model to grade its own evidence before answering. |
+| `grader_model` | str \| null | `null` | Optional model for sufficiency checks in agentic workflows. The assistant model still plans and writes the answer; use a model from the configured provider. |
 | `verify_citations` | bool \| null | `true` | Drop `[n]` markers that do not resolve to a real citation. |
 | `max_facts` | int \| null | `12` | Graph facts surfaced alongside the answer. |
 
@@ -1421,10 +1422,13 @@ so a change applies to the next question with no restart and no re-index.
 
 ```yaml
 assistant:
+  provider: openai
+  model: gpt-6-sol
   retrieval:
     max_rounds: 3
     max_context_passages: 16
     retrieval_modes: ["text", "vector", "graph"]
+    grader_model: gpt-6-luna
 ```
 
 **The key never lands in config.** Both routes are indirections: an

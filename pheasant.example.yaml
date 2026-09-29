@@ -604,10 +604,11 @@ assistant:
   # on the MCP tool `ask_knowledge_base`).
   workflow_options: {}
   #  agentic:
-  #    max_rounds: 2
+  #    max_rounds: 3
   #    retrieval_modes: [hybrid, vector]
   #    expand_graph: true
-  #    max_context_passages: 10
+  #    max_context_passages: 12
+  #    grader_model: gpt-6-luna  # optional with OpenAI; assistant.model writes answers
 
 # Knowledge-effectiveness evaluation (optional, off by default, read-only).
 #
@@ -844,6 +845,15 @@ tuning:
     minimum_interval_seconds: 86400
 
 sources:
+  # Fleet memory example: configure exactly one writable memory source, backed
+  # by a persistent /memory volume. Memory is written explicitly via MCP or
+  # the API; enabling the source does not save every chat turn automatically.
+  # - name: agent-memory
+  #   type: memory
+  #   path: /memory
+  #   include: ["**/*.md"]
+  #   exclude: ["**/*.archived"]
+
   - name: pheasant-repo
     type: repository
     path: /workspace

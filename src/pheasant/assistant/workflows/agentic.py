@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, TypedDict
 
 from pheasant.assistant.chat import (
@@ -65,7 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
-from pheasant.assistant.providers import ProviderError
+from pheasant.assistant.providers import ProviderError, collect_token_usage
 from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ DEFAULTS: dict[str, Any] = {
     # question (chat.classify_intent), or pin "knowledge" / "procedural".
     "intent": "auto",
     # How many plan→retrieve→grade rounds before answering with what we have.
-    "max_rounds": 2,
+    "max_rounds": 3,
     # Search modes to fan out over. "vector" is dropped automatically when no
     # vector index is built, so leaving it on is safe.
     #
@@ -91,14 +92,15 @@ DEFAULTS: dict[str, Any] = {
     "retrieval_modes": ["text", "vector"],
     # Walk the knowledge graph out of the best hits for related material.
     "expand_graph": True,
-    "expand_depth": 1,
-    "expand_per_node": 3,
+    "expand_depth": 2,
+    "expand_per_node": 4,
     # Passages fetched per query per mode.
-    "per_query_results": 6,
+    "per_query_results": 8,
     # Total passages offered to the synthesis step.
-    "max_context_passages": 10,
+    "max_context_passages": 12,
     # Ask the model to grade its own evidence before answering.
     "grade_evidence": True,
+    "grader_model": None,
     # Drop [n] markers that do not resolve to a real citation.
     "verify_citations": True,
     "max_facts": 12,
@@ -354,7 +356,9 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
                 queries = _dedupe([question, *planned])[:4]
                 notes = str(parsed.get("reasoning") or "planned")
             planned_modes = [str(m) for m in parsed.get("modes", []) if m in capabilities.modes]
-            if planned_modes:
+            # An explicit retrieval_modes list is a fanout contract, not just
+            # a menu for the planner to narrow. The fleet pins all three arms.
+            if planned_modes and "retrieval_modes" not in state.get("explicit_options", []):
                 available = planned_modes
             # The planner reads the question with the corpus in front of it,
             # so it is allowed to overturn the heuristic — but only when the
@@ -409,7 +413,8 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
             WorkflowStep(
                 name="retrieve",
                 detail=f"{len(found)} passages from {len(state.get('queries') or [])} "
-                f"quer{'y' if len(state.get('queries') or []) == 1 else 'ies'}",
+                f"quer{'y' if len(state.get('queries') or []) == 1 else 'ies'} "
+                f"across {', '.join(state.get('modes') or ['hybrid'])}",
                 passages=len(found),
             ),
         ],
@@ -452,7 +457,7 @@ def expand_node(state: AgentState, ctx: dict) -> dict:
 
 def grade_node(state: AgentState, ctx: dict) -> dict:
     """Decide whether the evidence answers the question."""
-    llm = ctx["llm"]
+    llm = ctx.get("grader_llm", ctx["llm"])
     options = resolve_options(state)
     passages = state.get("passages", [])
     round_index = state.get("round", 0) + 1
@@ -539,7 +544,9 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             "answer": extractive_answer(state["question"], citations),
             "answer_mode": "extractive",
         }
+    read_started = time.perf_counter()
     documents = hydrate_citations(retriever, citations, options)
+    read_seconds = time.perf_counter() - read_started
     steps = list(state.get("steps", []))
     if documents:
         whole = sum(1 for doc in documents.values() if not doc.truncated)
@@ -551,6 +558,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                 else f"read {len(documents)} file(s) from their chunks "
                 f"({len(documents) - whole} excerpted)",
                 passages=len(documents),
+                duration_seconds=read_seconds,
             )
         )
     try:
@@ -581,6 +589,14 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             ),
             "answer_mode": "extractive",
             "error": str(exc),
+            "steps": [
+                *steps,
+                WorkflowStep(
+                    name="synthesize",
+                    detail="model unavailable; returned extracted passages",
+                    passages=len(citations),
+                ),
+            ],
         }
 
 
@@ -733,15 +749,32 @@ def _bind(fn):
     def node(state, config):
         ctx = config["configurable"]["ctx"]
         before = len(state.get("steps") or [])
-        result = fn(state, ctx)
+        started = time.perf_counter()
+        with collect_token_usage() as usage:
+            result = fn(state, ctx)
+        elapsed = time.perf_counter() - started
         # Publish whatever this node appended, the moment it appended it. The
         # loop can take a minute over a large index, and "planning… retrieving
         # 35 passages… grading" is the difference between waiting and
         # wondering whether it hung. Nodes return the whole steps list, so
         # anything past the incoming length is new.
         request = ctx.get("request")
-        if request is not None and isinstance(result, dict):
-            for step in (result.get("steps") or [])[before:]:
+        if isinstance(result, dict):
+            new_steps = (result.get("steps") or [])[before:]
+            if new_steps:
+                for step in new_steps[:-1]:
+                    if step.duration_seconds is None:
+                        step.duration_seconds = 0.0
+                last = new_steps[-1]
+                if last.duration_seconds is None:
+                    last.duration_seconds = max(
+                        0.0, elapsed - sum(step.duration_seconds or 0.0 for step in new_steps[:-1])
+                    )
+                last.input_tokens = usage.reported_input
+                last.output_tokens = usage.reported_output
+            for step in new_steps:
+                if request is None:
+                    continue
                 request.report(step)
         return result
 
@@ -794,7 +827,10 @@ class AgenticWorkflow:
 
             return SimpleWorkflow().run(request, retriever, llm)
 
-        ctx = {"retriever": retriever, "llm": llm, "request": request}
+        grader_model = options.get("grader_model")
+        with_model = getattr(llm, "with_model", None)
+        grader_llm = with_model(str(grader_model)) if grader_model and callable(with_model) else llm
+        ctx = {"retriever": retriever, "llm": llm, "grader_llm": grader_llm, "request": request}
         initial: AgentState = {
             "question": request.question,
             "options": options,

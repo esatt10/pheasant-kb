@@ -117,6 +117,18 @@ export function RetrievalPanel() {
         </label>
       ))}
 
+      <label className="field">
+        <span>Evidence grader model (optional)</span>
+        <input
+          className="text-input"
+          type="text"
+          value={draft.grader_model ?? ""}
+          placeholder="Use assistant model"
+          onChange={(event) => set("grader_model", event.target.value.trim() || null)}
+        />
+        {help.grader_model ? <span className="muted small">{help.grader_model}</span> : null}
+      </label>
+
       {Object.keys(retrieval.data?.workflow_options ?? {}).length > 0 ? (
         <div className="banner banner--warn" style={{ marginBottom: 0 }}>
           <code>assistant.workflow_options</code> is also set in your config and takes

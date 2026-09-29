@@ -857,7 +857,10 @@ def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
         assert config.search.wasm_relationship_search is True
         assert config.graph.wasm_cross_source_resolution is True
         assert config.graph.memory_entity_bridging is True
-        assert config.assistant.model == "gpt-6-luna"
+        assert config.assistant.model == "gpt-6-sol"
+        assert config.assistant.retrieval.grader_model == "gpt-6-luna"
+        assert config.assistant.retrieval.max_rounds == 3
+        assert config.assistant.retrieval.expand_depth == 3
         assert config.ingestion.captioner.model == "gpt-6-luna"
         assert config.assistant.workflow == "agentic"
         assert config.search.default_mode == "hybrid"
@@ -872,7 +875,17 @@ def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
     ]
 
     assert any(source.type.value == "memory" for source in advanced.sources)
-    assert not any(source.type.value == "memory" for source in fleet.sources)
+    memory_sources = [source for source in fleet.sources if source.type.value == "memory"]
+    assert len(memory_sources) == 1
+    assert memory_sources[0].path.as_posix() == "/memory"
+    assert fleet.evaluation.enabled is True
+    assert fleet.tuning.enabled is True
+    assert fleet.tuning.auto.enabled is False
+    assert fleet.tuning.auto.apply is False
+    assert fleet.observability.interactions.enabled is True
+    assert fleet.observability.interactions.queue.enabled is True
+    assert fleet.observability.interactions.hot_retention_days == 7
+    assert fleet.observability.interactions.cold_enabled is False
     assert fleet.ingestion.extractor.provider == "auto"
     assert fleet.sync.source_processing.chunk_max_chars == 2000
     assert fleet.sync.source_processing.taxonomy_enabled is True

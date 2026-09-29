@@ -1,4 +1,7 @@
+import { useState } from "react";
 import type { Citation } from "../api/types";
+
+const SOURCE_PREVIEW_COUNT = 3;
 
 /**
  * The innermost section of a breadcrumb — "§ 12.3 Governing Law" out of
@@ -23,9 +26,9 @@ function chipTooltip(citation: Citation): string {
 /**
  * The citation row under an answer.
  *
- * Cited passages come first and at full strength; retrieved-but-unused ones
- * stay visible at reduced emphasis, because "what did it look at and not use"
- * is as much a part of trusting an answer as "what did it quote".
+ * Cited passages come first and at full strength. A short preview keeps a
+ * long retrieval from burying the answer; the rest remain one click away at
+ * reduced emphasis when they were retrieved but not cited.
  *
  * For a source with a taxonomy the chip also names the section the passage came
  * from. On a long structured document — a contract, a standard — the file name
@@ -38,10 +41,13 @@ export function SourceStrip({
   citations: Citation[];
   onSelect: (nodeId: string | undefined) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const ordered = [...citations].sort((a, b) => Number(b.used) - Number(a.used) || a.index - b.index);
+  const hiddenCount = Math.max(0, ordered.length - SOURCE_PREVIEW_COUNT);
+  const visible = expanded ? ordered : ordered.slice(0, SOURCE_PREVIEW_COUNT);
   return (
     <div className="sources-strip">
-      {ordered.map((citation) => {
+      {visible.map((citation) => {
         const section = sectionLabel(citation.heading_path);
         return (
           <button
@@ -68,6 +74,16 @@ export function SourceStrip({
           </button>
         );
       })}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="sources-strip__toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "▾" : "▸"} {expanded ? "Hide" : "Show"} {hiddenCount} more sources
+        </button>
+      ) : null}
     </div>
   );
 }

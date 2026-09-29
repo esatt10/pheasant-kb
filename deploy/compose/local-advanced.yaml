@@ -125,7 +125,7 @@ memory:
 assistant:
   enabled: true
   provider: openai
-  model: gpt-6-luna
+  model: gpt-6-sol
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   allow_session_keys: false
@@ -135,16 +135,17 @@ assistant:
   max_facts: 24
   workflow: agentic
   retrieval:
-    max_rounds: 2
+    max_rounds: 3
     per_query_results: 10
     max_context_passages: 16
     retrieval_modes:
       - hybrid
       - graph
     expand_graph: true
-    expand_depth: 2
+    expand_depth: 3
     expand_per_node: 6
     grade_evidence: true
+    grader_model: gpt-6-luna
     verify_citations: true
     max_facts: 24
 sources:

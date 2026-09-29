@@ -407,6 +407,9 @@ export interface WorkflowStep {
   name: string;
   detail: string;
   passages: number;
+  duration_seconds?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
 }
 
 export interface WorkflowInfo {
@@ -669,6 +672,7 @@ export interface RetrievalSettings {
   expand_depth: number | null;
   expand_per_node: number | null;
   grade_evidence: boolean | null;
+  grader_model: string | null;
   verify_citations: boolean | null;
   max_facts: number | null;
 }
