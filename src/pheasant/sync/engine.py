@@ -22,6 +22,7 @@ from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, TEXT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
+from pheasant.ingestion.media import MAX_MEDIA_BYTES, media_store_for_config
 from pheasant.ingestion.pipeline import (
     ParsedArtifact,
     git_state,
@@ -206,6 +207,16 @@ class _PreparedItem:
     #: indexed" and nothing like each other — a control folded into a routine
     #: counter is one nobody can see working.
     refused_by: str | None = None
+    #: An image's bytes, carried to the single writer so it can store them in
+    #: the media store (`ingestion.media`). Only images, only under the store's
+    #: size cap: everything else is text the chunks already hold.
+    media: bytes | None = None
+
+
+def _media_bytes(parsed: ParsedArtifact | None, content: bytes) -> bytes | None:
+    if parsed is None or parsed.type != "image" or len(content) > MAX_MEDIA_BYTES:
+        return None
+    return content
 
 
 _PROCESS_SAFE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
@@ -286,7 +297,9 @@ def _prepare_filesystem_item_process(
             fetched=True,
             skipped=True,
         )
-    return _PreparedItem(position, item, previous, parsed=parsed, fetched=True)
+    return _PreparedItem(
+        position, item, previous, parsed=parsed, fetched=True, media=_media_bytes(parsed, content)
+    )
 
 
 class SyncEngine:
@@ -375,6 +388,7 @@ class SyncEngine:
         # captioning network call possible). Default provider is the offline
         # deterministic stub.
         self.captioner = captioner_from_config(config) if initialize_indexing_components else None
+        self.media_store = media_store_for_config(config)
         # Multi-modal audio ingestion (Synapse 25.4 session B): None unless a
         # source's include globs admit audio extensions — same opt-in,
         # zero-network-when-absent contract as the image captioner above.
@@ -1112,6 +1126,7 @@ class SyncEngine:
             previous,
             parsed=parsed,
             fetched=True,
+            media=_media_bytes(parsed, payload.content),
         )
 
     def _remote_precheck(
@@ -1192,7 +1207,14 @@ class SyncEngine:
             return _PreparedItem(
                 position, item, previous, parsed=parsed, fetched=True, skipped=True
             )
-        return _PreparedItem(position, item, previous, parsed=parsed, fetched=True)
+        return _PreparedItem(
+            position,
+            item,
+            previous,
+            parsed=parsed,
+            fetched=True,
+            media=_media_bytes(parsed, payload.content),
+        )
 
     def _prepare_batch_remote(
         self,
@@ -2132,6 +2154,13 @@ class SyncEngine:
                     }
                     for chunk in parsed.chunks
                 ]
+                if prepared.media is not None:
+                    # Before the commit, and outside the mutex: content-addressed
+                    # and atomic, so a sync that fails after this leaves an
+                    # unreferenced file rather than a referenced missing one.
+                    self.media_store.put(
+                        parsed.sha256, Path(parsed.relative_path).suffix, prepared.media
+                    )
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)

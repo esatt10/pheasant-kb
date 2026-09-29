@@ -7,6 +7,7 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
+from pheasant.mcp_server.assistant_tools import register_assistant_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.version import __version__
@@ -531,49 +532,6 @@ def create_mcp_server(config: PheasantConfig) -> Any:
 
     @mcp.tool()
     @anticipated
-    def ask_knowledge_base(  # noqa: PLR0913 - mirrors the HTTP surface
-        knowledge_base: str,
-        question: str,
-        workflow: str | None = None,
-        mode: str = "hybrid",
-        max_results: int = 8,
-        source_name: str | None = None,
-        principal: str | None = None,
-        principal_groups: list[str] | None = None,
-        session: str | None = None,
-        options: dict | None = None,
-        source_types: list[str] | None = None,
-        exclude_source_types: list[str] | None = None,
-    ) -> dict:
-        """Answer a question from the knowledge base, with citations and graph facts.
-
-        Runs the configured agent workflow over pheasant's own search. Use
-        this for a synthesized, cited answer; use search_context when you
-        want the raw passages to reason over yourself.
-
-        session identifies the conversation this call belongs to. It is
-        recorded, never enforced -- pass a stable opaque string and the
-        region can keep one refined memory per session; omit it and nothing
-        changes. Like principal, it is asserted by you and verified by
-        nobody.
-        """
-
-        return tools.ask_knowledge_base(
-            knowledge_base,
-            question,
-            workflow=workflow,
-            mode=mode,
-            max_results=max_results,
-            source_name=source_name,
-            principal=principal,
-            principal_groups=principal_groups,
-            options=options,
-            source_types=source_types,
-            exclude_source_types=exclude_source_types,
-        )
-
-    @mcp.tool()
-    @anticipated
     def get_relevant_files(
         knowledge_base: str,
         task: str,
@@ -669,6 +627,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     # `anticipated` decorator are handed over rather than imported there, so
     # the registration is identical to the ones above it.
     register_readiness_tools(mcp, tools, anticipated)
+    register_assistant_tools(mcp, tools, anticipated, anticipated_resource)
 
     @mcp.tool()
     @anticipated

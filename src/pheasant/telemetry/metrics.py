@@ -493,6 +493,22 @@ def register_default_metrics(version: str) -> None:
         "Embedding provider requests, by outcome.",
         ("outcome",),
     )
+    # How the intent router read each question. `depth_by` separates a rule
+    # from a planner overruling it from a caller pinning it: a planner that
+    # overrules the rule on most questions is telling you the rule is wrong.
+    REGISTRY.counter(
+        "pheasant_assistant_route_total",
+        "Questions answered, by intent, depth, visual and what decided the depth.",
+        ("intent", "depth", "visual", "depth_by"),
+    )
+    # A visual that is asked for and declined is not a failure — a mostly
+    # ungrounded diagram *should* be declined — but a kind that is nearly
+    # always declined is being routed to wrongly.
+    REGISTRY.counter(
+        "pheasant_assistant_visual_total",
+        "Visuals built for answers, by type and status (ok / declined).",
+        ("type", "status"),
+    )
 
     # Retrieval, per pipeline stage.
     #

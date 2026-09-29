@@ -21,6 +21,7 @@ from pheasant.config.schema import (
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
+from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
@@ -72,7 +73,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools(ReadinessTools):
+class PheasantTools(ReadinessTools, AssistantTools):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)
@@ -1772,53 +1773,6 @@ class PheasantTools(ReadinessTools):
                 "assistant.retrieval in pheasant.yaml (`pheasant setup --advanced`)."
             ),
         }
-
-    def ask_knowledge_base(
-        self,
-        knowledge_base: str,
-        question: str,
-        workflow: str | None = None,
-        mode: str = "hybrid",
-        max_results: int = 8,
-        source_name: str | None = None,
-        principal: str | None = None,
-        principal_groups: list[str] | None = None,
-        options: dict | None = None,
-        source_types: list[str] | None = None,
-        exclude_source_types: list[str] | None = None,
-    ) -> dict:
-        """Answer a question from the knowledge base, with citations and graph facts.
-
-        Runs the configured question-answering workflow — by default the
-        LangGraph agent when the ``[agent]`` extra is installed and a model
-        is reachable, otherwise a single retrieval pass. Prefer this over
-        ``search_context`` when you want a synthesized answer rather than
-        raw passages to reason over yourself; the returned ``steps`` show
-        what the agent actually did.
-
-        With no model configured the answer is extractive (the retrieved
-        passages, attributed), so this is always safe to call.
-        """
-        from pheasant.assistant.chat import answer_question
-
-        self._require_knowledge_base(knowledge_base)
-        return answer_question(
-            question,
-            search=self.searcher,
-            knowledge_base=knowledge_base or self.config.knowledge_base_id,
-            config=self.config,
-            graph=self.graph,
-            state=self.state,
-            mode=mode,
-            max_results=max_results,
-            source_name=source_name,
-            principal=principal,
-            principal_groups=principal_groups,
-            workflow=workflow,
-            options=options,
-            source_types=source_types,
-            exclude_source_types=exclude_source_types,
-        )
 
     def get_relevant_files(
         self,

@@ -156,9 +156,28 @@ def classify_intent(question: str) -> tuple[str, str]:
     return "knowledge", "no explicit signal; defaulting to a summary"
 
 
-def system_prompt_for(intent: str | None) -> str:
-    """The answering prompt for an intent, falling back to the base rules."""
-    return INTENT_SYSTEM_PROMPTS.get(str(intent or ""), SYSTEM_PROMPT)
+FIGURE_RULE = """
+
+FIGURES: the passages show the images listed under "Figures". Where one \
+genuinely helps the reader, show it by writing its marker (like [fig:1]) on a \
+line of its own. Only use the listed numbers, and never describe an image \
+beyond its caption."""
+
+
+def system_prompt_for(intent: str | None, depth: str | None = None, figures: bool = False) -> str:
+    """The answering prompt for an intent, falling back to the base rules.
+
+    ``depth`` appends the length instruction (none for ``short``, which is the
+    prompt pheasant has always sent) and ``figures`` the rule for showing an
+    image; both default to adding nothing.
+    """
+    from pheasant.assistant.routing import depth_instruction
+
+    prompt = INTENT_SYSTEM_PROMPTS.get(str(intent or ""), SYSTEM_PROMPT)
+    prompt += depth_instruction(str(depth or "short"))
+    if figures:
+        prompt += FIGURE_RULE
+    return prompt
 
 
 def _known_workflow_names() -> set[str]:
@@ -592,6 +611,9 @@ def build_prompt(
     citations: list[dict],
     facts: list[dict],
     documents: dict | None = None,
+    *,
+    history_text: str = "",
+    figures: list[dict] | None = None,
 ) -> str:
     """Numbered passages + graph facts + the question.
 
@@ -600,9 +622,14 @@ def build_prompt(
     model reads the whole file with its metadata instead of the 500-character
     chunk preview; when it is absent (no state store, or content disabled)
     the snippet is used and the prompt shape is unchanged.
+
+    ``history_text`` (earlier turns, ``assistant.conversation``) leads the
+    prompt and ``figures`` follow the facts; with neither, the prompt is
+    byte-identical to the one pheasant has always sent.
     """
     documents = documents or {}
-    lines = ["Passages from the knowledge base:", ""]
+    lines = [history_text] if history_text else []
+    lines += ["Passages from the knowledge base:", ""]
     for citation in citations:
         header = f"[{citation['index']}] {citation['title']}"
         if citation.get("relative_path") and citation["relative_path"] != citation["title"]:
@@ -631,6 +658,16 @@ def build_prompt(
         lines.append("Relationships recorded in the knowledge graph:")
         for fact in facts:
             lines.append(f"- {fact['subject']} {fact['predicate']} {fact['object']}")
+        lines.append("")
+    if figures:
+        lines.append("Figures (images the passages show):")
+        for figure in figures:
+            described = figure.get("caption") or figure.get("alt") or "no caption"
+            where = ", ".join(f"[{n}]" for n in figure.get("cited_in") or []) or "a passage"
+            lines.append(
+                f"[fig:{figure['figure']}] {figure.get('relative_path') or 'image'} — "
+                f"{described} (shown in {where})"
+            )
         lines.append("")
     lines.append(f"Question: {question}")
     return "\n".join(lines)
@@ -716,134 +753,13 @@ def resolve_provider(config: Any, credential: Any, env: dict[str, str]) -> dict 
     }
 
 
-def answer_question(
-    question: str,
-    *,
-    search: Any,
-    knowledge_base: str,
-    config: Any,
-    graph: Any = None,
-    state: Any = None,
-    credential: Any = None,
-    env: dict[str, str] | None = None,
-    mode: str = "hybrid",
-    max_results: int | None = None,
-    source_name: str | None = None,
-    principal: str | None = None,
-    principal_groups: list[str] | None = None,
-    workflow: str | None = None,
-    options: dict | None = None,
-    on_step: Any = None,
-    memory: Any = None,
-    source_types: list[str] | None = None,
-    exclude_source_types: list[str] | None = None,
-) -> dict:
-    """Answer ``question`` from the knowledge base, with citations and facts.
+def answer_question(question: str, **kwargs: Any) -> dict:
+    """Answer ``question`` — see :func:`pheasant.assistant.answering.answer_question`.
 
-    This is the single entry point behind the UI chat panel, ``POST
-    /assistant/chat`` and the MCP ``ask_knowledge_base`` tool. It resolves a
-    credential, builds the retrieval toolbelt, and hands both to the selected
-    :mod:`~pheasant.assistant.workflows` workflow — so which workflow runs is
-    a configuration choice, not a code path.
+    The orchestration around a workflow (routing, conversation, figures,
+    visuals) lives in ``assistant.answering``; this name stays here because it
+    is the one every caller and test has always imported.
     """
-    import os
+    from pheasant.assistant.answering import answer_question as run
 
-    from pheasant.assistant.llm import llm_from_selection
-    from pheasant.assistant.retrieval import PheasantRetriever
-    from pheasant.assistant.workflows import (
-        WorkflowRequest,
-        build_workflow,
-        resolve_workflow_name,
-    )
-
-    settings = getattr(config, "assistant", None)
-    env = env if env is not None else dict(os.environ)
-    max_results = max_results or int(getattr(settings, "max_context_chunks", 8) or 8)
-
-    selected = resolve_provider(config, credential, env)
-    llm = llm_from_selection(selected, settings)
-    retriever = PheasantRetriever(
-        search=search,
-        knowledge_base=knowledge_base,
-        graph=graph,
-        state=state,
-        config=config,
-        memory=memory,
-        source_types=source_types,
-        exclude_source_types=exclude_source_types,
-    )
-
-    name = resolve_workflow_name(
-        workflow or getattr(settings, "workflow", "auto"), has_llm=llm is not None
-    )
-    # `workflow_options` is documented as "keyed by workflow name" and every
-    # example nests it that way — but this splatted it flat, so a config of
-    # `workflow_options: {agentic: {max_rounds: 3}}` produced an option
-    # literally named "agentic" and every key inside it was silently ignored.
-    # Accept both shapes: keys matching the selected workflow are merged in,
-    # any other workflow's block is skipped, and flat keys still work.
-    configured_options = dict(getattr(settings, "workflow_options", None) or {})
-    merged_options = {"max_facts": int(getattr(settings, "max_facts", 12) or 12)}
-    # Typed retrieval criteria (`assistant.retrieval`) sit UNDER
-    # `workflow_options`, so a config that already tuned the untyped dict is
-    # unchanged by their arrival — the block only fills in keys nobody set.
-    retrieval = getattr(settings, "retrieval", None)
-    if retrieval is not None and hasattr(retrieval, "as_options"):
-        merged_options.update(retrieval.as_options())
-    nested_for_workflow: dict = {}
-    for key, value in configured_options.items():
-        if isinstance(value, dict) and (key in _known_workflow_names() or key == name):
-            if key == name:
-                nested_for_workflow = value
-            continue  # another workflow's block — not ours
-        merged_options[key] = value
-    merged_options.update(nested_for_workflow)
-    merged_options.update(options or {})
-    request = WorkflowRequest(
-        question=question,
-        mode=mode,
-        max_results=max_results,
-        source_name=source_name,
-        principal=principal,
-        principal_groups=principal_groups or [],
-        options=merged_options,
-        # Live progress for callers that want it (the streaming chat route).
-        # None keeps the workflow byte-identical to before.
-        on_step=on_step,
-    )
-
-    try:
-        result = build_workflow(name).run(request, retriever, llm)
-    except Exception as exc:  # a custom workflow must not take down the API
-        logger.exception("assistant workflow %r failed; falling back to simple", name)
-        from pheasant.assistant.workflows.simple import SimpleWorkflow
-
-        result = SimpleWorkflow().run(request, retriever, llm)
-        result.error = f"workflow {name!r} failed ({exc}); answered with the simple workflow"
-
-    return {
-        "question": question,
-        "answer": result.answer,
-        "mode": result.mode,
-        "provider": result.provider,
-        "model": result.model,
-        "credential_source": selected.get("source") if selected else None,
-        "error": result.error,
-        "citations": result.citations,
-        "facts": result.facts,
-        "focus_node_ids": result.focus_node_ids,
-        "search_mode": result.search_mode,
-        "counts": result.counts,
-        "workflow": result.workflow,
-        "steps": [
-            {
-                "name": step.name,
-                "detail": step.detail,
-                "passages": step.passages,
-                "duration_seconds": step.duration_seconds,
-                "input_tokens": step.input_tokens,
-                "output_tokens": step.output_tokens,
-            }
-            for step in result.steps
-        ],
-    }
+    return run(question, **kwargs)

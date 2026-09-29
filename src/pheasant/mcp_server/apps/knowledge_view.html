@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pheasant knowledge view</title>
+<!--
+  pheasant's MCP App view (MCP Apps extension, protocol 2026-01-26).
+
+  One self-contained page, no network: an MCP host renders it in a sandboxed
+  iframe for `ask_knowledge_base`, `create_visual` and `get_image`, and
+  pheasant's own UI hosts the very same file for its chat. It renders from the
+  tool result the host sends (`ui/notifications/tool-result`) and can call back
+  only through the host (`tools/call get_image`), so every byte it shows came
+  through a tool the region already ACL-checks.
+
+  Nothing from the result is ever parsed as markup: text goes in through
+  textContent and the diagram is built node by node as SVG. A model wrote the
+  answer and the diagram labels; treating either as HTML would be the one way
+  this page could be made to run something.
+-->
+<style>
+  :root { --bg: #ffffff; --fg: #1d2330; --muted: #5d6677; --line: #d7dbe3; --accent: #2f6fdf;
+          --chip: #eaf1fd; --node: #f5f7fb; --inferred: #9aa3b2; --warn: #9a5b00; }
+  :root[data-theme="dark"] { --bg: #16191f; --fg: #e7eaf0; --muted: #9aa3b2; --line: #333a46;
+          --accent: #7aa7ff; --chip: #22314d; --node: #1f242d; --inferred: #6b7486; --warn: #f0b35a; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { padding: 12px 14px; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  h3, h4 { margin: 14px 0 4px; font-size: 14px; }
+  p { margin: 6px 0; }
+  pre { background: var(--node); border: 1px solid var(--line); padding: 8px; overflow: auto;
+    border-radius: 6px; font-size: 12.5px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  .chip { display: inline-block; min-width: 1.4em; padding: 0 4px; margin: 0 1px; border-radius: 8px;
+    background: var(--chip); color: var(--accent); font-size: 11px; text-align: center; cursor: default; }
+  .figure { margin: 10px 0; }
+  .figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+  .figure figcaption { color: var(--muted); font-size: 12.5px; }
+  .sources { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .sources li { font-size: 12.5px; }
+  .diagram { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); }
+  .declined { color: var(--warn); }
+  svg text { fill: var(--fg); font: 12px system-ui, sans-serif; }
+  svg .node rect { fill: var(--node); stroke: var(--accent); stroke-width: 1.2; }
+  svg .node.inferred rect { stroke: var(--inferred); stroke-dasharray: 4 3; }
+  svg .edge path, svg .edge line { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+  svg .edge.inferred path, svg .edge.inferred line { stroke-dasharray: 4 3; }
+  svg .edge text { fill: var(--muted); font-size: 11px; }
+  svg .cite { fill: var(--accent); font-size: 10px; }
+  svg .lifeline { stroke: var(--line); stroke-dasharray: 3 3; }
+  button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
+    font: inherit; }
+</style>
+</head>
+<body>
+<main id="root"><p class="muted">Waiting for a result…</p></main>
+<script>
+(() => {
+  "use strict";
+  const PROTOCOL = "2026-01-26";
+  const root = document.getElementById("root");
+  let nextId = 1;
+  const pending = new Map();
+
+  // ---------------------------------------------------------------- bridge
+  function send(message) { window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*"); }
+  function request(method, params) {
+    const id = nextId++;
+    send({ id, method, params });
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      setTimeout(() => { if (pending.delete(id)) reject(new Error(method + " timed out")); }, 20000);
+    });
+  }
+  function notify(method, params) { send({ method, params }); }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && pending.has(message.id)) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message || "error"));
+      else waiter.resolve(message.result);
+      return;
+    }
+    if (message.method === "ui/notifications/tool-result") render(message.params || {});
+    if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
+  });
+
+  function applyContext(context) {
+    if (context && (context.theme === "dark" || context.theme === "light")) {
+      document.documentElement.dataset.theme = context.theme;
+    }
+  }
+
+  function reportSize() {
+    const height = Math.ceil(document.documentElement.scrollHeight);
+    notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height });
+  }
+  new ResizeObserver(reportSize).observe(document.body);
+
+  request("ui/initialize", {
+    protocolVersion: PROTOCOL,
+    clientInfo: { name: "pheasant-knowledge-view", version: "1" },
+    appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+  }).then((result) => {
+    applyContext(result && result.hostContext);
+    notify("ui/notifications/initialized", {});
+  }).catch(() => notify("ui/notifications/initialized", {}));
+
+  // ---------------------------------------------------------------- helpers
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (key === "class") node.className = value; else node.setAttribute(key, value);
+    }
+    for (const child of children) {
+      if (child === null || child === undefined) continue;
+      node.append(typeof child === "string" ? document.createTextNode(child) : child);
+    }
+    return node;
+  }
+  const SVG = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs) {
+    const node = document.createElementNS(SVG, tag);
+    for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, String(value));
+    return node;
+  }
+
+  function payloadOf(result) {
+    if (result.structuredContent && typeof result.structuredContent === "object") {
+      return result.structuredContent.result && typeof result.structuredContent.result === "object"
+        ? result.structuredContent.result : result.structuredContent;
+    }
+    for (const block of result.content || []) {
+      if (block.type === "text") { try { return JSON.parse(block.text); } catch (_) { /* text */ } }
+    }
+    return {};
+  }
+
+  // ---------------------------------------------------------------- render
+  function render(result) {
+    root.replaceChildren();
+    const image = (result.content || []).find((block) => block.type === "image");
+    const payload = payloadOf(result);
+    if (image) { renderImageResult(image, payload); reportSize(); return; }
+    if (typeof payload.answer === "string") renderAnswer(payload);
+    else if (payload.visual) renderVisual(payload.visual, payload.citations || []);
+    else root.append(el("p", { class: "muted" }, "Nothing to show for this result."));
+    reportSize();
+  }
+
+  function renderImageResult(image, payload) {
+    const figure = el("figure", { class: "figure" });
+    figure.append(el("img", { src: `data:${image.mimeType};base64,${image.data}`,
+      alt: payload.caption || payload.relative_path || "image" }));
+    figure.append(el("figcaption", {}, [payload.relative_path, payload.caption]
+      .filter(Boolean).join(" — ")));
+    root.append(figure);
+  }
+
+  function renderAnswer(payload) {
+    const citations = payload.citations || [];
+    const figures = payload.figures || [];
+    const route = payload.route || {};
+    const bits = [route.intent, route.depth && route.depth + " answer"].filter(Boolean);
+    if (bits.length) root.append(el("p", { class: "muted" }, bits.join(" · ")));
+    renderText(payload.answer, citations, figures, root);
+    if (payload.visual && payload.visual.status) renderVisual(payload.visual, citations);
+    renderSources(citations);
+  }
+
+  // A deliberately small Markdown subset — the one the UI's AnswerBody
+  // renders — built with DOM calls only.
+  function renderText(text, citations, figures, into) {
+    const parts = String(text || "").split("```");
+    parts.forEach((part, index) => {
+      if (index % 2 === 1) {
+        const newline = part.indexOf("\n");
+        into.append(el("pre", {}, el("code", {}, newline > 0 ? part.slice(newline + 1) : part)));
+        return;
+      }
+      for (const block of part.split(/\n{2,}/)) {
+        const lines = block.split("\n").filter((line) => line.trim());
+        if (!lines.length) continue;
+        const figureOnly = lines.length === 1 && /^\s*\[fig:(\d{1,2})\]\s*$/.exec(lines[0]);
+        if (figureOnly) { into.append(figureBlock(Number(figureOnly[1]), figures)); continue; }
+        const heading = lines.length === 1 && /^(#{1,4})\s+(.*)$/.exec(lines[0]);
+        if (heading) { into.append(el(heading[1].length <= 3 ? "h3" : "h4", {},
+          ...inline(heading[2], citations, figures))); continue; }
+        if (lines.every((line) => /^\s*[-*•]\s+/.test(line))) {
+          into.append(el("ul", {}, ...lines.map((line) =>
+            el("li", {}, ...inline(line.replace(/^\s*[-*•]\s+/, ""), citations, figures)))));
+          continue;
+        }
+        if (lines.every((line) => /^\s*\d+[.)]\s+/.test(line))) {
+          into.append(el("ol", {}, ...lines.map((line) =>
+            el("li", {}, ...inline(line.replace(/^\s*\d+[.)]\s+/, ""), citations, figures)))));
+          continue;
+        }
+        into.append(el("p", {}, ...inline(block, citations, figures)));
+      }
+    });
+  }
+
+  function inline(text, citations, figures) {
+    const out = [];
+    const pattern = /(\[fig:\d{1,2}\])|(\[\d{1,2}\])|(`[^`]+`)|(\*\*[^*]+\*\*)/;
+    let rest = text;
+    while (rest) {
+      const match = pattern.exec(rest);
+      if (!match) { out.push(rest); break; }
+      if (match.index > 0) out.push(rest.slice(0, match.index));
+      const token = match[0];
+      if (token.startsWith("[fig:")) {
+        const figure = figures.find((f) => f.figure === Number(token.slice(5, -1)));
+        out.push(el("span", { class: "chip", title: figure ? figure.relative_path || "" : "" },
+          "fig " + token.slice(5, -1)));
+      } else if (/^\[\d{1,2}\]$/.test(token)) {
+        const index = Number(token.slice(1, -1));
+        const citation = citations.find((c) => c.index === index);
+        out.push(el("span", { class: "chip", title: citation ? citation.title || "" : "" },
+          String(index)));
+      } else if (token.startsWith("`")) {
+        out.push(el("code", {}, token.slice(1, -1)));
+      } else {
+        out.push(el("strong", {}, token.slice(2, -2)));
+      }
+      rest = rest.slice(match.index + token.length);
+    }
+    return out;
+  }
+
+  function figureBlock(number, figures) {
+    const figure = figures.find((f) => f.figure === number);
+    const holder = el("figure", { class: "figure" });
+    if (!figure) return holder;
+    const caption = el("figcaption", {}, `Fig. ${number} — ${figure.relative_path || ""}` +
+      (figure.caption ? ` — ${figure.caption}` : ""));
+    holder.append(el("p", { class: "muted" }, "Loading image…"), caption);
+    // Through the host, never a fetch: the view has no network, and the
+    // tool is what applies the region's ACL to the bytes.
+    request("tools/call", { name: "get_image", arguments: { node_id: figure.node_id } })
+      .then((result) => {
+        const image = (result && result.content || []).find((block) => block.type === "image");
+        holder.firstChild.replaceWith(image
+          ? el("img", { src: `data:${image.mimeType};base64,${image.data}`,
+              alt: figure.caption || figure.alt || figure.relative_path || "figure" })
+          : el("p", { class: "muted" }, "Image unavailable."));
+        reportSize();
+      })
+      .catch(() => { holder.firstChild.replaceWith(el("p", { class: "muted" }, "Image unavailable.")); });
+    return holder;
+  }
+
+  function renderSources(citations) {
+    if (!citations.length) return;
+    const list = el("ol", {});
+    for (const citation of citations) {
+      list.append(el("li", { value: String(citation.index) },
+        citation.relative_path || citation.title || citation.node_id || "source"));
+    }
+    root.append(el("div", { class: "sources" }, el("div", { class: "muted" }, "Sources"), list));
+  }
+
+  // ---------------------------------------------------------------- visuals
+  function renderVisual(visual, citations) {
+    if (visual.status === "pending") {
+      root.append(el("p", { class: "muted" }, "Drawing the visual…"));
+      return;
+    }
+    if (visual.status !== "ok") {
+      root.append(el("p", { class: "declined" }, "No visual: " + (visual.reason || "declined")));
+      return;
+    }
+    if (visual.type === "images") {
+      for (const figure of visual.figures || []) root.append(figureBlock(figure.figure, visual.figures));
+      return;
+    }
+    const diagram = visual.diagram;
+    root.append(el("h1", {}, diagram.title || "Diagram"));
+    if (diagram.summary) root.append(el("p", { class: "muted" }, diagram.summary));
+    const holder = el("div", { class: "diagram" });
+    holder.append(diagram.kind === "sequence" ? sequenceSvg(diagram) : layeredSvg(diagram));
+    root.append(holder);
+    const grounding = visual.grounding || {};
+    root.append(el("p", { class: "muted" },
+      `${grounding.cited || 0} of ${(grounding.cited || 0) + (grounding.inferred || 0)} elements ` +
+      `cite a passage; dashed ones do not. Source: ${visual.source === "graph"
+        ? "the index's own graph edges" : "the model, checked against the passages"}.`));
+  }
+
+  function arrowDefs() {
+    const defs = svg("defs");
+    const marker = svg("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5,
+      markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--muted)" }));
+    defs.append(marker);
+    return defs;
+  }
+
+  function measure(label) { return Math.min(220, Math.max(70, 7.2 * label.length + 24)); }
+
+  // Layered left-to-right (flow, timeline) or top-down (hierarchy, concept)
+  // layout: longest-path ranks over the acyclic part of the graph, so a
+  // process reads in order. Deterministic: node order breaks every tie.
+  function layeredSvg(diagram) {
+    const horizontal = diagram.kind === "flow" || diagram.kind === "timeline";
+    const nodes = diagram.nodes;
+    const index = new Map(nodes.map((node, i) => [node.id, i]));
+    const rank = new Map(nodes.map((node) => [node.id, 0]));
+    const forward = diagram.edges.filter((edge) => index.get(edge.from) < index.get(edge.to));
+    for (let pass = 0; pass < nodes.length; pass++) {
+      let changed = false;
+      for (const edge of forward) {
+        if (rank.get(edge.to) < rank.get(edge.from) + 1) { rank.set(edge.to, rank.get(edge.from) + 1); changed = true; }
+      }
+      if (!changed) break;
+    }
+    const layers = [];
+    for (const node of nodes) (layers[rank.get(node.id)] ||= []).push(node);
+    const gapMain = 70, gapCross = 26, height = 38;
+    const pos = new Map();
+    let main = 16;
+    for (const layer of layers) {
+      if (!layer) continue;
+      const widest = Math.max(...layer.map((node) => measure(node.label)));
+      let cross = 16;
+      for (const node of layer) {
+        const width = measure(node.label);
+        pos.set(node.id, horizontal
+          ? { x: main + (widest - width) / 2, y: cross, w: width, h: height }
+          : { x: cross, y: main, w: width, h: height });
+        cross += (horizontal ? height : width) + gapCross;
+      }
+      main += (horizontal ? widest : height) + gapMain;
+    }
+    const boxes = [...pos.values()];
+    const width = Math.max(...boxes.map((b) => b.x + b.w)) + 16;
+    const totalHeight = Math.max(...boxes.map((b) => b.y + b.h)) + 16;
+    const canvas = svg("svg", { width, height: totalHeight, viewBox: `0 0 ${width} ${totalHeight}`,
+      role: "img", "aria-label": diagram.title || "diagram" });
+    canvas.append(arrowDefs());
+    for (const edge of diagram.edges) {
+      const a = pos.get(edge.from), b = pos.get(edge.to);
+      if (!a || !b) continue;
+      const [x1, y1, x2, y2] = horizontal
+        ? [a.x + a.w, a.y + a.h / 2, b.x, b.y + b.h / 2]
+        : [a.x + a.w / 2, a.y + a.h, b.x + b.w / 2, b.y];
+      const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") });
+      const bend = horizontal ? `C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2}` : `C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2}`;
+      group.append(svg("path", { d: `M${x1},${y1} ${bend} ${x2},${y2}`, "marker-end": "url(#arrow)" }));
+      if (edge.label) {
+        const text = svg("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 4, "text-anchor": "middle" });
+        text.textContent = edge.label;
+        group.append(text);
+      }
+      canvas.append(group);
+    }
+    for (const node of nodes) {
+      const box = pos.get(node.id);
+      const group = svg("g", { class: "node" + (node.inferred ? " inferred" : "") });
+      group.append(svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h, rx: 7 }));
+      const text = svg("text", { x: box.x + box.w / 2, y: box.y + box.h / 2 + 4, "text-anchor": "middle" });
+      text.textContent = node.label;
+      group.append(text);
+      if (node.cites && node.cites.length) {
+        const cite = svg("text", { class: "cite", x: box.x + box.w - 4, y: box.y + 11, "text-anchor": "end" });
+        cite.textContent = node.cites.map((n) => `[${n}]`).join("");
+        group.append(cite);
+      }
+      const title = svg("title");
+      title.textContent = node.inferred ? `${node.label} (not cited)` : `${node.label} — sources ${node.cites.join(", ")}`;
+      group.append(title);
+      // Ask the conversation to go deeper on one element; the host decides.
+      group.style.cursor = "pointer";
+      group.addEventListener("click", () => request("ui/message", {
+        role: "user", content: { type: "text", text: `Tell me more about ${node.label}` },
+      }).catch(() => {}));
+      canvas.append(group);
+    }
+    return canvas;
+  }
+
+  function sequenceSvg(diagram) {
+    const lane = 150, top = 20, step = 36;
+    const nodes = diagram.nodes;
+    const x = new Map(nodes.map((node, i) => [node.id, 20 + i * lane + lane / 2]));
+    const width = 40 + nodes.length * lane;
+    const height = top + 44 + diagram.edges.length * step + 20;
+    const canvas = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
+      "aria-label": diagram.title || "sequence diagram" });
+    canvas.append(arrowDefs());
+    for (const node of nodes) {
+      const cx = x.get(node.id), w = measure(node.label);
+      const group = svg("g", { class: "node" + (node.inferred ? " inferred" : "") });
+      group.append(svg("rect", { x: cx - w / 2, y: top, width: w, height: 30, rx: 6 }));
+      const text = svg("text", { x: cx, y: top + 19, "text-anchor": "middle" });
+      text.textContent = node.label;
+      group.append(text);
+      canvas.append(group, svg("line", { class: "lifeline", x1: cx, y1: top + 30, x2: cx, y2: height - 10 }));
+    }
+    diagram.edges.forEach((edge, i) => {
+      const y = top + 58 + i * step, x1 = x.get(edge.from), x2 = x.get(edge.to);
+      const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") });
+      group.append(svg("line", { x1, y1: y, x2, y2: y, "marker-end": "url(#arrow)" }));
+      const text = svg("text", { x: (x1 + x2) / 2, y: y - 5, "text-anchor": "middle" });
+      text.textContent = `${i + 1}. ${edge.label || ""}` + (edge.cites.length ? ` [${edge.cites.join("][")}]` : "");
+      group.append(text);
+      canvas.append(group);
+    });
+    return canvas;
+  }
+})();
+</script>
+</body>
+</html>

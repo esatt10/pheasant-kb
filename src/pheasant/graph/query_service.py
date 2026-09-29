@@ -245,6 +245,9 @@ class RemoteGraph:
     def remote_facts(self, node_ids: list[str], limit: int = 12) -> list[dict[str, Any]]:
         return list(self.client.query("facts", node_ids=node_ids, limit=limit) or [])
 
+    def remote_figures(self, node_ids: list[str], limit: int = 8) -> list[dict[str, Any]]:
+        return list(self.client.query("figures", node_ids=node_ids, limit=limit) or [])
+
     def remote_memory_coverage(self, artifact_ids: list[str]) -> dict[str, Any]:
         return dict(self.client.query("memory_coverage", artifact_ids=artifact_ids))
 

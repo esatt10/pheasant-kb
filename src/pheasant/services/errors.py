@@ -120,6 +120,41 @@ class InvalidRequest(ServiceError):
     code = "INVALID_REQUEST"
 
 
+class EmptyQuestion(InvalidRequest):
+    """A question with no text. 400, which is what the chat route always said."""
+
+    status = 400
+
+    def __init__(self) -> None:
+        super().__init__("question must not be empty")
+
+
+class AssistantDisabled(ServiceError):
+    """``assistant.enabled`` is off, on every surface that answers questions.
+
+    Before answering moved into the service layer only HTTP refused; the MCP
+    tool answered anyway, so the setting an operator turned off to stop the
+    region calling a model was a setting agents walked around.
+    """
+
+    status = 403
+    code = "ASSISTANT_DISABLED"
+
+    def __init__(self) -> None:
+        super().__init__("The assistant is disabled")
+
+
+class MediaNotFound(ServiceError):
+    """No stored bytes for this node: not an image, or never captured."""
+
+    status = 404
+    code = "UNKNOWN_MEDIA"
+
+    def __init__(self, node_id: str) -> None:
+        super().__init__(f"No media stored for node: {node_id}")
+        self.node_id = node_id
+
+
 class SnapshotNotFound(ServiceError):
     """A snapshot id this region has never sealed."""
 

@@ -54,6 +54,7 @@ import re
 import time
 from typing import Any, TypedDict
 
+from pheasant.assistant import conversation, longform, routing
 from pheasant.assistant.chat import (
     CONTENT_DEFAULTS,
     INTENTS,
@@ -75,6 +76,10 @@ DEFAULTS: dict[str, Any] = {
     # Which answer shape to plan and write toward: "auto" reads it off the
     # question (chat.classify_intent), or pin "knowledge" / "procedural".
     "intent": "auto",
+    # How long the answer should be: "auto" reads it off the question
+    # (assistant.routing.classify_depth), or pin "short" / "medium" / "long".
+    # "short" is the answer this workflow has always written.
+    "depth": "auto",
     # How many plan→retrieve→grade rounds before answering with what we have.
     "max_rounds": 3,
     # Search modes to fan out over. "vector" is dropped automatically when no
@@ -177,7 +182,12 @@ identifier, path or symbol.
 - "intent" is "procedural" when the asker wants to DO something (steps, \
 usage, configuration, code examples) and "knowledge" when they want to \
 UNDERSTAND something (what it is, what it does, how it is organised). A \
-first reading is given to you below; change it only if it is clearly wrong."""
+first reading is given to you below; change it only if it is clearly wrong.
+- "depth" is "short" for a direct answer, "medium" for an overview in a few \
+sections, "long" for a detailed, sectioned write-up. A first reading is given \
+below; change it only if the question clearly asks for more or less.
+- If an earlier conversation is shown, the question may refer back to it: \
+plan queries for what it refers to, by name."""
 
 GRADER_SYSTEM = """You judge whether retrieved passages are sufficient to \
 answer a question.
@@ -229,6 +239,12 @@ class AgentState(TypedDict, total=False):
     #: a default, but never something the user asked for by name.
     explicit_options: list[str]
     intent: str
+    depth: str
+    #: ``{"depth": why}`` and ``{"depth": rule|planner|pinned}``.
+    depth_why: str
+    depth_by: str
+    history: list
+    search_question: str
     capabilities: Any
     queries: list[str]
     modes: list[str]
@@ -238,6 +254,7 @@ class AgentState(TypedDict, total=False):
     grade: dict
     citations: list[dict]
     facts: list[dict]
+    figures: list[dict]
     answer: str
     answer_mode: str
     error: str | None
@@ -259,6 +276,9 @@ def resolve_options(state: AgentState) -> dict:
     for key, value in profile.items():
         if key not in explicit:
             options[key] = value
+    # Depth layers over intent: a long procedural answer still reads files
+    # deeply, it just reads more of them into more sections.
+    options = routing.depth_options(str(state.get("depth") or "short"), options, explicit)
     floor = int(options.get("min_context_passages") or 0)
     options["max_context_passages"] = max(int(options["max_context_passages"]), floor)
     return options
@@ -295,11 +315,18 @@ def classify_node(state: AgentState, ctx: dict) -> dict:
         intent, why = configured, "pinned by configuration"
     else:
         intent, why = classify_intent(state["question"])
+    depth, depth_why, depth_by = routing.classify_depth(
+        state["question"], (state.get("options") or {}).get("depth")
+    )
+    length = "" if depth == "short" else f"; {depth} answer ({depth_why})"
     return {
         "intent": intent,
+        "depth": depth,
+        "depth_why": depth_why,
+        "depth_by": depth_by,
         "steps": [
             *state.get("steps", []),
-            WorkflowStep(name="classify", detail=f"{INTENT_LABELS[intent]} — {why}"),
+            WorkflowStep(name="classify", detail=f"{INTENT_LABELS[intent]} — {why}{length}"),
         ],
     }
 
@@ -336,15 +363,21 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
             ],
         }
 
-    queries = [question]
-    notes = "asked as-is"
+    history = state.get("history") or []
+    searched = state.get("search_question") or question
+    queries = [searched]
+    notes = "asked as-is" if searched == question else "follow-up, searched in context"
     steps = list(state.get("steps", []))
+    depth = str(state.get("depth") or "short")
+    depth_update: dict = {}
     if llm is not None:
         raw = llm.try_complete(
             PLANNER_SYSTEM,
             f"{capabilities.as_prompt_context()}\n\n"
-            f"First reading of the question: {intent}\n"
-            f"Question: {question}",
+            f"{conversation.history_block(history)}"
+            f"First reading of the question: {intent}, {depth} answer\n"
+            f"Question: {question}"
+            + (f"\nStandalone form: {searched}" if searched != question else ""),
             max_output_tokens=400,
         )
         parsed = _parse_json(raw)
@@ -353,7 +386,7 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
             if planned:
                 # Always keep the original question: a planner that drifts
                 # should not be able to lose the user's actual words.
-                queries = _dedupe([question, *planned])[:4]
+                queries = _dedupe([searched, *planned])[:4]
                 notes = str(parsed.get("reasoning") or "planned")
             planned_modes = [str(m) for m in parsed.get("modes", []) if m in capabilities.modes]
             # An explicit retrieval_modes list is a fanout contract, not just
@@ -373,8 +406,26 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
                     )
                 )
                 intent = planned_intent
+            # The same rule for depth: overturn only an unpinned reading.
+            planned_depth = str(parsed.get("depth") or "").strip().lower()
+            if (
+                planned_depth in routing.DEPTHS
+                and planned_depth != depth
+                and state.get("depth_by") == "rule"
+            ):
+                steps.append(
+                    WorkflowStep(
+                        name="reclassify", detail=f"planner read this as a {planned_depth} answer"
+                    )
+                )
+                depth_update = {
+                    "depth": planned_depth,
+                    "depth_why": "the planner's reading",
+                    "depth_by": "planner",
+                }
 
     return {
+        **depth_update,
         "intent": intent,
         "queries": queries,
         "modes": available,
@@ -406,6 +457,22 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
         principal_groups=request.principal_groups,
     )
     merged = _merge_passages(state.get("passages", []), found)
+    # A follow-up keeps the previous question's evidence in play, on the first
+    # round only: it is searched again under the same ACL and criteria as
+    # everything else, and ranks below the follow-up's own hits.
+    carried = conversation.carried_question(state.get("history") or [])
+    if carried and state.get("search_question") and not state.get("round"):
+        merged = conversation.carry(
+            merged,
+            retriever.multi_search(
+                [carried],
+                modes=state.get("modes") or ["hybrid"],
+                limit=int(options["per_query_results"]),
+                source_name=request.source_name,
+                principal=request.principal,
+                principal_groups=request.principal_groups,
+            ),
+        )
     return {
         "passages": merged,
         "steps": [
@@ -527,20 +594,25 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     This is where retrieval stops being a list of the right files and starts
     being an answer about them: the cited chunks are joined back up into the
     files they came from (:func:`~pheasant.assistant.chat.hydrate_citations`)
-    and the answering prompt is the one for the classified intent.
+    and the answering prompt is the one for the classified intent and depth.
+    A ``long`` answer is written section by section (``assistant.longform``).
     """
     retriever, llm = ctx["retriever"], ctx["llm"]
     options = resolve_options(state)
     intent = str(state.get("intent") or "knowledge")
+    depth = str(state.get("depth") or "short")
     passages = state.get("passages", [])[: int(options["max_context_passages"])]
     citations = passages_to_citations(passages, int(options["max_context_passages"]))
     node_ids = [c["node_id"] for c in citations if c.get("node_id")]
     facts = retriever.facts(node_ids, int(options["max_facts"]))
+    collect = getattr(retriever, "figures", None)
+    figures = collect(citations) if callable(collect) and citations else []
 
     if llm is None or not citations:
         return {
             "citations": citations,
             "facts": facts,
+            "figures": figures,
             "answer": extractive_answer(state["question"], citations),
             "answer_mode": "extractive",
         }
@@ -561,29 +633,39 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                 duration_seconds=read_seconds,
             )
         )
+    history_text = conversation.history_block(state.get("history") or [])
+    evidence = {"citations": citations, "facts": facts, "figures": figures}
     try:
-        answer = llm.complete(
-            system_prompt_for(intent),
-            build_prompt(state["question"], citations, facts, documents),
-        )
-        return {
-            "citations": citations,
-            "facts": facts,
-            "answer": answer,
-            "answer_mode": "llm",
-            "steps": [
-                *steps,
+        if depth == "long":
+            answer, long_steps = longform.write_long(
+                state, ctx, options, documents, history_text, evidence
+            )
+            steps.extend(long_steps)
+        else:
+            answer = llm.complete(
+                system_prompt_for(intent, depth, figures=bool(figures)),
+                build_prompt(
+                    state["question"],
+                    citations,
+                    facts,
+                    documents,
+                    history_text=history_text,
+                    figures=figures,
+                ),
+                max_output_tokens=options.get("max_output_tokens"),
+            )
+            steps.append(
                 WorkflowStep(
                     name="synthesize",
-                    detail=f"wrote a {INTENT_LABELS[intent]} answer from {len(citations)} passages",
+                    detail=f"wrote a {INTENT_LABELS[intent]} answer from {len(citations)} passages"
+                    + ("" if depth == "short" else f" ({depth})"),
                     passages=len(citations),
-                ),
-            ],
-        }
+                )
+            )
+        return {**evidence, "answer": answer, "answer_mode": "llm", "steps": steps}
     except ProviderError as exc:
         return {
-            "citations": citations,
-            "facts": facts,
+            **evidence,
             "answer": extractive_answer(
                 state["question"], citations, reason=short_reason(str(exc))
             ),
@@ -839,6 +921,8 @@ class AgenticWorkflow:
             "round": 0,
             "plan_notes": [],
             "steps": [],
+            "history": list(request.history or []),
+            "search_question": request.search_question or "",
         }
         # `recursion_limit` is LangGraph's own runaway guard; size it to the
         # configured rounds so a pathological grader cannot spin forever.
@@ -851,6 +935,13 @@ class AgenticWorkflow:
         )
 
         citations = final.get("citations", [])
+        depth = final.get("depth", "short")
+        route = {
+            "intent": final.get("intent", "knowledge"),
+            "depth": depth,
+            "why": {"depth": final.get("depth_why", "")},
+            "decided_by": {"depth": final.get("depth_by", "rule")},
+        }
         return WorkflowResult(
             answer=final.get("answer", ""),
             citations=citations,
@@ -868,9 +959,12 @@ class AgenticWorkflow:
                 # How the question was read. Surfaced so a caller can tell a
                 # summary from a how-to without re-parsing the answer.
                 "intent": final.get("intent", "knowledge"),
+                "depth": depth,
             },
             steps=final.get("steps", []),
             workflow=self.name,
+            figures=final.get("figures", []),
+            route=route,
         )
 
 
