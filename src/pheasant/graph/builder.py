@@ -247,8 +247,37 @@ class GraphBuilder:
             )
             self.upsert_edge(artifact.id, chunk_id, "has_chunk", {"source_id": source.name})
         self.add_headings(source, artifact)
+        self._drop_embeds(artifact.id)
         self.apply_enrichment(enrichment)
         return enrichment
+
+    def _drop_embeds(self, artifact_id: str) -> None:
+        """Forget which images a document showed before this index of it.
+
+        Enrichment is upserted, so on an incremental re-index an edge the new
+        text no longer implies would otherwise survive — the pre-existing
+        behaviour for `references`, and a visible one for `embeds`: an answer
+        would keep showing a figure the document stopped containing. The
+        document's `embeds` edges are therefore re-derived from its current
+        text every time it is indexed; the ones it still has come straight
+        back from `apply_enrichment` and the global resolution pass.
+
+        Only pairs whose every edge is `embeds` are dropped, so a parallel edge
+        of another type between the same two nodes is never collateral. Scoped
+        to `embeds` deliberately: doing the same for `references` changes what
+        an incremental sync means for every corpus and needs its own evidence
+        (CLAUDE.md §6, the chunk-node leak).
+        """
+
+        if artifact_id not in self.graph:
+            return
+        pairs = [
+            (source, target)
+            for source, target, edge_map in self.graph.out_edges(artifact_id)
+            if edge_map and all(data.get("type") == "embeds" for data in edge_map.values())
+        ]
+        if pairs:
+            self.graph.remove_edges_from(pairs)
 
     def add_memory_edges(self, state: Any, max_targets: int | None = None) -> dict[str, Any]:
         """Wire memory records into the graph (Step 33.7). Returns a report.

@@ -1874,6 +1874,21 @@ Each of these cost real time. They are listed because the shape recurs.
   the iframe's own height — so a host could grow the frame and never shrink it,
   and every answer kept the tallest frame it had ever had. Measure the content
   element. Found by looking at a screenshot, which no test would have done.
+- **Enrichment that only upserts cannot express "this link is gone".**
+  `embeds` edges are added when a page links an image, and re-indexing a page
+  re-asserted the links it still had without retracting the one it had
+  dropped — so an edit that deleted an image kept showing it as the page's
+  figure, in every answer, forever. `GraphBuilder.add_artifact` drops the
+  artifact's own `embeds` before applying enrichment now. Scoped to `embeds`
+  deliberately: `references` has the same shape and the same fix would change
+  what an incremental sync does to every cross-source link, which wants its
+  own evidence (as the chunk leak above does). Found by running the fleet
+  (`deploy/compose/ci/fleet-smoke/process_fleet.py`), whose edit check was then
+  run with the fix removed to watch it fail; the offline twin is in
+  `tests/test_sync_idempotency.py`. The fleet check had to assert on
+  `embedded_in`, not on "no figures": an image whose own caption matches the
+  question is a figure of itself, and the first version of the check blamed
+  that correct answer.
 
 ---
 

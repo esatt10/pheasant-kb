@@ -558,3 +558,70 @@ def test_a_document_embedding_an_image_resyncs_to_the_same_state(tmp_path: Path)
     assert embeds() == first[0], "a full re-sync must not duplicate the resolved edge"
     assert stored() == first[1], "unchanged bytes are never rewritten"
     engine.close()
+
+
+def test_an_edit_that_drops_an_image_link_drops_the_figure(tmp_path: Path) -> None:
+    """Enrichment is upserted, so an `embeds` edge the new text no longer
+    implies would survive an incremental re-index — and an answer would keep
+    showing a figure the document stopped containing. Found on the fleet: edit
+    a page, sync through the queue, and the old image is still a figure.
+
+    Covers the three edits that matter: the link removed, the link pointed at
+    a different image, and an unchanged re-sync (which must keep the edge)."""
+
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.graph.figures import collect_figures
+    from pheasant.sync.engine import SyncEngine
+
+    fixture = Path(__file__).parent / "fixtures" / "sample_workspace" / "images" / "diagram.png"
+    workspace = tmp_path / "workspace"
+    (workspace / "img").mkdir(parents=True)
+    (workspace / "img" / "old.png").write_bytes(fixture.read_bytes())
+    (workspace / "img" / "new.png").write_bytes(fixture.read_bytes() + b"\x02")
+    page = workspace / "design.md"
+    page.write_text("# Design\n\n![Old](img/old.png)\n", encoding="utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "embeds-edits",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(workspace),
+                    "include": ["**/*.md", "**/*.png"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    doc = "file:docs:design.md:branch=none"
+
+    def shown() -> list[str]:
+        figures = collect_figures(engine.graph_builder.graph, [doc])
+        return [figure["relative_path"] for figure in figures]
+
+    engine.sync_source("docs", "full")
+    assert shown() == ["img/old.png"]
+
+    engine.sync_source("docs", "incremental")
+    assert shown() == ["img/old.png"], "an unchanged page keeps its figure"
+
+    page.write_text("# Design\n\n![New](img/new.png)\n", encoding="utf-8")
+    engine.sync_source("docs", "incremental")
+    assert shown() == ["img/new.png"], "a re-pointed link moves the figure"
+
+    page.write_text("# Design\n\nThe diagram was removed.\n", encoding="utf-8")
+    engine.sync_source("docs", "incremental")
+    assert shown() == [], "a removed link removes the figure"
+
+    # And the persisted graph agrees with the working set: a serving replica
+    # reads the rows, not the indexer's copy.
+    engine.reload_graph()
+    assert collect_figures(engine.serving_graph(), [doc]) == []
+    engine.close()
