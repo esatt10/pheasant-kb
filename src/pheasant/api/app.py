@@ -323,6 +323,7 @@ class RetrievalRequest(BaseModel):
     expand_depth: int | None = None
     expand_per_node: int | None = None
     grade_evidence: bool | None = None
+    grader_model: str | None = None
     verify_citations: bool | None = None
     max_facts: int | None = None
     # Write the change to the config file as well as the live process.
@@ -458,7 +459,7 @@ class RemotePrepareRequest(BaseModel):
 
 #: Tasks a worker will accept in one batch. Every task holds its file's bytes
 #: in memory, so this is a memory bound, not a politeness limit: at the
-#: 25 MB-per-file default a 64-task batch is already a 1.6 GB worst case, and
+#: 1 GiB-per-file default a 64-task batch is already a 64 GiB worst case, and
 #: the coordinator's own default batch is far smaller.
 MAX_PREPARE_BATCH = 64
 
@@ -4045,7 +4046,7 @@ def create_app(
     @app.get("/graph/neighbors")
     def graph_neighbors_route(
         node_id: str,
-        depth: int = 1,
+        depth: int = 2,
         edge_types: str | None = None,
         exclude_edge_types: str | None = None,
     ) -> dict:
@@ -5103,6 +5104,9 @@ def create_app(
                             "name": step.name,
                             "detail": step.detail,
                             "passages": step.passages,
+                            "duration_seconds": step.duration_seconds,
+                            "input_tokens": step.input_tokens,
+                            "output_tokens": step.output_tokens,
                         }
                     ),
                 )
@@ -5176,6 +5180,9 @@ def create_app(
         # `exclude_none` on purpose: a PUT that sets one knob must not reset
         # the other nine to their schema defaults.
         changes = req.model_dump(exclude={"persist"}, exclude_none=True)
+        # Unlike an omitted field, an explicit null clears a model override.
+        if "grader_model" in req.model_fields_set:
+            changes["grader_model"] = req.grader_model
         previous = {key: getattr(settings, key) for key in changes}
         for key, value in changes.items():
             setattr(settings, key, value)

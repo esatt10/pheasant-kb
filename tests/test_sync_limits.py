@@ -409,6 +409,35 @@ def test_effective_source_unions_secret_excludes(tmp_path: Path, home: Path) -> 
     assert source.exclude == ["**/mine/**"]
 
 
+def test_source_processing_policy_overrides_every_source_without_mutating_it(
+    tmp_path: Path,
+) -> None:
+    config = PheasantConfig.model_validate(
+        {"sync": {"source_processing": {"chunk_max_chars": 2000, "taxonomy_enabled": True}}}
+    )
+    source = SourceConfig(name="uploaded", type=SourceType.document_folder, path=tmp_path)
+    source.chunking.max_chars = 3000
+
+    resolved = config.effective_source(source)
+
+    assert resolved.chunking.max_chars == 2000
+    assert resolved.taxonomy.enabled is True
+    assert source.chunking.max_chars == 3000
+    assert source.taxonomy.enabled is False
+    assert PheasantConfig().effective_source(source).chunking.max_chars == 3000
+    assert PheasantConfig().effective_source(source).taxonomy.enabled is False
+
+
+def test_source_processing_policy_rejects_chunk_size_below_overlap(tmp_path: Path) -> None:
+    config = PheasantConfig.model_validate(
+        {"sync": {"source_processing": {"chunk_max_chars": 200}}}
+    )
+    source = SourceConfig(name="uploaded", type=SourceType.document_folder, path=tmp_path)
+
+    with pytest.raises(ValueError, match="chunk_max_chars must exceed"):
+        config.effective_source(source)
+
+
 def test_secret_exclusion_can_be_turned_off_explicitly(tmp_path: Path, home: Path) -> None:
     """It is a policy, not a cage — but turning it off has to be deliberate."""
 

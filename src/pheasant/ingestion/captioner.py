@@ -191,9 +191,11 @@ def source_includes_images(source: Any) -> bool:
     operator explicitly adds e.g. ``**/*.png`` to a source's includes.
     """
 
-    from pheasant.ingestion.content_types import IMAGE_EXTENSIONS
+    from pheasant.ingestion.content_types import IMAGE_EXTENSIONS, source_includes_zip
 
     includes = list(getattr(source, "include", None) or [])
+    if source_includes_zip(source):
+        return True
     broad = {"*", "**", "**/*", "*.*", "**/*.*"}
     return any(
         pattern.replace("\\", "/").lower().rstrip("/") in broad

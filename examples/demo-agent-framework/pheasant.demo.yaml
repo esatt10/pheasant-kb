@@ -142,10 +142,10 @@ assistant:
   provider: openai
   # Model ids are per-account. List what this key can reach with:
   #   curl -s https://api.openai.com/v1/models \
-  #     -H "Authorization: Bearer $OPENAI_API_KEY" | grep -o '"id": "gpt-5[^"]*"'
+  #     -H "Authorization: Bearer $OPENAI_API_KEY" | grep -o '"id": "gpt-6[^"]*"'
   # A model the account cannot see fails with a 404 model_not_found, which the
   # chat surface reports verbatim rather than silently substituting one.
-  model: gpt-5.6-luna
+  model: gpt-6-luna
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   # A browser user can still paste their own key for their session; it stays

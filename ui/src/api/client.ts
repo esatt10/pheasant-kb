@@ -247,7 +247,7 @@ export const api = {
           : undefined,
       })}`,
     ),
-  graphNeighbors: (nodeId: string, depth = 1, edgeTypes?: string[]) =>
+  graphNeighbors: (nodeId: string, depth = 2, edgeTypes?: string[]) =>
     request<NeighborsResponse>(
       `/graph/neighbors${qs({ node_id: nodeId, depth, edge_types: edgeTypes?.join(",") })}`,
     ),
@@ -469,7 +469,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // Uploads — documents dropped into the browser become a real source.
+  // Uploads — supported files and ZIP archives become a real source.
   // Not `request()`: that sets a JSON content-type, and a multipart body
   // needs the browser to set its own boundary header.
   uploadDocuments: async (files: File[], sourceName = "uploads"): Promise<UploadResponse> => {

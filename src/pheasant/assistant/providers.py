@@ -24,6 +24,9 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from pheasant.assistant.catalog import (
@@ -44,6 +47,57 @@ DEFAULT_TIMEOUT = 90.0
 
 class ProviderError(RuntimeError):
     """A chat provider could not produce an answer."""
+
+
+@dataclass
+class TokenUsage:
+    """Actual provider-reported usage for one workflow node, never estimated."""
+
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    input_reports: int = 0
+    output_reports: int = 0
+
+    @property
+    def reported_input(self) -> int | None:
+        return self.input_tokens if self.input_reports == self.calls else None
+
+    @property
+    def reported_output(self) -> int | None:
+        return self.output_tokens if self.output_reports == self.calls else None
+
+
+_active_usage: ContextVar[TokenUsage | None] = ContextVar("pheasant_model_usage", default=None)
+
+
+@contextmanager
+def collect_token_usage() -> Iterator[TokenUsage]:
+    """Scope usage to the current request/node, including concurrent requests."""
+    usage = TokenUsage()
+    token = _active_usage.set(usage)
+    try:
+        yield usage
+    finally:
+        _active_usage.reset(token)
+
+
+def note_model_call() -> None:
+    usage = _active_usage.get()
+    if usage is not None:
+        usage.calls += 1
+
+
+def _record_usage(input_tokens: object, output_tokens: object) -> None:
+    usage = _active_usage.get()
+    if usage is None:
+        return
+    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool):
+        usage.input_tokens += input_tokens
+        usage.input_reports += 1
+    if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
+        usage.output_tokens += output_tokens
+        usage.output_reports += 1
 
 
 @dataclass(frozen=True)
@@ -79,7 +133,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         # that cannot see this one gets a 404 model_not_found, which the chat
         # surface reports verbatim rather than silently substituting.
         # Override with assistant.model.
-        default_model="gpt-5.6-luna",
+        default_model="gpt-6-luna",
         default_base_url="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         key_hint="sk-…",
@@ -175,6 +229,8 @@ def _anthropic(
     }
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
     data = _http_json(f"{base}/v1/messages", payload, headers, timeout)
+    reported = data.get("usage") or {}
+    _record_usage(reported.get("input_tokens"), reported.get("output_tokens"))
     # Safety classifiers can decline with a 200 + stop_reason "refusal" and an
     # empty content array, so check that before indexing into content.
     if data.get("stop_reason") == "refusal":
@@ -193,13 +249,16 @@ def _anthropic(
 def _openai(
     base: str, key: str, model: str, system: str, prompt: str, max_tokens: int, timeout: float
 ) -> str:
+    # GPT-6 models reject the legacy cap. Other OpenAI-compatible endpoints
+    # keep their existing spelling and the error-driven retry below.
+    token_field = "max_completion_tokens" if model.startswith("gpt-6-") else "max_tokens"
     payload: dict = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": max_tokens,
+        token_field: max_tokens,
     }
     headers = {"authorization": f"Bearer {key}"}
     url = f"{base}/chat/completions"
@@ -207,11 +266,13 @@ def _openai(
         data = _http_json(url, payload, headers, timeout)
     except ProviderError as exc:
         # Reasoning-era models renamed the output cap and reject the old key.
-        if "max_tokens" not in str(exc):
+        if "max_tokens" not in payload or "max_tokens" not in str(exc):
             raise
         payload.pop("max_tokens")
         payload["max_completion_tokens"] = max_tokens
         data = _http_json(url, payload, headers, timeout)
+    reported = data.get("usage") or {}
+    _record_usage(reported.get("prompt_tokens"), reported.get("completion_tokens"))
     choices = data.get("choices") or []
     text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
     if not text:
@@ -229,6 +290,8 @@ def _gemini(
     }
     headers = {"x-goog-api-key": key}
     data = _http_json(f"{base}/models/{model}:generateContent", payload, headers, timeout)
+    reported = data.get("usageMetadata") or {}
+    _record_usage(reported.get("promptTokenCount"), reported.get("candidatesTokenCount"))
     candidates = data.get("candidates") or []
     parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
     text = "".join(part.get("text", "") for part in parts).strip()

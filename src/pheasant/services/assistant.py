@@ -26,6 +26,8 @@ RETRIEVAL_FIELD_HELP: dict[str, str] = {
     "expand_depth": "hops to walk when expanding.",
     "expand_per_node": "neighbours taken per expanded node.",
     "grade_evidence": "ask the model to grade its own evidence before answering.",
+    "grader_model": "optional model for evidence sufficiency checks; the assistant model "
+    "still writes the answer.",
     "verify_citations": "drop [n] markers that do not resolve to a real citation.",
     "max_facts": "graph facts surfaced alongside the answer.",
 }

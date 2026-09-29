@@ -34,8 +34,8 @@ Three routes reach the same place, so pick whichever fits:
 | `repository` | A git repository (branch/commit-aware, dependency graph) |
 | `markdown_folder` | A folder of Markdown notes |
 | `obsidian_vault` | An existing Obsidian vault (`.md` + `.canvas`) |
-| `document_folder` | PDFs, DOCX, TXT, HTML, XML |
-| `single_file` | One file |
+| `document_folder` | Mixed supported text, documents, images, audio and ZIPs |
+| `single_file` | One file, including a ZIP of mixed supported files |
 | `web_collection` | A set of web URLs |
 | `memory` | Agent-memory records (see [Agent memory](agent-memory.md)) |
 | `notion` | A Notion workspace, via an integration token (below) |
@@ -48,6 +48,12 @@ Three routes reach the same place, so pick whichever fits:
 
 Third-party connector plugins add further types by name — see the
 [Connector SDK](../reference/connector-sdk.md).
+
+Filesystem-backed sources can also index ZIP archives with nested folders of
+supported files. Use `pheasant up path/to/archive.zip`, upload a ZIP, or add
+`"**/*.zip"` to a folder source's `include` list. Each member keeps a stable
+`archive.zip/path/to/file` identity. See [document ingestion](document-ingest.md)
+for filtering and limits.
 
 ## Notion
 

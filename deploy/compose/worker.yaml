@@ -38,7 +38,7 @@ sync:
     enabled: false
   limits:
     max_files: 50000
-    max_file_size_mb: 25
+    max_file_size_mb: 1024
 search:
   embeddings:
     enabled: false

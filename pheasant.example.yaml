@@ -204,9 +204,13 @@ sync:
   # these numbers, or sync once with --full-scan.
   limits:
     max_files: 50000        # matching files, after include/exclude
-    max_file_size_mb: 25    # skip any single file larger than this
+    max_file_size_mb: 1024  # skip any single file larger than this (1 GiB)
     max_total_mb: 4096      # total matched content
     follow_symlinks: false  # home dirs are full of links that escape or loop
+  # Optional fleet-wide overrides. Null keeps each source's own settings.
+  source_processing:
+    chunk_max_chars: null
+    taxonomy_enabled: null
   startup:
     full_validation: true
     repair_missing_indexes: true
@@ -600,10 +604,11 @@ assistant:
   # on the MCP tool `ask_knowledge_base`).
   workflow_options: {}
   #  agentic:
-  #    max_rounds: 2
+  #    max_rounds: 3
   #    retrieval_modes: [hybrid, vector]
   #    expand_graph: true
-  #    max_context_passages: 10
+  #    max_context_passages: 12
+  #    grader_model: gpt-6-luna  # optional with OpenAI; assistant.model writes answers
 
 # Knowledge-effectiveness evaluation (optional, off by default, read-only).
 #
@@ -840,6 +845,15 @@ tuning:
     minimum_interval_seconds: 86400
 
 sources:
+  # Fleet memory example: configure exactly one writable memory source, backed
+  # by a persistent /memory volume. Memory is written explicitly via MCP or
+  # the API; enabling the source does not save every chat turn automatically.
+  # - name: agent-memory
+  #   type: memory
+  #   path: /memory
+  #   include: ["**/*.md"]
+  #   exclude: ["**/*.archived"]
+
   - name: pheasant-repo
     type: repository
     path: /workspace

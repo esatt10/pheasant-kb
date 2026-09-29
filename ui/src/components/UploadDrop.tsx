@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
 
 /**
- * Drop documents here and they become a real source.
+ * Drop supported files or ZIP archives here and they become a real source.
  *
  * The zero-setup path: no path to type, no directory to mount, no source type
  * to pick. Files are posted to `/sources/upload`, land in a directory under
@@ -67,10 +67,11 @@ export function UploadDrop({
             event.target.value = "";
           }}
         />
-        <strong>{upload.isPending ? "Uploading…" : "Drop documents here"}</strong>
+        <strong>{upload.isPending ? "Uploading…" : "Drop files or ZIP archives here"}</strong>
         <span className="muted small">
-          Markdown, PDF, DOCX, HTML, code, configs — or click to choose. They are
-          indexed like any other source, and appear as <code>{sourceName}</code>.
+          Markdown, PDF, Office, images, audio, code, configs, or a ZIP containing
+          any mix of supported files in folders — or click to choose. ZIP members
+          are indexed separately in <code>{sourceName}</code>.
         </span>
       </div>
 

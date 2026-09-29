@@ -278,7 +278,16 @@ function AgentTrace({ steps }: { steps: NonNullable<ChatAnswer["steps"]> }) {
             <li key={`${step.name}-${index}`}>
               <span className="trace__name">{step.name}</span>
               <span className="trace__detail">{step.detail}</span>
-              {step.passages > 0 ? <span className="trace__count">{step.passages}</span> : null}
+              <span className="trace__metrics">
+                {step.passages > 0 ? (
+                  <span>{step.passages} {step.name === "read" ? "files" : "passages"}</span>
+                ) : null}
+                <span>in {step.input_tokens == null ? "—" : step.input_tokens} tokens</span>
+                <span>out {step.output_tokens == null ? "—" : step.output_tokens} tokens</span>
+                <span>
+                  {step.duration_seconds == null ? "—" : `${step.duration_seconds.toFixed(3)}s`}
+                </span>
+              </span>
             </li>
           ))}
         </ol>

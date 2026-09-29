@@ -548,7 +548,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     def get_graph_neighbors(
         knowledge_base: str,
         node_id: str,
-        depth: int = 1,
+        depth: int = 2,
         edge_types: list[str] | None = None,
     ) -> dict:
         """Return graph neighbors around a node."""

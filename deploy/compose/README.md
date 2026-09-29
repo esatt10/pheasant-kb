@@ -7,8 +7,32 @@ stored in YAML.
 | Profile | State and coordination | Search/assistant | Intended size |
 |---|---|---|---|
 | `local-small.yaml` | Local SQLite, no broker or workers | BM25/text search and extractive answers; MCP and durable memory remain enabled | Laptop, offline, small corpus |
-| `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and the `gpt-5.6-luna` agentic workflow | One capable workstation/container |
+| `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and an agentic workflow using GPT-6 Luna for evidence grading and GPT-6 Sol for answers | One capable workstation/container |
 | `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Vector + graph + hybrid assistant fanout with adaptive concurrency; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
+
+The fleet applies 2,000-character chunks and structural taxonomy extraction to
+all sources, including UI uploads. PDF and Office text extraction is already
+included in the universal image; taxonomy is a built-in indexing setting, not
+a separate package extra. A change to either processing setting causes a full
+source pass on the next sync.
+
+The advanced and fleet presets use three retrieval rounds and three-hop graph
+expansion. The agentic workflow grades evidence with `gpt-6-luna` and writes
+the grounded answer with `gpt-6-sol`. This affects query-time cost and latency,
+not indexing or stored state.
+
+The fleet also provisions one durable `/memory` source and enables the
+interaction ledger with a seven-day hot retention window. Start the
+`observability` Compose profile so the dedicated logger drains its NATS queue.
+Evaluation and tuning are enabled for manual baseline runs, but automatic
+tuning and bundle application remain off. The ledger records queries and
+principals; no observed interaction becomes memory without explicit admission.
+
+The fleet mounts `fleet.yaml` read-only in every service. The UI can display
+retrieval settings, but saving a persistent search-parameter change through
+the Config page fails on this deployment; edit `answers/scalable.json`,
+regenerate `fleet.yaml`, and redeploy instead. Applied tuning bundles are
+stored separately from YAML and can be changed through the Tuning UI.
 
 `worker.yaml` is the deliberately minimal trust-boundary config for the
 fleet's stateless gRPC workers. It has no source list, database DSN, OpenAI key,
@@ -90,6 +114,8 @@ the PostgreSQL lexical ranking query that stress testing identified as the
 slowest arm for common terms. Text remains available as an explicit API/MCP
 mode and remains part of every hybrid request. The explicit vector and graph
 modes preserve arm-specific candidates that can be truncated by hybrid fusion.
+Because the fleet explicitly configures all three, the planner cannot narrow
+that fanout for an individual question; the step audit names the modes searched.
 
 This is a fleet-profile choice, not a schema-default change. The small and
 advanced profiles and the setup wizard defaults are unchanged.

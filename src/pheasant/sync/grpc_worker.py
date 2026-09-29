@@ -53,10 +53,10 @@ CHECK_METHOD = f"/{SERVICE}/Check"
 
 DEFAULT_PORT = 8766
 
-#: A single message must fit the file it carries. Aligned with the JSON
-#: worker's own `sync.limits.max_file_size_mb` default plus room for the
-#: structured fields; the coordinator's batch size bounds the rest.
-MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+#: A single message must fit the file it carries. Allow the 1 GiB configured
+#: file limit plus room for protobuf metadata; the coordinator's batch size
+#: bounds the rest.
+MAX_MESSAGE_BYTES = 1024 * 1024 * 1024 + 16 * 1024 * 1024
 
 _LOADED: tuple[Any, Any] | None = None
 _LOAD_LOCK = threading.Lock()

@@ -11,10 +11,10 @@ makes the offline path real rather than an error branch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
-from pheasant.assistant.providers import PROVIDERS, ProviderError, complete
+from pheasant.assistant.providers import PROVIDERS, ProviderError, complete, note_model_call
 
 
 @dataclass
@@ -34,8 +34,13 @@ class LLM:
         spec = PROVIDERS.get(self.provider)
         return self.model or (spec.default_model if spec else "unknown")
 
+    def with_model(self, model: str) -> LLM:
+        """Use another model with the same provider, credentials and limits."""
+        return replace(self, model=model)
+
     def complete(self, system: str, prompt: str, *, max_output_tokens: int | None = None) -> str:
         """One turn. Raises :class:`ProviderError` on failure."""
+        note_model_call()
         return complete(
             self.provider,
             api_key=self.api_key,

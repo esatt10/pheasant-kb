@@ -11,12 +11,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from pheasant.config.schema import SourceConfig
 from pheasant.ingestion.pipeline import _match_any, utc_now, within_max_depth
-from pheasant.ingestion.walk import walk_source
+from pheasant.ingestion.walk import WalkBudget, walk_source
 from pheasant.persistence.state_store import StateStore
 
 logger = logging.getLogger(__name__)
@@ -198,12 +198,15 @@ class FilesystemConnector(SourceConnector):
         # `rglob("*")` materialized the whole tree before applying excludes,
         # so excluding node_modules cost more than not excluding it — and a
         # source pointed at a home directory had no upper bound at all.
-        from pheasant.ingestion.walk import SyncBudgetExceeded, WalkBudget, budget_message
+        from pheasant.ingestion.walk import SyncBudgetExceeded, budget_message
 
         budget = WalkBudget.from_settings(self.source.limits)
+        # The include globs select members, not just the ZIP container. Let
+        # the walk discover archives even when only inner extensions match.
+        include = [*self.source.include, "**/*.zip", "**/*.ZIP"]
         report = walk_source(
             root,
-            include=self.source.include,
+            include=include,
             exclude=self.source.exclude,
             max_depth=self.source.max_depth,
             budget=budget,
@@ -212,9 +215,73 @@ class FilesystemConnector(SourceConnector):
         if report.limit_hit:
             raise SyncBudgetExceeded(budget_message(self.source.name, report, budget), report)
         items: list[ConnectorItem] = []
+        expanded_total = report.total_bytes
         for path in report.files:
             relative = path.relative_to(root if root.is_dir() else root.parent).as_posix()
             stat = path.stat()
+            if path.suffix.lower() == ".zip":
+                from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, members
+
+                archive_selected = _match_any(
+                    relative.lower(), [pattern.lower() for pattern in self.source.include]
+                )
+                for member_name, info in members(path):
+                    virtual = f"{relative}/{member_name}"
+                    if not within_max_depth(virtual, self.source.max_depth):
+                        continue
+                    if _match_any(virtual, self.source.exclude) or _match_any(
+                        member_name, self.source.exclude
+                    ):
+                        continue
+                    if self.source.include and not (
+                        archive_selected
+                        or _match_any(virtual, self.source.include)
+                        or _match_any(member_name, self.source.include)
+                    ):
+                        continue
+                    max_bytes = min(
+                        budget.max_file_size_bytes or MAX_ARCHIVE_MEMBER_BYTES,
+                        MAX_ARCHIVE_MEMBER_BYTES,
+                    )
+                    if info.file_size > max_bytes:
+                        report.oversized.append((virtual, info.file_size))
+                        continue
+                    if budget.max_files is not None and len(items) >= budget.max_files:
+                        report.limit_hit = "max_files"
+                        raise SyncBudgetExceeded(
+                            budget_message(self.source.name, report, budget), report
+                        )
+                    if (
+                        budget.max_total_bytes is not None
+                        and expanded_total + info.file_size > budget.max_total_bytes
+                    ):
+                        report.limit_hit = "max_total_mb"
+                        report.total_bytes = expanded_total
+                        raise SyncBudgetExceeded(
+                            budget_message(self.source.name, report, budget), report
+                        )
+                    expanded_total += info.file_size
+                    items.append(
+                        ConnectorItem(
+                            identity=f"filesystem:{self.source.name}:{virtual}",
+                            relative_path=virtual,
+                            uri=f"{_path_uri(path)}#{quote(member_name, safe='/')}",
+                            mime_type=mimetypes.guess_type(member_name)[0],
+                            size_bytes=info.file_size,
+                            mtime=_timestamp(stat.st_mtime),
+                            metadata={
+                                "archive_path": str(path),
+                                "archive_member": member_name,
+                                "archive_entry_name": info.filename,
+                            },
+                        )
+                    )
+                continue
+            if not self._allows_relative_path(relative):
+                continue
+            if budget.max_files is not None and len(items) >= budget.max_files:
+                report.limit_hit = "max_files"
+                raise SyncBudgetExceeded(budget_message(self.source.name, report, budget), report)
             items.append(
                 ConnectorItem(
                     identity=f"filesystem:{self.source.name}:{relative}",
@@ -229,6 +296,22 @@ class FilesystemConnector(SourceConnector):
         return items
 
     def read_item(self, item: ConnectorItem) -> ConnectorPayload:
+        if "archive_member" in item.metadata:
+            from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, read_member
+
+            limit = WalkBudget.from_settings(self.source.limits).max_file_size_bytes
+            content = read_member(
+                Path(item.metadata["archive_path"]),
+                item.metadata.get("archive_entry_name", item.metadata["archive_member"]),
+                min(limit or MAX_ARCHIVE_MEMBER_BYTES, MAX_ARCHIVE_MEMBER_BYTES),
+            )
+            return ConnectorPayload(
+                item=item,
+                content=content,
+                mime_type=item.mime_type,
+                size_bytes=len(content),
+                mtime=item.mtime,
+            )
         path = Path(item.metadata["path"])
         content = path.read_bytes()
         return ConnectorPayload(

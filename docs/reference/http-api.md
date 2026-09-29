@@ -245,6 +245,12 @@ See [Stress-test readiness](../stress-test-readiness.md).
 | DELETE | `/assistant/key` | Revoke a session key immediately. |
 | GET | `/assistant/workflows` | Available answering workflows, which one `auto` currently resolves to, whether the `[agent]` extra is installed, and each workflow's option defaults. |
 | POST | `/assistant/chat` | Ask a question. Returns the answer, numbered citations, graph facts, the nodes to focus, and the workflow's step trace. Accepts `workflow` and `options` overrides. |
+| POST | `/assistant/chat/stream` | Stream completed workflow steps followed by the same answer. |
+
+Each step reports `duration_seconds`, `input_tokens`, and `output_tokens`.
+Token counts are provider-reported, not estimated: `null` means the provider
+did not report usage, while `0` means the step made no model call. The
+`retrieve` step also lists the search modes it attempted.
 
 See [Ask your knowledge base](../how-to/chat-and-ui.md) and
 [Customize the answering workflow](../how-to/agent-workflows.md).
@@ -282,7 +288,7 @@ See [Vector self-search](../how-to/vector-search.md).
 |---|---|---|
 | GET | `/graph` | Full graph. Filter with `types` / `exclude_types` / `source` before the node limit applies. |
 | GET | `/graph/slice` | Subgraph around a node. |
-| GET | `/graph/neighbors` | Neighbors of a node (depth + edge filters). |
+| GET | `/graph/neighbors` | Neighbors of a node (two hops by default; depth + edge filters). |
 | GET | `/graph/export/node-link-json` | Export graph as node-link JSON. |
 | GET | `/graph/export/cytoscape-json` | Export graph as Cytoscape JSON. |
 | GET | `/graph/diagnostics` | Structural health: node/edge type histograms, hubs by degree, orphan count, density. Walks the whole graph — do not poll it. |

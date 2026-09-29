@@ -94,6 +94,9 @@ its tested runtime default as **Recommended** plus **Custom model ID**. For
 `provider: auto`, setup displays the currently resolved provider and exact
 default from available environment keys, while keeping `assistant.model: null`.
 When no key is available it reports that extractive answers only are available.
+For agentic workflows, `assistant.retrieval.grader_model` can use a different
+model for evidence sufficiency checks; `assistant.model` still plans retrieval
+and writes the final answer.
 
 Document extraction is enabled by source include globs; PDF and DOCX files are
 handled by the existing extractor. OCR is intentionally not a setup option:
@@ -104,10 +107,11 @@ image-only scanned PDFs need an authored `<file>.extract.txt` sidecar.
 Start the server with no sources and the UI shows an empty state with three
 ways forward: paste a path or URL, drop files in, or copy a one-line command.
 
-- **Drop documents in.** Files land in a directory under `/state/uploads`,
-  which is registered as an ordinary `document_folder` source — the same
-  connector → chunk → graph pipeline as everything else, removable by deleting
-  the source. No path to type, no directory to mount.
+- **Drop files or ZIP archives in.** Files land in a directory under
+  `/state/uploads`, which is registered as an ordinary `document_folder`
+  source — the same connector → chunk → graph pipeline as everything else,
+  removable by deleting the source. Supported files inside ZIP folders are
+  indexed separately. No path to type, no directory to mount.
 - **Paste a path.** pheasant detects what it is (folder, Obsidian vault, git
   checkout or clone URL, web page, S3 bucket, connector).
 - **Change your mind.** Settings has purpose-built panels for the

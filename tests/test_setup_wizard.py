@@ -141,7 +141,7 @@ def test_explicit_provider_writes_recommended_model_and_custom_model() -> None:
         accept_defaults=True,
     )
     recommended._ask(question)
-    assert recommended.answers["assistant.model"] == "gpt-5.6-luna"
+    assert recommended.answers["assistant.model"] == "gpt-6-luna"
 
     custom = Wizard(
         prompter=ScriptedPrompter(["2", "my-account-model"]),

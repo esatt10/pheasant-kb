@@ -359,7 +359,7 @@ def build_sections() -> list[Section]:
                     prompt="Chat and agent workflow model",
                     kind="model",
                     help=(
-                        "One model powers grounded chat and the agent workflow. "
+                        "The primary model plans retrieval and writes grounded answers. "
                         "Choose the tested provider default or enter a custom model ID."
                     ),
                     when=lambda a: (
@@ -437,6 +437,13 @@ def build_sections() -> list[Section]:
                     key="assistant.retrieval.grade_evidence",
                     prompt="Ask the model to grade its evidence before answering?",
                     kind="bool",
+                    advanced=True,
+                ),
+                Question(
+                    key="assistant.retrieval.grader_model",
+                    prompt="Evidence grader model (blank uses the chat model)",
+                    kind="text",
+                    when=lambda a: bool(a.get("assistant.retrieval.grade_evidence")),
                     advanced=True,
                 ),
                 Question(
@@ -1187,7 +1194,7 @@ def build_phases(sections: list[Section] | None = None) -> list[Phase]:
         Phase(
             "assistant-memory",
             "Assistant & memory",
-            "The single chat/agent model, retrieval behavior, and agent memory.",
+            "Chat and agent models, retrieval behavior, and agent memory.",
             ("assistant", "retrieval", "memory"),
         ),
         Phase(

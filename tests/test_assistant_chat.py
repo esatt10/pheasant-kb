@@ -221,6 +221,47 @@ def test_each_provider_is_called_with_its_own_wire_shape(
     config.assistant.provider = "auto"  # restore the shared class attribute
 
 
+def test_gpt_6_luna_uses_supported_chat_completion_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def fake_http(url, payload, headers, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": "A grounded answer."}}]}
+
+    monkeypatch.setattr(providers_module, "_http_json", fake_http)
+    answer = providers_module.complete(
+        "openai", api_key="test-key", system="Ground the answer.", prompt="Question?"
+    )
+
+    assert answer == "A grounded answer."
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-6-luna"
+    assert calls[0]["max_completion_tokens"] == 4096
+    assert "max_tokens" not in calls[0]
+    assert "temperature" not in calls[0]
+
+
+def test_gpt_6_sol_uses_supported_chat_completion_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    def fake_http(url, payload, headers, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": "Grounded summary."}}]}
+
+    monkeypatch.setattr(providers_module, "_http_json", fake_http)
+    answer = providers_module.complete(
+        "openai", api_key="test-key", model="gpt-6-sol", system="Summarize.", prompt="Question?"
+    )
+
+    assert answer == "Grounded summary."
+    assert calls[0]["max_completion_tokens"] == 4096
+    assert "max_tokens" not in calls[0]
+
+
 def test_provider_failure_degrades_to_extractive_rather_than_erroring(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -379,6 +420,9 @@ def test_chat_stream_reports_steps_before_the_answer(loaded_config) -> None:
         if event["type"] == "step":
             assert event["name"]
             assert isinstance(event["detail"], str)
+            assert event["duration_seconds"] >= 0
+            assert event["input_tokens"] == 0
+            assert event["output_tokens"] == 0
 
     answer = next(event["answer"] for event in events if event["type"] == "answer")
     assert answer["question"] == "what is the sync engine?"

@@ -35,7 +35,7 @@ pheasant config show --effective --profile dev --config pheasant.yaml
 | `storage` | Database/graph/manifests locations and state limits. | Yes |
 | `search` | Retrieval modes and ranking behavior. | Yes |
 | `ingestion` | Turning binary/markup files (documents, images, audio) into indexable text. | Optional |
-| `sync` | Watcher, git polling, schedule, idempotency, and concurrency behavior. | Yes |
+| `sync` | Watcher, git polling, schedule, source processing, idempotency, and concurrency behavior. | Yes |
 | `graph` | Knowledge-graph density (concept-node threshold, WASM acceleration). | Optional |
 | `security` | Path allowlisting, source-read protections, and ACL enforcement. | Strongly recommended |
 | `synapse` | Federation into a Synapse fleet (contract publishing, signing). | Optional, standalone-safe |
@@ -451,11 +451,27 @@ disable that limit.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `max_files` | integer\|null | `50000` | Matching files, after include/exclude. |
-| `max_file_size_mb` | integer\|null | `25` | Skip any single file larger than this. Skipped files are reported, not fatal. |
+| `max_file_size_mb` | integer\|null | `1024` | Skip any single file larger than this (1024 MiB / 1 GiB). Skipped files are reported, not fatal. |
 | `max_total_mb` | integer\|null | `4096` | Total matched content. |
 | `follow_symlinks` | bool | `false` | Home directories routinely contain links that escape the root or loop. |
 
 A source can override the whole block with `sources[].limits`.
+
+### Fleet-wide source processing (`sync.source_processing`)
+
+These optional overrides apply to **every source at indexing time**, including
+sources added later through the UI, API, or MCP. They take precedence over a
+source's own `chunking.max_chars` and `taxonomy.enabled`. `null` leaves the
+per-source setting unchanged, so standalone behavior is unchanged.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `chunk_max_chars` | integer\|null | `null` | Override the maximum characters per chunk. Must exceed the source's overlap. |
+| `taxonomy_enabled` | bool\|null | `null` | Enable or disable structural heading extraction across all sources. Can mistake numbered prose for headings. |
+
+Changing either setting invalidates the affected source's index; its next
+incremental sync escalates to a full pass. The fleet preset sets `2000` and
+`true`, respectively.
 
 **A source over budget indexes nothing.** A partial index would be
 non-deterministic, and silently indexing the first N files of a home
@@ -810,6 +826,10 @@ shard into several regions.
 | `api_auth.token_env` | string | `PHEASANT_API_TOKEN` | Name of the env var holding a static shared bearer token; never the value. When it resolves, every route outside `public_paths` (and outside `/internal/*`, which enforces its own per-boundary tokens) needs `Authorization: Bearer <value>` or answers `401`. |
 | `api_auth.behind_authenticating_proxy` | bool | `false` | "An ingress already authenticates callers." Satisfies the startup check below without a token of pheasant's own. |
 | `api_auth.public_paths` | list[str] | `[/health, /ready, /metrics]` | Answerable without a token. The probes must stay open or an orchestrator cannot tell a healthy pod from an unauthorized one. |
+
+The built-in secret and generated-directory exclude globs are maintained in
+`src/pheasant/config/exclusions.py` and remain available through
+`pheasant.config.schema`; this does not change effective source exclusions.
 
 **Every role but `all` refuses to start** on a bind address other machines can
 reach with neither of the first two set. One container is exempt on purpose —
@@ -1344,7 +1364,7 @@ default and works fully offline.
 |---|---|---|---|
 | `enabled` | bool | `true` | `false` makes `/assistant/chat` return 403. |
 | `provider` | str | `auto` | `auto` \| `anthropic` \| `openai` \| `gemini` \| `none`. `auto` picks the first provider whose key env var is set, in the order Anthropic → OpenAI → Gemini. |
-| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-5.6-luna`, `gemini-2.5-flash`). |
+| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-6-luna`, `gemini-2.5-flash`). |
 | `base_url` | str \| null | `null` | Point at a gateway or self-hosted OpenAI-spec endpoint. |
 | `api_key_env` | str \| null | `null` | Read the key from a differently-named variable. Defaults to the provider's own (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). |
 | `allow_session_keys` | bool | `true` | Let a UI user paste a key for their browser session. Held in server memory behind an opaque token — never written to config, `/state`, or logs; dropped on expiry, revoke, or restart. Set `false` to require the env var. |
@@ -1367,14 +1387,15 @@ typed home, which is what makes them validated, editable from the UI
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `max_rounds` | int \| null | `2` | plan → retrieve → grade turns before answering with what is in hand. `1` disables the re-plan loop. |
-| `per_query_results` | int \| null | `6` | Passages fetched per query per search mode. |
-| `max_context_passages` | int \| null | `10` | Total passages offered to the answering step. |
+| `max_rounds` | int \| null | `3` | plan → retrieve → grade turns before answering with what is in hand. `1` disables the re-plan loop. |
+| `per_query_results` | int \| null | `8` | Passages fetched per query per search mode. |
+| `max_context_passages` | int \| null | `12` | Total passages offered to the answering step. |
 | `retrieval_modes` | list \| null | `["text", "vector"]` | Modes to fan out over. `vector` is dropped automatically when no vector index is built, so leaving it on is safe. |
 | `expand_graph` | bool \| null | `true` | Walk the graph out of the best hits, reaching documents that share no vocabulary with the question. |
-| `expand_depth` | int \| null | `1` | Hops to walk when expanding. |
-| `expand_per_node` | int \| null | `3` | Neighbours taken per expanded node. |
+| `expand_depth` | int \| null | `2` | Hops to walk when expanding. |
+| `expand_per_node` | int \| null | `4` | Neighbours taken per expanded node. |
 | `grade_evidence` | bool \| null | `true` | Ask the model to grade its own evidence before answering. |
+| `grader_model` | str \| null | `null` | Optional model for sufficiency checks in agentic workflows. The assistant model still plans and writes the answer; use a model from the configured provider. |
 | `verify_citations` | bool \| null | `true` | Drop `[n]` markers that do not resolve to a real citation. |
 | `max_facts` | int \| null | `12` | Graph facts surfaced alongside the answer. |
 
@@ -1405,10 +1426,13 @@ so a change applies to the next question with no restart and no re-index.
 
 ```yaml
 assistant:
+  provider: openai
+  model: gpt-6-sol
   retrieval:
     max_rounds: 3
     max_context_passages: 16
     retrieval_modes: ["text", "vector", "graph"]
+    grader_model: gpt-6-luna
 ```
 
 **The key never lands in config.** Both routes are indirections: an

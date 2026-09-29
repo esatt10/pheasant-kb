@@ -7,80 +7,15 @@ from functools import cache
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
-#: Patterns that keep credentials out of the index. Unlike the rest of
-#: ``DEFAULT_EXCLUDES``, these are **not** merely a default a caller can
-#: replace: ``security.default_exclude_secrets`` (on by default) unions them
-#: into every filesystem source's effective exclude list. That distinction
-#: matters because pheasant supports indexing any readable path — pointing a
-#: source at ``$HOME`` with ``include: ["**/*.json", "**/*.yaml"]`` otherwise
-#: sweeps up ``~/.docker/config.json``, ``~/.config/gh/hosts.yml`` and
-#: friends, and a caller that supplies its own ``exclude`` list used to drop
-#: every one of these patterns silently.
-SECRET_EXCLUDES = [
-    # Environment and dotenv files
-    "**/.env",
-    "**/.env.*",
-    "**/*.envrc",
-    # Private keys and certificates
-    "**/*id_rsa*",
-    "**/*id_dsa*",
-    "**/*id_ecdsa*",
-    "**/*id_ed25519*",
-    "**/*.pem",
-    "**/*.key",
-    "**/*.p12",
-    "**/*.pfx",
-    "**/*.jks",
-    "**/*.keystore",
-    "**/*.asc",
-    "**/*.gpg",
-    # Credential stores people keep in a home directory
-    "**/.ssh/**",
-    "**/.gnupg/**",
-    "**/.aws/**",
-    "**/.azure/**",
-    "**/.kube/**",
-    "**/.docker/config.json",
-    "**/.config/gh/**",
-    "**/.config/gcloud/**",
-    "**/.netrc",
-    "**/.npmrc",
-    "**/.pypirc",
-    "**/.git-credentials",
-    "**/credentials",
-    "**/credentials.json",
-    "**/secrets.yaml",
-    "**/secrets.yml",
-    "**/*.kdbx",
-    # Local keychains / browser profiles
-    "**/Library/Keychains/**",
-    "**/.mozilla/**",
-    "**/.password-store/**",
-]
-
-#: Directories that are large, generated, and never worth indexing. Kept
-#: separate from the secret list because these are about *cost*, not
-#: disclosure, and an operator may legitimately want to drop them.
-NOISE_EXCLUDES = [
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/__pycache__/**",
-    "**/.venv/**",
-    "**/venv/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/target/**",
-    "**/.next/**",
-    "**/.cache/**",
-    "**/.tox/**",
-    "**/.gradle/**",
-    "**/.terraform/**",
-    "**/.mypy_cache/**",
-    "**/.pytest_cache/**",
-    "**/.ruff_cache/**",
-]
-
-DEFAULT_EXCLUDES = [*NOISE_EXCLUDES, *SECRET_EXCLUDES]
+from pheasant.config.exclusions import (
+    DEFAULT_EXCLUDES as DEFAULT_EXCLUDES,
+)
+from pheasant.config.exclusions import (
+    NOISE_EXCLUDES as NOISE_EXCLUDES,
+)
+from pheasant.config.exclusions import (
+    SECRET_EXCLUDES as SECRET_EXCLUDES,
+)
 
 
 class SourceType(StrEnum):
@@ -744,9 +679,9 @@ class SyncLimitsSettings(ModelMixin):
 
     #: Matching files, after include/exclude. A large monorepo is ~100k.
     max_files: int | None = 50_000
-    #: Skip any single file bigger than this — a 2 GB model checkpoint or
+    #: Skip any single file bigger than this — a multi-gigabyte model checkpoint or
     #: database dump has no business in a text index and would be read whole.
-    max_file_size_mb: int | None = 25
+    max_file_size_mb: int | None = 1024
     #: Total matched content. Chunking and embedding both scale off this.
     max_total_mb: int | None = 4096
     #: Symlinks are not followed by default: a home directory routinely
@@ -774,8 +709,9 @@ class SyncConcurrencySettings(ModelMixin):
     #: Files per request to a remote worker. A batch amortizes the request
     #: overhead and carries one deadline for the group, but every task in it
     #: holds its file's bytes in memory on both sides — so this is a memory
-    #: knob as much as a throughput one. Eight is small enough that the
-    #: default 25 MB file limit cannot surprise a worker.
+    #: knob as much as a throughput one. With a 1 GiB file limit, a batch of
+    #: eight can hold 8 GiB before parser overhead, so keep it low for large
+    #: documents.
     remote_worker_batch_size: int = 8
     #: ``http`` (stdlib, no extra) or ``grpc`` (needs the ``[grpc]`` extra).
     #: Retry, failover, breakers and deadlines are transport-independent, so
@@ -821,11 +757,20 @@ class SyncQueueSettings(ModelMixin):
 
 
 @dataclass
+class SourceProcessingSettings(ModelMixin):
+    """Optional region-wide overrides for every source's indexing pipeline."""
+
+    chunk_max_chars: int | None = None
+    taxonomy_enabled: bool | None = None
+
+
+@dataclass
 class SyncSettings(ModelMixin):
     watcher: WatcherSettings = field(default_factory=WatcherSettings)
     git: GitSettings = field(default_factory=GitSettings)
     scheduler: SchedulerSettings = field(default_factory=SchedulerSettings)
     limits: SyncLimitsSettings = field(default_factory=SyncLimitsSettings)
+    source_processing: SourceProcessingSettings = field(default_factory=SourceProcessingSettings)
     concurrency: SyncConcurrencySettings = field(default_factory=SyncConcurrencySettings)
     queue: SyncQueueSettings = field(default_factory=SyncQueueSettings)
 
@@ -929,20 +874,23 @@ class RetrievalSettings(ModelMixin):
     """
 
     #: plan → retrieve → grade turns before answering with what is in hand.
-    max_rounds: int | None = 2
+    max_rounds: int | None = 3
     #: Passages fetched per query per search mode.
-    per_query_results: int | None = 6
+    per_query_results: int | None = 8
     #: Total passages offered to the synthesis step.
-    max_context_passages: int | None = 10
+    max_context_passages: int | None = 12
     #: Search modes to fan out over. "vector" is dropped automatically when
     #: no vector index is built, so leaving it on is safe.
     retrieval_modes: list[str] | None = field(default_factory=lambda: ["text", "vector"])
     #: Walk the graph out of the best hits for structurally-related material.
     expand_graph: bool | None = True
-    expand_depth: int | None = 1
-    expand_per_node: int | None = 3
+    expand_depth: int | None = 2
+    expand_per_node: int | None = 4
     #: Ask the model to grade its own evidence before answering.
     grade_evidence: bool | None = True
+    #: Optional model for evidence sufficiency checks; the assistant model
+    #: still plans retrieval and writes the final answer.
+    grader_model: str | None = None
     #: Drop [n] markers that do not resolve to a real citation.
     verify_citations: bool | None = True
     #: Graph facts surfaced alongside the answer.
@@ -2147,7 +2095,7 @@ class PheasantConfig(ModelMixin):
     ) -> SourceConfig:
         """The source as the sync path should actually see it.
 
-        Two deployment-wide policies are folded in here rather than at every
+        Three deployment-wide policies are folded in here rather than at every
         call site, because the connector API takes only ``(source, state)``
         and third-party plugins must keep working unchanged:
 
@@ -2157,6 +2105,8 @@ class PheasantConfig(ModelMixin):
           wholesale — which used to drop every credential pattern silently.
         * ``sync.limits`` fills in a per-source budget when the source does
           not carry its own.
+        * ``sync.source_processing`` overrides chunk size and taxonomy when
+          configured, including for sources registered after startup.
 
         ``max_depth`` overrides the source's own depth for this call, and
         ``full_scan`` means "I know what I am asking for": no depth cap and
@@ -2165,6 +2115,16 @@ class PheasantConfig(ModelMixin):
         import copy
 
         resolved = copy.deepcopy(source)
+        processing = self.sync.source_processing
+        if processing.chunk_max_chars is not None:
+            if processing.chunk_max_chars <= resolved.chunking.overlap_chars:
+                raise ValueError(
+                    "sync.source_processing.chunk_max_chars must exceed "
+                    f"{source.name}'s chunking.overlap_chars"
+                )
+            resolved.chunking.max_chars = processing.chunk_max_chars
+        if processing.taxonomy_enabled is not None:
+            resolved.taxonomy.enabled = processing.taxonomy_enabled
         if self.security.default_exclude_secrets:
             existing = list(resolved.exclude or [])
             for pattern in SECRET_EXCLUDES:

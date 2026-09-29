@@ -53,8 +53,8 @@ export function EmptyState({
             <div className="step__body">
               <div className="step__title">…or just drop some files in</div>
               <p className="muted small" style={{ margin: "0 0 8px" }}>
-                No path to type, no directory to mount. Uploaded documents become a
-                normal source and are indexed exactly like any other.
+                No path to type, no directory to mount. Uploaded files and ZIP
+                archives become a normal source and are indexed like any other.
               </p>
               <UploadDrop onUploaded={onAdded} />
             </div>

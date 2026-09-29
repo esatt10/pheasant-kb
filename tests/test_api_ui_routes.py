@@ -42,6 +42,23 @@ def test_graph_routes_have_stable_shape_when_empty(loaded_config) -> None:
     assert slice_resp.json()["links"] == []
 
 
+def test_graph_neighbors_defaults_to_two_hops(loaded_config) -> None:
+    app = create_app(config=loaded_config)
+    graph = app.state.engine.graph_builder.graph
+    graph.add_node("neighbor-start", id="neighbor-start", type="source", label="Start")
+    graph.add_node("neighbor-middle", id="neighbor-middle", type="file", label="Middle")
+    graph.add_node("neighbor-end", id="neighbor-end", type="chunk", label="End")
+    graph.add_edge("neighbor-start", "neighbor-middle", type="contains")
+    graph.add_edge("neighbor-middle", "neighbor-end", type="has_chunk")
+
+    response = TestClient(app).get("/graph/neighbors", params={"node_id": "neighbor-start"})
+    assert response.status_code == 200
+    assert {node["node_id"] for node in response.json()["neighbors"]} == {
+        "neighbor-middle",
+        "neighbor-end",
+    }
+
+
 def test_graph_route_can_return_bounded_preview(loaded_config) -> None:
     app = create_app(config=loaded_config)
     graph = app.state.engine.graph_builder.graph

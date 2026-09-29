@@ -153,7 +153,7 @@ def test_example_config_still_declares_the_sync_guardrails() -> None:
     data = yaml.safe_load(example.read_text(encoding="utf-8"))
     limits = (data.get("sync") or {}).get("limits") or {}
     assert limits.get("max_files")
-    assert limits.get("max_file_size_mb")
+    assert limits.get("max_file_size_mb") == 1024
     assert limits.get("follow_symlinks") is False
 
 

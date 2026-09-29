@@ -34,7 +34,16 @@ def test_retrieval_is_typed_config_and_loads_from_yaml() -> None:
     assert config.assistant.retrieval.max_rounds == 5
     assert config.assistant.retrieval.expand_graph is False
     # Untouched fields keep their schema defaults.
-    assert config.assistant.retrieval.per_query_results == 6
+    assert config.assistant.retrieval.per_query_results == 8
+
+
+def test_agentic_defaults_search_more_than_one_hop_and_round() -> None:
+    from pheasant.assistant.workflows.agentic import DEFAULTS
+
+    settings = RetrievalSettings()
+    assert settings.max_rounds == DEFAULTS["max_rounds"] == 3
+    assert settings.expand_depth == DEFAULTS["expand_depth"] == 2
+    assert settings.expand_per_node == DEFAULTS["expand_per_node"] == 4
 
 
 def test_a_none_field_is_not_merged_at_all() -> None:
@@ -43,6 +52,7 @@ def test_a_none_field_is_not_merged_at_all() -> None:
     options = settings.as_options()
     assert "max_rounds" not in options
     assert options["per_query_results"] == 3
+    assert "grader_model" not in options
 
 
 def test_scalars_are_coerced_like_every_other_config_block() -> None:
@@ -129,7 +139,7 @@ def test_retrieval_route_reports_config_and_what_is_effective(
     client = TestClient(create_app(config=loaded_config, config_path=config_path))
     body = client.get("/assistant/retrieval").json()
 
-    assert body["retrieval"]["per_query_results"] == 6
+    assert body["retrieval"]["per_query_results"] == 8
     # "What did I set" is not the same as "what is it doing".
     assert body["effective"]["max_rounds"] == 2
     assert "max_rounds" in body["field_help"]
@@ -156,6 +166,22 @@ def test_a_put_applies_to_the_live_process(loaded_config, config_path: Path) -> 
     client = TestClient(create_app(config=loaded_config, config_path=config_path))
     client.put("/assistant/retrieval", json={"max_context_passages": 25, "persist": False})
     assert loaded_config.assistant.retrieval.max_context_passages == 25
+
+
+def test_grader_model_can_be_set_and_cleared(loaded_config, config_path: Path) -> None:
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+
+    set_response = client.put(
+        "/assistant/retrieval", json={"grader_model": "gpt-6-luna", "persist": False}
+    )
+    assert set_response.status_code == 200
+    assert loaded_config.assistant.retrieval.grader_model == "gpt-6-luna"
+
+    clear_response = client.put(
+        "/assistant/retrieval", json={"grader_model": None, "persist": False}
+    )
+    assert clear_response.status_code == 200
+    assert loaded_config.assistant.retrieval.grader_model is None
 
 
 def test_a_put_can_persist_to_the_config_file(loaded_config, config_path: Path) -> None:

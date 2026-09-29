@@ -58,7 +58,7 @@ search:
 ingestion:
   captioner:
     provider: openai-spec
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
   transcriber:
@@ -100,9 +100,12 @@ sync:
     interval_seconds: 900
   limits:
     max_files: null
-    max_file_size_mb: 100
+    max_file_size_mb: 1024
     max_total_mb: null
     follow_symlinks: false
+  source_processing:
+    chunk_max_chars: 2000
+    taxonomy_enabled: true
   concurrency:
     max_parallel_sources: 4
     max_parallel_files: 16
@@ -177,7 +180,7 @@ memory:
 assistant:
   enabled: true
   provider: openai
-  model: gpt-5.6-luna
+  model: gpt-6-sol
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   allow_session_keys: false
@@ -187,7 +190,7 @@ assistant:
   max_facts: 32
   workflow: agentic
   retrieval:
-    max_rounds: 2
+    max_rounds: 3
     per_query_results: 16
     max_context_passages: 24
     retrieval_modes:
@@ -195,11 +198,25 @@ assistant:
       - graph
       - hybrid
     expand_graph: true
-    expand_depth: 2
+    expand_depth: 3
     expand_per_node: 8
     grade_evidence: true
+    grader_model: gpt-6-luna
     verify_citations: true
     max_facts: 32
+evaluation:
+  enabled: true
+  on_material_snapshot: false
+  max_results: 10
+  maximum_queries_per_run: 500
+  run_stale_seconds: 90.0
+  promotion:
+    enabled: false
+tuning:
+  enabled: true
+  auto:
+    enabled: false
+    apply: false
 readiness:
   enabled: true
   corpus_denylist:
@@ -211,27 +228,32 @@ readiness:
   latency_probe_queries: 12
   concurrency_probe_writers: 4
   concurrency_probe_items: 5
-sources: []
+sources:
+  - name: agent-memory
+    type: memory
+    path: /memory
+    description: Durable agent memory
+    include:
+      - '**/*.md'
+    exclude:
+      - '**/*.archived'
+    sync:
+      on_startup: true
+      on_file_change: debounce
+      on_git_commit: false
+      interval_seconds: 60
 observability:
-  # The observation plane and its log tier. Off, exactly as it ships: turning it
-  # on means recording queries and principals, which is an operator's decision
-  # rather than a default. Bring up the `logger` service with it:
-  #
-  #   docker compose --profile observability -f docker-compose.scale.yml up
-  #
-  # `serve --role logger` refuses to start unless both flags below are true, so
-  # a half-configured tier fails loudly instead of idling while healthy.
+  # The interaction ledger records queries and principals for evaluation.
+  # Start the dedicated logger with the observability Compose profile.
+  # Rows expire after seven days; cold export is intentionally disabled.
   otlp_endpoint: null
   interactions:
-    enabled: false
+    enabled: true
     hot_retention_days: 7
-    # Rolls expired rows to Parquet under /exports/interactions/dt=... before
-    # deleting them. That directory enforces no access control and these rows
-    # carry principals and query text -- put the access control on the volume.
     cold_enabled: false
     cold_retention_days: null
     queue:
-      enabled: false
+      enabled: true
       backend: nats
       nats_stream: PHEASANT_LOGS
       nats_subject: pheasant.logs.batches

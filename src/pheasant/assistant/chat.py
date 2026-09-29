@@ -836,7 +836,14 @@ def answer_question(
         "counts": result.counts,
         "workflow": result.workflow,
         "steps": [
-            {"name": step.name, "detail": step.detail, "passages": step.passages}
+            {
+                "name": step.name,
+                "detail": step.detail,
+                "passages": step.passages,
+                "duration_seconds": step.duration_seconds,
+                "input_tokens": step.input_tokens,
+                "output_tokens": step.output_tokens,
+            }
             for step in result.steps
         ],
     }

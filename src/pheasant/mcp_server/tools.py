@@ -1827,7 +1827,7 @@ class PheasantTools(ReadinessTools):
         self,
         knowledge_base: str,
         node_id: str,
-        depth: int = 1,
+        depth: int = 2,
         edge_types: list[str] | None = None,
         max_nodes: int | None = None,
     ) -> dict:

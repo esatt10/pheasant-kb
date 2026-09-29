@@ -257,7 +257,10 @@ def test_the_far_side_enforces_the_size_limit_itself(writing_tier: str, loaded_c
     which is exactly what a caller that skipped it would do.
     """
 
-    limit_mb = loaded_config.sync.limits.max_file_size_mb or 100
+    # Keep the regression test small; the production default is intentionally
+    # large enough that deriving the payload from it would allocate 1 GiB.
+    loaded_config.sync.limits.max_file_size_mb = 1
+    limit_mb = loaded_config.sync.limits.max_file_size_mb
     oversized = b"x" * ((limit_mb * 1024 * 1024) + 1024)
 
     with pytest.raises(LandingServiceError, match="per-file limit"):

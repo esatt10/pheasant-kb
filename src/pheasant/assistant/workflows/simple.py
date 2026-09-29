@@ -12,6 +12,7 @@ workflows changes *how much work* is done, not what an answer looks like.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from pheasant.assistant.chat import (
@@ -24,7 +25,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
-from pheasant.assistant.providers import ProviderError
+from pheasant.assistant.providers import ProviderError, collect_token_usage
 from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep
 
 
@@ -34,6 +35,7 @@ class SimpleWorkflow:
     name = "simple"
 
     def run(self, request: WorkflowRequest, retriever: Any, llm: Any) -> WorkflowResult:
+        retrieve_started = time.perf_counter()
         passages = retriever.search(
             request.question,
             mode=request.mode,
@@ -50,6 +52,7 @@ class SimpleWorkflow:
                 name="retrieve",
                 detail=f"{request.mode} search for the question as asked",
                 passages=len(citations),
+                duration_seconds=time.perf_counter() - retrieve_started,
             )
         ]
         # Progress is reported by every workflow, not just the agentic one:
@@ -66,6 +69,7 @@ class SimpleWorkflow:
         answer_mode = "extractive"
         error: str | None = None
         if llm is not None and citations:
+            read_started = time.perf_counter()
             documents = hydrate_citations(retriever, citations, request.options)
             if documents:
                 steps.append(
@@ -73,20 +77,41 @@ class SimpleWorkflow:
                         name="read",
                         detail=f"read {len(documents)} file(s) in full from their chunks",
                         passages=len(documents),
+                        duration_seconds=time.perf_counter() - read_started,
                     )
                 )
                 request.report(steps[-1])
             try:
-                answer = llm.complete(
-                    system_prompt_for(intent),
-                    build_prompt(request.question, citations, facts, documents),
-                )
+                answer_started = time.perf_counter()
+                with collect_token_usage() as usage:
+                    answer = llm.complete(
+                        system_prompt_for(intent),
+                        build_prompt(request.question, citations, facts, documents),
+                    )
                 answer_mode = "llm"
-                steps.append(WorkflowStep(name="answer", detail=f"synthesized with {llm.model_id}"))
+                steps.append(
+                    WorkflowStep(
+                        name="answer",
+                        detail=f"synthesized with {llm.model_id}",
+                        duration_seconds=time.perf_counter() - answer_started,
+                        input_tokens=usage.reported_input,
+                        output_tokens=usage.reported_output,
+                    )
+                )
                 request.report(steps[-1])
             except ProviderError as exc:
                 error = str(exc)
                 answer = extractive_answer(request.question, citations, reason=short_reason(error))
+                steps.append(
+                    WorkflowStep(
+                        name="answer",
+                        detail="model unavailable; returned extracted passages",
+                        duration_seconds=time.perf_counter() - answer_started,
+                        input_tokens=usage.reported_input,
+                        output_tokens=usage.reported_output,
+                    )
+                )
+                request.report(steps[-1])
         else:
             answer = extractive_answer(request.question, citations)
 
