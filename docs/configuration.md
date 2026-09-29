@@ -827,6 +827,10 @@ shard into several regions.
 | `api_auth.behind_authenticating_proxy` | bool | `false` | "An ingress already authenticates callers." Satisfies the startup check below without a token of pheasant's own. |
 | `api_auth.public_paths` | list[str] | `[/health, /ready, /metrics]` | Answerable without a token. The probes must stay open or an orchestrator cannot tell a healthy pod from an unauthorized one. |
 
+The built-in secret and generated-directory exclude globs are maintained in
+`src/pheasant/config/exclusions.py` and remain available through
+`pheasant.config.schema`; this does not change effective source exclusions.
+
 **Every role but `all` refuses to start** on a bind address other machines can
 reach with neither of the first two set. One container is exempt on purpose —
 a laptop and every existing standalone deployment start with no configuration

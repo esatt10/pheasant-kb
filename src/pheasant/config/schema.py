@@ -7,80 +7,15 @@ from functools import cache
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
-#: Patterns that keep credentials out of the index. Unlike the rest of
-#: ``DEFAULT_EXCLUDES``, these are **not** merely a default a caller can
-#: replace: ``security.default_exclude_secrets`` (on by default) unions them
-#: into every filesystem source's effective exclude list. That distinction
-#: matters because pheasant supports indexing any readable path — pointing a
-#: source at ``$HOME`` with ``include: ["**/*.json", "**/*.yaml"]`` otherwise
-#: sweeps up ``~/.docker/config.json``, ``~/.config/gh/hosts.yml`` and
-#: friends, and a caller that supplies its own ``exclude`` list used to drop
-#: every one of these patterns silently.
-SECRET_EXCLUDES = [
-    # Environment and dotenv files
-    "**/.env",
-    "**/.env.*",
-    "**/*.envrc",
-    # Private keys and certificates
-    "**/*id_rsa*",
-    "**/*id_dsa*",
-    "**/*id_ecdsa*",
-    "**/*id_ed25519*",
-    "**/*.pem",
-    "**/*.key",
-    "**/*.p12",
-    "**/*.pfx",
-    "**/*.jks",
-    "**/*.keystore",
-    "**/*.asc",
-    "**/*.gpg",
-    # Credential stores people keep in a home directory
-    "**/.ssh/**",
-    "**/.gnupg/**",
-    "**/.aws/**",
-    "**/.azure/**",
-    "**/.kube/**",
-    "**/.docker/config.json",
-    "**/.config/gh/**",
-    "**/.config/gcloud/**",
-    "**/.netrc",
-    "**/.npmrc",
-    "**/.pypirc",
-    "**/.git-credentials",
-    "**/credentials",
-    "**/credentials.json",
-    "**/secrets.yaml",
-    "**/secrets.yml",
-    "**/*.kdbx",
-    # Local keychains / browser profiles
-    "**/Library/Keychains/**",
-    "**/.mozilla/**",
-    "**/.password-store/**",
-]
-
-#: Directories that are large, generated, and never worth indexing. Kept
-#: separate from the secret list because these are about *cost*, not
-#: disclosure, and an operator may legitimately want to drop them.
-NOISE_EXCLUDES = [
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/__pycache__/**",
-    "**/.venv/**",
-    "**/venv/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/target/**",
-    "**/.next/**",
-    "**/.cache/**",
-    "**/.tox/**",
-    "**/.gradle/**",
-    "**/.terraform/**",
-    "**/.mypy_cache/**",
-    "**/.pytest_cache/**",
-    "**/.ruff_cache/**",
-]
-
-DEFAULT_EXCLUDES = [*NOISE_EXCLUDES, *SECRET_EXCLUDES]
+from pheasant.config.exclusions import (
+    DEFAULT_EXCLUDES as DEFAULT_EXCLUDES,
+)
+from pheasant.config.exclusions import (
+    NOISE_EXCLUDES as NOISE_EXCLUDES,
+)
+from pheasant.config.exclusions import (
+    SECRET_EXCLUDES as SECRET_EXCLUDES,
+)
 
 
 class SourceType(StrEnum):

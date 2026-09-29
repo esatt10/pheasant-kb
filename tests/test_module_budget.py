@@ -88,7 +88,7 @@ CEILINGS: dict[str, int] = {
 
 def _line_counts() -> dict[str, int]:
     return {
-        str(path.relative_to(SOURCE_ROOT)): len(path.read_text(encoding="utf-8").splitlines())
+        path.relative_to(SOURCE_ROOT).as_posix(): len(path.read_text(encoding="utf-8").splitlines())
         for path in sorted(SOURCE_ROOT.rglob("*.py"))
     }
 
