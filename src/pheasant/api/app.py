@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.readiness_routes import register_readiness_routes
+from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -114,50 +115,6 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
     ("s3", "S3 bucket", "An S3-compatible bucket prefix (experimental).", "unused"),
 )
-
-
-class SearchRequest(BaseModel):
-    # Step 32.2 — optional caller identity; enforced only when
-    # security.acl_enforced is on. The caller (router / deployment
-    # perimeter) authenticates; the region enforces visibility.
-    principal: str | None = None
-    principal_groups: list[str] = []
-    knowledge_base: str | None = None
-    query: str
-    mode: str = "hybrid"
-    max_results: int = 10
-    source_name: str | None = None
-    # Restrict to one part of a document's extracted taxonomy, matched against
-    # the heading breadcrumb. Only meaningful for sources with taxonomy on.
-    section: str | None = None
-    # Step 33.6 — the same retrieval criteria the MCP tool has always had.
-    # They lived only on the MCP surface, so the same region answered a query
-    # differently depending on which protocol asked; the router, which reaches
-    # this region over HTTP, could not scope a search at all.
-    exclude_sources: list[str] | None = None
-    node_types: list[str] | None = None
-    min_score: float | None = None
-    # Scope by the *kind* of source (repository, notion, slack, ...) rather
-    # than by name. A caller that does not already know every source in the
-    # region can still say "only our wikis" or "nothing from git". Each hit
-    # reports its own under `provenance.source_type`.
-    source_types: list[str] | None = None
-    exclude_source_types: list[str] | None = None
-    # How this region's agent memory takes part: "auto" (default), "off",
-    # "only", "prefer", or an object with scopes/subject/current_only/as_of.
-    memory: dict | str | None = None
-    # Pin this search to a sealed snapshot. The region verifies it still
-    # stands there and refuses with SNAPSHOT_DRIFTED if it does not — it holds
-    # one version of its corpus, so the guarantee is that two runs naming one
-    # snapshot cannot silently have seen different corpora.
-    snapshot_id: str | None = None
-    # The instant memory validity is evaluated at, echoed into the lineage
-    # even where the region holds no memory — an arm that ran with memory off
-    # has to be able to record that it did.
-    as_of: str | None = None
-    # The caller's correlation id, echoed so a result joins to the ledger row
-    # and the span that produced it.
-    trace_id: str | None = None
 
 
 class MemoryEnableRequest(BaseModel):
@@ -3801,33 +3758,42 @@ def create_app(
         the `Request` that carried it.
         """
 
-        payload = retrieval_service.search(
-            services,
-            retrieval_service.SearchRequest(
-                query=req.query,
-                knowledge_base=req.knowledge_base,
-                mode=req.mode,
-                max_results=req.max_results,
-                source_name=req.source_name,
-                section=req.section,
-                principal=req.principal,
-                principal_groups=req.principal_groups,
-                memory=req.memory,
-                exclude_sources=req.exclude_sources,
-                node_types=req.node_types,
-                min_score=req.min_score,
-                source_types=req.source_types,
-                exclude_source_types=req.exclude_source_types,
-                snapshot_id=req.snapshot_id,
-                as_of=req.as_of,
-                trace_id=req.trace_id,
-            ),
-        )
+        payload = retrieval_service.search(services, req.service_request(req.query))
         record_retrieval(
             request,
             query=req.query,
             payload=payload,
             criteria={"mode": req.mode, **(payload.get("criteria") or {})},
+        )
+        return payload
+
+    @app.post("/search/batch")
+    def search_batch(req: BatchSearchRequest, request: Request) -> dict:
+        """Transport adapter. The operation is `services.retrieval.search_batch`.
+
+        Recorded as one interaction with no query text: the ledger's formation
+        rules read a query's words against what it retrieved, and a batch's
+        concatenated queries are not a query anybody asked. The merged hits are
+        still recorded as served.
+        """
+
+        payload = retrieval_service.search_batch(
+            services,
+            retrieval_service.BatchSearchRequest(
+                queries=tuple(req.queries),
+                criteria=req.service_request(""),
+                per_query=req.per_query,
+            ),
+        )
+        record_retrieval(
+            request,
+            query=None,
+            payload=payload,
+            criteria={
+                "mode": req.mode,
+                "batch_queries": len(req.queries),
+                **(payload.get("criteria") or {}),
+            },
         )
         return payload
 

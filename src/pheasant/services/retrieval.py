@@ -33,11 +33,12 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pheasant.search.criteria import apply_retrieval_criteria, criteria_active, criteria_dict
 from pheasant.services import ServiceContext
+from pheasant.services.errors import InvalidRequest
 from pheasant.telemetry import metrics
 
 
@@ -131,19 +132,29 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     """
 
     kb_id = context.knowledge_base(request.knowledge_base)
-    ranking = context.searcher.ranking_parameters()
-    fetch = ranking.overfetch(request.max_results, filtering=request.filtering)
-
     # Before the arms run, not after. A pinned search whose corpus has moved
     # must not spend the retrieval and then discard it: the caller is going to
     # attribute whatever comes back to the snapshot it named, so the only safe
     # order is to establish that the name is still true first.
-    snapshot = None
-    if request.snapshot_id:
-        from pheasant.services import snapshots as snapshot_service
+    snapshot = _require_snapshot(context, request.snapshot_id)
+    return _search(context, request, kb_id, snapshot)
 
-        snapshot = snapshot_service.require_current(context, request.snapshot_id)
 
+def _require_snapshot(context: ServiceContext, snapshot_id: str | None) -> Any:
+    if not snapshot_id:
+        return None
+    from pheasant.services import snapshots as snapshot_service
+
+    return snapshot_service.require_current(context, snapshot_id)
+
+
+def _search(
+    context: ServiceContext, request: SearchRequest, kb_id: str, snapshot: Any
+) -> dict[str, Any]:
+    """One retrieval, once the knowledge base and any snapshot pin are settled."""
+
+    ranking = context.searcher.ranking_parameters()
+    fetch = ranking.overfetch(request.max_results, filtering=request.filtering)
     started = time.perf_counter()
     try:
         payload = context.searcher.search_context(
@@ -236,6 +247,154 @@ def relevant_files(context: ServiceContext, request: FilesRequest) -> dict[str, 
             seen.add(relative_path)
             files.append(result)
     return {"files": files}
+
+
+#: The most queries one batch may carry, and the most hits it may ask for in
+#: total (queries × ``max_results``). A batch runs on a serving replica inside
+#: one request slot, so an unbounded one is a way for a single caller to hold
+#: that slot for as long as it likes. Both refusals say how to split the call.
+MAX_BATCH_QUERIES = 25
+MAX_BATCH_RESULTS = 1000
+
+
+@dataclass(frozen=True)
+class BatchSearchRequest:
+    """Many queries, one set of criteria: bulk context in one round trip.
+
+    ``criteria`` is an ordinary :class:`SearchRequest` whose ``query`` is
+    ignored. Reusing it rather than re-declaring its fields is what keeps a
+    batch from drifting away from a single search: a criterion added there is
+    a criterion a batch honours, with no second list to remember.
+    """
+
+    queries: tuple[str, ...]
+    criteria: SearchRequest
+    #: Include each query's own payload under ``searches``. Off when a caller
+    #: wants only the merged context and would rather not receive every hit
+    #: twice.
+    per_query: bool = True
+
+
+def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[str, Any]:
+    """Run :func:`search` once per query and merge the hits into one context.
+
+    Each query is an ordinary search — same over-fetch, criteria, ACL, memory
+    policy, metrics and lineage — so a batch cannot answer a query differently
+    than asking it alone would. What batching buys is everything *around* the
+    arms: one round trip, one knowledge-base resolution, and one snapshot
+    verification rather than one per query (re-deriving a manifest is the most
+    expensive thing a pinned search does before it retrieves anything).
+
+    ``results`` is the union, deduplicated by chunk or node id, and ordered
+    **by rank, not by score**: every query's first hit, then every query's
+    second, and so on. Fused RRF scores have no absolute scale, so comparing
+    them across two queries would rank by how *confident* each query happened
+    to be; ordering by rank means no query's tail can crowd out another's head,
+    and a caller that truncates the list keeps coverage of every query. Ties
+    go to the hit more queries agreed on. Each merged hit carries a ``batch``
+    block naming the queries that returned it and its best rank among them.
+
+    Queries run in order on the calling thread. Concurrent reads do not scale
+    on SQLite in a container (see CLAUDE.md, "Serving concurrency"), and a
+    batch that fanned out would take several request slots' worth of work
+    while holding one.
+    """
+
+    queries = _batch_queries(request.queries, request.criteria.max_results)
+    kb_id = context.knowledge_base(request.criteria.knowledge_base)
+    snapshot = _require_snapshot(context, request.criteria.snapshot_id)
+
+    started = time.perf_counter()
+    # A repeated query is asked once and answered for every position it holds.
+    answered: dict[str, dict[str, Any]] = {}
+    searches: list[dict[str, Any]] = []
+    for query in queries:
+        if query not in answered:
+            answered[query] = _search(
+                context, replace(request.criteria, query=query), kb_id, snapshot
+            )
+        searches.append(answered[query])
+
+    merged = _merge_batch(searches)
+    hits = sum(len(payload.get("results") or []) for payload in searches)
+    payload: dict[str, Any] = {
+        "knowledge_base": kb_id,
+        "queries": list(queries),
+        "results": merged,
+        "counts": {
+            "queries": len(queries),
+            "distinct_queries": len(answered),
+            "hits": hits,
+            "results": len(merged),
+            # Hits another query had already returned. High overlap means the
+            # queries are paraphrases of one another rather than facets.
+            "overlap": hits - len(merged),
+        },
+        "graph_generation": getattr(context.engine, "loaded_graph_generation", None),
+        "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+    }
+    if request.criteria.filtering:
+        payload["criteria"] = request.criteria.criteria_block()
+    if request.per_query:
+        payload["searches"] = [{"query": query, **searches[i]} for i, query in enumerate(queries)]
+    return payload
+
+
+def _batch_queries(queries: Any, max_results: int) -> tuple[str, ...]:
+    """The batch's queries, or a refusal that says how to fix the call."""
+
+    if isinstance(queries, str) or not isinstance(queries, (list, tuple)) or not queries:
+        raise InvalidRequest("queries must be a non-empty list of query strings")
+    if len(queries) > MAX_BATCH_QUERIES:
+        raise InvalidRequest(
+            f"A batch holds at most {MAX_BATCH_QUERIES} queries; this one has {len(queries)}. "
+            "Split it into several calls."
+        )
+    for index, query in enumerate(queries):
+        if not isinstance(query, str) or not query.strip():
+            raise InvalidRequest(f"queries[{index}] is empty; every query needs text")
+    requested = len(queries) * max(1, int(max_results or 1))
+    if requested > MAX_BATCH_RESULTS:
+        raise InvalidRequest(
+            f"A batch may ask for at most {MAX_BATCH_RESULTS} hits in total; "
+            f"{len(queries)} queries × max_results {max_results} is {requested}. "
+            "Lower max_results or split the batch."
+        )
+    return tuple(queries)
+
+
+def _merge_batch(searches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate every query's hits into one list ordered by rank."""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for query_index, payload in enumerate(searches):
+        for rank, item in enumerate(payload.get("results") or []):
+            # A hit with no id cannot be recognised twice, so it is kept as
+            # its own entry rather than collapsed into a stranger.
+            key = str(item.get("chunk_id") or item.get("node_id") or f"#{query_index}:{rank}")
+            entry = merged.get(key)
+            if entry is None:
+                merged[key] = {
+                    "item": item,
+                    "rank": rank,
+                    "first": (query_index, rank),
+                    "queries": [query_index],
+                }
+                continue
+            if query_index not in entry["queries"]:
+                entry["queries"].append(query_index)
+            if rank < entry["rank"]:
+                entry["item"], entry["rank"] = item, rank
+    ordered = sorted(
+        merged.values(), key=lambda entry: (entry["rank"], -len(entry["queries"]), entry["first"])
+    )
+    return [
+        {
+            **entry["item"],
+            "batch": {"best_rank": entry["rank"] + 1, "matched_queries": entry["queries"]},
+        }
+        for entry in ordered
+    ]
 
 
 def _query_id(kb_id: str, request: SearchRequest, snapshot_id: str | None) -> str:

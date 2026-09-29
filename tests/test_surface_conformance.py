@@ -296,6 +296,156 @@ def test_as_of_reaches_the_lineage_from_both_surfaces(region: dict[str, Any]) ->
     assert _identities(over_http) == _identities(over_mcp)
 
 
+# ---------------------------------------------------------------------------
+# Bulk retrieval
+# ---------------------------------------------------------------------------
+
+BATCH = ["credential rotation", "hybrid retrieval fusion", "vault sidecar token"]
+
+
+def test_a_batch_answers_identically_on_both_surfaces(region: dict[str, Any]) -> None:
+    over_http = _http(region, "post", "/search/batch", json={"queries": BATCH, "max_results": 3})
+    over_mcp = region["tools"].search_context_batch(region["kb"], BATCH, "hybrid", 3)
+
+    assert _identities(over_http) == _identities(over_mcp)
+    assert over_http["counts"] == over_mcp["counts"]
+    assert [_identities(each) for each in over_http["searches"]] == [
+        _identities(each) for each in over_mcp["searches"]
+    ]
+    assert over_http.get("graph_generation") == over_mcp.get("graph_generation")
+
+
+def test_each_query_in_a_batch_answers_as_it_would_alone(region: dict[str, Any]) -> None:
+    """Batching changes the round trips, never the answer to any one query."""
+
+    batch = region["tools"].search_context_batch(region["kb"], BATCH, "hybrid", 3)
+
+    for query, answered in zip(BATCH, batch["searches"], strict=True):
+        alone = region["tools"].search_context(region["kb"], query, "hybrid", 3)
+        assert answered["query"] == query
+        assert _identities(answered) == _identities(alone)
+        assert answered["lineage"]["query_id"] == alone["lineage"]["query_id"]
+
+
+def test_the_merged_context_is_deduplicated_and_ordered_by_rank(region: dict[str, Any]) -> None:
+    batch = region["tools"].search_context_batch(region["kb"], BATCH, "hybrid", 3)
+    merged = _identities(batch)
+    per_query = [_identities(each) for each in batch["searches"]]
+
+    assert len(merged) == len(set(merged)), "a passage appears once in the merged context"
+    assert set(merged) == {hit for hits in per_query for hit in hits}, "and nothing is lost"
+    assert batch["counts"]["overlap"] > 0, "the fixture must overlap, or dedup is untested"
+    assert batch["counts"]["overlap"] == batch["counts"]["hits"] - len(merged)
+
+    # Rank-major: every query's best hit leads, so truncation keeps coverage.
+    ranks = [hit["batch"]["best_rank"] for hit in batch["results"]]
+    assert ranks == sorted(ranks)
+    firsts = {hits[0] for hits in per_query if hits}
+    assert set(merged[: len(firsts)]) == firsts
+
+    for hit, identity in zip(batch["results"], merged, strict=True):
+        found_by = hit["batch"]["matched_queries"]
+        assert found_by == sorted(found_by)
+        assert all(identity in per_query[index] for index in found_by)
+        assert (
+            min(per_query[index].index(identity) for index in found_by) + 1
+            == (hit["batch"]["best_rank"])
+        )
+
+
+def test_a_repeated_query_is_asked_once_and_answered_twice(region: dict[str, Any]) -> None:
+    batch = region["tools"].search_context_batch(
+        region["kb"], ["rotation", "vault", "rotation"], "hybrid", 3
+    )
+
+    assert batch["counts"]["queries"] == 3
+    assert batch["counts"]["distinct_queries"] == 2
+    assert _identities(batch["searches"][0]) == _identities(batch["searches"][2])
+    first = _identities(batch["searches"][0])[0]
+    merged = dict(zip(_identities(batch), batch["results"], strict=True))
+    assert {0, 2} <= set(merged[first]["batch"]["matched_queries"])
+
+
+def test_per_query_false_returns_only_the_merged_context(region: dict[str, Any]) -> None:
+    lean = _http(
+        region,
+        "post",
+        "/search/batch",
+        json={"queries": BATCH, "max_results": 3, "per_query": False},
+    )
+    full = _http(region, "post", "/search/batch", json={"queries": BATCH, "max_results": 3})
+
+    assert "searches" not in lean
+    assert _identities(lean) == _identities(full)
+
+
+def test_batch_criteria_apply_to_every_query(region: dict[str, Any]) -> None:
+    body = {"queries": BATCH, "max_results": 3, "node_types": ["chunk"]}
+    over_http = _http(region, "post", "/search/batch", json=body)
+    over_mcp = region["tools"].search_context_batch(
+        region["kb"], BATCH, "hybrid", 3, node_types=["chunk"]
+    )
+
+    assert _identities(over_http) == _identities(over_mcp)
+    assert over_mcp["criteria"]["node_types"] == ["chunk"]
+    assert over_http["criteria"] == over_mcp["criteria"]
+    for query, each in zip(BATCH, over_mcp["searches"], strict=True):
+        alone = region["tools"].search_context(
+            region["kb"], query, "hybrid", 3, node_types=["chunk"]
+        )
+        assert _identities(each) == _identities(alone)
+
+
+def test_a_pinned_batch_verifies_its_snapshot_once(
+    region: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-deriving the manifest is the costly part of a pinned search; a batch
+    of N pays it once, and every query still reports the pin in its lineage."""
+
+    from pheasant.services import snapshots
+
+    snapshot_id = region["tools"].seal_snapshot(region["kb"], label="batch")["snapshot_id"]
+    verified: list[str] = []
+    original = snapshots.require_current
+
+    def counting(context: Any, requested: str) -> Any:
+        verified.append(requested)
+        return original(context, requested)
+
+    monkeypatch.setattr(snapshots, "require_current", counting)
+    batch = region["tools"].search_context_batch(
+        region["kb"], BATCH, "hybrid", 3, snapshot_id=snapshot_id
+    )
+
+    assert verified == [snapshot_id]
+    for each in batch["searches"]:
+        assert each["lineage"]["state"]["snapshot_id"] == snapshot_id
+
+
+@pytest.mark.parametrize(
+    ("queries", "max_results", "fragment"),
+    [
+        ([], 10, "non-empty list"),
+        (["rotation", "   "], 10, "queries[1] is empty"),
+        (["rotation"] * 26, 10, "at most 25 queries"),
+        (["rotation"] * 20, 60, "at most 1000 hits"),
+    ],
+)
+def test_a_malformed_batch_is_refused_with_one_text(
+    region: dict[str, Any], queries: list[str], max_results: int, fragment: str
+) -> None:
+    response = region["client"].post(
+        "/search/batch", json={"queries": queries, "max_results": max_results}
+    )
+    with pytest.raises(ServiceError) as refused:
+        region["tools"].search_context_batch(region["kb"], queries, "hybrid", max_results)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == str(refused.value)
+    assert response.json()["code"] == refused.value.code == "INVALID_REQUEST"
+    assert fragment in str(refused.value)
+
+
 def test_relevant_files_answers_identically(region: dict[str, Any]) -> None:
     """Three of the six divergences were in this one operation."""
 
@@ -423,6 +573,7 @@ def test_the_refusal_is_a_value_error_so_the_sdk_boundary_still_reads_it(
 #: them. Adding an operation to the layer without adding it here fails below.
 CONFORMED = {
     "search": ("POST /search", "search_context"),
+    "search_batch": ("POST /search/batch", "search_context_batch"),
     "relevant_files": ("POST /relevant-files", "get_relevant_files"),
     "neighbors": ("GET /graph/neighbors", "get_graph_neighbors"),
     "slice_": ("GET /graph/slice", "get_graph_slice"),

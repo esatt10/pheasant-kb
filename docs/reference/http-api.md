@@ -102,6 +102,7 @@ actually behind. See [Monitor indexing](../how-to/monitor-indexing.md).
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/search` | Search (`mode`: `text` / `graph` / `vector` / `hybrid`). Also takes `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`, `section` and `memory`. Every hit reports `provenance.source_type` — the kind of source it came from. The response carries `graph_generation`: which graph answered, so a diagnosis can tell "not indexed" from "this replica has not picked up the index that has it". |
+| POST | `/search/batch` | Bulk context retrieval: `queries` (up to 25, at most 1,000 hits in total) under every criterion `/search` takes. Each query is answered exactly as `/search` would answer it. `results` is the merged context, deduplicated and ordered by rank across queries, each hit carrying a `batch` block (`best_rank`, `matched_queries`); `searches` holds the per-query payloads unless `per_query: false`. A `snapshot_id` pin is verified once. Malformed batches are refused with `422` / `INVALID_REQUEST` and a message saying how to split the call. The MCP tool is `search_context_batch`. |
 | POST | `/relevant-files` | Rank relevant files for a task/query. |
 | GET | `/files/summary` | Summarize a file node. |
 | GET | `/nodes/content` | Fetch a node's content. |

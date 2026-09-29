@@ -881,6 +881,42 @@ class PheasantTools(ReadinessTools):
             ),
         )
 
+    def search_context_batch(
+        self,
+        knowledge_base: str,
+        queries: list[str],
+        mode: str = "hybrid",
+        max_results: int = 10,
+        per_query: bool = True,
+        **criteria: Any,
+    ) -> dict:
+        """Retrieve passages for many queries in one call.
+
+        ``criteria`` are the keyword criteria ``search_context`` takes, by the
+        same names, applied to every query — passed straight into the service's
+        ``SearchRequest`` so a criterion added there needs no edit here. The MCP
+        tool in ``server.py`` declares them one by one, because that is the
+        schema an agent reads. ``results`` is the merged context, ordered by
+        rank across queries; ``searches`` holds each query's own payload unless
+        ``per_query`` is false.
+        """
+        self._require_knowledge_base(knowledge_base)
+        # Transport adapter. The operation is `services.retrieval.search_batch`.
+        return retrieval_service.search_batch(
+            self.services,
+            retrieval_service.BatchSearchRequest(
+                queries=tuple(queries) if isinstance(queries, list) else queries,
+                criteria=retrieval_service.SearchRequest(
+                    query="",
+                    knowledge_base=knowledge_base,
+                    mode=mode,
+                    max_results=max_results,
+                    **criteria,
+                ),
+                per_query=per_query,
+            ),
+        )
+
     def record_evidence(
         self,
         knowledge_base: str,

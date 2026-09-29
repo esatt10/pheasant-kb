@@ -421,6 +421,64 @@ def create_mcp_server(config: PheasantConfig) -> Any:
 
     @mcp.tool()
     @anticipated
+    def search_context_batch(  # noqa: PLR0913 - the same criteria as search_context
+        knowledge_base: str,
+        queries: list[str],
+        mode: str = "hybrid",
+        max_results: int = 10,
+        per_query: bool = True,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+        session: str | None = None,
+        section: str | None = None,
+        source_name: str | None = None,
+        exclude_sources: list[str] | None = None,
+        node_types: list[str] | None = None,
+        min_score: float | None = None,
+        memory: dict | str | None = None,
+        source_types: list[str] | None = None,
+        exclude_source_types: list[str] | None = None,
+        snapshot_id: str | None = None,
+        as_of: str | None = None,
+    ) -> dict:
+        """Search for many queries in one call and return one merged context.
+
+        Use this instead of calling search_context repeatedly when you need
+        context for several sub-questions, facets or identifiers at once. Up
+        to 25 queries, and at most 1000 hits in total (queries x max_results).
+        Every other argument means what it means on search_context and applies
+        to every query.
+
+        results is the merged context: each passage once, ordered by rank
+        across queries -- every query's best hit, then every query's second --
+        so truncating it keeps coverage of every query. Each hit's "batch"
+        block lists the query indexes that found it. searches holds each
+        query's own result set unless per_query is false; counts.overlap is
+        how many hits a query shared with an earlier one.
+        """
+
+        return tools.search_context_batch(
+            knowledge_base,
+            queries,
+            mode,
+            max_results,
+            per_query,
+            principal=principal,
+            principal_groups=principal_groups,
+            section=section,
+            source_name=source_name,
+            exclude_sources=exclude_sources,
+            node_types=node_types,
+            min_score=min_score,
+            memory=memory,
+            source_types=source_types,
+            exclude_source_types=exclude_source_types,
+            snapshot_id=snapshot_id,
+            as_of=as_of,
+        )
+
+    @mcp.tool()
+    @anticipated
     def describe_retrieval(knowledge_base: str) -> dict:
         """Report how this knowledge base retrieves, and what you can override.
 
