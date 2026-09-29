@@ -180,7 +180,7 @@ memory:
 assistant:
   enabled: true
   provider: openai
-  model: gpt-6-luna
+  model: gpt-6-sol
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   allow_session_keys: false
