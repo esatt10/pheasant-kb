@@ -37,9 +37,12 @@ function chipTooltip(citation: Citation): string {
 export function SourceStrip({
   citations,
   onSelect,
+  onVisualize,
 }: {
   citations: Citation[];
   onSelect: (nodeId: string | undefined) => void;
+  /** "Visualize this passage": a diagram grounded in this one source. */
+  onVisualize?: (citation: Citation) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const ordered = [...citations].sort((a, b) => Number(b.used) - Number(a.used) || a.index - b.index);
@@ -50,8 +53,8 @@ export function SourceStrip({
       {visible.map((citation) => {
         const section = sectionLabel(citation.heading_path);
         return (
+          <span key={citation.index} className="source-chip-wrap">
           <button
-            key={citation.index}
             className={`source-chip${citation.used ? "" : " source-chip--unused"}`}
             onClick={() => onSelect(citation.node_id)}
             title={chipTooltip(citation)}
@@ -72,6 +75,18 @@ export function SourceStrip({
             ) : null}
             {section ? <span className="source-chip__section">{section}</span> : null}
           </button>
+          {onVisualize ? (
+            <button
+              type="button"
+              className="source-chip__visualize"
+              onClick={() => onVisualize(citation)}
+              title="Draw a diagram of this passage"
+              aria-label={`Draw a diagram of source ${citation.index}`}
+            >
+              ◇
+            </button>
+          ) : null}
+          </span>
         );
       })}
       {hiddenCount > 0 ? (

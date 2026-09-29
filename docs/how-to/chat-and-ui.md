@@ -52,6 +52,27 @@ claim that no model is connected.
 
 ---
 
+### Length, follow-ups, figures and diagrams
+
+- **Length.** The picker under the chat box is *Auto* by default — each
+  question decides ("in detail" writes a long, sectioned answer; "briefly" a
+  short one) — or pin *Short*, *Medium* or *Long*.
+- **Follow-ups.** Each question is sent with the recent answered turns, so
+  "and what about the vault?" is understood. The composer says how many turns
+  are in play; **New topic** starts fresh without clearing the thread.
+- **Figures.** When a cited document shows an image the region indexed, the
+  answer can show it inline, and "show me the … diagram" answers with the
+  images themselves.
+- **Diagrams.** **Draw a diagram** under an answer draws its cited passages;
+  ◇ beside a source draws that one passage. Every box and arrow cites a
+  passage — dashed ones do not — and a diagram that would be mostly guesswork
+  is declined with the reason.
+
+Visuals render in pheasant's MCP App view, hosted in a sandboxed frame — the
+same view an MCP host such as Claude renders for the `ask_knowledge_base`,
+`create_visual` and `get_image` tools. See
+[answer length, conversations, visuals and figures](conversations-and-visuals.md).
+
 ## Connecting a model
 
 Three providers are supported: **Anthropic**, **OpenAI**, and **Google

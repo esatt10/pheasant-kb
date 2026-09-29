@@ -104,18 +104,27 @@ def visual_for(
     no model, from the graph edges between the cited sources. ``None`` when no
     visual was asked for.
     """
-    from pheasant.assistant import visuals
 
     if visual == "image":
-        if not figures:
-            return {
-                "type": "images",
-                "status": "declined",
-                "reason": "none of the cited sources shows an image this region holds",
-            }
-        return {"type": "images", "status": "ok", "figures": figures}
+        if figures:
+            return {"type": "images", "status": "ok", "figures": figures}
+        # Asked to be shown a picture the corpus does not hold. Drawing one
+        # from the same passages is more useful than nothing, and it is still
+        # grounded — but the payload says it was drawn, not found.
+        drawn = _diagram(question, citations, facts, llm, kind if kind != "image" else None)
+        drawn["fallback_from"] = "image"
+        drawn["note"] = "none of the cited sources shows an image; drawn from the passages instead"
+        return drawn
     if visual != "diagram":
         return None
+    return _diagram(question, citations, facts, llm, kind)
+
+
+def _diagram(
+    question: str, citations: list[dict], facts: list[dict], llm: Any, kind: str | None
+) -> dict:
+    from pheasant.assistant import visuals
+
     if not citations:
         return visuals.declined("no passages to draw from")
     if llm is None:

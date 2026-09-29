@@ -99,10 +99,13 @@ pheasant-kb/
 │   │                            slack, confluence, imap
 │   ├── ingestion/             ← pipeline, chunking, content_types, taxonomy,
 │   │                            extractor (7 doc formats), captioner,
-│   │                            transcriber, office, msdoc
+│   │                            transcriber, office, msdoc, media (image
+│   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
 │   │                            sql (the serving read surface), builder,
-│   │                            enrichment, capacity, traversal
+│   │                            enrichment, capacity, traversal,
+│   │                            media_links (documents -> images they show),
+│   │                            figures (what an answer can show)
 │   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
 │   │                            graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
@@ -122,10 +125,15 @@ pheasant-kb/
 │   │                            code and a retryable flag), retrieval,
 │   │                            graph, assistant, ingestion (submission and
 │   │                            receipts), snapshots (seal and the drift
-│   │                            refusal)
-│   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools)
-│   ├── api/app.py             ← the HTTP surface
-│   ├── assistant/             ← grounded answering + workflows
+│   │                            refusal), media (image bytes by node)
+│   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
+│   │                            assistant_tools (answer, visuals, images),
+│   │                            apps/knowledge_view.html (the MCP App view)
+│   ├── api/app.py             ← the HTTP surface (+ per-plane routers:
+│   │                            assistant_routes, readiness_routes, …)
+│   ├── assistant/             ← grounded answering + workflows: answering
+│   │                            (around every workflow), routing (depth,
+│   │                            visual), conversation, longform, visuals
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host
 │   ├── security/              ← path_policy (what may be read),
@@ -135,7 +143,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 133 pytest modules, offline by design
+└── tests/                     ← 138 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -820,6 +828,46 @@ guard.
   for that reason; the *contract* is not, because a 404 there is
   indistinguishable from an old build that has none.
   `docs/stress-test-readiness.md`.
+
+### Answering: length, conversations, visuals, figures
+
+`services.assistant.answer` is one operation behind `POST /assistant/chat`, its
+stream, and MCP `ask_knowledge_base` — they had drifted (HTTP refused when
+`assistant.enabled` was off and MCP answered; the stream dropped `memory`).
+Around whichever workflow runs, `assistant.answering` applies the parts every
+workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`.
+
+- **Three axes, none costs a call to decide.** Intent (existing), **depth**
+  (`short` — the unchanged default, so baselines stay comparable — `medium`,
+  `long`) and **visual** (`none`, `diagram`, `image`), read by rules
+  (`assistant.routing`, with a labelled set in `tests/test_intent_routing.py`)
+  and overruled by the planner's existing JSON only when unpinned. "Show me
+  the X diagram" is `image` (a picture the corpus holds) and "draw a diagram
+  of X" is `diagram`; the verb and the article are the difference.
+- **Long answers are outlined, then written section by section** from only
+  each section's passages under their *original* numbers (so `verify_node`
+  still works), in parallel under a deadline; a failed or late section is
+  written from its passages and the trace says so (`assistant.longform`).
+- **The region keeps no chat state.** The caller sends `history`; a follow-up
+  is rewritten into a standalone *search* question (model when connected,
+  joined to the previous question otherwise), the previous question is
+  **re-searched, never fetched by the ids a caller sends** (that would bypass
+  ACL), and earlier answers reach the prompt with `[n]` stripped. No history
+  is a byte-identical prompt, asserted.
+- **A visual is grounded or declined.** The model returns a spec whose every
+  node and edge `cites` passages; `assistant.visuals.validate_spec` drops
+  unknown citations, marks uncited elements `inferred`, and declines a
+  mostly-inferred diagram. No model: the graph's own edges. Never markup from
+  model output — renderers draw from the spec; Mermaid is an escaped export.
+- **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
+  to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
+  kept off the WASM resolver's inputs); the indexer stores image bytes in a
+  content-addressed media store so a replica with no source mount can show
+  them; `[fig:n]` is verified like `[n]`.
+- **MCP Apps.** The three assistant tools declare
+  `ui://pheasant/knowledge-view.html` (`text/html;profile=mcp-app`); the web UI
+  hosts the same file in `sandbox="allow-scripts"` and speaks the host half of
+  the protocol, so one renderer serves agents and people.
 
 ### Retrieval telemetry
 
@@ -1807,6 +1855,25 @@ Each of these cost real time. They are listed because the shape recurs.
   from something an agent *read*, so that path alone refuses non-public
   addresses (`security/url_policy.py`); an operator indexing an intranet wiki
   from YAML is doing a normal thing.
+
+- **Leaving a `ThreadPoolExecutor` block waits for every task, so a deadline
+  inside one is a suggestion.** The long-form section fill timed each future
+  out correctly and then sat in `__exit__` until the slowest model call
+  returned anyway. A deadline needs `shutdown(wait=False, cancel_futures=True)`.
+  The same code needed `contextvars.copy_context().run` per task, because
+  token accounting is a `ContextVar` and pool threads start with an empty
+  context — without it, the tokens of a long answer's sections silently
+  counted as zero.
+- **An adapter that "helpfully" coerces input hides the refusal the service
+  would have given.** The MCP facade wrapped `history` in `list(...)`, which
+  turns the string `"not a list"` into ten one-character turns and a
+  different, misleading refusal. Pass what arrived; the service owns the
+  message. Found by the both-surfaces refusal test, not by reading.
+- **A document is never shorter than the frame showing it.** The MCP App view
+  first reported `documentElement.scrollHeight` as its size, which is at least
+  the iframe's own height — so a host could grow the frame and never shrink it,
+  and every answer kept the tallest frame it had ever had. Measure the content
+  element. Found by looking at a screenshot, which no test would have done.
 
 ---
 

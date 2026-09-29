@@ -98,6 +98,36 @@ ingestion:
 | You have exact text already (alt text, meeting notes) | author a **sidecar** |
 | You want real captions/transcripts at scale | `openai-spec` + a hosted or self-hosted endpoint |
 
+## Images your documents reference
+
+A caption makes an image *searchable*; a link makes it *showable*. When a
+Markdown or HTML document references an image the same region indexes —
+`![Architecture](img/arch.png)`, Obsidian's `![[flow.png|300]]` (the `|300` is
+a size, not alt text), or `<img src="…" alt="…">` — the link becomes an
+`embeds` edge from the document to the image artifact
+([graph model](../graph_model.md#edge-types)). The path is tried relative to the
+document first and by path suffix otherwise, preferring the document's own
+source. Remote (`https://…`) and `data:` images are not in the corpus and stay
+ordinary references.
+
+The indexer also stores each image's bytes, content-addressed, under
+`<state_path>/media/` (at most 8 MB per image; larger images are still indexed
+and captioned, just not shown). That is what lets a serving replica with no
+source mount — or a Notion or Drive image with no path at all — still show the
+picture. `GET /media?node_id=…` and the MCP `get_image` tool serve them under
+the same read check as every content operation; SVG is never ingested or
+served, because it can carry script. An image indexed before the store existed
+is served from its source path when that is still readable here, and a
+`full` sync fills the store.
+
+An answer citing the document then carries the image as a numbered figure —
+see [answer length, conversations, visuals and figures](conversations-and-visuals.md#figures-images-your-documents-reference).
+
+Images *embedded inside* PDF, DOCX and PPTX files are not extracted yet: each
+would need its own artifact id, and the id grammar is a contract
+([graph model](../graph_model.md#stable-ids)) that changes only with a
+migration and a decision note.
+
 ## Idempotency
 
 An unchanged image or audio file is skipped by content `sha256` **before it is

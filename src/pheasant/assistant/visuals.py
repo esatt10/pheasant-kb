@@ -265,8 +265,8 @@ def _mermaid_text(text: str) -> str:
     # Quotes, brackets, pipes and angle brackets are Mermaid syntax or HTML;
     # entity-encode the first and drop the rest rather than let a label close
     # a node early or smuggle markup into a renderer.
-    cleaned = str(text).replace('"', "#quot;")
-    return re.sub(r"[\[\]{}()<>|;`]", " ", cleaned).strip() or " "
+    cleaned = re.sub(r"[\[\]{}()<>|;`]", " ", str(text))
+    return cleaned.replace('"', "#quot;").strip() or " "
 
 
 def _label(value: Any, limit: int = MAX_LABEL) -> str:

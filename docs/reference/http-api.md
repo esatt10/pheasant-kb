@@ -245,8 +245,11 @@ See [Stress-test readiness](../stress-test-readiness.md).
 | POST | `/assistant/key` | Hand the server an API key for this session only. Held in process memory behind an opaque token; never written to config, `/state`, or logs. |
 | DELETE | `/assistant/key` | Revoke a session key immediately. |
 | GET | `/assistant/workflows` | Available answering workflows, which one `auto` currently resolves to, whether the `[agent]` extra is installed, and each workflow's option defaults. |
-| POST | `/assistant/chat` | Ask a question. Returns the answer, numbered citations, graph facts, the nodes to focus, and the workflow's step trace. Accepts `workflow` and `options` overrides. |
-| POST | `/assistant/chat/stream` | Stream completed workflow steps followed by the same answer. |
+| POST | `/assistant/chat` | Ask a question. Returns the answer, numbered citations, graph facts, the nodes to focus, and the workflow's step trace. Accepts `workflow` and `options` overrides, `history` (the conversation so far, `[{question, answer}]` — the region keeps no chat state), `depth` (`short` / `medium` / `long`) and `visual` (`diagram` / `image` / `none`). The answer adds `route`, `figures` (images the cited documents show, for `[fig:n]` markers), `visual`, and `search_question` when a follow-up was searched in context. Same operation as the MCP `ask_knowledge_base` tool. |
+| POST | `/assistant/chat/stream` | Stream completed workflow steps followed by the same answer. When the route asked for a visual, the `answer` event carries `visual.status: "pending"` and a final `visual` event follows — the text is never held back for the picture. |
+| POST | `/assistant/visual` | A grounded diagram of named passages (`node_ids`, up to 12) or of what a search for `request` finds; `kind: "image"` returns the images those passages hold. Every element cites its passages; a mostly-inferred diagram is declined with a reason. Same operation as the MCP `create_visual` tool. |
+| GET | `/assistant/apps/knowledge-view` | pheasant's MCP App view (the `ui://pheasant/knowledge-view.html` resource), for the web UI to host in a sandboxed frame. Served with a `sandbox` CSP. |
+| GET | `/media?node_id=…` | An indexed image's bytes (`image/png`, `jpeg`, `webp`, `gif`; never SVG), `nosniff` and a `sandbox` CSP, under the same read check as other content. `404 UNKNOWN_MEDIA` for a node that is not a stored image. Same operation as the MCP `get_image` tool. |
 
 Each step reports `duration_seconds`, `input_tokens`, and `output_tokens`.
 Token counts are provider-reported, not estimated: `null` means the provider

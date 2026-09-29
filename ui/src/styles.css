@@ -3582,7 +3582,7 @@ select.text-input {
   border-radius: 10px;
   padding: 16px 18px;
   margin-bottom: 16px;
-  background: var(--surface);
+  background: var(--bg-raised);
 }
 
 .tune-page .tune-section > h2 {
@@ -3689,13 +3689,13 @@ select.text-input {
 
 .tune-page .badge--live {
   background: var(--ok);
-  color: var(--surface);
+  color: var(--bg-raised);
 }
 
-.tune-page .badge--promote { background: var(--ok); color: var(--surface); }
+.tune-page .badge--promote { background: var(--ok); color: var(--bg-raised); }
 .tune-page .badge--reject,
-.tune-page .badge--failed { background: var(--danger); color: var(--surface); }
-.tune-page .badge--running { background: var(--accent); color: var(--surface); }
+.tune-page .badge--failed { background: var(--danger); color: var(--bg-raised); }
+.tune-page .badge--running { background: var(--accent); color: var(--bg-raised); }
 
 .tune-page .gate {
   display: flex;
@@ -3706,8 +3706,8 @@ select.text-input {
   border-bottom: 1px solid var(--border);
 }
 
-.tune-page .gate--fail .badge { background: var(--danger); color: var(--surface); }
-.tune-page .gate--pass .badge { background: var(--ok); color: var(--surface); }
+.tune-page .gate--fail .badge { background: var(--danger); color: var(--bg-raised); }
+.tune-page .gate--pass .badge { background: var(--ok); color: var(--bg-raised); }
 
 /* Tuning: sweeps, rate tiles, and the experiment observability surface.
    Charts use the app's own tokens rather than a chart palette — the only
@@ -3901,3 +3901,27 @@ select.text-input {
 .tune-page .mechanisms { margin-top: 12px; }
 .tune-page .mechanisms__hybrid td { border-top: 2px solid var(--border-strong); }
 .tune-page .mechanisms__loss { color: var(--danger); font-weight: 600; }
+
+
+/* ---- Answers: figures, visuals, and the MCP App frame --------------------- */
+.answer-figure { margin: 10px 0; }
+.answer-figure img { max-width: 100%; max-height: 420px; border: 1px solid var(--border);
+  border-radius: 8px; display: block; }
+.answer-figure__open { padding: 0; border: 0; background: none; cursor: zoom-in; }
+.answer-figure__placeholder { padding: 24px; border: 1px dashed var(--border); border-radius: 8px;
+  color: var(--muted); font-size: 12.5px; }
+.answer-figure figcaption { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.answer-figure__n { font-weight: 600; color: var(--text); }
+.cite-chip--figure { font-size: 11px; width: auto; padding: 0 5px; cursor: default; }
+.msg__visual { margin: 10px 0 6px; }
+.mcp-app-frame { width: 100%; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-raised); display: block; }
+.msg__mermaid { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.msg__mermaid pre { white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.source-chip-wrap { display: inline-flex; align-items: stretch; gap: 2px; }
+.source-chip__visualize { border: 1px solid var(--border); background: var(--bg-raised);
+  color: var(--muted); border-radius: 6px; padding: 0 6px; cursor: pointer; font-size: 11px; }
+.source-chip__visualize:hover { color: var(--accent); border-color: var(--accent); }
+.composer__depth { font-size: 12px; padding: 2px 4px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-raised); color: var(--text); }
+.composer__context { display: inline-flex; align-items: center; gap: 6px; }

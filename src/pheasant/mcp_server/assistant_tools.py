@@ -109,7 +109,9 @@ class AssistantTools:
                 workflow=workflow,
                 options=options,
                 memory=memory,
-                history=list(history or []),
+                # As sent: coercing here would turn a string into a list of
+                # characters and hide the refusal the service gives it.
+                history=history if history is not None else [],
                 depth=depth,
                 visual=visual,
             ),

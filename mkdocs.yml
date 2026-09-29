@@ -70,6 +70,7 @@ nav:
       - Run the web UI (Docker Compose & CLI): how-to/run-the-ui.md
       - Ask your knowledge base (web UI): how-to/chat-and-ui.md
       - Customize the answering workflow: how-to/agent-workflows.md
+      - Answer length, conversations & visuals: how-to/conversations-and-visuals.md
       - Attach to a coding agent (MCP): how-to/attach-to-coding-agent.md
       - Agent memory: how-to/agent-memory.md
       - Configure sources: how-to/sources.md

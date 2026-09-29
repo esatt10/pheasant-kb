@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useReducer } from "react";
 import type { ReactNode } from "react";
-import type { ChatAnswer, GraphLink, GraphNode } from "../api/types";
+import type { AnswerDepth, ChatAnswer, GraphLink, GraphNode, HistoryTurn } from "../api/types";
 import { NOISY_NODE_TYPES } from "../graph/graphStyles";
 
 /**
@@ -54,6 +54,14 @@ export interface SessionState {
   workflow: string | null;
   turns: ChatTurn[];
   draft: string;
+  /**
+   * Turns before this index are shown but no longer sent as context. "New
+   * topic" moves it to the end, so the next question is answered on its own
+   * without wiping the thread the reader may still want to scroll.
+   */
+  contextFrom: number;
+  /** A pinned answer length, or null to let each question decide. */
+  answerDepth: AnswerDepth | null;
   /** Pane widths in px. The graph pane in particular needs to be growable. */
   railWidth: number;
   panelWidth: number;
@@ -86,6 +94,8 @@ const INITIAL: SessionState = {
   workflow: null,
   turns: [],
   draft: "",
+  contextFrom: 0,
+  answerDepth: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
 };
@@ -109,6 +119,8 @@ export type SessionAction =
   | { type: "ask-failed"; question: string; error: string }
   | { type: "clear-view" }
   | { type: "new-conversation" }
+  | { type: "new-topic" }
+  | { type: "set-answer-depth"; depth: AnswerDepth | null }
   | { type: "set-pane-width"; pane: "rail" | "panel"; width: number };
 
 /**
@@ -230,6 +242,10 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         depth: DEFAULT_DEPTH,
         showAll: false,
       };
+    case "new-topic":
+      return { ...state, contextFrom: state.turns.length };
+    case "set-answer-depth":
+      return { ...state, answerDepth: action.depth };
     case "new-conversation":
       // Drops the thread and everything derived from it. The canvas goes back
       // to its plain state too, because the graph filter came from an answer
@@ -237,6 +253,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return {
         ...state,
         turns: [],
+        contextFrom: 0,
         draft: "",
         answer: null,
         surfacedIds: [],
@@ -249,6 +266,17 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     default:
       return state;
   }
+}
+
+/** Turns sent with a question: answered ones since the last "new topic". */
+export const MAX_HISTORY_TURNS = 6;
+
+export function historyFor(state: Pick<SessionState, "turns" | "contextFrom">): HistoryTurn[] {
+  return state.turns
+    .slice(state.contextFrom)
+    .filter((turn) => turn.answer && !turn.error)
+    .slice(-MAX_HISTORY_TURNS)
+    .map((turn) => ({ question: turn.question, answer: turn.answer?.answer ?? "" }));
 }
 
 function fillTurn(
@@ -288,6 +316,7 @@ const PERSISTED_KEYS = [
   "depth",
   "panelTab",
   "workflow",
+  "answerDepth",
   "railWidth",
   "panelWidth",
 ] as const;
@@ -305,6 +334,7 @@ function hydrate(): SessionState {
       depth: clampDepth(saved.depth ?? DEFAULT_DEPTH),
       panelTab: saved.panelTab ?? INITIAL.panelTab,
       workflow: saved.workflow ?? INITIAL.workflow,
+      answerDepth: saved.answerDepth ?? INITIAL.answerDepth,
       railWidth: Number(saved.railWidth) || DEFAULT_RAIL_WIDTH,
       panelWidth: Number(saved.panelWidth) || DEFAULT_PANEL_WIDTH,
     };

@@ -252,6 +252,29 @@ def register_assistant_routes(
             env=dict(os.environ),
         )
 
+    @app.get("/assistant/apps/knowledge-view")
+    def knowledge_view() -> Response:
+        """The MCP App view, for the UI to host exactly as an MCP host would.
+
+        One renderer for agents and people: the chat panel loads this into a
+        sandboxed iframe and speaks the host half of the MCP Apps protocol.
+        Served with a ``sandbox`` CSP so that opening it directly still runs
+        it in an opaque origin, never in the API's.
+        """
+
+        from pheasant.mcp_server.assistant_tools import app_html
+
+        return Response(
+            content=app_html(),
+            media_type="text/html",
+            headers={
+                "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; "
+                "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-cache",
+            },
+        )
+
     @app.get("/media")
     def media(node_id: str, principal: str | None = None) -> Response:
         """An indexed image's bytes. The operation is `services.media.get_media`.

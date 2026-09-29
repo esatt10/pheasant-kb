@@ -494,3 +494,67 @@ def test_a_web_collection_resync_is_free_and_state_is_unchanged(tmp_path: Path) 
     assert second.indexed_artifacts == 0
     assert second.skipped_artifacts == 2
     assert [dict(r) for r in snapshot] == [dict(r) for r in after]
+
+
+def test_a_document_embedding_an_image_resyncs_to_the_same_state(tmp_path: Path) -> None:
+    """The image path adds three things a re-sync must not disturb: an
+    `embeds` edge (resolved in the global post-pass, which re-runs every sync),
+    a stored copy of the image's bytes, and — through both — the published
+    graph generation. An unchanged corpus keeps all three exactly."""
+
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.ingestion.media import media_store_for_config
+    from pheasant.sync.engine import SyncEngine
+
+    fixture = Path(__file__).parent / "fixtures" / "sample_workspace" / "images" / "diagram.png"
+    workspace = tmp_path / "workspace"
+    (workspace / "img").mkdir(parents=True)
+    (workspace / "img" / "arch.png").write_bytes(fixture.read_bytes())
+    (workspace / "design.md").write_text("# Design\n\n![Arch](img/arch.png)\n", encoding="utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "embeds-idempotency",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(workspace),
+                    "include": ["**/*.md", "**/*.png"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    store = media_store_for_config(config)
+
+    def embeds() -> int:
+        graph = engine.graph_builder.graph
+        return sum(
+            1
+            for _s, _t, edges in graph.out_edges("file:docs:design.md:branch=none")
+            for data in edges.values()
+            if data.get("type") == "embeds"
+        )
+
+    def stored() -> dict[str, int]:
+        return {str(p): p.stat().st_mtime_ns for p in store.root.rglob("*.png")}
+
+    engine.sync_source("docs", "full")
+    first = (embeds(), stored(), engine.loaded_graph_generation)
+    assert first[0] == 2, "one edge to the link stub, one to the resolved image"
+    assert len(first[1]) == 1
+
+    incremental = engine.sync_source("docs", "incremental")
+    assert incremental.indexed_artifacts == 0
+    assert (embeds(), stored(), engine.loaded_graph_generation) == first
+
+    engine.sync_source("docs", "full")
+    assert embeds() == first[0], "a full re-sync must not duplicate the resolved edge"
+    assert stored() == first[1], "unchanged bytes are never rewritten"
+    engine.close()

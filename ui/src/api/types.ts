@@ -491,6 +491,83 @@ export interface ChatAnswer {
   workflow?: string;
   /** The agent's trace; empty for the single-pass workflow. */
   steps?: WorkflowStep[];
+  /** Images the cited documents show, for `[fig:n]` markers in `answer`. */
+  figures?: Figure[];
+  /** How the router read the question. */
+  route?: AnswerRoute;
+  /** A grounded diagram or the cited images; `pending` while it is drawn. */
+  visual?: AnswerVisual | null;
+  /** What was searched when the question was a follow-up. */
+  search_question?: string;
+}
+
+/** One earlier exchange sent back so a follow-up can be understood. */
+export interface HistoryTurn {
+  question: string;
+  answer: string;
+}
+
+export type AnswerDepth = "short" | "medium" | "long";
+
+export interface AnswerRoute {
+  intent: string;
+  depth: AnswerDepth;
+  visual: "none" | "diagram" | "image";
+  why?: Record<string, string>;
+  decided_by?: Record<string, string>;
+}
+
+export interface Figure {
+  figure: number;
+  node_id: string;
+  relative_path: string | null;
+  caption: string;
+  alt: string;
+  cited_in: number[];
+  shown: boolean;
+}
+
+export interface DiagramNode {
+  id: string;
+  label: string;
+  cites: number[];
+  inferred: boolean;
+  group?: string;
+}
+
+export interface DiagramEdge {
+  from: string;
+  to: string;
+  label: string;
+  cites: number[];
+  inferred: boolean;
+}
+
+export interface AnswerVisual {
+  type: "diagram" | "images" | "image";
+  status: "ok" | "declined" | "pending";
+  reason?: string;
+  note?: string;
+  source?: "model" | "graph";
+  diagram?: {
+    kind: string;
+    title: string;
+    summary: string;
+    nodes: DiagramNode[];
+    edges: DiagramEdge[];
+  };
+  mermaid?: string;
+  grounding?: { cited: number; inferred: number; ratio: number };
+  figures?: Figure[];
+}
+
+/** `POST /assistant/visual`: a visual on demand, with the evidence it drew on. */
+export interface VisualResponse {
+  request: string;
+  visual: AnswerVisual | null;
+  citations: Citation[];
+  facts: GraphFact[];
+  figures: Figure[];
 }
 
 export interface McpToolSummary {

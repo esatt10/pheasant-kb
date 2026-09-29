@@ -580,6 +580,11 @@ CONFORMED = {
     "explain_node": ("GET /nodes/explain", "explain_node"),
     "file_summary": ("GET /files/summary", "get_file_summary"),
     "repo_map": ("GET /sources/{id}/repo-map", "get_repo_map"),
+    # Driven in tests/test_image_references.py, test_grounded_visuals.py and
+    # test_conversation.py, over corpora that hold images and turns.
+    "answer": ("POST /assistant/chat", "ask_knowledge_base"),
+    "visualize": ("POST /assistant/visual", "create_visual"),
+    "get_media": ("GET /media", "get_image"),
 }
 
 
@@ -590,11 +595,13 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
 
     import inspect
 
+    from pheasant.services import assistant as assistant_service
     from pheasant.services import graph as graph_service
+    from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
 
     public: set[str] = set()
-    for module in (retrieval_service, graph_service):
+    for module in (retrieval_service, graph_service, assistant_service, media_service):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
                 continue
@@ -609,6 +616,12 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # up reporting memory off while it is on.
     public.discard("require_readable")
     public.discard("memory_enabled")
+    # `admit` is `answer`'s own refusal, public so the streaming route can
+    # refuse with a status code before it opens a stream. `render_visual`
+    # exists on one transport on purpose: only a *stream* can send the answer
+    # first and the picture after; MCP returns one result, built by `answer`.
+    public.discard("admit")
+    public.discard("render_visual")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

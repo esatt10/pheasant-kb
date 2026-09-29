@@ -83,8 +83,11 @@ _MEDIUM = re.compile(
     r"trade-?offs?|outline|a few paragraphs|walk me through|break (?:it |this )?down)\b"
 )
 _IMAGE = re.compile(
+    # "show me the deploy pipeline diagram" names a picture the corpus holds;
+    # "draw a diagram of the pipeline" asks for one to be made. The verb and
+    # the definite article are the difference.
     r"\b(?:show|display|find|see|open|pull up|where is)\b.{0,40}\b(?:image|picture|photo|"
-    r"screenshot|figure(?! out)|illustration|the (?:\w+ )?(?:diagram|chart|graphic))\b|"
+    r"screenshot|figure(?! out)|illustration|the (?:[\w-]+ ){0,4}(?:diagram|chart|graphic))\b|"
     r"\b(?:image|picture|figure|screenshot|diagram)s? (?:from|in|of) (?:the )?\w+ "
     r"(?:doc|document|file|page|slide|deck|readme|spec)\b"
 )

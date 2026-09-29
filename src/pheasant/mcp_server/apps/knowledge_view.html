@@ -99,11 +99,17 @@
     }
   }
 
+  // The content's own height, not the document's: a document is never
+  // shorter than the frame showing it, so measuring it would let a host grow
+  // the frame and never shrink it back.
   function reportSize() {
-    const height = Math.ceil(document.documentElement.scrollHeight);
-    notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height });
+    const box = root.getBoundingClientRect();
+    notify("ui/notifications/size-changed", {
+      width: Math.ceil(box.width),
+      height: Math.ceil(box.bottom + 8),
+    });
   }
-  new ResizeObserver(reportSize).observe(document.body);
+  new ResizeObserver(reportSize).observe(root);
 
   request("ui/initialize", {
     protocolVersion: PROTOCOL,
