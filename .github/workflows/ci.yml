@@ -21,10 +21,24 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Two legs, two sides of one optional extra. The image installs `agent`
+      # (langgraph) by default, so `workflow: auto` runs the agentic planner /
+      # grader loop in every container that has a model -- and until this leg
+      # existed CI had never run it: every agentic test importorskips
+      # langgraph, and nothing here installed it. 3.12 matches the image and
+      # carries the extra, with PHEASANT_REQUIRE_AGENT turning "skipped" into
+      # "failed" so the leg cannot go green by testing nothing. 3.11 keeps the
+      # minimal install, which is the other side of the same `auto`: the
+      # simple workflow a region without the extra falls back to.
+      # `tests/test_workflow_coverage.py` fails if either leg goes away.
       matrix:
-        python-version:
-          - "3.11"
-          - "3.12"
+        include:
+          - python-version: "3.11"
+            extras: "dev,mcp"
+            require-agent: "0"
+          - python-version: "3.12"
+            extras: "dev,mcp,agent"
+            require-agent: "1"
 
     steps:
       - name: Check out repository
@@ -39,7 +53,7 @@ jobs:
       - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,mcp]"
+          python -m pip install -e ".[${{ matrix.extras }}]"
 
       - name: Run ruff lint
         run: python -m ruff check src tests scripts --no-cache
@@ -57,6 +71,8 @@ jobs:
         run: python -m pip check
 
       - name: Run pytest suite
+        env:
+          PHEASANT_REQUIRE_AGENT: ${{ matrix.require-agent }}
         run: python -m pytest -q
 
   mcp-app-browser:

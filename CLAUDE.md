@@ -254,7 +254,11 @@ For deployment/configuration work, load
     `backend-parity` job, deliberately unfiltered); locally it is
     `PHEASANT_TEST_POSTGRES_DSN=… pytest -q`, which turns on the parity suite
     and the lease/queue differential. Neither replaces running the thing you
-    changed.
+    changed. The same holds for the `agent` extra the image ships: CI's 3.12
+    leg installs it with `PHEASANT_REQUIRE_AGENT=1` (a skipped agentic test is
+    a failure there) and the 3.11 leg does not, so both sides of
+    `workflow: auto` run on every PR — `tests/test_workflow_coverage.py` holds
+    both. Locally, `pip install -e ".[agent]"` or those tests skip.
 11. **Config-schema changes owe the config surface an update.** Adding a
     *top-level* section to `src/pheasant/config/schema.py` needs three things:
     a mention in `docs/configuration.md`, a `Section` in
@@ -878,7 +882,7 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `validate_spec` sit: a prompt stating the contract at both ends, the citable
   passage numbers and a worked example of the shape (`assistant.visual_prompt`,
   every example asserted valid); JSON mode where the wire has one; an 8,192-token
-  floor with one doubled retry on `OutputBudgetExhausted`; a dialect reader
+  floor (and `LLM.complete`'s reasoning headroom, below); a dialect reader
   (`assistant.visual_dialect`) that renames and restructures but never adds a
   claim; one repair turn for an *unreadable* reply and none for an
   *ungrounded* one; and, last, the graph's own edges with `fallback_from:
