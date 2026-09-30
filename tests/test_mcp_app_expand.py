@@ -39,6 +39,9 @@ from tests.test_visual_shapes import CITATIONS, SPECS
 
 REQUIRED = os.environ.get("PHEASANT_REQUIRE_BROWSER") == "1"
 
+#: How long the stand-in host takes to grant a display mode (see HOST).
+HOST_LAG_MS = 120
+
 #: Nodes free to move: every edge is drawn between the boxes, so it can follow.
 MOVABLE = (
     "flow",
@@ -87,11 +90,17 @@ window.addEventListener("message", (e) => {
     send({ method: "ui/notifications/tool-result",
       params: { content: [], structuredContent: %(result)s } });
   } else if (m.method === "ui/request-display-mode") {
-    const mode = modes.includes(m.params.mode) ? m.params.mode : window.__mode;
-    window.__mode = mode;
-    frame.classList.toggle("full", mode === "fullscreen");
-    send({ id: m.id, result: { mode } });
-    send({ method: "ui/notifications/host-context-changed", params: { displayMode: mode } });
+    // A real host takes a beat to restyle its frame, and the view does not wait
+    // for it when collapsing. Without this lag the stand-in answers before a
+    // test can act, and a test that races the host passes here and fails on a
+    // slower machine.
+    setTimeout(() => {
+      const mode = modes.includes(m.params.mode) ? m.params.mode : window.__mode;
+      window.__mode = mode;
+      frame.classList.toggle("full", mode === "fullscreen");
+      send({ id: m.id, result: { mode } });
+      send({ method: "ui/notifications/host-context-changed", params: { displayMode: mode } });
+    }, %(lag)d);
   } else if (m.id !== undefined) {
     send({ id: m.id, error: { code: -32601, message: "not in this host" } });
   }
@@ -149,6 +158,7 @@ def _open(browser: Any, kind: str, *, modes: tuple[str, ...] = ("inline", "fulls
         HOST
         % {
             "modes": json.dumps(list(modes)),
+            "lag": HOST_LAG_MS,
             "result": json.dumps(payload).replace("</", "<\\/"),
             # `</script>` inside a script element ends it, whatever string it is in.
             "view": json.dumps(app_html()).replace("</", "<\\/"),
@@ -188,9 +198,53 @@ def _drag(page: Any, node: Any, dx: float, dy: float) -> None:
     page.mouse.up()
 
 
+def _host_in(page: Any, mode: str) -> None:
+    """Wait until the *host* is in ``mode`` and has restyled its frame to match.
+
+    The view leaves fullscreen the moment Collapse is pressed — it must not be
+    stranded by a host that never answers — so "the view says inline" and "the
+    host has resized the frame" are different instants. A click or a read in
+    between lands on a frame that is still moving.
+    """
+    page.wait_for_function(
+        "(mode) => window.__mode === mode && "
+        "document.getElementById('f').classList.contains('full') === (mode === 'fullscreen')",
+        arg=mode,
+    )
+
+
 def _expand(page: Any, frame: Any) -> None:
     frame.locator("button.tool", has_text="Expand").click()
     frame.locator("body.fs").wait_for()
+    _host_in(page, "fullscreen")
+
+
+def _collapse(page: Any, frame: Any) -> None:
+    frame.locator("button.tool", has_text="Collapse").click()
+    frame.locator("body:not(.fs)").wait_for()
+    _host_in(page, "inline")
+
+
+def _messages(page: Any, count: int) -> list[dict]:
+    """Wait for ``count`` ``ui/message`` posts to reach the host, and no more.
+
+    A post crosses a frame boundary asynchronously, so reading the host's log
+    straight after a click reads what had arrived, not what was sent. A count
+    that must *not* grow is given a moment to prove it.
+    """
+    if count:
+        try:
+            page.wait_for_function(
+                "(n) => window.__log.filter((e) => e.method === 'ui/message').length >= n",
+                arg=count,
+                timeout=10_000,
+            )
+        except Exception as error:  # noqa: BLE001 - re-raised with what did arrive
+            seen = [entry["method"] for entry in page.evaluate("window.__log")]
+            raise AssertionError(f"expected {count} ui/message post(s); host saw {seen}") from error
+    else:
+        page.wait_for_timeout(300)
+    return _log(page, "ui/message")
 
 
 @pytest.mark.parametrize("kind", MOVABLE)
@@ -217,9 +271,7 @@ def test_a_dragged_node_carries_its_edges_and_reset_puts_them_back(browser: Any,
 
         # Move again and leave: the inline picture keeps the layout that was made.
         _drag(page, _biggest_node(frame), -90, 60)
-        frame.locator("button.tool", has_text="Collapse").click()
-        frame.locator("body:not(.fs)").wait_for()
-        assert page.evaluate("window.__mode") == "inline"
+        _collapse(page, frame)
         assert frame.locator("svg g.node[transform]").count() >= 1
         assert page.errors == [], page.errors  # type: ignore[attr-defined]
     finally:
@@ -240,8 +292,7 @@ def test_a_shape_tied_to_an_axis_or_a_grid_expands_but_does_not_come_apart(
             before = nodes.first.bounding_box()
             _drag(page, nodes.first, 120, 60)
             assert nodes.first.bounding_box() == before, f"{kind} nodes must not move"
-        frame.locator("button.tool", has_text="Collapse").click()
-        frame.locator("body:not(.fs)").wait_for()
+        _collapse(page, frame)
         assert page.errors == [], page.errors  # type: ignore[attr-defined]
     finally:
         page.close()
@@ -260,20 +311,17 @@ def test_the_button_exists_only_where_the_host_offers_fullscreen(browser: Any) -
 def test_a_click_asks_about_a_node_inline_and_not_once_expanded(browser: Any) -> None:
     page, frame = _open(browser, "flow")
     try:
-        node = frame.locator("svg g.node").first
-        node.click()
-        assert len(_log(page, "ui/message")) == 1, "inline, a click is still 'tell me more'"
+        frame.locator("svg g.node").first.click()
+        assert len(_messages(page, 1)) == 1, "inline, a click is still 'tell me more'"
 
         _expand(page, frame)
-        node = frame.locator("svg g.node").first
-        node.click()
-        _drag(page, frame.locator("svg g.node").first, 60, 40)
-        assert len(_log(page, "ui/message")) == 1, "expanded, neither a click nor a drag asks"
-
-        frame.locator("button.tool", has_text="Collapse").click()
-        frame.locator("body:not(.fs)").wait_for()
         frame.locator("svg g.node").first.click()
-        assert len(_log(page, "ui/message")) == 2, "back inline, it asks again"
+        _drag(page, frame.locator("svg g.node").first, 60, 40)
+        assert len(_messages(page, 0)) == 1, "expanded, neither a click nor a drag asks"
+
+        _collapse(page, frame)
+        frame.locator("svg g.node").first.click()
+        assert len(_messages(page, 2)) == 2, "back inline, it asks again"
     finally:
         page.close()
 
@@ -284,7 +332,7 @@ def test_escape_collapses_and_tells_the_host(browser: Any) -> None:
         _expand(page, frame)
         frame.locator("body").press("Escape")
         frame.locator("body:not(.fs)").wait_for()
-        assert page.evaluate("window.__mode") == "inline"
+        _host_in(page, "inline")
         modes = [e["params"]["mode"] for e in _log(page, "ui/request-display-mode")]
         assert modes == ["fullscreen", "inline"]
     finally:
@@ -336,6 +384,6 @@ def test_a_new_result_leaves_the_mode_rather_than_stranding_the_host(browser: An
         # A new result replaces the page's contents, so the mode is left rather
         # than stranding the host in fullscreen on nothing.
         frame.locator("body:not(.fs)").wait_for()
-        assert page.evaluate("window.__mode") == "inline"
+        _host_in(page, "inline")
     finally:
         page.close()
