@@ -159,6 +159,29 @@ a result as HTML, and calls back only through the host: `get_image` for an
 image, `create_visual` for its **Redraw as** row. pheasant's web UI hosts the
 same file.
 
+**Expanding a visual.** The view can ask its host for the whole window with the
+standard `ui/request-display-mode` request (`fullscreen`, and `inline` to go
+back). It shows its **Expand** button only when the host's
+`hostContext.availableDisplayModes` includes `fullscreen` — a host that does not
+offer it is never asked — and it follows the host if the host changes the mode
+itself (`ui/notifications/host-context-changed` with a `displayMode`). Expanded,
+the shapes whose nodes are free to move (flow, tree, mind map, concept, cycle,
+swimlanes, layers, canvas and the UML class, activity, state and use case
+diagrams) can be dragged, and their edges follow; sequence, timeline, 2×2,
+chart, table and groups expand but do not move. A rearranged layout is view
+state: nothing about it is sent to the host or the region, and it does not
+change what a `create_visual` call returns. While expanded, clicking a node
+does not send `ui/message`, because the message would land in a conversation
+the frame is covering. See
+[expand a visual, and move things around](how-to/conversations-and-visuals.md#expand-a-visual-and-move-things-around).
+
+A host implementing this needs three things: list `fullscreen` in
+`availableDisplayModes` at `ui/initialize`, answer `ui/request-display-mode`
+with the mode it actually granted, and send `host-context-changed` when the mode
+changes. Restyle the existing frame rather than moving it in the page — a moved
+iframe reloads and loses the layout — and ignore `size-changed` while
+fullscreen. `ui/src/chat/McpAppFrame.tsx` is a working reference.
+
 ## Resources
 
 ```text

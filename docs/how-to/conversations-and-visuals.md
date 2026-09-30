@@ -206,8 +206,8 @@ for an image, `tools/call create_visual` to redraw — so both are read under
 the same ACL over MCP as over HTTP. An answer that already shows a figure
 inline does not repeat it in the image gallery below. Clicking a
 diagram node sends `ui/message` — "tell me more about …" — which the host
-may turn into the next turn. A host that offers `fullscreen` also lets the view expand
-(`ui/request-display-mode`) — see above.
+may turn into the next turn. A host that offers `fullscreen` also lets the view
+expand (`ui/request-display-mode`) — see below.
 
 **pheasant's own UI hosts the same view.** The chat panel loads it from
 `GET /assistant/apps/knowledge-view` into `<iframe sandbox="allow-scripts">`

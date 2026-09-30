@@ -81,6 +81,43 @@ Behind it are three retrieval arms—full-text, vector and graph—merged by
 reciprocal rank fusion, so a query matches on wording, on meaning and on how
 documents relate to each other.
 
+### Draw it, then rearrange it
+
+<p align="center">
+  <img src="docs/assets/ui/mcp-app-inline.png" alt="A flow diagram drawn inline in the chat, grounded in the answer's cited passages, with an Expand button at its top right" width="900">
+</p>
+
+Ask for a picture—"draw the release process", "a timeline of the incidents",
+"a UML class diagram of the roles"—and the answer comes with a visual in one of
+eighteen shapes. Every box and arrow cites the passages that support it;
+dashed ones do not, and a diagram that would be mostly guesswork is declined
+with the reason.
+
+**Expand** opens the visual at the full size of the window, where you can
+drag its nodes into a layout that reads the way you want. Every arrow follows
+the node it touches, **Reset layout** puts the drawn layout back exactly, and
+**Collapse** (or Esc) returns to the chat with your layout kept.
+
+<p align="center">
+  <img src="docs/assets/ui/mcp-app-dragged.png" alt="The same diagram expanded to the whole window after four of its nodes were dragged to new places; the arrows between them follow, and Reset layout and Collapse sit at the top right" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/assets/ui/mcp-app-uml-dragged.png" alt="A UML class diagram, expanded and rearranged: three classes moved apart, with the composition, association and dependency arrows and their multiplicities following each class" width="440">
+  <img src="docs/assets/ui/mcp-app-collapsed.png" alt="Back at the normal size in the chat, the flow diagram keeps the rearranged layout" width="440">
+</p>
+
+It is the same view an MCP host such as Claude renders for
+`ask_knowledge_base`, `create_visual` and `get_image`, so a diagram looks and
+behaves the same for an agent's user as it does here. The Expand button appears
+only in hosts that can give the view the whole window (the MCP Apps
+`ui/request-display-mode` request); elsewhere the view is exactly as before.
+Twelve shapes can be rearranged; sequence, timeline, 2×2, chart, table and
+groups expand but stay put, because moving a node off its lifeline, axis or
+cell would make the picture say something the passages did not.
+
+→ [Answers, conversations and visuals](docs/how-to/conversations-and-visuals.md)
+
 ### Hand it to your coding agent
 
 ```bash

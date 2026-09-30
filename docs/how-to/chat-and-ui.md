@@ -67,6 +67,10 @@ claim that no model is connected.
   ◇ beside a source draws that one passage. Every box and arrow cites a
   passage — dashed ones do not — and a diagram that would be mostly guesswork
   is declined with the reason.
+- **Expand and rearrange.** **Expand** on a visual opens it at the full size of
+  the window; drag its nodes and the arrows follow, **Reset layout** restores the
+  drawn layout, and **Collapse** or Esc goes back with your layout kept. See
+  [expand a visual, and move things around](conversations-and-visuals.md#expand-a-visual-and-move-things-around).
 
 Visuals render in pheasant's MCP App view, hosted in a sandboxed frame — the
 same view an MCP host such as Claude renders for the `ask_knowledge_base`,
