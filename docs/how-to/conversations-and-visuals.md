@@ -206,12 +206,53 @@ for an image, `tools/call create_visual` to redraw — so both are read under
 the same ACL over MCP as over HTTP. An answer that already shows a figure
 inline does not repeat it in the image gallery below. Clicking a
 diagram node sends `ui/message` — "tell me more about …" — which the host
-may turn into the next turn.
+may turn into the next turn. A host that offers `fullscreen` also lets the view expand
+(`ui/request-display-mode`) — see above.
 
 **pheasant's own UI hosts the same view.** The chat panel loads it from
 `GET /assistant/apps/knowledge-view` into `<iframe sandbox="allow-scripts">`
 and speaks the host half of the protocol, so a diagram looks the same in
 Claude as it does in pheasant, and a fix to it lands in both.
+
+### Expand a visual, and move things around
+
+A diagram opens at the size its chat slot allows. **Expand** (top right of the
+visual) gives it the whole window; **Collapse**, **Esc**, or the host's own
+close control brings it back.
+
+![A flow diagram inline in the chat, with its Expand button](../assets/ui/mcp-app-inline.png)
+
+Expanded, the diagram fills the frame and its nodes are draggable — with a
+mouse, a pen or a finger. Every edge that touches a node follows it, and
+**Reset layout** puts the drawn layout back exactly.
+
+![The same diagram expanded, then rearranged by dragging four nodes](../assets/ui/mcp-app-dragged.png)
+
+Collapsing keeps the layout you made:
+
+![Back at the normal size, with the rearranged layout](../assets/ui/mcp-app-collapsed.png)
+
+It works for every shape whose nodes are free to move — flow, tree, mind map,
+concept map, cycle, swimlanes, layers, canvas and the UML class, activity, state
+and use case diagrams (a class carries its multiplicities with it):
+
+![A UML class diagram, rearranged](../assets/ui/mcp-app-uml-dragged.png)
+
+Shapes whose nodes sit on something — sequence (lifelines), timeline (an axis),
+2×2, chart, table and groups — expand for a bigger view but are not draggable,
+because moving a node off its lifeline, axis or cell would make the picture say
+something the passages did not.
+
+Two things to know. A rearranged layout is a view: nothing about it is saved,
+sent to the region or fed back into the conversation, and redrawing or asking a
+new question starts from the drawn layout again. And while expanded, clicking a
+node does **not** send "tell me more about …" — that message would land in a
+conversation the frame is covering; it resumes on collapse.
+
+Over MCP this is the standard `ui/request-display-mode` request. The view shows
+its Expand button only if the host lists `fullscreen` in
+`hostContext.availableDisplayModes`, so a host that cannot give it the window
+sees the view exactly as before.
 
 ## Related
 
