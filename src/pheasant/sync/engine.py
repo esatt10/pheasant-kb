@@ -1786,6 +1786,10 @@ class SyncEngine:
                     self.config.knowledge_base_id,
                     self.graph_builder.graph,
                 )
+                # Vectors live in their own LanceDB store, outside the
+                # relational rows removed below. Prune them after publishing
+                # the graph delta so a retry can finish cleanup idempotently.
+                self.vectors.prune_source(source_name, set())
                 self.manifests.delete(source_name)
                 self.state.delete_source(source_name)
                 self.config.sources = [s for s in self.config.sources if s.name != source_name]
