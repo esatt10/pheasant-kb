@@ -159,6 +159,17 @@ def standalone_question(
         rewritten = " ".join(str(rewritten or "").split()).strip("\"' ")
         if rewritten and len(rewritten) <= 400:
             return rewritten, f"{reason}; rewritten as “{rewritten}”"
+        # Say why the model's rewrite was not used: the joined search below is
+        # a worse question, and a trace that does not mention the model reads
+        # as though no model had been asked.
+        failure = getattr(llm, "last_failure", None) or (
+            "reply too long" if rewritten else "no reply"
+        )
+        joined = f"{previous.question} {question}"
+        return joined, (
+            f"{reason}; model rewrite unavailable ({str(failure).splitlines()[0][:80]}); "
+            "searched together with the previous question"
+        )
     joined = f"{previous.question} {question}"
     return joined, f"{reason}; searched together with the previous question"
 

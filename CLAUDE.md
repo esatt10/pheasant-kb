@@ -149,7 +149,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 145 pytest modules, offline by design
+└── tests/                     ← 147 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -254,7 +254,11 @@ For deployment/configuration work, load
     `backend-parity` job, deliberately unfiltered); locally it is
     `PHEASANT_TEST_POSTGRES_DSN=… pytest -q`, which turns on the parity suite
     and the lease/queue differential. Neither replaces running the thing you
-    changed.
+    changed. The same holds for the `agent` extra the image ships: CI's 3.12
+    leg installs it with `PHEASANT_REQUIRE_AGENT=1` (a skipped agentic test is
+    a failure there) and the 3.11 leg does not, so both sides of
+    `workflow: auto` run on every PR — `tests/test_workflow_coverage.py` holds
+    both. Locally, `pip install -e ".[agent]"` or those tests skip.
 11. **Config-schema changes owe the config surface an update.** Adding a
     *top-level* section to `src/pheasant/config/schema.py` needs three things:
     a mention in `docs/configuration.md`, a `Section` in
@@ -874,6 +878,25 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   documents the answer read (`answering.visual_documents`), never 500-character
   previews. No model: the graph's own edges. Never markup from model output —
   each kind has a renderer in the view; Mermaid/Markdown are escaped exports.
+- **A visual does not depend on the model drawing it.** Between the reply and
+  `validate_spec` sit: a prompt stating the contract at both ends, the citable
+  passage numbers and a worked example of the shape (`assistant.visual_prompt`,
+  every example asserted valid); JSON mode where the wire has one; an 8,192-token
+  floor (and `LLM.complete`'s reasoning headroom, below); a dialect reader
+  (`assistant.visual_dialect`) that renames and restructures but never adds a
+  claim; one repair turn for an *unreadable* reply and none for an
+  *ungrounded* one; and, last, the graph's own edges with `fallback_from:
+  "model"`. `pheasant_assistant_visual_model_total{provider,outcome}` is the
+  signal a model switch moves. `tests/test_visual_robustness.py`.
+- **A cap is for the reply; `LLM.complete` adds the room to think.** Every
+  call site sizes `max_output_tokens` for the words it wants back (300 for a
+  grade, 120 for a rewrite). On `OutputBudgetExhausted` the call is retried
+  with `REASONING_HEADROOM` on top and the model is remembered per process,
+  so later calls get the room up front and a model that does not think is
+  sent exactly its cap. Structured calls share one reader
+  (`assistant.replies`) and ask for JSON mode; a best-effort call that fell
+  back names why in its step (`LLM.last_failure`). Do not "fix" a small cap
+  at a call site. `tests/test_reasoning_models.py`.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
@@ -1925,6 +1948,26 @@ Each of these cost real time. They are listed because the shape recurs.
   Found by looking at a demo screenshot of a pipeline with two steps missing;
   `tests/test_visual_shapes.py` asserts step five reaches the prompt and fails
   with the hydration stubbed out.
+- **An output cap sized for the answer is spent on thinking by a model that
+  thinks.** The drawing call asked for 1,600 tokens. On the model it was tuned
+  against that was plenty; on GPT-6 (and Gemini 2.5) hidden reasoning comes
+  out of the same `max_completion_tokens`, so the reply was an empty 200 with
+  `finish_reason: length`, `try_complete` turned that into `None`, and the
+  visual said "the model did not return a diagram" — indistinguishable from a
+  model that ignored the prompt. Nothing about it was specific to diagrams
+  except the small cap. `OutputBudgetExhausted` names the case now so a caller
+  can ask again with room. Around it, the prompt had been tuned to one model's
+  habits and the check read one spelling of the grammar, so the same switch
+  also broke every reply that said `source`/`target` or wrapped its JSON in a
+  sentence: a strict *spelling* check is a decline that reads like a
+  grounding judgement and is not one. `tests/test_visual_robustness.py`
+  drives the real provider wire, so it fails if the cap comes back. The same
+  cap shape sat under the planner (400), the grader (300), the rewrite (120)
+  and the long-answer outline (700), and each fell back without a word. The
+  grader's fallback was `{"sufficient": True}`, so a thinking model silently
+  turned off every follow-up retrieval round while each step's trace read as
+  a success. The room to think lives in `LLM.complete` now, because the
+  alternative is re-sizing every call site for every model.
 - **An `except` whose reason stopped being true catches only what it was not
   written for.** `_sync_all_queued` swallowed every publish failure at debug
   as "already queued" — right when a duplicate `INSERT` raised, and dead once

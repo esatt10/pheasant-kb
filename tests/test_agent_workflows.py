@@ -13,11 +13,17 @@ Acceptance:
 5. It verifies its own citations, dropping ``[n]`` markers with no passage.
 6. Every path works with no model at all, and a broken custom workflow
    cannot take down question answering.
+
+The agentic half needs the ``agent`` extra and skips without it.
+``PHEASANT_REQUIRE_AGENT=1`` makes a missing extra a failure instead — CI's
+agent leg sets it, so that leg cannot go green by skipping the workflow every
+image runs by default.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -133,6 +139,15 @@ class _ScriptedLLM(LLM):
 
 
 # ------------------------------------------------------------------ registry
+
+
+def test_the_agent_extra_is_installed_where_it_is_required() -> None:
+    if os.environ.get("PHEASANT_REQUIRE_AGENT") != "1":
+        pytest.skip("PHEASANT_REQUIRE_AGENT is not set; the agentic tests may skip here")
+    assert langgraph_available(), (
+        "PHEASANT_REQUIRE_AGENT=1 but langgraph is not importable, so every agentic "
+        "test in this run skipped. Install the `agent` extra."
+    )
 
 
 def test_builtin_workflows_are_listed() -> None:

@@ -160,3 +160,111 @@ def test_the_filtered_workflows_keep_their_postgres_leg(workflow: str) -> None:
     assert any("postgres" in str(matrix.get("backend") or "") for matrix in matrices), (
         f"{workflow} no longer runs a postgres backend leg"
     )
+
+
+# ---------------------------------------------------------------------------
+# the `agent` extra: both sides of `workflow: auto`, on every pull request
+# ---------------------------------------------------------------------------
+
+_MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
+
+
+def _legs(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each matrix leg of ``job`` as its own job, ``${{ matrix.x }}`` substituted.
+
+    Only ``include`` legs and single-axis lists are expanded — what this repo
+    writes. A job with no matrix is one leg.
+    """
+
+    matrix = (job.get("strategy") or {}).get("matrix") or {}
+    entries: list[dict[str, Any]] = list(matrix.get("include") or [])
+    if not entries:
+        axes = {key: value for key, value in matrix.items() if isinstance(value, list)}
+        entries = [{key: item} for key, values in axes.items() for item in values] or [{}]
+
+    def substitute(value: Any, entry: dict[str, Any]) -> Any:
+        if isinstance(value, str):
+            return _MATRIX_REF.sub(lambda m: str(entry.get(m.group(1), "")), value)
+        if isinstance(value, dict):
+            return {key: substitute(inner, entry) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [substitute(inner, entry) for inner in value]
+        return value
+
+    return [substitute(job, entry) for entry in entries]
+
+
+def _installs_agent(leg: dict[str, Any]) -> bool:
+    for step in leg.get("steps") or []:
+        for extras in re.findall(r"pip install[^\n]*\.\[([^\]]*)\]", str(step.get("run") or "")):
+            if "agent" in {extra.strip() for extra in extras.split(",")}:
+                return True
+    return False
+
+
+def _runs_whole_suite(leg: dict[str, Any]) -> dict[str, Any] | None:
+    """The step that runs every test, unnarrowed, or ``None``."""
+
+    for step in leg.get("steps") or []:
+        command = str(step.get("run") or "")
+        if "pytest" in command and not re.search(r"pytest[^\n|&]*\s(-k\s|tests/)", command):
+            return step
+    return None
+
+
+def _unfiltered_suite_legs() -> list[tuple[str, dict[str, Any]]]:
+    legs: list[tuple[str, dict[str, Any]]] = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        document = _workflow(path.name)
+        trigger = _pull_request_trigger(document)
+        if trigger is None or trigger.get("paths") or trigger.get("paths-ignore"):
+            continue
+        for name, job in (document.get("jobs") or {}).items():
+            for leg in _legs(job):
+                if _runs_whole_suite(leg) is not None:
+                    legs.append((f"{path.name}:{name}", leg))
+    return legs
+
+
+def test_the_agentic_workflow_is_tested_on_every_pull_request() -> None:
+    """The image installs the `agent` extra, so `auto` runs the agent loop.
+
+    Every agentic test importorskips langgraph, and until a leg installed it
+    none of them had ever run in CI — while the planner, the grader and the
+    long-answer outline were exactly what a model switch had silently broken.
+    The leg must also set PHEASANT_REQUIRE_AGENT, or a broken install turns
+    every one of those tests into a skip and the leg into a green check.
+    """
+
+    agent_legs = [
+        (where, leg)
+        for where, leg in _unfiltered_suite_legs()
+        if _installs_agent(leg)
+        and str((_runs_whole_suite(leg) or {}).get("env", {}).get("PHEASANT_REQUIRE_AGENT")) == "1"
+    ]
+    assert agent_legs, (
+        "no unfiltered pull-request job installs the `agent` extra and runs the whole "
+        "suite with PHEASANT_REQUIRE_AGENT=1, so the workflow every image runs by "
+        "default is untested"
+    )
+
+
+def test_the_workflow_without_the_extra_is_tested_too() -> None:
+    """The other side of `auto`: a region without langgraph falls back to simple.
+
+    Adding the extra everywhere would stop testing the fallback, which is what a
+    minimal `pip install pheasant` runs.
+    """
+
+    minimal = [where for where, leg in _unfiltered_suite_legs() if not _installs_agent(leg)]
+    assert minimal, "every suite run installs the `agent` extra; the fallback is untested"
+
+
+def test_matrix_legs_are_expanded_with_their_own_values() -> None:
+    """The two tests above read legs, so the reader is checked against the real file."""
+
+    job = _workflow("ci.yml")["jobs"]["python-quality"]
+    legs = _legs(job)
+    assert len(legs) >= 2
+    assert all("${{" not in str(leg.get("steps")) for leg in legs), "a matrix ref survived"
+    assert sorted(_installs_agent(leg) for leg in legs) == [False, True]

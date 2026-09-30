@@ -111,7 +111,7 @@ class _Recorder(LLM):
         self.reply = reply
         self.lock = threading.Lock()
 
-    def complete(self, system, prompt, *, max_output_tokens=None):  # type: ignore[override]
+    def complete(self, system, prompt, *, max_output_tokens=None, **kwargs):  # type: ignore[override]
         with self.lock:
             self.calls.append((system, prompt, max_output_tokens))
         return self.reply(system, prompt) if callable(self.reply) else self.reply

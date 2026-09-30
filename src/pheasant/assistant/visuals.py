@@ -34,94 +34,67 @@ without a new search.
 With no model connected, :func:`graph_diagram` draws what the index itself
 recorded — the graph's own edges between the cited documents and what they
 reference — which is grounded by construction and needs no network.
+
+**Any model, not one.** The drawing call was tuned against one model and
+failed quietly on the next, for reasons that all surfaced as "no diagram":
+a reasoning model spending a 1,600-token cap on thinking and returning
+nothing, prose or a fence around the JSON, the grammar's keys spelled another
+way. Four layers now stand between a model's reply and "no diagram", and none
+of them lowers the grounding bar:
+
+1. ``assistant.visual_prompt`` states the contract at both ends of the call,
+   lists the passage numbers that may be cited, and shows a worked reply of
+   the shape being drawn; the provider is asked for JSON where it can be.
+2. The budget is sized for a model that thinks before it writes, and a reply
+   cut off before any text is asked again with room to think
+   (``LLM.complete``, for every call the assistant makes).
+3. ``assistant.visual_dialect`` reads the spellings models actually use onto
+   the grammar before the check — renaming, never adding a claim.
+4. A reply that still cannot be *read* gets one repair turn saying what was
+   wrong. A diagram declined as *ungrounded* does not: asking for citations
+   until the check passes is asking the model to pass the check.
+
+When all of that fails, the caller (``assistant.answering``) falls back to
+:func:`graph_diagram` and says so, rather than showing nothing.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
-from pheasant.assistant import visual_specs
+from pheasant.assistant import visual_dialect, visual_prompt, visual_specs
+from pheasant.assistant.providers import ProviderError
 from pheasant.assistant.visual_export import to_markdown, to_mermaid
+from pheasant.assistant.visual_prompt import DIAGRAM_SYSTEM
 from pheasant.assistant.visual_specs import KINDS, MAX_NODES, normalize_kind
 
-__all__ = ["KINDS", "MAX_NODES", "build_diagram", "declined", "graph_diagram", "validate_spec"]
+__all__ = [
+    "DIAGRAM_SYSTEM",
+    "KINDS",
+    "MAX_NODES",
+    "build_diagram",
+    "declined",
+    "graph_diagram",
+    "validate_spec",
+]
 
 #: Below this share of cited elements a diagram is declined. Half, not more:
 #: a process diagram legitimately has a start and an end nobody wrote down,
 #: but a diagram that is mostly inference is a guess with arrows.
 MIN_GROUNDED = 0.5
 
-DIAGRAM_SYSTEM = """You turn retrieved passages from a private knowledge base \
-into ONE visual that answers the user's request, in whatever shape or from \
-whatever viewpoint they asked for. You draw ONLY what the passages support.
+#: The output cap for a drawing call. A spec is a few hundred to ~2,000
+#: tokens of JSON, but a reasoning model (GPT-6, Gemini 2.5, anything that
+#: thinks first) spends hidden tokens out of the same cap before it writes a
+#: character — so the old 1,600 was routinely spent on thinking alone, and the
+#: reply was an empty 200 that read as "the model did not return a diagram".
+#: A model that does not think writes what it writes and stops; the cap costs
+#: it nothing.
+DIAGRAM_OUTPUT_TOKENS = 8192
 
-Reply with JSON only, no prose:
-{"kind": "flow", "title": "short title", "viewpoint": "",
- "summary": "one sentence saying what the visual shows",
- "nodes": [{"id": "n1", "label": "short label", "cites": [1]}],
- "edges": [{"from": "n1", "to": "n2", "label": "", "cites": [2]}]}
-
-Kinds — pick the one the request names or implies; if none fits, use \
-"canvas" and place the nodes yourself:
-- "flow": a process or pipeline. Node "shape" may be box, round, pill, \
-diamond (a decision), cylinder (a store), hexagon, ellipse, note.
-- "sequence": actors exchanging messages; nodes are actors, edges IN ORDER \
-are the messages.
-- "hierarchy": a tree (part-of, reports-to, breakdown); edges parent->child.
-- "mindmap": the FIRST node is the central idea; edges parent->child.
-- "concept": how ideas relate, as a network; any labelled edges.
-- "cycle": a loop; nodes in loop order (edges optional).
-- "timeline": ordered events; each node has "when" (a date or phase).
-- "swimlane": a process across owners; "groups": [{"id": "g1", "label": \
-"Team", "cites": [1]}] and each node has "group": "g1"; edges as in flow.
-- "layers": a stack, top layer first; "groups" are the layers, nodes sit \
-in them via "group".
-- "groups": things sorted into categories; "groups" are the categories.
-- "table": a comparison; nodes are the rows, "columns": [{"id": "c1", \
-"label": "..."}], "cells": [{"row": "n1", "column": "c1", "text": "...", \
-"cites": [1]}].
-- "quadrant": a 2x2; "axes": {"x": {"label": "", "low": "", "high": ""}, \
-"y": {...}} and each node has "x" and "y" between 0 and 1.
-- "chart": numbers stated in the passages; each node has a numeric "value"; \
-"chart": "bar" or "line"; optional "unit" and "axes": {"y": {"label": ""}}.
-- "canvas": anything else; each node has "x" and "y" from 0 to 100 and a \
-"shape".
-- "class" (UML class diagram): nodes are classes with optional \
-"stereotype" (interface, abstract, enumeration), "attributes" and \
-"operations" (lists of strings such as "id: string" or "promote()"); edges \
-have "relation": inheritance or realization (from the subclass TO the \
-parent), composition or aggregation (from the whole TO the part), \
-association or dependency; optional "from_mult"/"to_mult" such as "1", \
-"0..*".
-- "activity" (UML activity diagram): node "type" is initial, final, \
-action, decision, merge, fork or join (initial, final, fork, join and merge \
-need no label or cites); edges may carry a "guard"; nodes may sit in \
-partitions via "group" with "groups" declared.
-- "state" (UML state machine, a behavior diagram): node "type" is initial, \
-state, choice or final, and a state may have "entry", "do", "exit"; edges \
-are transitions with "trigger", "guard" and "effect"; a state may \
-transition to itself.
-- "usecase" (UML use case diagram): node "type" is actor or usecase; \
-"groups": [one system boundary]; edges have "relation": association (actor \
-to use case), include, extend or generalization.
-
-Rules:
-- A "viewpoint" the user asks for ("for a new engineer", "from the \
-operator's side") decides what you include and how you label it; say it in \
-"viewpoint".
-- 3 to 15 nodes. Labels of at most six words, using the passages' own names \
-for files, components, commands and steps. Node "detail" may add one short \
-sentence.
-- EVERY node, edge, group and cell lists in "cites" the passage numbers [n] \
-that support it (UML start/end/fork/join/merge/choice pseudo-nodes excepted). \
-Never cite a number that was not given. If nothing supports an element, \
-leave it out.
-- A chart value must be a number the cited passage states; never compute \
-or estimate one.
-- Do not add steps, components, relationships or numbers the passages do \
-not state."""
+#: Transport failures a drawing call absorbs rather than raising: a visual is
+#: an addition to an answer, and must never be the thing that fails it.
+_CALL_FAILURES = (ProviderError, OSError, ValueError)
 
 
 def build_diagram(
@@ -132,7 +105,7 @@ def build_diagram(
     prompt: str,
     kind: str | None = None,
     evidence: dict[int, str] | None = None,
-    max_output_tokens: int = 1600,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Ask the model for a spec and validate it. Never raises.
 
@@ -141,23 +114,91 @@ def build_diagram(
     (a vocabulary kind or an alias such as "org chart"); without it the model
     picks the one the request implies. ``evidence`` (passage number → text)
     lets chart values be checked against what the passages state.
+
+    At most two turns: the drawing, and one repair if the first reply could
+    not be read (the module docstring says why a grounding decline gets none).
+    A declined result says which it was; the caller decides what to show
+    instead.
     """
 
     pinned = normalize_kind(kind)
-    hint = f"\nUse kind: {pinned}." if pinned else ""
-    raw = llm.try_complete(
-        DIAGRAM_SYSTEM + hint,
-        f"{prompt}\n\nDraw: {request}",
-        max_output_tokens=max_output_tokens,
+    valid = sorted({int(c["index"]) for c in citations if c.get("index") is not None})
+    system = visual_prompt.system(pinned)
+    budget = max(
+        int(max_output_tokens or 0),
+        int(getattr(llm, "max_output_tokens", 0) or 0),
+        DIAGRAM_OUTPUT_TOKENS,
     )
-    parsed = _parse_json(raw)
+    turn = visual_prompt.user(prompt, request, valid)
+    raw, failure = _ask(llm, system, turn, budget)
+    if failure is not None:
+        record_model_outcome(llm, "no_reply")
+        return declined(f"the model did not return a diagram ({failure})", retryable=True)
+    result = _read(raw, citations, pinned, evidence)
+    if _readable(result):
+        record_model_outcome(llm, "drawn" if result["status"] == "ok" else "ungrounded")
+        return result
+
+    problem = result.get("reason") or "it was not a diagram"
+    repaired_raw, failure = _ask(
+        llm, system, visual_prompt.repair(prompt, request, valid, raw, problem), budget
+    )
+    if failure is None:
+        repaired = _read(repaired_raw, citations, pinned, evidence)
+        if _readable(repaired):
+            record_model_outcome(llm, "repaired" if repaired["status"] == "ok" else "ungrounded")
+            return repaired
+    record_model_outcome(llm, "unreadable")
+    return result
+
+
+def _ask(llm: Any, system: str, turn: str, budget: int) -> tuple[str | None, str | None]:
+    """One drawing turn: ``(reply, None)`` or ``(None, why there is none)``.
+
+    A reply cut off before any text is retried with room to think by
+    :meth:`LLM.complete` itself; anything that still fails is reported here,
+    never raised.
+    """
+
+    try:
+        return llm.complete(system, turn, max_output_tokens=budget, json_mode=True), None
+    except _CALL_FAILURES as exc:
+        return None, str(exc) or type(exc).__name__
+
+
+def _read(
+    raw: str | None,
+    citations: list[dict],
+    pinned: str | None,
+    evidence: dict[int, str] | None,
+) -> dict[str, Any]:
+    parsed = visual_dialect.extract(raw)
     if parsed is None:
         return declined("the model did not return a diagram")
+    spec = visual_dialect.normalize(parsed, kind=pinned)
     if pinned:
         # The caller asked for this shape; a model that answered in another
         # one does not get to overrule the reader.
-        parsed["kind"] = pinned
-    return validate_spec(parsed, citations, source="model", evidence=evidence)
+        spec["kind"] = pinned
+    return validate_spec(spec, citations, source="model", evidence=evidence)
+
+
+def _readable(result: dict[str, Any]) -> bool:
+    """Drawn, or declined *on grounding* — either way the model was understood."""
+
+    return result.get("status") == "ok" or "grounding" in result
+
+
+def record_model_outcome(llm: Any, outcome: str) -> None:
+    """Count how the model half of a diagram went, per provider."""
+
+    from pheasant.telemetry import metrics
+
+    metrics.REGISTRY.inc(
+        "pheasant_assistant_visual_model_total",
+        provider=str(getattr(llm, "provider", "") or "unknown"),
+        outcome=outcome,
+    )
 
 
 def validate_spec(
@@ -262,23 +303,3 @@ def graph_diagram(citations: list[dict], facts: list[dict]) -> dict[str, Any]:
         "edges": edges,
     }
     return validate_spec(spec, citations, source="graph")
-
-
-def _parse_json(raw: str | None) -> dict | None:
-    if not raw:
-        return None
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text).strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return parsed if isinstance(parsed, dict) else None

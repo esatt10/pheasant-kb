@@ -24,8 +24,6 @@ extractively from its passages, and the step list says which.
 from __future__ import annotations
 
 import contextvars
-import json
-import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +32,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from pheasant.assistant.chat import build_prompt, system_prompt_for
+from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import WorkflowStep
 
 OUTLINE_SYSTEM = """You plan a long, sectioned answer from retrieved passages.
@@ -197,23 +196,7 @@ def short(error: str) -> str:
 
 
 def _parse_json(raw: str | None) -> dict | None:
-    if not raw:
-        return None
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text).strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return parsed if isinstance(parsed, dict) else None
+    return json_object(raw)
 
 
 def write_long(
@@ -238,6 +221,7 @@ def write_long(
         OUTLINE_SYSTEM.replace("{max_sections}", str(max_sections)),
         outline_prompt(state["question"], citations, history_text),
         max_output_tokens=int(options.get("outline_output_tokens") or 700),
+        json_mode=True,
     )
     outline = plan_sections(raw, citations, max_sections)
     steps.append(
