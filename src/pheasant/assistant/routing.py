@@ -14,7 +14,8 @@ the axis was left on ``auto``:
   passages, ``assistant.visuals``) or ``image`` (show the images the corpus
   itself holds and its documents reference). A diagram also carries a
   **shape** when the request names one — "a timeline of", "as a table",
-  "an org chart of" — out of the fourteen in ``assistant.visual_specs``, and
+  "an org chart of", "a UML class diagram of" — out of the eighteen in
+  ``assistant.visual_specs``, and
   the ``visual`` pin accepts a shape name in place of ``diagram``.
 
 Neither axis costs a model call to decide. That is the performance half of
@@ -100,7 +101,8 @@ _IMAGE = re.compile(
 _DIAGRAM = re.compile(
     r"\b(?:draw|diagram|flow ?chart|visuali[sz]e|a visual|visual (?:of|for|explaining|"
     r"showing)|sketch|map out|mind ?map|sequence diagram|chart the|graph of how|picture of how|"
-    r"plot|org ?chart|swim ?lane|infographic|venn diagram|concept map|quadrant|2x2)\b"
+    r"plot|org ?chart|swim ?lane|infographic|venn diagram|concept map|quadrant|2x2|uml|"
+    r"state machine|statechart)\b"
 )
 _SHAPE_NOUN = (
     r"(?:timeline|table|chart|graph|mind ?map|matrix|tree|hierarchy|venn|canvas|"
@@ -123,6 +125,12 @@ _MADE_SHAPE = re.compile(
 _SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (kind, re.compile(pattern))
     for kind, pattern in (
+        # UML first: "class diagram" and "state machine" name a notation,
+        # which beats the generic shape words they contain.
+        ("class", r"\b(?:uml )?class diagram|\bdomain model|\bobject model|\buml class"),
+        ("activity", r"\bactivity diagram|\buml activity"),
+        ("state", r"\bstate (?:machine|diagram|chart)|\bstatechart|\bbehaviou?r(?:al)? diagram"),
+        ("usecase", r"\buse[- ]?case diagram|\buse[- ]?cases? (?:for|of)\b|\bactors and use cases"),
         ("sequence", r"\bsequence diagram|message flow|interaction diagram|who calls whom"),
         ("mindmap", r"\bmind ?map"),
         ("swimlane", r"\bswim ?lanes?|who does what|(?:per|by|across) (?:team|owner|role)s?\b"),

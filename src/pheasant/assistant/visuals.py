@@ -24,10 +24,12 @@ for hosts that render those and for copying out.
 The spec is not one picture type. A process is a flow, but "a timeline of
 the incidents", "compare the three options", "an org chart of the teams" or
 "plot the error budgets" are different shapes of the same evidence, and
-``assistant.visual_specs`` is their shared grammar: fourteen kinds over one
-core of cited nodes and edges, down to a free ``canvas`` for anything the
-named kinds do not cover. The request picks the shape (or pins it), and the
-same passages can be redrawn in another one without a new search.
+``assistant.visual_specs`` is their shared grammar: eighteen kinds over one
+core of cited nodes and edges — UML class, activity, state machine and use
+case diagrams included (``assistant.visual_uml``) — down to a free
+``canvas`` for anything the named kinds do not cover. The request picks
+the shape (or pins it), and the same passages can be redrawn in another one
+without a new search.
 
 With no model connected, :func:`graph_diagram` draws what the index itself
 recorded — the graph's own edges between the cited documents and what they
@@ -86,6 +88,24 @@ in them via "group".
 "chart": "bar" or "line"; optional "unit" and "axes": {"y": {"label": ""}}.
 - "canvas": anything else; each node has "x" and "y" from 0 to 100 and a \
 "shape".
+- "class" (UML class diagram): nodes are classes with optional \
+"stereotype" (interface, abstract, enumeration), "attributes" and \
+"operations" (lists of strings such as "id: string" or "promote()"); edges \
+have "relation": inheritance or realization (from the subclass TO the \
+parent), composition or aggregation (from the whole TO the part), \
+association or dependency; optional "from_mult"/"to_mult" such as "1", \
+"0..*".
+- "activity" (UML activity diagram): node "type" is initial, final, \
+action, decision, merge, fork or join (initial, final, fork, join and merge \
+need no label or cites); edges may carry a "guard"; nodes may sit in \
+partitions via "group" with "groups" declared.
+- "state" (UML state machine, a behavior diagram): node "type" is initial, \
+state, choice or final, and a state may have "entry", "do", "exit"; edges \
+are transitions with "trigger", "guard" and "effect"; a state may \
+transition to itself.
+- "usecase" (UML use case diagram): node "type" is actor or usecase; \
+"groups": [one system boundary]; edges have "relation": association (actor \
+to use case), include, extend or generalization.
 
 Rules:
 - A "viewpoint" the user asks for ("for a new engineer", "from the \
@@ -95,8 +115,9 @@ operator's side") decides what you include and how you label it; say it in \
 for files, components, commands and steps. Node "detail" may add one short \
 sentence.
 - EVERY node, edge, group and cell lists in "cites" the passage numbers [n] \
-that support it. Never cite a number that was not given. If nothing \
-supports an element, leave it out.
+that support it (UML start/end/fork/join/merge/choice pseudo-nodes excepted). \
+Never cite a number that was not given. If nothing supports an element, \
+leave it out.
 - A chart value must be a number the cited passage states; never compute \
 or estimate one.
 - Do not add steps, components, relationships or numbers the passages do \

@@ -135,6 +135,7 @@ pheasant-kb/
 │   │                            (around every workflow), routing (depth,
 │   │                            visual, shape), conversation, longform,
 │   │                            visuals, visual_specs (the shape grammar),
+│   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host
@@ -145,7 +146,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 139 pytest modules, offline by design
+└── tests/                     ← 140 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -857,10 +858,12 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   ACL), and earlier answers reach the prompt with `[n]` stripped. No history
   is a byte-identical prompt, asserted.
 - **A visual is grounded or declined, in any shape.** The model returns a
-  spec in one of fourteen kinds (`assistant.visual_specs`: flow, sequence,
+  spec in one of eighteen kinds (`assistant.visual_specs`: flow, sequence,
   hierarchy, mindmap, concept, cycle, timeline, swimlane, layers, groups,
-  table, quadrant, chart, canvas) whose every node, edge, lane and table cell
-  `cites` passages; `validate_spec` drops unknown citations, marks uncited
+  table, quadrant, chart, canvas, and UML class, activity, state and use case
+  in `assistant.visual_uml`) whose every node, edge, lane and table cell
+  `cites` passages — UML pseudo-nodes (start, end, fork/join, choice) are
+  notation and exempt, in both directions; `validate_spec` drops unknown citations, marks uncited
   elements `inferred`, marks a chart value no cited passage states as
   unverified, and declines a mostly-inferred visual. The question names the
   shape (routing) or the model picks; `visual.redraw` lets a viewer redraw the

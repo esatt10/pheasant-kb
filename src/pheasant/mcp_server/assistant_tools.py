@@ -302,9 +302,11 @@ def register_assistant_tools(
         chart), "mindmap", "concept" (network), "cycle", "timeline",
         "swimlane", "layers" (stack), "groups" (categories), "table"
         (comparison), "quadrant" (2x2), "chart" (bar or line, from numbers the
-        passages state), "canvas" (free layout, any node shapes), or "image"
-        to show the images those passages hold. Common names work too ("org
-        chart", "venn", "2x2", "bar chart"). Unset, the request decides.
+        passages state), "canvas" (free layout, any node shapes), the UML
+        diagrams "class", "activity", "state" (state machine, the behavior
+        diagram) and "usecase", or "image" to show the images those passages
+        hold. Common names work too ("org chart", "venn", "2x2", "bar chart",
+        "class diagram", "state machine"). Unset, the request decides.
 
         Every node, edge, lane and table cell in visual.diagram lists the
         passage numbers ("cites") that support it; an element nothing

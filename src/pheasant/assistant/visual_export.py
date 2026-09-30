@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from pheasant.assistant import visual_uml
+
 #: Mermaid node brackets per spec ``shape``. The label goes between them.
 _BRACKETS = {
     "box": ('["', '"]'),
@@ -40,6 +42,9 @@ def to_mermaid(diagram: dict[str, Any]) -> str | None:
     """The diagram as Mermaid text, or ``None`` for a shape Mermaid does not draw."""
 
     kind = diagram.get("kind")
+    uml = visual_uml.to_mermaid(diagram, mermaid_text, _plain)
+    if uml is not None:
+        return uml
     if kind == "sequence":
         return _sequence(diagram)
     if kind == "mindmap":

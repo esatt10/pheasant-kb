@@ -6,7 +6,8 @@ chart of") or leaves it to the model, and the spec grammar in
 reader could take as a claim cites a passage or is marked ``inferred``. What
 is asserted here:
 
-* every kind survives validation with the fields it needs, and a kind or an
+* every kind survives validation (UML's notation rules are in
+  ``tests/test_visual_uml.py``) with the fields it needs, and a kind or an
   everyday name for one ("org chart", "2x2", "venn") lands on the vocabulary;
 * a shape the caller pinned beats the one the model answered in;
 * a chart number no cited passage states is not a cited number;
@@ -129,6 +130,38 @@ SPECS: dict[str, dict] = {
             _node("b", "Worker", [2], x=80, y=70, shape="hexagon"),
         ],
         "edges": _chain(["a", "b"]),
+    },
+    # UML (tests/test_visual_uml.py has the notation's own rules).
+    "class": {
+        "nodes": [
+            _node("rel", "Release", [1], attributes=["version: string"], operations=["promote()"]),
+            _node("can", "CanaryRelease", [2]),
+        ],
+        "edges": [{"from": "can", "to": "rel", "relation": "extends", "cites": [2]}],
+    },
+    "activity": {
+        "nodes": [
+            {"id": "s", "type": "initial"},
+            _node("b", "Build", [1]),
+            _node("d", "Green?", [2], type="decision"),
+            {"id": "e", "type": "final"},
+        ],
+        "edges": [
+            {"from": "s", "to": "b"},
+            {"from": "b", "to": "d", "cites": [1]},
+            {"from": "d", "to": "e", "guard": "yes", "cites": [2]},
+        ],
+    },
+    "state": {
+        "nodes": [_node("c", "Canary", [1]), _node("p", "Promoted", [2])],
+        "edges": [
+            {"from": "c", "to": "p", "trigger": "30 min", "guard": "in budget", "cites": [1]}
+        ],
+    },
+    "usecase": {
+        "groups": [{"id": "sys", "label": "Release system", "cites": [1]}],
+        "nodes": [_node("rm", "Release manager", [1], type="actor"), _node("u", "Roll back", [2])],
+        "edges": [{"from": "rm", "to": "u", "cites": [2]}],
     },
 }
 

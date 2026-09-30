@@ -91,7 +91,8 @@ POST /assistant/visual
 
 ### Shapes
 
-One spec grammar (`assistant/visual_specs.py`) covers fourteen shapes. The
+One spec grammar (`assistant/visual_specs.py`) covers eighteen shapes,
+four of them UML. The
 question names one ("a timeline of", "as a table", "swim lanes", "2x2") or
 leaves it to the model, and everyday names map onto the vocabulary ("org
 chart" → `hierarchy`, "venn" → `groups`, "bar chart" → `chart`):
@@ -112,6 +113,22 @@ chart" → `hierarchy`, "venn" → `groups`, "bar chart" → `chart`):
 | `quadrant` | a 2×2 positioning | `axes`; node `x`/`y` in 0..1 |
 | `chart` | numbers the passages state, bar or line | node `value`; `unit` |
 | `canvas` | anything else, laid out freely | node `x`/`y` in 0..100 and `shape` |
+| `class` | a UML class diagram | node `stereotype`, `attributes`, `operations`; edge `relation` (inheritance, realization, association, aggregation, composition, dependency), `from_mult`/`to_mult` |
+| `activity` | a UML activity diagram | node `type` (action, initial, final, flow_final, decision, merge, fork, join); edge `guard`; partitions as `groups` |
+| `state` | a UML state machine (the behavior diagram) | node `type` (state, initial, choice, final), `entry`/`do`/`exit`; edge `trigger`, `guard`, `effect`; self-transitions |
+| `usecase` | a UML use case diagram | node `type` (actor, usecase); the system boundary as `groups`; edge `relation` (association, include, extend, generalization) |
+
+UML is drawn in UML's notation — three-compartment classes with hollow
+triangles, diamonds and multiplicities; start dots, fork/join bars and
+decision diamonds; `trigger [guard] / effect` transitions; stick-figure
+actors outside a system boundary — and exported as Mermaid's own
+`classDiagram` and `stateDiagram-v2`. Its **pseudo-nodes are notation, not
+claims**: a start dot, an end bullseye, a fork bar or a choice diamond needs
+no label or citation and is left out of the grounding share, as is an edge
+that only says where a flow begins or ends — so a diagram's punctuation can
+neither prop up nor sink its content. A class member written as a plain
+string shares its class's citations; one given as `{text, cites}` is checked
+on its own.
 
 A **viewpoint** in the request ("for a new engineer", "from the operator's
 side") decides what the model includes and how it labels it, and is shown on

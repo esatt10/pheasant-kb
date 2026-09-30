@@ -22,6 +22,10 @@ table      a comparison; nodes are rows, ``columns`` + ``cells``
 quadrant   a 2x2 positioning; ``axes`` + ``x``/``y`` (0..1) per node
 chart      numbers from the passages; ``value`` per node, ``chart`` bar|line
 canvas     anything else: ``x``/``y`` (0..100) and ``shape`` per node
+class      UML classes, members and relationships (``assistant.visual_uml``)
+activity   UML activity: actions, decisions, fork/join, guards, partitions
+state      UML state machine: states, pseudo-states, event [guard] / effect
+usecase    UML use cases: actors, use cases, system boundary, include/extend
 ========== =============================================================
 
 Every element a reader could take as a claim — a node, an edge, a lane, a
@@ -38,6 +42,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from pheasant.assistant import visual_uml
+
 KINDS = (
     "flow",
     "sequence",
@@ -53,6 +59,11 @@ KINDS = (
     "quadrant",
     "chart",
     "canvas",
+    # UML (``assistant.visual_uml``): class, activity, state machine, use case.
+    "class",
+    "activity",
+    "state",
+    "usecase",
 )
 
 #: The words people use for a shape, mapped onto the vocabulary. A request or
@@ -94,6 +105,26 @@ ALIASES = {
     "line chart": "chart",
     "plot": "chart",
     "freeform": "canvas",
+    "class diagram": "class",
+    "uml class": "class",
+    "uml class diagram": "class",
+    "domain model": "class",
+    "object model": "class",
+    "activity diagram": "activity",
+    "uml activity": "activity",
+    "uml activity diagram": "activity",
+    "state machine": "state",
+    "state diagram": "state",
+    "state chart": "state",
+    "statechart": "state",
+    "behavior": "state",
+    "behaviour": "state",
+    "behavior diagram": "state",
+    "behaviour diagram": "state",
+    "behavioral state machine": "state",
+    "use case": "usecase",
+    "use case diagram": "usecase",
+    "use cases": "usecase",
     "free-form": "canvas",
     "custom": "canvas",
 }
@@ -114,7 +145,7 @@ _NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
 #: What each kind needs at least, beyond the grounding share: a table of one
 #: cell or a chart of one bar is not a picture of anything.
-_MINIMUM = {"table": ("cells", 2), "chart": ("nodes", 2)}
+_MINIMUM = {"table": ("cells", 2), "chart": ("nodes", 2), "class": ("nodes", 1)}
 
 
 def normalize_kind(value: Any) -> str | None:
@@ -150,7 +181,8 @@ def check(
         nodes = [node for node in nodes if "value" in node]
         _check_values(nodes, evidence)
     known = {node["id"] for node in nodes}
-    edges = _edges(spec.get("edges"), valid, known)
+    types = {node["id"]: node["type"] for node in nodes if node.get("type")}
+    edges = _edges(spec.get("edges"), valid, known, kind=kind, types=types)
 
     diagram: dict[str, Any] = {"kind": kind, "nodes": nodes, "edges": edges}
     if groups:
@@ -177,11 +209,15 @@ def check(
 
 
 def elements(diagram: dict[str, Any]) -> list[dict[str, Any]]:
-    """Everything in a checked diagram a reader could take as a claim."""
+    """Everything in a checked diagram a reader could take as a claim.
+
+    UML pseudo-nodes (a start dot, a fork bar) and the edges that only say
+    where a flow begins or ends are notation, and are left out.
+    """
 
     return [
-        *diagram.get("nodes", []),
-        *diagram.get("edges", []),
+        *[node for node in diagram.get("nodes", []) if not node.get("structural")],
+        *[edge for edge in diagram.get("edges", []) if not edge.get("structural")],
         *diagram.get("groups", []),
         *diagram.get("cells", []),
     ]
@@ -240,7 +276,7 @@ def _nodes(
         if not isinstance(item, dict):
             continue
         node_id = str(item.get("id") or "").strip()
-        name = label(item.get("label"))
+        name = label(item.get("label")) or visual_uml.default_label(kind, item)
         if not _ID_RE.match(node_id) or node_id in known or not name:
             continue
         found = cites(item.get("cites"), valid)
@@ -269,6 +305,8 @@ def _nodes(
             if x is not None and y is not None:
                 node["x"] = min(1.0, max(0.0, x / scale))
                 node["y"] = min(1.0, max(0.0, y / scale))
+        if kind in visual_uml.UML_KINDS:
+            visual_uml.node_fields(kind, item, node, valid, label=label, cites=cites)
         nodes.append(node)
         known.add(node_id)
         if len(nodes) >= MAX_NODES:
@@ -276,25 +314,34 @@ def _nodes(
     return nodes
 
 
-def _edges(raw: Any, valid: set[int], known: set[str]) -> list[dict[str, Any]]:
+def _edges(
+    raw: Any,
+    valid: set[int],
+    known: set[str],
+    *,
+    kind: str,
+    types: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
+    loops = visual_uml.allows_self_loops(kind)
     for item in (raw if isinstance(raw, list) else [])[: MAX_EDGES * 2]:
         if not isinstance(item, dict):
             continue
         source = str(item.get("from") or "").strip()
         target = str(item.get("to") or "").strip()
-        if source not in known or target not in known or source == target:
+        if source not in known or target not in known or (source == target and not loops):
             continue
         found = cites(item.get("cites"), valid)
-        edges.append(
-            {
-                "from": source,
-                "to": target,
-                "label": label(item.get("label"), 40),
-                "cites": found,
-                "inferred": not found,
-            }
-        )
+        edge = {
+            "from": source,
+            "to": target,
+            "label": label(item.get("label"), 40),
+            "cites": found,
+            "inferred": not found,
+        }
+        if kind in visual_uml.UML_KINDS:
+            visual_uml.edge_fields(kind, item, edge, label=label, types=types)
+        edges.append(edge)
         if len(edges) >= MAX_EDGES:
             break
     return edges
