@@ -1190,6 +1190,11 @@ Each of these cost real time. They are listed because the shape recurs.
   raised `FileNotFoundError` on a file that had just moved out from under it.
   Unique per writer now, and a failed write unlinks its own temp file —
   otherwise unique names would turn one orphan into one per attempt.
+  `EngineLease` had the same shape and kept it: engines in one process share
+  a lease and each heartbeats it through one `engine.lease.tmp`, so two
+  heartbeats together lost a rename and logged it from a daemon thread —
+  which on Python 3.12, landing during interpreter shutdown, aborted a test
+  run whose every test had passed (exit 134, CI only, 3.11 unaffected).
 - **A sampler that slices a trace id measures the id's shape, not the traffic.**
   Stage sampling read the low four hex characters, reasoning that a W3C trace
   id is random so any slice is uniform. True of ids pheasant mints, false of
