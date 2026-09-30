@@ -240,12 +240,22 @@ class EngineLease:
             "hostname": socket.gethostname(),
             "heartbeat_at": datetime.now(UTC).isoformat(),
         }
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self.path)
+        # Unique per writer. Engines in one process share this lease and each
+        # heartbeats it, so a fixed `engine.lease.tmp` let one engine's rename
+        # take another's temp file mid-write -- a FileNotFoundError logged from
+        # a daemon thread, which on Python 3.12 aborts the interpreter if it
+        # lands during shutdown. A failed write removes its own temp file, or
+        # unique names would leave one orphan per failure.
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(self.heartbeat_interval_s):

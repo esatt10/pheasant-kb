@@ -76,9 +76,12 @@ CEILINGS: dict[str, int] = {
     # the split this test is actually asking for.
     "persistence/schema.py": 1100,
     "persistence/state_store.py": 1800,
-    "search/vector_store.py": 1400,
+    # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
+    "search/vector_store.py": 1250,
     "setup_wizard.py": 2200,
-    "sync/engine.py": 2800,
+    # Lowered from 2800 when the preparation types and the process worker's
+    # entry point moved to `sync/preparation.py`.
+    "sync/engine.py": 2780,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

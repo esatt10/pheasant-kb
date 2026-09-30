@@ -713,6 +713,16 @@ class SyncConcurrencySettings(ModelMixin):
     #: eight can hold 8 GiB before parser overhead, so keep it low for large
     #: documents.
     remote_worker_batch_size: int = 8
+    #: Batches in flight to the worker fleet, per source. ``0`` (the default)
+    #: keeps the long-standing rule of two per configured URL, which is right
+    #: when each URL is one worker. It is wrong when one URL is a *Service*
+    #: fronting many pods -- the shipped Kubernetes and Compose fleet profiles
+    #: -- because the rule cannot see the pods: a source kept two batches in
+    #: flight whether the autoscaler had given it two workers or twenty, and
+    #: the rest sat idle. Set it to roughly the worker replicas you expect a
+    #: source to use. Still capped by ``max_parallel_files``; the memory on
+    #: each side is about ``2 * this * remote_worker_batch_size`` files.
+    remote_worker_max_inflight_batches: int = 0
     #: ``http`` (stdlib, no extra) or ``grpc`` (needs the ``[grpc]`` extra).
     #: Retry, failover, breakers and deadlines are transport-independent, so
     #: this changes bytes on the wire and nothing about durability.

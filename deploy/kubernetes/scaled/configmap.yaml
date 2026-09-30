@@ -77,6 +77,12 @@ data:
           - http://pheasant-worker:8765
         remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
         remote_worker_batch_size: 8
+        # Batches in flight per source. The default (two per URL) cannot see
+        # that this one URL is a Service in front of up to 20 autoscaled
+        # pods, so a source kept two pods busy and the rest idle. Size it to
+        # the replicas one source should use; memory per side is about
+        # 2 x this x remote_worker_batch_size files.
+        remote_worker_max_inflight_batches: 8
         worker_transport: http
     ingestion:
       # Manual ingestion — the UI drop zone, an agent's `ingest_submit`, the

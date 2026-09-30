@@ -47,7 +47,6 @@ matches without any model or network.
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import email.utils
 import hashlib
 import importlib.util
@@ -61,7 +60,7 @@ import ssl
 import struct
 import threading
 import time
-from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.error import HTTPError, URLError
@@ -71,6 +70,7 @@ import numpy as np
 
 from pheasant.search.ranking import DEFAULT_FILTER_OVERFETCH
 from pheasant.search.sqlite_store import _row_result
+from pheasant.search.vector_indexer import VectorIndexer
 
 if TYPE_CHECKING:
     from pheasant.config.schema import EmbeddingsSettings, PheasantConfig
@@ -761,6 +761,25 @@ class LanceDBVectorStore:
 
     TABLE = "chunks"
 
+    #: Small fragments at which `flush` compacts. Every ``add`` is a new
+    #: fragment and nothing ever merged them, so search cost grew with the
+    #: number of writes rather than the number of vectors: measured on 20,000
+    #: 256-d vectors, 56.8ms p50 at 168 fragments against 32.5ms after one
+    #: compaction. Compaction rewrites every fragment under Lance's target
+    #: size -- the whole table, for any region under ~1M vectors -- so it is
+    #: gated here rather than run per sync, where an O(one file) change would
+    #: pay an O(total) rewrite. A first index of a large corpus crosses it
+    #: straight away, which is where the fragment count is worst.
+    COMPACT_AT_SMALL_FRAGMENTS = 64
+
+    #: Version manifests older than this are dropped when compacting. Nothing
+    #: here reads an old version: every call re-opens the table at its latest.
+    #: Data files keep Lance's own rule -- not deleted while younger than
+    #: seven days, since they could belong to another writer's uncommitted
+    #: transaction -- so the space a compaction frees comes back a week later
+    #: rather than never.
+    CLEANUP_OLDER_THAN = timedelta(hours=1)
+
     def __init__(self, directory: str | Path):
         self.directory = Path(directory)
         self._db = None
@@ -771,6 +790,9 @@ class LanceDBVectorStore:
         # memory and update it with every successful mutation.
         self._id_cache: set[str] | None = None
         self._id_cache_lock = threading.RLock()
+        #: Set by every write, cleared when `flush` has decided whether to
+        #: compact, so an unchanged sync does not even read the table stats.
+        self._mutated = False
 
     def _database(self):
         if self._db is None:
@@ -795,11 +817,29 @@ class LanceDBVectorStore:
     def _quote(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
-    def _rows(self, columns: list[str]) -> list[dict[str, Any]]:
+    def _rows(self, columns: list[str], where: str | None = None) -> list[dict[str, Any]]:
+        """Read ``columns`` of every row (matching ``where``), projected.
+
+        ``to_arrow()`` materializes every column -- the vectors included --
+        before ``select`` discards them, so asking for chunk ids read the
+        whole table. A projected scan with the predicate pushed down reads
+        only what it returns: 17.5ms against 67.0ms for one source's ids out
+        of 20,000 256-d vectors. The old path stays as the fallback for a
+        LanceDB whose query builder lacks any of these calls.
+        """
+
         table = self._table()
         if table is None:
             return []
-        return table.to_arrow().select(columns).to_pylist()
+        try:
+            query = table.search().select(columns)
+            if where is not None:
+                query = query.where(where)
+            return query.limit(None).to_arrow().select(columns).to_pylist()
+        except (AttributeError, TypeError, NotImplementedError):
+            if where is not None:
+                raise  # the caller filters the unprojected rows itself
+            return table.to_arrow().select(columns).to_pylist()
 
     # -- VectorStore protocol ----------------------------------------
 
@@ -821,6 +861,7 @@ class LanceDBVectorStore:
             }
             for chunk_id, vector, payload in zip(chunk_ids, vectors, payloads, strict=True)
         ]
+        self._mutated = True
         table = self._table()
         if table is None:
             self._database().create_table(self.TABLE, data=rows)
@@ -848,6 +889,7 @@ class LanceDBVectorStore:
         table = self._table()
         if table is None:
             return 0
+        self._mutated = True
         before = table.count_rows()
         ids = list(chunk_ids or [])
         for start in range(0, len(ids), 500):
@@ -903,11 +945,18 @@ class LanceDBVectorStore:
             return set(chunk_ids).intersection(self._id_cache)
 
     def source_chunk_ids(self, source_id: str) -> set[str]:
-        return {
-            row["chunk_id"]
-            for row in self._rows(["chunk_id", "source_id"])
-            if row["source_id"] == source_id
-        }
+        """One source's ids. Runs for every source at the end of every sync,
+        changed or not, which is why the filter is pushed into the scan."""
+
+        try:
+            rows = self._rows(["chunk_id"], where=f"source_id = {self._quote(source_id)}")
+        except (AttributeError, TypeError, NotImplementedError):
+            return {
+                row["chunk_id"]
+                for row in self._rows(["chunk_id", "source_id"])
+                if row["source_id"] == source_id
+            }
+        return {row["chunk_id"] for row in rows}
 
     def reset(self) -> int:
         """Drop the table so the next insert can establish a new vector width.
@@ -927,8 +976,35 @@ class LanceDBVectorStore:
         return removed
 
     def flush(self) -> None:
-        """No-op: `upsert`/`delete` already write through to the LanceDB
-        table on every call — nothing is ever buffered here."""
+        """`upsert`/`delete` already write through, so nothing is buffered.
+
+        This is the end-of-sync hook, and the one place compaction can run
+        without costing a request or a commit: see
+        `COMPACT_AT_SMALL_FRAGMENTS`. Maintenance, never correctness -- a
+        failure is logged and the sync carries on.
+        """
+
+        if not self._mutated:
+            return
+        self._mutated = False
+        table = self._table()
+        if table is None:
+            return
+        try:
+            stats = table.stats()
+            fragments = (stats.get("fragment_stats") or {}) if isinstance(stats, dict) else {}
+            small = int(fragments.get("num_small_fragments") or 0)
+            if small < self.COMPACT_AT_SMALL_FRAGMENTS:
+                return
+            started = time.monotonic()
+            table.optimize(cleanup_older_than=self.CLEANUP_OLDER_THAN)
+            logger.info(
+                "Compacted the vector store: %d small fragments in %.2fs",
+                small,
+                time.monotonic() - started,
+            )
+        except Exception:  # noqa: BLE001 - maintenance must not fail a sync
+            logger.warning("Vector store compaction failed; continuing", exc_info=True)
 
     def all_vectors(self) -> list[tuple[str, list[float]]]:
         """Bulk (chunk_id, vector) reader used by the contract publisher."""
@@ -937,165 +1013,6 @@ class LanceDBVectorStore:
             (row["chunk_id"], [float(value) for value in row["vector"]])
             for row in self._rows(["chunk_id", "vector"])
         ]
-
-
-class VectorIndexer:
-    """Embed-on-sync helper: embeds only chunk ids missing from the store.
-
-    New/changed chunks are queued across files rather than embedded one file
-    at a time. The sync loop calls `index_artifact` once per file, and most
-    files in a real corpus carry far fewer chunks than an embedder's own
-    `batch_size` (64) — embedding immediately, per file, turned a sync into
-    one HTTP round-trip to the embedding provider *per file* instead of
-    packing many files' chunks into one request. On a few-hundred-file repo
-    that was the difference between a handful of embedding calls and
-    hundreds, entirely serial on the sync's only thread. Queued chunks are
-    flushed automatically once `queue_size` accumulates (one provider batch
-    per allowed concurrent request by default, so memory stays bounded) and
-    explicitly by `flush()`, which the caller
-    (`SyncEngine`) already calls at the end of every sync.
-    """
-
-    def __init__(
-        self,
-        embedder: Embedder,
-        store: VectorStore,
-        queue_size: int | None = None,
-        max_parallel_embeddings: int = 1,
-    ):
-        self.embedder = embedder
-        self.store = store
-        self.max_parallel_embeddings = max(1, int(max_parallel_embeddings or 1))
-        configure_parallelism = getattr(embedder, "configure_parallelism", None)
-        if callable(configure_parallelism):
-            configure_parallelism(self.max_parallel_embeddings)
-        # Queue one provider-sized group per concurrency slot. This fills each
-        # request without allowing pending text to grow with source size.
-        provider_batch_size = int(getattr(embedder, "batch_size", 64) or 64)
-        self.queue_size = int(queue_size or provider_batch_size * self.max_parallel_embeddings)
-        self._pending: list[dict[str, Any]] = []
-
-    def index_artifact(
-        self,
-        source_id: str,
-        artifact_id: str,
-        chunk_rows: list[dict[str, Any]],
-        on_progress: Callable[[int], None] | None = None,
-    ) -> int:
-        """Queue new/changed chunks for embedding; returns how many were queued.
-
-        Chunk ids are content-addressed (``sha256={text_hash}`` is part of
-        the id), so store membership doubles as the text_hash bookkeeping:
-        an unchanged chunk keeps its id and is skipped without ever
-        reaching the embedder. Queued chunks are not yet in the store —
-        callers that need durability before returning (as opposed to by the
-        end of the sync) should call `flush()`.
-        """
-
-        ids = [str(chunk["id"]) for chunk in chunk_rows]
-        existing = self.store.existing_ids(ids)
-        pending = [chunk for chunk in chunk_rows if str(chunk["id"]) not in existing]
-        if not pending:
-            return 0
-        for chunk in pending:
-            self._pending.append(
-                {
-                    "id": str(chunk["id"]),
-                    "text": str(chunk["text"]),
-                    "source_id": source_id,
-                    "artifact_id": artifact_id,
-                    "text_hash": chunk.get("text_hash"),
-                }
-            )
-        if len(self._pending) >= self.queue_size:
-            self.flush_pending(on_progress=on_progress)
-        return len(pending)
-
-    def flush_pending(self, on_progress: Callable[[int], None] | None = None) -> None:
-        """Embed and upsert everything queued so far, across every file
-        `index_artifact` has touched since the last flush.
-
-        Provider-sized batches may be in flight concurrently, but results are
-        reassembled in input order and the vector store receives one ordered
-        upsert. A failed batch therefore commits no partial flush and the
-        content-addressed ids make a retry safe.
-        """
-        if not self._pending:
-            return
-        batch, self._pending = self._pending, []
-        batch_size = max(1, int(getattr(self.embedder, "batch_size", len(batch)) or len(batch)))
-        groups = [batch[start : start + batch_size] for start in range(0, len(batch), batch_size)]
-        grouped_vectors: list[list[list[float]] | None] = [None] * len(groups)
-
-        def embed_group(group: list[dict[str, Any]]) -> list[list[float]]:
-            return self.embedder.embed([str(item["text"]) for item in group])
-
-        try:
-            if self.max_parallel_embeddings <= 1 or len(groups) <= 1:
-                for index, group in enumerate(groups):
-                    grouped_vectors[index] = embed_group(group)
-                    if on_progress is not None:
-                        on_progress(len(group))
-            else:
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=min(self.max_parallel_embeddings, len(groups)),
-                    thread_name_prefix="pheasant-embed",
-                ) as executor:
-                    futures = {
-                        executor.submit(embed_group, group): (index, len(group))
-                        for index, group in enumerate(groups)
-                    }
-                    for future in concurrent.futures.as_completed(futures):
-                        index, size = futures[future]
-                        grouped_vectors[index] = future.result()
-                        if on_progress is not None:
-                            on_progress(size)
-        except BaseException:
-            # Nothing reached the store. Put the exact ordered work back so a
-            # caller that catches the provider error may retry this indexer.
-            self._pending = batch + self._pending
-            raise
-
-        vectors = [vector for group in grouped_vectors for vector in (group or [])]
-        self.store.upsert(
-            [item["id"] for item in batch],
-            vectors,
-            [
-                {
-                    "source_id": item["source_id"],
-                    "artifact_id": item["artifact_id"],
-                    "text_hash": item["text_hash"],
-                }
-                for item in batch
-            ],
-        )
-
-    def prune_source(self, source_id: str, live_chunk_ids: set[str]) -> int:
-        """Delete vectors for chunks (or whole artifacts) no longer indexed.
-
-        Only considers chunks already *in the store* — a chunk still sitting
-        in the pending queue (not yet embedded) is never mistaken for stale,
-        since it cannot be a member of `store.source_chunk_ids` yet.
-        """
-
-        stale = sorted(self.store.source_chunk_ids(source_id) - set(live_chunk_ids))
-        if not stale:
-            return 0
-        return self.store.delete(chunk_ids=stale)
-
-    def reset(self) -> int:
-        """Discard pending work and reset the store's vector-space schema."""
-
-        self._pending = []
-        return self.store.reset()
-
-    def flush(self, on_progress: Callable[[int], None] | None = None) -> None:
-        """Embed anything still queued, then force the store's writes to
-        disk now. The caller (`SyncEngine`) MUST call this at the end of a
-        sync, alongside its own final graph save — see `NumpyVectorStore`'s
-        docstring for why the disk-flush half exists."""
-        self.flush_pending(on_progress=on_progress)
-        self.store.flush()
 
 
 class VectorSearcher:
@@ -1244,7 +1161,9 @@ def vector_store_available(provider: str) -> bool:
     return False
 
 
-def vector_indexer_from_config(config: PheasantConfig) -> VectorIndexer | None:
+def vector_indexer_from_config(
+    config: PheasantConfig, *, background: bool = False
+) -> VectorIndexer | None:
     """Build the embed-on-sync indexer, or ``None`` when disabled.
 
     Unrecognized providers (e.g. pre-21.4 example configs with
@@ -1261,6 +1180,7 @@ def vector_indexer_from_config(config: PheasantConfig) -> VectorIndexer | None:
             build_embedder(settings),
             build_vector_store(config),
             max_parallel_embeddings=getattr(config.sync.concurrency, "max_parallel_embeddings", 1),
+            background=background,
         )
     except ValueError as exc:
         logger.warning("Vector search disabled: %s", exc)

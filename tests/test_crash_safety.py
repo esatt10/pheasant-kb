@@ -433,3 +433,45 @@ def test_busy_timeout_is_long_enough_for_a_long_sync(tmp_path) -> None:
         assert applied == BUSY_TIMEOUT_MS, "the pragma is not reaching the connection"
     finally:
         store.close()
+
+
+def test_engines_sharing_a_lease_can_heartbeat_at_the_same_moment(tmp_path: Path) -> None:
+    """Engines in one process share one lease file, and each heartbeats it.
+
+    Every heartbeat wrote to the same fixed ``engine.lease.tmp`` and renamed it,
+    so two heartbeats landing together had one rename take the other's temp
+    file: ``FileNotFoundError``, logged from a daemon thread. Harmless to the
+    lease -- and on Python 3.12 a daemon thread writing to stderr while the
+    interpreter shuts down aborts the whole process, which is how it surfaced:
+    a test run whose every test had passed, exiting 134.
+    """
+
+    path = tmp_path / "engine.lease"
+    first = EngineLease(tmp_path)
+    second = EngineLease(tmp_path)
+    first.acquire()
+    second.acquire()  # same process: ownership is shared, as two engines do
+    try:
+        start = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def heartbeat(lease: EngineLease) -> None:
+            start.wait()
+            for _ in range(300):
+                try:
+                    lease._write()
+                except OSError as exc:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=heartbeat, args=(lease,)) for lease in (first, second)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        assert errors == []
+        assert json.loads(path.read_text())["pid"] == os.getpid()
+        # No temp file is left behind by either writer.
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["engine.lease"]
+    finally:
+        second.release()
+        first.release()

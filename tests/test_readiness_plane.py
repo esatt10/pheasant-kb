@@ -593,6 +593,12 @@ def test_the_submission_and_indexing_doors_enforce_one_rule() -> None:
     from pheasant.sync import engine as sync_engine
 
     assert "corpus_policy.denied_by" in inspect.getsource(check_denylist)
-    assert "corpus_policy.denied_by" in inspect.getsource(sync_engine.SyncEngine._prepare_item)
+    engine = sync_engine.SyncEngine
+    assert "corpus_policy.denied_by" in inspect.getsource(engine._decide_before_read)
+    # Every door on the sync side goes through that one decision: the thread
+    # path, the remote path, and the pool dispatch that the process executor
+    # uses -- the door that used to skip the check.
+    for door in (engine._prepare_item, engine._remote_precheck, engine._prepared_items):
+        assert "self._decide_before_read(" in inspect.getsource(door), door.__name__
     assert corpus_policy.denied_by("benchmark/x.md", ["benchmark/*"]) == "benchmark/*"
     assert corpus_policy.denied_by("src/x.md", ["benchmark/*"]) is None

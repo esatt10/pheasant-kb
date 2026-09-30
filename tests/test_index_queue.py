@@ -1026,6 +1026,97 @@ def test_nats_terminates_a_task_that_exhausts_its_attempts(nats_queue: Any) -> N
     nats_queue.ack(replay)
 
 
+@nats_broker
+def test_nats_an_acked_task_leaves_the_broker(nats_queue: Any) -> None:
+    """Work-queue retention: the stream holds what is outstanding, not history.
+
+    Created with the default ``limits`` retention and no limits, the stream
+    kept every task ever published -- on the broker's disk, forever.
+    """
+
+    for index in range(5):
+        nats_queue.publish(_task(f"s{index}", id=f"kept-{index}"))
+    while (task := nats_queue.claim("worker")) is not None:
+        nats_queue.ack(task)
+
+    async def stored() -> Any:
+        info = await nats_queue._js.stream_info(nats_queue.stream)
+        return info.state.messages, str(info.config.retention)
+
+    messages, retention = nats_queue._run(stored())
+    assert "workqueue" in retention.lower()
+    assert messages == 0
+    assert nats_queue.depth()[DONE] == 5  # still counted, from the consumer
+
+
+@nats_broker
+def test_nats_dead_letters_a_task_whose_workers_keep_dying(nats_queue: Any) -> None:
+    """A claimer that crashes never nacks, so the cap must hold at claim time.
+
+    The attempt cap lived only in `nack`, and the consumer's `max_deliver` is
+    unlimited, so a task that killed its worker was redelivered forever.
+    """
+
+    js = nats_queue._connect()
+
+    async def fast_redelivery() -> None:
+        from nats.js.api import AckPolicy, ConsumerConfig
+
+        await js.add_consumer(
+            nats_queue.stream,
+            ConsumerConfig(
+                durable_name=nats_queue.durable,
+                filter_subject=nats_queue.subject,
+                ack_policy=AckPolicy.EXPLICIT,
+                ack_wait=1.0,
+            ),
+        )
+
+    nats_queue._run(fast_redelivery())
+    nats_queue.publish(_task("docs", id="poison", max_attempts=2))
+
+    import time as _time
+
+    handed_out: list[int] = []
+    deadline = _time.monotonic() + 12
+    while _time.monotonic() < deadline and nats_queue.depth()[DEAD] == 0:
+        task = nats_queue.claim("worker")
+        if task is not None:
+            handed_out.append(task.attempts)  # the worker "dies": no ack, no nack
+        _time.sleep(1.2)
+
+    assert handed_out == [1, 2]
+    assert nats_queue.depth()[DEAD] == 1
+    assert nats_queue.requeue_dead() == 1
+
+
+def test_nats_depth_refuses_to_report_an_unreachable_broker_as_empty(monkeypatch: Any) -> None:
+    """An empty queue is a reading an autoscaler acts on; an outage is not one.
+
+    It returned zeros -- and before it could, the initial connect sat in the
+    client's own retry loop for minutes.
+    """
+
+    pytest.importorskip("nats", reason="the [queue] extra is optional")
+    import socket as _socket
+    import time as _time
+
+    from pheasant.sync.queue import NatsQueue, QueueUnavailable
+
+    with _socket.socket() as probe:  # a port nothing listens on
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(NatsQueue, "CONNECT_DEADLINE_SECONDS", 1.0)
+    queue = NatsQueue([f"nats://127.0.0.1:{port}"], connect_timeout=0.2)
+    try:
+        started = _time.monotonic()
+        with pytest.raises(QueueUnavailable):
+            queue.depth()
+        assert _time.monotonic() - started < 10
+    finally:
+        queue.close()
+
+
 def _nats_server_binary_available() -> bool:
     import shutil
 

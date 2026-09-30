@@ -647,23 +647,34 @@ class StateStore:
                 self.conn.execute(
                     "DELETE FROM artifact_terms WHERE artifact_id=?", (artifact["id"],)
                 )
-            for chunk in chunks:
-                self.conn.execute(
-                    """INSERT INTO chunks(
-                        id,artifact_id,source_id,chunk_index,heading_path,start_line,
-                        end_line,text,text_hash,summary,token_estimate
-                    )
-                    VALUES(
-                        :id,:artifact_id,:source_id,:chunk_index,:heading_path,
-                        :start_line,:end_line,:text,:text_hash,:summary,:token_estimate
-                    )""",
-                    chunk,
+            if not chunks:
+                return
+            # One `executemany` per table rather than two `execute`s per chunk.
+            # Same statements, same rows, same order -- but on Postgres psycopg
+            # pipelines an `executemany`, so a 30-chunk file is two round
+            # trips instead of sixty, and this runs under the sync mutex on the
+            # sole commit authority. Measured on loopback Postgres, 30 chunks +
+            # 40 terms + 8 symbols per artifact: see
+            # `tests/test_state_store_batching.py` for what it must preserve.
+            title = _basename(artifact["relative_path"] or artifact["path"])
+            path = artifact["relative_path"] or artifact["path"]
+            self.conn.executemany(
+                """INSERT INTO chunks(
+                    id,artifact_id,source_id,chunk_index,heading_path,start_line,
+                    end_line,text,text_hash,summary,token_estimate
                 )
-                self.conn.execute(
-                    """INSERT INTO chunks_fts(
-                        chunk_id,source_id,artifact_id,title,path,heading_path,text
-                    )
-                    VALUES(?,?,?,?,?,?,?)""",
+                VALUES(
+                    :id,:artifact_id,:source_id,:chunk_index,:heading_path,
+                    :start_line,:end_line,:text,:text_hash,:summary,:token_estimate
+                )""",
+                chunks,
+            )
+            self.conn.executemany(
+                """INSERT INTO chunks_fts(
+                    chunk_id,source_id,artifact_id,title,path,heading_path,text
+                )
+                VALUES(?,?,?,?,?,?,?)""",
+                [
                     (
                         chunk["id"],
                         chunk["source_id"],
@@ -672,12 +683,14 @@ class StateStore:
                         # distinct signals so BM25 can weight a filename match
                         # above a body match (see sqlite_store._BM25_WEIGHTS);
                         # storing the same string twice made them one.
-                        _basename(artifact["relative_path"] or artifact["path"]),
-                        artifact["relative_path"] or artifact["path"],
+                        title,
+                        path,
                         chunk.get("heading_path") or "",
                         chunk["text"],
-                    ),
-                )
+                    )
+                    for chunk in chunks
+                ],
+            )
 
     def replace_artifact_enrichment(
         self,
@@ -690,6 +703,7 @@ class StateStore:
             self.conn.execute("DELETE FROM symbols WHERE artifact_id=?", (artifact_id,))
             self.conn.execute("DELETE FROM artifact_terms WHERE artifact_id=?", (artifact_id,))
             seen_terms: set[tuple[str, str, str]] = set()
+            term_rows: list[tuple[Any, ...]] = []
             for index, term in enumerate(terms):
                 key = (
                     term["node_id"],
@@ -699,12 +713,7 @@ class StateStore:
                 if key in seen_terms:
                     continue
                 seen_terms.add(key)
-                self.conn.execute(
-                    """INSERT INTO artifact_terms(
-                        id,artifact_id,source_id,node_id,node_type,term,
-                        normalized_term,weight,metadata_json
-                    )
-                    VALUES(?,?,?,?,?,?,?,?,?)""",
+                term_rows.append(
                     (
                         f"{artifact_id}:term:{index:04d}",
                         artifact_id,
@@ -715,10 +724,20 @@ class StateStore:
                         term["normalized_term"],
                         float(term.get("weight") or 1.0),
                         json.dumps(term.get("metadata") or {}, default=str),
-                    ),
+                    )
                 )
-            for symbol in symbols:
-                self.conn.execute(
+            # Batched for the reason `replace_artifact_chunks` gives.
+            if term_rows:
+                self.conn.executemany(
+                    """INSERT INTO artifact_terms(
+                        id,artifact_id,source_id,node_id,node_type,term,
+                        normalized_term,weight,metadata_json
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?)""",
+                    term_rows,
+                )
+            if symbols:
+                self.conn.executemany(
                     """INSERT INTO symbols(
                         id,artifact_id,source_id,language,symbol_type,name,
                         qualified_name,start_line,end_line,signature,docstring_summary
@@ -727,7 +746,7 @@ class StateStore:
                         :id,:artifact_id,:source_id,:language,:symbol_type,:name,
                         :qualified_name,:start_line,:end_line,:signature,:docstring_summary
                     )""",
-                    symbol,
+                    list(symbols),
                 )
 
     def mark_source_indexed(self, source_id: str, now: str, status: str = "healthy") -> None:

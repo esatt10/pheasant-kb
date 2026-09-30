@@ -396,27 +396,35 @@ class LocalQueue(TaskQueue):
         return counts
 
     def requeue_dead(self) -> int:
-        """Replay dead-lettered tasks after the cause is fixed."""
+        """Replay dead-lettered tasks after the cause is fixed.
+
+        One statement, not a read followed by an ``UPDATE`` per row: the same
+        rows either way, in one commit rather than one per task.
+        """
 
         now = _now()
-        rows = self.state.rows(f"SELECT id FROM {self.TABLE} WHERE status=?", (DEAD,))
-        for row in rows:
-            self.state.execute(
-                f"UPDATE {self.TABLE} SET status=?, attempts=0, owner=NULL, visible_at=?, "
-                "updated_at=? WHERE id=?",
-                (PENDING, _iso(now), _iso(now), str(row["id"])),
-            )
+        rows = self.state.execute_returning(
+            f"UPDATE {self.TABLE} SET status=?, attempts=0, owner=NULL, visible_at=?, "
+            "updated_at=? WHERE status=? RETURNING id",
+            (PENDING, _iso(now), _iso(now), DEAD),
+        )
         return len(rows)
 
     def purge_completed(self, older_than_seconds: float = 86_400.0) -> int:
-        """Keep the table from growing without bound; failures are kept."""
+        """Keep the table from growing without bound; failures are kept.
+
+        One ``DELETE``, for the reason `requeue_dead` gives. The log tier's
+        maintenance pass calls it (`log_queue._purge_completed_batches`),
+        where every batch is a new row. Index tasks need no purge: their ids
+        are content-addressed over (knowledge base, source, mode, payload), so
+        a re-run re-arms an existing row rather than adding one.
+        """
 
         cutoff = _iso(_now() - timedelta(seconds=max(0.0, older_than_seconds)))
-        rows = self.state.rows(
-            f"SELECT id FROM {self.TABLE} WHERE status=? AND updated_at<?", (DONE, cutoff)
+        rows = self.state.execute_returning(
+            f"DELETE FROM {self.TABLE} WHERE status=? AND updated_at<? RETURNING id",
+            (DONE, cutoff),
         )
-        for row in rows:
-            self.state.execute(f"DELETE FROM {self.TABLE} WHERE id=?", (str(row["id"]),))
         return len(rows)
 
 
@@ -431,7 +439,25 @@ class NatsQueue(TaskQueue):
     A local queue is still the default. This buys fan-out across machines
     without a shared database; it does not buy correctness the local queue
     lacks, and it is one more thing to run.
+
+    **A new stream uses work-queue retention**: a task is removed when it is
+    acked, which is what a task is. The stream used to be created with the
+    default ``limits`` retention and no limits, so every task ever published
+    stayed on the broker's disk forever -- 50 of 50 acked tasks still stored,
+    measured against a real server. ``max_age`` would have bounded it too and
+    is the wrong tool: it expires a *pending* task whose backlog outlived it,
+    and the dead letters, which are kept on purpose. JetStream cannot change
+    an existing stream's retention, so a stream created by an earlier release
+    keeps ``limits`` and says so once at connect.
     """
+
+    #: Ceiling on establishing the connection. nats-py retries an initial
+    #: connect ``max_reconnect_attempts`` times (60, two seconds apart), so
+    #: with the broker unreachable a ``/metrics`` scrape or a ``claim`` sat in
+    #: that loop for minutes -- measured: still blocked at 90s. Only the
+    #: *initial* connect is bounded here; reconnecting an established
+    #: connection keeps the client's own policy.
+    CONNECT_DEADLINE_SECONDS = 10.0
 
     def __init__(
         self,
@@ -508,19 +534,38 @@ class NatsQueue(TaskQueue):
     def _connect(self) -> Any:
         with self._loop_lock:
             if self._js is not None:
-                return self._js
+                if self._client is None or not getattr(self._client, "is_closed", False):
+                    return self._js
+                # The client gave up reconnecting (its own retry budget ran
+                # out during a long outage). A cached handle to it would fail
+                # every call until the process restarted; start again.
+                self._js = None
+                self._subscription = None
+                self._dead_subscription = None
 
             async def setup() -> Any:
+                import asyncio
+
                 import nats
 
-                self._client = await nats.connect(
-                    servers=self.servers, connect_timeout=self.connect_timeout
-                )
+                try:
+                    self._client = await asyncio.wait_for(
+                        nats.connect(servers=self.servers, connect_timeout=self.connect_timeout),
+                        timeout=max(self.connect_timeout, self.CONNECT_DEADLINE_SECONDS),
+                    )
+                except Exception as exc:
+                    raise QueueUnavailable(
+                        f"JetStream at {', '.join(self.servers)} is unreachable: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
                 js = self._client.jetstream()
                 try:
+                    from nats.js.api import RetentionPolicy
+
                     await js.add_stream(
                         name=self.stream,
                         subjects=[self.subject, self.dead_subject],
+                        retention=RetentionPolicy.WORK_QUEUE,
                     )
                 except Exception:
                     # Already provisioned by another indexer, which is the normal
@@ -528,6 +573,14 @@ class NatsQueue(TaskQueue):
                     logger.debug("JetStream stream %s already exists", self.stream)
                     try:
                         info = await js.stream_info(self.stream)
+                        retention = str(getattr(info.config, "retention", "") or "")
+                        if "limits" in retention.lower():
+                            logger.info(
+                                "JetStream stream %s uses limits retention, so acked "
+                                "tasks are never removed; recreate it (drained) to "
+                                "get work-queue retention",
+                                self.stream,
+                            )
                         subjects = set(getattr(info.config, "subjects", None) or [])
                         wanted = {self.subject, self.dead_subject}
                         if not wanted.issubset(subjects):
@@ -608,19 +661,33 @@ class NatsQueue(TaskQueue):
                 return None
             return messages[0] if messages else None
 
-        message = self._run(pull())
-        if message is None:
-            return None
-        raw = json.loads(message.data.decode("utf-8"))
-        return IndexTask(
-            id=str(raw.get("id") or uuid.uuid4().hex),
-            source_id=str(raw["source"]),
-            mode=str(raw.get("mode") or "incremental"),
-            payload=dict(raw.get("payload") or {}),
-            attempts=int(message.metadata.num_delivered or 1),
-            max_attempts=int(raw.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
-            handle=message,
-        )
+        for _ in range(CLAIM_ATTEMPTS):
+            message = self._run(pull())
+            if message is None:
+                return None
+            raw = json.loads(message.data.decode("utf-8"))
+            task = IndexTask(
+                id=str(raw.get("id") or uuid.uuid4().hex),
+                source_id=str(raw["source"]),
+                mode=str(raw.get("mode") or "incremental"),
+                payload=dict(raw.get("payload") or {}),
+                attempts=int(message.metadata.num_delivered or 1),
+                max_attempts=int(raw.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
+                handle=message,
+            )
+            if task.attempts > task.max_attempts:
+                # Delivered more times than it may be attempted, so earlier
+                # deliveries ended without a nack: the claimer died holding
+                # it. The attempt cap lived only in `nack`, which a crash
+                # never reaches, so a task that kills its worker was
+                # redelivered forever -- the consumer's `max_deliver` is
+                # unlimited. The same check `LocalQueue.claim` makes, and the
+                # same outcome: a dead letter someone can replay, rather than
+                # a consumer-side cap that stops delivering without one.
+                self.nack(task, "exceeded max_attempts before running")
+                continue
+            return task
+        return None
 
     def ack(self, task: IndexTask) -> None:
         if task.handle is not None:
@@ -683,19 +750,24 @@ class NatsQueue(TaskQueue):
         ``num_ack_pending`` is what is being worked on right now.
         """
 
-        js = self._connect()
-
         async def info() -> Any:
+            js = self._js
             main = await js.consumer_info(self.stream, self.durable)
             dead = await js.consumer_info(self.stream, self.dead_durable)
             return main, dead
 
         try:
+            self._connect()
             self._subscribe()
             self._subscribe_dead()
             consumer, dead_consumer = self._run(info())
-        except Exception:  # pragma: no cover - broker unreachable at scrape time
-            return {PENDING: 0, INFLIGHT: 0, DONE: 0, DEAD: 0}
+        except Exception as exc:
+            # Raised, never reported as zeros. An empty queue is a reading an
+            # autoscaler acts on -- it scales the fleet down -- and it used to
+            # be what an unreachable broker produced, so an outage looked like
+            # a drained backlog. Every caller already treats an exception as
+            # "unknown": `/metrics` leaves the gauge out of that scrape.
+            raise QueueUnavailable(f"could not read JetStream depth: {exc}") from exc
         return {
             PENDING: int(getattr(consumer, "num_pending", 0) or 0),
             INFLIGHT: int(getattr(consumer, "num_ack_pending", 0) or 0),
