@@ -46,7 +46,8 @@ of them lowers the grounding bar:
    lists the passage numbers that may be cited, and shows a worked reply of
    the shape being drawn; the provider is asked for JSON where it can be.
 2. The budget is sized for a model that thinks before it writes, and a reply
-   cut off before any text is asked again with twice the room.
+   cut off before any text is asked again with room to think
+   (``LLM.complete``, for every call the assistant makes).
 3. ``assistant.visual_dialect`` reads the spellings models actually use onto
    the grammar before the check — renaming, never adding a claim.
 4. A reply that still cannot be *read* gets one repair turn saying what was
@@ -62,7 +63,7 @@ from __future__ import annotations
 from typing import Any
 
 from pheasant.assistant import visual_dialect, visual_prompt, visual_specs
-from pheasant.assistant.providers import OutputBudgetExhausted, ProviderError
+from pheasant.assistant.providers import ProviderError
 from pheasant.assistant.visual_export import to_markdown, to_mermaid
 from pheasant.assistant.visual_prompt import DIAGRAM_SYSTEM
 from pheasant.assistant.visual_specs import KINDS, MAX_NODES, normalize_kind
@@ -90,10 +91,6 @@ MIN_GROUNDED = 0.5
 #: A model that does not think writes what it writes and stops; the cap costs
 #: it nothing.
 DIAGRAM_OUTPUT_TOKENS = 8192
-
-#: The one retry a reply cut off before any text gets, as a multiple of the
-#: first budget.
-BUDGET_RETRY_FACTOR = 2
 
 #: Transport failures a drawing call absorbs rather than raising: a visual is
 #: an addition to an answer, and must never be the thing that fails it.
@@ -158,20 +155,15 @@ def build_diagram(
 def _ask(llm: Any, system: str, turn: str, budget: int) -> tuple[str | None, str | None]:
     """One drawing turn: ``(reply, None)`` or ``(None, why there is none)``.
 
-    A reply cut off before any text is asked again once with more room;
-    anything else is reported, never raised.
+    A reply cut off before any text is retried with room to think by
+    :meth:`LLM.complete` itself; anything that still fails is reported here,
+    never raised.
     """
 
-    for attempt in range(2):
-        try:
-            return llm.complete(system, turn, max_output_tokens=budget, json_mode=True), None
-        except OutputBudgetExhausted as exc:
-            if attempt:
-                return None, str(exc)
-            budget *= BUDGET_RETRY_FACTOR
-        except _CALL_FAILURES as exc:
-            return None, str(exc) or type(exc).__name__
-    return None, "no reply"
+    try:
+        return llm.complete(system, turn, max_output_tokens=budget, json_mode=True), None
+    except _CALL_FAILURES as exc:
+        return None, str(exc) or type(exc).__name__
 
 
 def _read(

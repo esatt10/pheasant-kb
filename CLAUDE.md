@@ -149,7 +149,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 146 pytest modules, offline by design
+└── tests/                     ← 147 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -884,6 +884,15 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   *ungrounded* one; and, last, the graph's own edges with `fallback_from:
   "model"`. `pheasant_assistant_visual_model_total{provider,outcome}` is the
   signal a model switch moves. `tests/test_visual_robustness.py`.
+- **A cap is for the reply; `LLM.complete` adds the room to think.** Every
+  call site sizes `max_output_tokens` for the words it wants back (300 for a
+  grade, 120 for a rewrite). On `OutputBudgetExhausted` the call is retried
+  with `REASONING_HEADROOM` on top and the model is remembered per process,
+  so later calls get the room up front and a model that does not think is
+  sent exactly its cap. Structured calls share one reader
+  (`assistant.replies`) and ask for JSON mode; a best-effort call that fell
+  back names why in its step (`LLM.last_failure`). Do not "fix" a small cap
+  at a call site. `tests/test_reasoning_models.py`.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
@@ -1948,7 +1957,13 @@ Each of these cost real time. They are listed because the shape recurs.
   also broke every reply that said `source`/`target` or wrapped its JSON in a
   sentence: a strict *spelling* check is a decline that reads like a
   grounding judgement and is not one. `tests/test_visual_robustness.py`
-  drives the real provider wire, so it fails if the cap comes back.
+  drives the real provider wire, so it fails if the cap comes back. The same
+  cap shape sat under the planner (400), the grader (300), the rewrite (120)
+  and the long-answer outline (700), and each fell back without a word. The
+  grader's fallback was `{"sufficient": True}`, so a thinking model silently
+  turned off every follow-up retrieval round while each step's trace read as
+  a success. The room to think lives in `LLM.complete` now, because the
+  alternative is re-sizing every call site for every model.
 - **An `except` whose reason stopped being true catches only what it was not
   written for.** `_sync_all_queued` swallowed every publish failure at debug
   as "already queued" — right when a duplicate `INSERT` raised, and dead once

@@ -200,6 +200,14 @@ def _http_json(
         raise ProviderError(f"{exc.code} from provider: {detail}") from exc
     except urllib.error.URLError as exc:  # pragma: no cover - network path
         raise ProviderError(f"could not reach provider: {exc.reason}") from exc
+    except TimeoutError as exc:
+        # A read that times out after the connection opened is not a URLError,
+        # and a model that thinks first is the kind that takes long enough.
+        raise ProviderError(f"provider did not answer within {timeout:g}s") from exc
+    except OSError as exc:  # pragma: no cover - network path
+        raise ProviderError(f"connection to provider failed: {exc}") from exc
+    except ValueError as exc:
+        raise ProviderError("provider returned a response that is not JSON") from exc
 
 
 def complete(

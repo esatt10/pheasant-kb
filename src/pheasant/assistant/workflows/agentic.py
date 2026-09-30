@@ -48,7 +48,6 @@ Requires ``pip install 'pheasant-kb[agent]'``.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -68,6 +67,7 @@ from pheasant.assistant.chat import (
     system_prompt_for,
 )
 from pheasant.assistant.providers import ProviderError, collect_token_usage
+from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep
 
 logger = logging.getLogger(__name__)
@@ -379,8 +379,13 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
             f"Question: {question}"
             + (f"\nStandalone form: {searched}" if searched != question else ""),
             max_output_tokens=400,
+            json_mode=True,
         )
         parsed = _parse_json(raw)
+        if parsed is None:
+            # Say so: a planner that quietly never runs looks exactly like one
+            # that ran and chose the literal question.
+            notes = f"planner unavailable ({_why_not(llm, raw)}); {notes}"
         if parsed:
             planned = [str(q).strip() for q in parsed.get("queries", []) if str(q).strip()]
             if planned:
@@ -565,8 +570,15 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
         GRADER_SYSTEM + GRADER_CRITERIA.get(str(state.get("intent") or ""), ""),
         f"Question: {state['question']}\n\nPassages:\n{evidence}",
         max_output_tokens=300,
+        json_mode=True,
     )
-    parsed = _parse_json(raw) or {"sufficient": True}
+    parsed = _parse_json(raw)
+    # An unusable grade ends the loop, as it always has — retrying rounds on a
+    # grader that cannot answer would only spend them — but it says so. A
+    # grader that silently read as "sufficient" is how a model switch turned
+    # off every follow-up retrieval round without anything showing it.
+    unavailable = None if parsed is not None else _why_not(llm, raw)
+    parsed = parsed or {"sufficient": True}
     grade = {
         "sufficient": bool(parsed.get("sufficient", True)),
         "missing": str(parsed.get("missing") or ""),
@@ -579,7 +591,9 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
             *state.get("steps", []),
             WorkflowStep(
                 name="grade",
-                detail="evidence is sufficient"
+                detail=f"grader unavailable ({unavailable}); answering with what was found"
+                if unavailable
+                else "evidence is sufficient"
                 if grade["sufficient"]
                 else f"missing: {grade['missing'] or 'unclear'}",
                 passages=len(passages),
@@ -1024,21 +1038,13 @@ def _merge_passages(existing: list, incoming: list) -> list:
 
 
 def _parse_json(raw: str | None) -> dict | None:
-    """Parse a JSON object out of a model reply, tolerating code fences."""
-    if not raw:
-        return None
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text).strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return parsed if isinstance(parsed, dict) else None
+    """Parse a JSON object out of a model reply (``assistant.replies``)."""
+    return json_object(raw)
+
+
+def _why_not(llm: Any, raw: str | None) -> str:
+    """Why an optional model call produced nothing usable, in a few words."""
+    failure = getattr(llm, "last_failure", None)
+    if failure:
+        return short_reason(str(failure))
+    return "reply was not JSON" if raw else "no reply"

@@ -165,7 +165,7 @@ none of it lowers the grounding bar:
 |---|---|
 | Prompt (`assistant.visual_prompt`) | States the reply contract at both ends of the call, lists the passage numbers that may be cited, and shows a worked reply of the shape being drawn |
 | Provider | Asks for JSON where the wire can say so (OpenAI `response_format`, Gemini `responseMimeType`), and drops the field if an endpoint rejects it |
-| Budget | 8,192 output tokens (or `assistant.max_output_tokens`, if higher) — room to think *and* write; a reply cut off before any text is asked again with twice the room |
+| Budget | 8,192 output tokens (or `assistant.max_output_tokens`, if higher) — room to think *and* write; a reply cut off before any text is asked again with 8,192 more (see "Models that think first" below) |
 | Dialect (`assistant.visual_dialect`) | Reads the spellings models use onto the grammar before the check: renames and restructures, never adds a citation |
 | Repair | A reply that still cannot be *read* gets one more turn saying what was wrong. A visual declined as *ungrounded* does not — asking for citations until the check passes would be asking the model to pass the check |
 | Fallback | If the model still cannot draw, the visual is the graph's own edges between the cited sources, with `fallback_from: "model"` and a `note` saying why |
@@ -174,6 +174,24 @@ none of it lowers the grounding bar:
 model half went — `drawn`, `repaired`, `ungrounded`, `unreadable`,
 `no_reply`, `fallback`. After changing `assistant.model`, a rise in
 `unreadable` or `no_reply` is a prompt or budget problem, not a corpus one.
+
+### Models that think first
+
+This applies to every model call the assistant makes, not only visuals. A
+reasoning model spends hidden tokens out of the same output cap its reply
+comes from, and the assistant's small structured calls (the planner, the
+grader, the follow-up rewrite, a long answer's outline and sections) have
+caps sized for the reply alone. When a model stops at its cap without writing
+anything, the call is retried once with 8,192 more tokens. The process then
+remembers that model (per provider, endpoint and model id) and gives every
+later call that room from the start. A model that does not think is sent
+exactly the cap it always was.
+
+When one of those optional calls still fails, the answer's step trace says
+so and why: `planner unavailable (…)`, `grader unavailable (…); answering
+with what was found`, `model rewrite unavailable (…)`. A grader that cannot
+answer ends the retrieval loop, as it always has, but no longer reports the
+evidence as sufficient.
 
 `visual.mermaid` is the same visual as Mermaid text where Mermaid has the
 shape (flowchart, sequence, mindmap, timeline, quadrantChart, xychart);

@@ -16,9 +16,8 @@ fails on the next is exactly this module's absence.
 So this module does two things, both deterministic and neither of which can
 make a claim a model did not make:
 
-* :func:`extract` finds the JSON object in a reply — inside a fence, after a
-  preamble, beside a ``<think>`` block, with a trailing comma, or written as a
-  Python literal.
+* :func:`extract` finds the spec among the JSON objects in a reply
+  (``assistant.replies`` finds the objects, for every JSON-shaped call).
 * :func:`normalize` rewrites the spellings below onto the grammar's own,
   *before* the check runs. It renames and restructures; it never invents a
   citation, a node or an edge. An element with no citation in any spelling
@@ -29,11 +28,10 @@ Pure functions over plain data; no model, no I/O.
 
 from __future__ import annotations
 
-import ast
-import json
 import re
 from typing import Any
 
+from pheasant.assistant.replies import json_objects
 from pheasant.assistant.visual_specs import normalize_kind
 
 #: Keys a wrapped reply puts the spec under: ``{"diagram": {...}}``.
@@ -90,9 +88,6 @@ _DETAIL_KEYS = ("detail", "description", "details", "summary", "note")
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _ARROW_RE = re.compile(r"^\s*(.+?)\s*(?:-+>|→|=>)\s*(.+?)\s*$")
-_THINK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE)
-_FENCE_RE = re.compile(r"```[A-Za-z0-9_-]*\s*\n?(.*?)```", re.DOTALL)
-_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
 #: How deep a nested ``children`` tree is followed; a model does not draw a
 #: tree deeper than this, and a cycle in a malformed reply must terminate.
@@ -110,12 +105,7 @@ def extract(raw: str | None) -> dict[str, Any] | None:
     be read for its answer.
     """
 
-    if not raw:
-        return None
-    text = _THINK_RE.sub("", str(raw)).strip()
-    candidates: list[dict[str, Any]] = []
-    for block in [text, *_FENCE_RE.findall(text)]:
-        candidates.extend(_objects_in(block))
+    candidates = json_objects(raw)
     if not candidates:
         return None
     for candidate in candidates:
@@ -123,42 +113,6 @@ def extract(raw: str | None) -> dict[str, Any] | None:
         if _looks_like_spec(unwrapped):
             return unwrapped
     return _unwrap(candidates[0])
-
-
-def _objects_in(text: str) -> list[dict[str, Any]]:
-    """Every top-level JSON object ``text`` contains, lenient forms last."""
-
-    text = text.strip()
-    found: list[dict[str, Any]] = []
-    for attempt in (text, _TRAILING_COMMA_RE.sub(r"\1", text)):
-        if found:
-            break
-        decoder = json.JSONDecoder()
-        index = attempt.find("{")
-        while index != -1:
-            try:
-                value, end = decoder.raw_decode(attempt, index)
-            except json.JSONDecodeError:
-                index = attempt.find("{", index + 1)
-                continue
-            if isinstance(value, dict):
-                found.append(value)
-            elif isinstance(value, list):
-                found.extend(item for item in value if isinstance(item, dict))
-            index = attempt.find("{", end)
-    if not found:
-        # A Python literal (single quotes, True/None) is what some models
-        # write when they forget which language they are in. ``literal_eval``
-        # evaluates literals only, never code.
-        start, end = text.find("{"), text.rfind("}")
-        if start != -1 and end > start:
-            try:
-                value = ast.literal_eval(text[start : end + 1])
-            except (ValueError, SyntaxError, MemoryError, RecursionError):
-                value = None
-            if isinstance(value, dict):
-                found.append(value)
-    return found
 
 
 def _unwrap(value: dict[str, Any]) -> dict[str, Any]:

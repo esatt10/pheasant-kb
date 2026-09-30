@@ -11,7 +11,7 @@ Each has a test here, and most drive the real provider wire through the one
   first) spends hidden tokens out of that same cap, returned an empty 200 with
   ``finish_reason: length``, and the visual reported "the model did not
   return a diagram". The budget now fits a thinking model, and a reply cut
-  off before any text is asked again with twice the room;
+  off before any text is asked again with room to think;
 * **the JSON was wrapped, fenced, preceded by reasoning, or spelled in
   another dialect** (``source``/``target``, ``citations``, nested
   ``children``, ids with spaces, a table of rows holding their cells). Every
@@ -36,7 +36,7 @@ from typing import Any
 import pytest
 
 from pheasant.assistant import answering, providers, visual_dialect, visual_prompt, visuals
-from pheasant.assistant.llm import LLM
+from pheasant.assistant.llm import LLM, REASONING_HEADROOM, forget_thinking_models
 from pheasant.assistant.providers import OutputBudgetExhausted, ProviderError
 from pheasant.assistant.visual_specs import KINDS
 from pheasant.telemetry import metrics
@@ -69,6 +69,15 @@ CANONICAL = {
         {"from": "test", "to": "ship", "cites": [2]},
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_models() -> Any:
+    """What one test teaches the process about a model must not leak into the next."""
+
+    forget_thinking_models()
+    yield
+    forget_thinking_models()
 
 
 class _Scripted(LLM):
@@ -176,7 +185,7 @@ def test_a_reply_cut_off_before_any_text_is_asked_again_with_more_room(
     caps = [payload["max_completion_tokens"] for payload in seen]
     assert caps == [
         visuals.DIAGRAM_OUTPUT_TOKENS,
-        visuals.DIAGRAM_OUTPUT_TOKENS * visuals.BUDGET_RETRY_FACTOR,
+        visuals.DIAGRAM_OUTPUT_TOKENS + REASONING_HEADROOM,
     ]
 
 
