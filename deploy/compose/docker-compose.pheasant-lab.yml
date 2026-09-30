@@ -1,0 +1,324 @@
+# The role-split fleet, in Compose.
+#
+#   docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up -d \
+#     --scale indexer=1 --scale worker=4
+#
+# `docker-compose.yml` (one container, role `all`) remains the default and
+# needs no infrastructure. This file is the other trade: Postgres, NATS
+# JetStream, a shared state volume, and four tiers that scale independently.
+# It is worth it past
+# the point where one container stops being enough — see
+# docs/how-to/capacity-planning.md — and not before.
+#
+# The tiers and why they are separate:
+#
+#   api      serves search/UI/MCP, never indexes or loads the full graph
+#   graph    owns the resident graph and authenticated internal graph queries
+#   indexer  watches, schedules and drains the durable NATS queue
+#   worker   parse/chunk only — the tier you scale, with --scale worker=N
+#   logger   drains the observation queue (profile: observability)
+#
+# Scale workers, not indexers. Extra indexers are automatic hot standbys, not
+# throughput: the graph, vectors and graph FTS are one coordinated commit
+# stream. More commit capacity comes from another shard/stack.
+name: pheasant-lab
+
+#
+# Four secrets, four boundaries, and deliberately no sharing between them:
+#
+#   PHEASANT_API_TOKEN            callers -> the region's API
+#   PHEASANT_GRAPH_SERVICE_TOKEN  API/MCP replicas -> the internal graph API
+#   PHEASANT_INDEX_WORKER_TOKEN   the indexer -> the preparation workers
+#   PHEASANT_INGESTION_SERVICE_TOKEN
+#                                 API replicas -> the indexer's landing service
+#
+# The fourth is what makes manual upload work here. The api tier mounts /state
+# read-only below, so the UI drop zone and `ingest_submit` have nowhere to put
+# their bytes; rather than give the serving tier write access, an upload is
+# forwarded to the indexer, which performs the identical local write. That is
+# the same move this role already makes for indexing (publish, do not run) and
+# for graph reads (ask the service), and it is why no tier here needs a
+# writable landing mount. Holding this token means being able to put bytes into
+# the corpus, so it is its own value: `serve` refuses to start when it resolves
+# equal to the worker token, for the reason the graph token already had.
+#
+# The graph token used to be wired to the worker token's value, which read as
+# a convenience and was a trust-boundary collapse: workers are the least
+# trusted tier in the fleet and hold the indexing token by necessity, so one
+# value meant compromising any worker also yielded the credential for the
+# internal graph API — which serves the whole graph. `serve` now refuses to
+# start when the two resolve to the same value.
+x-fleet-env: &fleet-env
+  PHEASANT_CONFIG: /config/pheasant.yaml
+  PHEASANT_DATABASE_URL: postgresql://pheasant:${POSTGRES_PASSWORD:-pheasant}@postgres:5432/pheasant
+  PHEASANT_API_TOKEN: ${PHEASANT_API_TOKEN:?set a random API token; see deploy/compose/.env.example}
+  PHEASANT_INDEX_WORKER_TOKEN: ${PHEASANT_INDEX_WORKER_TOKEN:?set a shared worker token}
+  PHEASANT_GRAPH_SERVICE_TOKEN: ${PHEASANT_GRAPH_SERVICE_TOKEN:?set a graph token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
+  PHEASANT_INGESTION_SERVICE_TOKEN: ${PHEASANT_INGESTION_SERVICE_TOKEN:?set an ingestion token; it must differ from PHEASANT_INDEX_WORKER_TOKEN}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GH_TOKEN: ${GH_TOKEN:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=100"]
+    mem_limit: 1280m
+    cpus: 2.0
+    environment:
+      POSTGRES_USER: pheasant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pheasant}
+      POSTGRES_DB: pheasant
+    volumes:
+      - pheasant-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pheasant"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    mem_limit: 256m
+    cpus: 0.5
+    volumes:
+      - pheasant-nats:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8222/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  db-init:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    restart: "no"
+    entrypoint: ["python", "-c"]
+    command:
+      - "from pathlib import Path; from pheasant.cli import _engine; engine = _engine(Path('/config/pheasant.yaml')); engine.close()"
+    environment: *fleet-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../../pheasant.yaml:/config/pheasant.yaml:ro
+      - pheasant-state:/state
+      - pheasant-exports:/exports
+
+  workspace-init:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    # Named-volume roots are created as root by Docker. Pheasant itself runs
+    # as uid/gid 10001, so create the managed-clone parent and grant both
+    # entries before a URL-backed source asks an indexer to clone. Creating a
+    # child also prevents Docker's empty-volume copy-up from restoring the
+    # image's root-owned /workspace metadata after this initializer exits.
+    command: ["mkdir -p /workspace/sources && chown 10001:10001 /workspace /workspace/sources && chmod 0755 /workspace /workspace/sources"]
+    volumes:
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
+
+  api:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    build:
+      context: ../..
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # The API no longer owns graph residency. Keep capacity for vector/text
+    # result sets and assistant fan-out, without paying one graph per replica.
+    # Repeated 40-request/c8 hybrid stress plateaus around 1.0 GiB after
+    # allocator warm-up; 2 GiB leaves one full warm working set of headroom.
+    mem_limit: 2048m
+    cpus: 1.0
+    command: ["serve", "--role", "api"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      graph:
+        condition: service_healthy
+    ports:
+      # Loopback by default even though the API now requires a bearer token:
+      # a token is authentication, not a perimeter, and Docker's iptables
+      # rules bypass most host firewalls. Widen this behind an ingress.
+      - "${PHEASANT_BIND:-127.0.0.1}:${PHEASANT_PORT:-8765}:8765"
+    environment: *fleet-env
+    volumes:
+      - ../../pheasant.yaml:/config/pheasant.yaml:ro
+      # Read-only, and it stays that way: the indexer is the only writer of
+      # /state. The API needs manifests/vectors, graph reads go to the graph
+      # service, and manual uploads are forwarded to the indexer rather than
+      # written here — so this tier writes nothing under /state at all.
+      - pheasant-state:/state:ro
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
+      - pheasant-memory:/memory
+      # The Parquet extract, and the one volume meant to be read by
+      # something that is not pheasant. Swap the named volume for a host
+      # path to hand it straight to an outside service:
+      #   - ${PHEASANT_EXPORTS_PATH:-./exports}:/exports
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/ready || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  graph:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    build:
+      context: ../..
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # Reload is an atomic generation swap and briefly holds old + new graphs.
+    # Size this tier for that peak; API replicas remain graph-free.
+    mem_limit: 2560m
+    cpus: 1.5
+    command: ["serve", "--role", "graph"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    environment: *fleet-env
+    volumes:
+      - ../../pheasant.yaml:/config/pheasant.yaml:ro
+      - pheasant-state:/state:ro
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
+      - pheasant-memory:/memory:ro
+      - pheasant-exports:/exports:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  indexer:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    build:
+      context: ../..
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    mem_limit: 2560m
+    cpus: 2.0
+    command: ["serve", "--role", "indexer"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    environment: *fleet-env
+    volumes:
+      - ../../pheasant.yaml:/config/pheasant.yaml:ro
+      - pheasant-state:/state
+      # URL-managed repositories need to clone, fetch and fast-forward here.
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
+      - pheasant-memory:/memory
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # The log tier. Behind a profile, so `docker compose up` brings up exactly
+  # the fleet it always did:
+  #
+  #   docker compose --profile observability -f docker-compose.scale.yml up
+  #
+  # It exists so that persisting observations, rolling them to Parquet and
+  # dropping expired partitions never happen on a process that is either
+  # answering a request or holding the indexer's sync lock. Requires
+  # observability.interactions.enabled and .queue.enabled in fleet.yaml --
+  # `serve --role logger` refuses to start otherwise rather than idling while
+  # reporting itself healthy.
+  #
+  # Scale it on pheasant_log_queue_depth. One replica handles a lot: the work
+  # is a multi-row insert per batch, and batches are 500 observations by
+  # default.
+  logger:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    build:
+      context: ../..
+    profiles: ["observability"]
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # Small: it holds one batch and one Parquet row-group at a time. The
+    # DuckDB writer is capped at a 512MB spill limit and a 5,000-row group,
+    # which is what keeps this flat rather than proportional to a day's
+    # traffic.
+    mem_limit: 1024m
+    cpus: 1.0
+    command: ["serve", "--role", "logger"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    environment: *fleet-env
+    volumes:
+      - ../../pheasant.yaml:/config/pheasant.yaml:ro
+      # Read-only: the ledger lives in Postgres in this topology, and cold
+      # storage is /exports. Nothing here writes the state volume.
+      - pheasant-state:/state:ro
+      # Writable: this is the only process that writes cold partitions.
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.12.14}
+    build:
+      context: ../..
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
+    command: ["worker", "--transport", "grpc", "--port", "8766", "--max-workers", "2"]
+    # No ports: reached only by the indexer, over the Compose network, by
+    # service name. The coordinator's shared gRPC channel uses client-side
+    # round-robin across every IP returned for the scaled service; without
+    # that policy gRPC's pick_first default pins a whole sync to one replica.
+    # Its own block rather than the shared anchor, and that is the whole
+    # point: a worker parses bytes it is handed, so the database URL, the
+    # model keys, the graph token and the API token are all things it can only
+    # ever leak. `pheasant worker` refuses to start holding any of them.
+    environment:
+      PHEASANT_CONFIG: /config/pheasant.yaml
+      # The only secret a worker gets.
+      PHEASANT_INDEX_WORKER_TOKEN: ${PHEASANT_INDEX_WORKER_TOKEN:?set a shared worker token}
+    volumes:
+      - ./worker.yaml:/config/pheasant.yaml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8766), 5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pheasant-state:
+  pheasant-workspace:
+  pheasant-memory:
+  pheasant-exports:
+  pheasant-pg:
+  pheasant-nats:

@@ -83,7 +83,7 @@ export function ChatPanel({
   const [useMemory, setUseMemory] = useState(true);
 
   const ask = useMutation({
-    mutationFn: (question: string) => {
+    mutationFn: ({ id, question }: { id: string; question: string }) => {
       setProgress([]);
       return api.chatStream(
         {
@@ -102,17 +102,17 @@ export function ChatPanel({
         // the pending placeholder in the same turn.
         (answer) => {
           setProgress([]);
-          dispatch({ type: "answered", question, answer });
+          dispatch({ type: "answered", id, answer });
         },
       );
     },
-    onSuccess: (answer, question) => {
+    onSuccess: (answer, { id }) => {
       setProgress([]);
-      dispatch({ type: "answered", question, answer });
+      dispatch({ type: "answered", id, answer });
     },
-    onError: (error: Error, question) => {
+    onError: (error: Error, { id }) => {
       setProgress([]);
-      dispatch({ type: "ask-failed", question, error: error.message });
+      dispatch({ type: "ask-failed", id, error: error.message });
     },
   });
 
@@ -132,9 +132,10 @@ export function ChatPanel({
   const submit = (text: string) => {
     const question = text.trim();
     if (!question || ask.isPending) return;
-    dispatch({ type: "ask", id: `${Date.now()}-${turns.length}`, question });
+    const id = `${Date.now()}-${turns.length}`;
+    dispatch({ type: "ask", id, question });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    ask.mutate(question);
+    ask.mutate({ id, question });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

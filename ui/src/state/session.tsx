@@ -115,8 +115,8 @@ export type SessionAction =
   | { type: "set-workflow"; workflow: string | null }
   | { type: "set-draft"; text: string }
   | { type: "ask"; id: string; question: string }
-  | { type: "answered"; question: string; answer: ChatAnswer }
-  | { type: "ask-failed"; question: string; error: string }
+  | { type: "answered"; id: string; answer: ChatAnswer }
+  | { type: "ask-failed"; id: string; error: string }
   | { type: "clear-view" }
   | { type: "new-conversation" }
   | { type: "new-topic" }
@@ -202,10 +202,12 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       const surfaced = surfacedFrom(action.answer);
       return {
         ...state,
-        turns: fillTurn(state.turns, action.question, (turn) => ({
-          ...turn,
-          answer: action.answer,
-        })),
+        // Streaming chat first dispatches the text with visual.status=pending,
+        // then dispatches the same turn again when its visual is ready. Replace
+        // that turn by id so the completed MCP App result reaches the UI.
+        turns: state.turns.map((turn) =>
+          turn.id === action.id ? { ...turn, answer: action.answer, error: undefined } : turn,
+        ),
         answer: action.answer,
         // Asking is the action that re-aims the canvas: filter to what the
         // answer actually surfaced, centered on its strongest citation.
@@ -219,10 +221,9 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "ask-failed":
       return {
         ...state,
-        turns: fillTurn(state.turns, action.question, (turn) => ({
-          ...turn,
-          error: action.error,
-        })),
+        turns: state.turns.map((turn) =>
+          turn.id === action.id && !turn.answer ? { ...turn, error: action.error } : turn,
+        ),
       };
     case "set-pane-width":
       return action.pane === "rail"
@@ -277,16 +278,6 @@ export function historyFor(state: Pick<SessionState, "turns" | "contextFrom">): 
     .filter((turn) => turn.answer && !turn.error)
     .slice(-MAX_HISTORY_TURNS)
     .map((turn) => ({ question: turn.question, answer: turn.answer?.answer ?? "" }));
-}
-
-function fillTurn(
-  turns: ChatTurn[],
-  question: string,
-  update: (turn: ChatTurn) => ChatTurn,
-): ChatTurn[] {
-  return turns.map((turn) =>
-    turn.question === question && !turn.answer && !turn.error ? update(turn) : turn,
-  );
 }
 
 /** Citation targets first (ranked), then any extra focus nodes the agent named. */
