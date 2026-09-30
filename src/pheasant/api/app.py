@@ -17,8 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.readiness_routes import register_readiness_routes
+from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -114,50 +116,6 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
     ("s3", "S3 bucket", "An S3-compatible bucket prefix (experimental).", "unused"),
 )
-
-
-class SearchRequest(BaseModel):
-    # Step 32.2 — optional caller identity; enforced only when
-    # security.acl_enforced is on. The caller (router / deployment
-    # perimeter) authenticates; the region enforces visibility.
-    principal: str | None = None
-    principal_groups: list[str] = []
-    knowledge_base: str | None = None
-    query: str
-    mode: str = "hybrid"
-    max_results: int = 10
-    source_name: str | None = None
-    # Restrict to one part of a document's extracted taxonomy, matched against
-    # the heading breadcrumb. Only meaningful for sources with taxonomy on.
-    section: str | None = None
-    # Step 33.6 — the same retrieval criteria the MCP tool has always had.
-    # They lived only on the MCP surface, so the same region answered a query
-    # differently depending on which protocol asked; the router, which reaches
-    # this region over HTTP, could not scope a search at all.
-    exclude_sources: list[str] | None = None
-    node_types: list[str] | None = None
-    min_score: float | None = None
-    # Scope by the *kind* of source (repository, notion, slack, ...) rather
-    # than by name. A caller that does not already know every source in the
-    # region can still say "only our wikis" or "nothing from git". Each hit
-    # reports its own under `provenance.source_type`.
-    source_types: list[str] | None = None
-    exclude_source_types: list[str] | None = None
-    # How this region's agent memory takes part: "auto" (default), "off",
-    # "only", "prefer", or an object with scopes/subject/current_only/as_of.
-    memory: dict | str | None = None
-    # Pin this search to a sealed snapshot. The region verifies it still
-    # stands there and refuses with SNAPSHOT_DRIFTED if it does not — it holds
-    # one version of its corpus, so the guarantee is that two runs naming one
-    # snapshot cannot silently have seen different corpora.
-    snapshot_id: str | None = None
-    # The instant memory validity is evaluated at, echoed into the lineage
-    # even where the region holds no memory — an arm that ran with memory off
-    # has to be able to record that it did.
-    as_of: str | None = None
-    # The caller's correlation id, echoed so a result joins to the ledger row
-    # and the span that produced it.
-    trace_id: str | None = None
 
 
 class MemoryEnableRequest(BaseModel):
@@ -259,29 +217,6 @@ class PromoteSourceRequest(BaseModel):
 class ConfigWriteRequest(BaseModel):
     config: dict | None = None
     yaml_text: str | None = None
-
-
-class ChatRequest(BaseModel):
-    question: str
-    # Opaque handle for a key the user pasted this session. Never the key.
-    session_id: str | None = None
-    mode: str = "hybrid"
-    max_results: int | None = None
-    source_name: str | None = None
-    # Scope the answer to (or away from) kinds of source. Same axis as
-    # `POST /search`'s, applied to every retrieval the answering loop runs.
-    source_types: list[str] | None = None
-    exclude_source_types: list[str] | None = None
-    principal: str | None = None
-    principal_groups: list[str] = []
-    # Override assistant.workflow for this one question ("simple",
-    # "agentic", or any registered plugin name).
-    workflow: str | None = None
-    # Per-request workflow knobs, merged over assistant.workflow_options.
-    options: dict | None = None
-    # How this region's agent memory takes part in the answer: "auto", "off",
-    # "only", "prefer", or the full policy object (Step 33.10).
-    memory: dict | str | None = None
 
 
 class EmbeddingsRequest(BaseModel):
@@ -3801,33 +3736,42 @@ def create_app(
         the `Request` that carried it.
         """
 
-        payload = retrieval_service.search(
-            services,
-            retrieval_service.SearchRequest(
-                query=req.query,
-                knowledge_base=req.knowledge_base,
-                mode=req.mode,
-                max_results=req.max_results,
-                source_name=req.source_name,
-                section=req.section,
-                principal=req.principal,
-                principal_groups=req.principal_groups,
-                memory=req.memory,
-                exclude_sources=req.exclude_sources,
-                node_types=req.node_types,
-                min_score=req.min_score,
-                source_types=req.source_types,
-                exclude_source_types=req.exclude_source_types,
-                snapshot_id=req.snapshot_id,
-                as_of=req.as_of,
-                trace_id=req.trace_id,
-            ),
-        )
+        payload = retrieval_service.search(services, req.service_request(req.query))
         record_retrieval(
             request,
             query=req.query,
             payload=payload,
             criteria={"mode": req.mode, **(payload.get("criteria") or {})},
+        )
+        return payload
+
+    @app.post("/search/batch")
+    def search_batch(req: BatchSearchRequest, request: Request) -> dict:
+        """Transport adapter. The operation is `services.retrieval.search_batch`.
+
+        Recorded as one interaction with no query text: the ledger's formation
+        rules read a query's words against what it retrieved, and a batch's
+        concatenated queries are not a query anybody asked. The merged hits are
+        still recorded as served.
+        """
+
+        payload = retrieval_service.search_batch(
+            services,
+            retrieval_service.BatchSearchRequest(
+                queries=tuple(req.queries),
+                criteria=req.service_request(""),
+                per_query=req.per_query,
+            ),
+        )
+        record_retrieval(
+            request,
+            query=None,
+            payload=payload,
+            criteria={
+                "mode": req.mode,
+                "batch_queries": len(req.queries),
+                **(payload.get("criteria") or {}),
+            },
         )
         return payload
 
@@ -4319,6 +4263,14 @@ def create_app(
                 graph_obj,
                 [str(item) for item in parameters.get("node_ids") or []],
                 int(parameters.get("limit") or 12),
+            )
+        elif operation == "figures":
+            from pheasant.graph.figures import collect_figures
+
+            result = collect_figures(
+                graph_obj,
+                [str(item) for item in parameters.get("node_ids") or []],
+                int(parameters.get("limit") or 8),
             )
         elif operation == "memory_coverage":
             from pheasant.memory.bridge import ABOUT_EDGE
@@ -4990,159 +4942,12 @@ def create_app(
     def assistant_key_revoke(session_id: str | None = None) -> dict:
         return {"revoked": app.state.session_keys.revoke(session_id)}
 
-    @app.post("/assistant/chat")
-    def assistant_chat(req: ChatRequest, request: Request) -> dict:
-        from pheasant.assistant.chat import answer_question
-
-        if not config.assistant.enabled:
-            raise HTTPException(status_code=403, detail="The assistant is disabled")
-        if not req.question.strip():
-            raise HTTPException(status_code=400, detail="question must not be empty")
-        answer = answer_question(
-            req.question,
-            search=search,
-            knowledge_base=config.knowledge_base_id,
-            config=config,
-            graph=serving_graph,
-            state=state,
-            credential=app.state.session_keys.get(req.session_id),
-            env=dict(os.environ),
-            mode=req.mode,
-            max_results=req.max_results,
-            source_name=req.source_name,
-            source_types=req.source_types,
-            exclude_source_types=req.exclude_source_types,
-            principal=req.principal,
-            principal_groups=req.principal_groups,
-            workflow=req.workflow,
-            options=req.options,
-            memory=req.memory,
-        )
-        # A chat turn is the richest evidence the ledger gets: the question, the
-        # passages that answered it, and the answer itself. `citations` is what
-        # `extract_results` reads for ids and paths.
-        record_retrieval(
-            request,
-            query=req.question,
-            payload=answer,
-            criteria={"mode": req.mode, "workflow": req.workflow} if req.mode else None,
-            answer=str(answer.get("answer") or "") or None,
-        )
-        return answer
-
-    @app.post("/assistant/chat/stream")
-    def assistant_chat_stream(req: ChatRequest, request: Request):
-        """The same answer as ``/assistant/chat``, with progress as it happens.
-
-        Server-sent events: one ``step`` per workflow stage the moment it
-        finishes, then a single ``answer`` (or ``error``) and the stream
-        closes. The agent loop can take a while over a large index, and a
-        client that shows "planning… retrieved 35 passages… grading" is
-        waiting rather than wondering. The work runs in a worker thread and
-        the steps arrive through a queue, so a slow reader can never stall the
-        workflow itself.
-
-        ``publish`` below is deliberately an **async** generator polling the
-        queue with ``get_nowait``, not a sync generator blocking on
-        ``events.get()`` — the same reasoning as ``/jobs/stream`` above.
-        Starlette runs a sync generator in the anyio thread pool and cannot
-        interrupt it, so a client that disconnects (or just an agentic
-        workflow that runs long) leaves that worker thread — and its
-        thread-pool token — held until ``run()``'s ``finally`` finally puts
-        the ``None`` sentinel. Measured: ten abandoned streams pinned ten of
-        the pool's forty tokens for the whole ~8s a stubbed workflow took to
-        finish. An async generator never touches the pool at all.
-        """
-
-        import asyncio
-        import json as json_module
-        import queue as queue_module
-        import threading
-
-        from starlette.responses import StreamingResponse
-
-        from pheasant.assistant.chat import answer_question
-
-        if not config.assistant.enabled:
-            raise HTTPException(status_code=403, detail="The assistant is disabled")
-        if not req.question.strip():
-            raise HTTPException(status_code=400, detail="question must not be empty")
-
-        events: queue_module.Queue = queue_module.Queue()
-        credential = app.state.session_keys.get(req.session_id)
-        environ = dict(os.environ)
-        # Captured here, in the request, because `run()` executes on a worker
-        # thread after this route has already returned its response object.
-        parent_event = observed(request)
-        # Monotonic, like every other duration here: a wall-clock delta across a
-        # generation that can take a minute is exactly where an NTP step shows up.
-        answer_started = time.perf_counter()
-
-        def run() -> None:
-            try:
-                answer = answer_question(
-                    req.question,
-                    search=search,
-                    knowledge_base=config.knowledge_base_id,
-                    config=config,
-                    graph=serving_graph,
-                    state=state,
-                    credential=credential,
-                    env=environ,
-                    mode=req.mode,
-                    max_results=req.max_results,
-                    source_name=req.source_name,
-                    source_types=req.source_types,
-                    exclude_source_types=req.exclude_source_types,
-                    principal=req.principal,
-                    principal_groups=req.principal_groups,
-                    workflow=req.workflow,
-                    options=req.options,
-                    on_step=lambda step: events.put(
-                        {
-                            "type": "step",
-                            "name": step.name,
-                            "detail": step.detail,
-                            "passages": step.passages,
-                            "duration_seconds": step.duration_seconds,
-                            "input_tokens": step.input_tokens,
-                            "output_tokens": step.output_tokens,
-                        }
-                    ),
-                )
-                _record_stream_answer(parent_event, req, answer, answer_started)
-                events.put({"type": "answer", "answer": answer})
-            except Exception as exc:  # surfaced to the client, never a 500 mid-stream
-                logger.exception("streaming chat failed")
-                events.put({"type": "error", "error": str(exc)})
-            finally:
-                events.put(None)
-
-        threading.Thread(target=run, name="pheasant-chat-stream", daemon=True).start()
-
-        poll_seconds = 0.25
-
-        async def publish():
-            while True:
-                try:
-                    item = events.get_nowait()
-                except queue_module.Empty:
-                    await asyncio.sleep(poll_seconds)
-                    continue
-                if item is None:
-                    return
-                yield f"data: {json_module.dumps(item)}\n\n"
-
-        return StreamingResponse(
-            publish(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                # nginx sits in front of this in the compose stack and would
-                # otherwise buffer the whole stream into one write.
-                "X-Accel-Buffering": "no",
-            },
-        )
+    register_assistant_routes(
+        app,
+        services=services,
+        session_keys=lambda: app.state.session_keys,
+        record_stream_answer=_record_stream_answer,
+    )
 
     # ------------------------------------------------------------------
     # Retrieval criteria. The same knobs an MCP client can override per

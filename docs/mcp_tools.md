@@ -75,9 +75,13 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `promote_memory_candidate` | Admit one proposal, making it an ordinary record through the same write path `memory_write` uses. |
 | `reject_memory_candidate` | Decline one proposal, permanently. The rule that proposed it will not suggest it again. |
 | `search_context` | Search graph/search state in `text` (SQLite full-text over chunk content and paths), `graph` (node/relationship labels, types and attribute values), `vector` (embedding similarity; requires `search.embeddings.enabled`, otherwise contributes nothing), or `hybrid` (merged and re-ranked) mode. Also accepts **retrieval criteria** an agent can set per call instead of relying on how the region was configured: `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`. `source_types` scopes by the *kind* of source (`repository`, `notion`, `slack`, …) rather than by name, which is what you want when you do not already know every source in the region; every hit reports its own as `provenance.source_type`, and `describe_retrieval` lists the types present. All optional and additive — an existing caller is unaffected. `snapshot_id` pins the search to a sealed snapshot: the region answers from that state or refuses with `SNAPSHOT_DRIFTED`, naming the sections that moved. `as_of` is the instant memory validity is evaluated at, echoed into the lineage even where the region holds no memory — which is where a caller most needs to be told it did nothing. |
+| `search_context_batch` | Bulk context retrieval: up to 25 `queries` in one call, at most 1,000 hits in total (`queries × max_results`). Every other argument means exactly what it means on `search_context` and applies to every query, and each query is answered exactly as it would be alone. `results` is the merged context — each passage once, ordered **by rank across queries** (every query's best hit, then every query's second), so truncating it keeps coverage of every query; each hit's `batch` block names the query indexes that found it and its best rank. `searches` holds each query's own payload unless `per_query` is false. A `snapshot_id` pin is verified once for the whole batch. `counts.overlap` is how many hits a query shared with an earlier one — high overlap means the queries are paraphrases rather than facets. |
 | `describe_retrieval` | Report how this knowledge base retrieves and what an agent may override per call: default mode and result count, which modes actually work here (`vector` is only offered when a vector index exists), the sources present, the `assistant.retrieval` settings, and one line of help per knob. Call this before guessing at parameters for an unfamiliar region. |
 | `preview_retrieval` | Run retrieval criteria and report how they differ from the standing configuration — both result sets plus the delta (added / dropped / kept). Lets an agent test a setting against real content before anyone writes it into `pheasant.yaml`. Read-only: nothing is persisted. |
 | `get_relevant_files` | Return files likely needed for a coding task. |
+| `ask_knowledge_base` | A synthesized, cited answer from the configured workflow (extractive with no model). Takes `history` (the conversation so far, `[{question, answer}]`, oldest first — the region keeps no chat state), `depth` (`short` / `medium` / `long`, or unset to read it off the question) and `visual` (`diagram` / `image` / `none`), plus the retrieval criteria and `memory` `search_context` takes. The answer carries `route`, numbered `figures` for `[fig:n]` markers, and `visual`. See [answer length, conversations, visuals and figures](how-to/conversations-and-visuals.md). |
+| `create_visual` | A visual grounded in the knowledge base, in whatever shape the request needs, or the images it holds. `request` says what to draw and from what viewpoint; `node_ids` (up to 12 chunk or file ids) draws from exactly those passages — "visualize this passage", or redraw the same evidence as another shape — and without them the region searches for the request. `kind`: `flow`, `sequence`, `hierarchy`, `mindmap`, `concept`, `cycle`, `timeline`, `swimlane`, `layers`, `groups`, `table`, `quadrant`, `chart`, `canvas`, the UML `class`, `activity`, `state` (state machine) and `usecase`, or `image` (everyday names such as "org chart", "2x2" or "class diagram" work too). Every node, edge, lane and cell lists the passages (`cites`) that support it; an unsupported element is `inferred`, a chart value no cited passage states is unverified, and a mostly-inferred visual is declined with a reason. `visual.mermaid` is the Mermaid export where Mermaid has the shape (`visual.markdown` for a table); `visual.redraw` carries the `node_ids` to redraw it. With no model connected the visual is the graph's own edges. |
+| `get_image` | An indexed image as MCP **image content** plus its caption and path, so a vision-capable agent can look at what a document shows. `node_id` comes from an answer's `figures`, an `image` search hit, or `create_visual`. Raster formats only. Also readable as the resource `pheasant://knowledge-bases/{kb_id}/media/{node_id}`. |
 | `get_graph_neighbors` | Traverse graph neighbors with true depth-aware BFS and optional edge-type filters (two hops by default). |
 | `get_file_summary` | Return a compact summary and provenance for a file. |
 | `get_repo_map` | Return repository structure, important modules, and dependencies. |
@@ -142,6 +146,18 @@ same way medoid promotion does. Off by default (`memory.synthesis.enabled`)
 and **never automatic** — only this explicit call runs it, so the scheduler
 beat never makes a network request. Returns `{"skipped": reason}` when
 disabled, no memory source is configured, or no model is reachable.
+
+## MCP Apps
+
+`ask_knowledge_base`, `create_visual` and `get_image` declare
+`_meta.ui.resourceUri: "ui://pheasant/knowledge-view.html"` (plus the deprecated
+flat `ui/resourceUri`). The resource is served as `text/html;profile=mcp-app`
+(MCP Apps, protocol 2026-01-26): a host that supports apps renders the answer,
+diagram or image in a sandboxed iframe, and one that does not reads the same
+JSON. The view is self-contained, loads nothing from the network, never parses
+a result as HTML, and calls back only through the host: `get_image` for an
+image, `create_visual` for its **Redraw as** row. pheasant's web UI hosts the
+same file.
 
 ## Resources
 

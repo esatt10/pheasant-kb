@@ -67,6 +67,13 @@ class WorkflowRequest:
     #: a workflow that ignores it still works, and an exception raised by the
     #: callback must never fail the answer.
     on_step: Callable[[WorkflowStep], None] | None = None
+    #: Earlier turns (``assistant.conversation.Turn``), oldest first. Empty for
+    #: a question with no conversation, which answers exactly as before.
+    history: list[Any] = field(default_factory=list)
+    #: What to *search* for when ``question`` is a follow-up that cannot be
+    #: retrieved on its own. ``None`` means search for the question as asked.
+    #: The question *answered* is always ``question``.
+    search_question: str | None = None
 
     def report(self, step: WorkflowStep) -> None:
         """Publish one completed step. Never raises."""
@@ -108,6 +115,10 @@ class WorkflowResult:
     # The agent's trace. Empty for single-shot workflows.
     steps: list[WorkflowStep] = field(default_factory=list)
     workflow: str = "simple"
+    #: Images the cited documents show, numbered for ``[fig:n]`` markers.
+    figures: list[dict] = field(default_factory=list)
+    #: How the question was read (``assistant.routing.Route.as_dict``).
+    route: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

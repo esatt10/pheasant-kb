@@ -8,6 +8,12 @@ synthesizes, without one it returns the retrieved passages attributed.
 The prompt, citation numbering and fact collection are shared with the
 agentic workflow (see :mod:`pheasant.assistant.chat`), so switching
 workflows changes *how much work* is done, not what an answer looks like.
+
+It honours the router's depth as far as one call can: ``medium`` fetches
+more and asks for sections; ``long`` is answered as ``medium`` and the step
+list says so, because an outline-then-sections answer is several model calls
+and "one call" is the whole promise of this workflow. A follow-up keeps the
+previous question's evidence (``assistant.conversation``).
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from pheasant.assistant import conversation, routing
 from pheasant.assistant.chat import (
     build_prompt,
     classify_intent,
@@ -35,26 +42,74 @@ class SimpleWorkflow:
     name = "simple"
 
     def run(self, request: WorkflowRequest, retriever: Any, llm: Any) -> WorkflowResult:
+        intent = str(request.options.get("intent") or "").strip().lower()
+        intent_pinned = intent in ("knowledge", "procedural")
+        if not intent_pinned:
+            intent, intent_why = classify_intent(request.question)
+        else:
+            intent_why = "pinned by configuration"
+        route = routing.route_question(
+            request.question,
+            intent=(intent, intent_why),
+            depth=request.options.get("depth"),
+            intent_pinned=intent_pinned,
+        )
+        depth = route.depth
+        options = routing.depth_options(depth, dict(request.options), set(request.options))
+        # `max_context_passages` also arrives from `assistant.retrieval` for the
+        # agentic workflow's sake, so it widens this search only when the depth
+        # asked for more — a short answer fetches exactly what it always did.
+        limit = int(request.max_results)
+        if depth != "short":
+            limit = max(limit, int(routing.DEPTH_PROFILES[depth]["max_context_passages"]))
+
+        steps: list[WorkflowStep] = []
+        if depth != "short":
+            # Only when the route differs from what this workflow always did,
+            # so a plain question's trace is the one it has always been.
+            note = "; answered as medium in one call" if depth == "long" else ""
+            steps.append(
+                WorkflowStep(name="classify", detail=f"{depth} answer — {route.why['depth']}{note}")
+            )
+            request.report(steps[-1])
+
         retrieve_started = time.perf_counter()
         passages = retriever.search(
-            request.question,
+            request.search_question or request.question,
             mode=request.mode,
-            limit=request.max_results,
+            limit=limit,
             source_name=request.source_name,
             principal=request.principal,
             principal_groups=request.principal_groups,
         )
-        citations = passages_to_citations(passages, request.max_results)
+        carried_from = conversation.carried_question(request.history)
+        if request.search_question and carried_from:
+            passages = conversation.carry(
+                passages,
+                retriever.search(
+                    carried_from,
+                    mode=request.mode,
+                    limit=limit,
+                    source_name=request.source_name,
+                    principal=request.principal,
+                    principal_groups=request.principal_groups,
+                ),
+            )
+        citations = passages_to_citations(passages, limit)
         node_ids = [c["node_id"] for c in citations if c.get("node_id")]
-        facts = retriever.facts(node_ids, int(request.options.get("max_facts", 12)))
-        steps = [
+        facts = retriever.facts(node_ids, int(options.get("max_facts", 12)))
+        figures = _figures(retriever, citations)
+        steps.append(
             WorkflowStep(
                 name="retrieve",
-                detail=f"{request.mode} search for the question as asked",
+                detail=f"{request.mode} search for the question as asked"
+                if not request.search_question
+                else f"{request.mode} search for “{request.search_question}”, keeping the "
+                "previous question's sources",
                 passages=len(citations),
                 duration_seconds=time.perf_counter() - retrieve_started,
             )
-        ]
+        )
         # Progress is reported by every workflow, not just the agentic one:
         # a caller streaming the answer should not have to know which one ran.
         request.report(steps[-1])
@@ -62,15 +117,12 @@ class SimpleWorkflow:
         # One pass, but not a starved one: the same file-level content and the
         # same intent-shaped prompt the agentic graph uses. What "single pass"
         # buys you is fewer model calls, not a worse answer per call.
-        intent = str(request.options.get("intent") or "").strip().lower()
-        if intent not in ("knowledge", "procedural"):
-            intent, _why = classify_intent(request.question)
-
         answer_mode = "extractive"
         error: str | None = None
+        answering_depth = "medium" if depth == "long" else depth
         if llm is not None and citations:
             read_started = time.perf_counter()
-            documents = hydrate_citations(retriever, citations, request.options)
+            documents = hydrate_citations(retriever, citations, options)
             if documents:
                 steps.append(
                     WorkflowStep(
@@ -85,8 +137,16 @@ class SimpleWorkflow:
                 answer_started = time.perf_counter()
                 with collect_token_usage() as usage:
                     answer = llm.complete(
-                        system_prompt_for(intent),
-                        build_prompt(request.question, citations, facts, documents),
+                        system_prompt_for(intent, answering_depth, figures=bool(figures)),
+                        build_prompt(
+                            request.question,
+                            citations,
+                            facts,
+                            documents,
+                            history_text=conversation.history_block(request.history),
+                            figures=figures,
+                        ),
+                        max_output_tokens=options.get("max_output_tokens"),
                     )
                 answer_mode = "llm"
                 steps.append(
@@ -126,7 +186,19 @@ class SimpleWorkflow:
             model=llm.model_id if llm else None,
             error=error,
             search_mode=request.mode,
-            counts={"passages": len(passages), "citations": len(citations), "intent": intent},
+            counts={
+                "passages": len(passages),
+                "citations": len(citations),
+                "intent": intent,
+                "depth": depth,
+            },
             steps=steps,
             workflow=self.name,
+            figures=figures,
+            route=route.as_dict(),
         )
+
+
+def _figures(retriever: Any, citations: list[dict]) -> list[dict]:
+    collect = getattr(retriever, "figures", None)
+    return collect(citations) if callable(collect) and citations else []

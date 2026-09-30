@@ -717,7 +717,9 @@ sources: []
                     assert client.server_info.version == __version__
                     assert client.instructions, "the model-facing instructions must still be sent"
                     tools = await client.list_tools()
-                    assert {"search_context", "memory_write"} <= {t.name for t in tools.tools}
+                    assert {"search_context", "search_context_batch", "memory_write"} <= {
+                        t.name for t in tools.tools
+                    }
     finally:
         app.state.engine.close()
 

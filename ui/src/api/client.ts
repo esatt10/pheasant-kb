@@ -5,7 +5,10 @@ import type {
   MemoryListResponse,
   MemoryWriteResponse,
   AssistantStatus,
+  AnswerDepth,
   ChatAnswer,
+  HistoryTurn,
+  VisualResponse,
   ConfigResponse,
   EmbeddingsStatus,
   ExplainResponse,
@@ -384,9 +387,19 @@ export const api = {
       workflow?: string | null;
       options?: Record<string, unknown>;
       memory?: string | null;
+      /** Earlier turns, oldest first: the region keeps no chat state. */
+      history?: HistoryTurn[];
+      depth?: AnswerDepth | null;
+      visual?: "none" | "diagram" | "image" | null;
     },
     onStep: (step: { name: string; detail: string; passages: number }) => void,
     signal?: AbortSignal,
+    /**
+     * Called with the answer the moment its text exists, and again when a
+     * visual the route asked for has been drawn — the server sends the text
+     * first and the picture after, so the reader is not kept waiting for it.
+     */
+    onAnswer?: (answer: ChatAnswer) => void,
   ): Promise<ChatAnswer> => {
     const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
       method: "POST",
@@ -425,12 +438,68 @@ export const api = {
         if (!line) continue;
         const event = JSON.parse(line.slice(5).trim());
         if (event.type === "step") onStep(event);
-        else if (event.type === "answer") answer = event.answer as ChatAnswer;
-        else if (event.type === "error") throw new Error(event.error);
+        else if (event.type === "answer") {
+          answer = event.answer as ChatAnswer;
+          onAnswer?.(answer);
+        } else if (event.type === "visual" && answer !== null) {
+          const current = answer as ChatAnswer;
+          answer = { ...current, visual: event.visual, steps: event.steps ?? current.steps };
+          onAnswer?.(answer);
+        } else if (event.type === "error") throw new Error(event.error);
       }
     }
     if (!answer) throw new Error("the answer stream closed before an answer arrived");
     return answer;
+  },
+
+  /** A grounded diagram of named passages, or the images they hold. */
+  visualize: (body: {
+    request: string;
+    node_ids?: string[];
+    kind?: string | null;
+    session_id?: string | null;
+    source_name?: string | null;
+  }) =>
+    request<VisualResponse>("/assistant/visual", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /**
+   * An indexed image as an object URL. Fetched rather than put in an `<img
+   * src>` because an `<img>` cannot carry the API token a secured region
+   * requires; the caller revokes the URL when it is done with it.
+   */
+  mediaObjectUrl: async (nodeId: string): Promise<string> => {
+    const response = await fetch(`${API_BASE}/media${qs({ node_id: nodeId })}`, {
+      headers: requestHeaders(),
+    });
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    return URL.createObjectURL(await response.blob());
+  },
+  /** An indexed image as MCP image content (`{data, mimeType}`), for the app bridge. */
+  mediaBase64: async (nodeId: string): Promise<{ data: string; mimeType: string }> => {
+    const response = await fetch(`${API_BASE}/media${qs({ node_id: nodeId })}`, {
+      headers: requestHeaders(),
+    });
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    const blob = await response.blob();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error("could not read the image"));
+      reader.readAsDataURL(blob);
+    });
+    return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: blob.type || "image/png" };
+  },
+  /** The MCP App view, to host in a sandboxed frame exactly as an MCP host would. */
+  knowledgeView: async (): Promise<string> => {
+    const response = await fetch(`${API_BASE}/assistant/apps/knowledge-view`, {
+      headers: requestHeaders(),
+    });
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    return response.text();
   },
 
   // Semantic search (embeddings)

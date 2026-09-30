@@ -2,9 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { AssistantStatus, ChatAnswer } from "../api/types";
-import { useSession } from "../state/session";
+import type {
+  AnswerDepth,
+  AssistantStatus,
+  ChatAnswer,
+  Citation,
+  VisualResponse,
+} from "../api/types";
+import { historyFor, useSession } from "../state/session";
 import { AnswerBody } from "./AnswerBody";
+import { McpAppFrame } from "./McpAppFrame";
 import { SourceStrip } from "./SourceStrip";
 
 export type { ChatTurn } from "../state/session";
@@ -26,7 +33,19 @@ const STEP_LABELS: Record<string, string> = {
   replan: "Evidence was thin — searching again…",
   synthesize: "Writing the answer…",
   verify: "Verifying citations…",
+  context: "Reading the question in context…",
+  classify: "Reading the question…",
+  outline: "Outlining a long answer…",
+  sections: "Writing the sections…",
+  visual: "Drawing the visual…",
 };
+
+const DEPTHS: { value: AnswerDepth | "auto"; label: string; title: string }[] = [
+  { value: "auto", label: "Auto length", title: "Let each question decide how long its answer is" },
+  { value: "short", label: "Short", title: "A direct answer" },
+  { value: "medium", label: "Medium", title: "An overview in a few sections" },
+  { value: "long", label: "Long", title: "An outlined, sectioned write-up (slower)" },
+];
 
 const SUGGESTIONS = [
   "What is this knowledge base about?",
@@ -45,7 +64,10 @@ export function ChatPanel({
   // store, so leaving for Sources or Settings and coming back finds the thread
   // exactly where it was — including a half-typed question.
   const { state, dispatch } = useSession();
-  const { turns, draft, sourceFilter, sourceTypeFilter, workflow } = state;
+  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth } = state;
+  // The earlier turns a question is sent with. The region keeps no chat
+  // state, so this is what makes "and what about the second one?" answerable.
+  const history = historyFor(state);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Keyed by turn id rather than a single ref: the effect below always needs
   // *the newest turn's* element, and turns re-render with new array
@@ -71,8 +93,17 @@ export function ChatPanel({
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
+          history,
+          depth: answerDepth,
         },
         (step) => setProgress((prev) => [...prev, { name: step.name, detail: step.detail }]),
+        undefined,
+        // The text lands as soon as it exists; a visual follows and replaces
+        // the pending placeholder in the same turn.
+        (answer) => {
+          setProgress([]);
+          dispatch({ type: "answered", question, answer });
+        },
       );
     },
     onSuccess: (answer, question) => {
@@ -160,7 +191,13 @@ export function ChatPanel({
                 </div>
               </div>
             ) : turn.answer ? (
-              <AnswerTurn answer={turn.answer} onCitationClick={onCitationClick} />
+              <AnswerTurn
+                answer={turn.answer}
+                onCitationClick={onCitationClick}
+                onAsk={submit}
+                sessionId={sessionId}
+                sourceName={sourceFilter}
+              />
             ) : (
               <div className="msg">
                 <span className="thinking">
@@ -229,6 +266,37 @@ export function ChatPanel({
           {sourceFilter ? <span className="pill pill--accent">scoped to {sourceFilter}</span> : null}
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>
+          ) : null}
+          <select
+            className="composer__depth"
+            value={answerDepth ?? "auto"}
+            title={DEPTHS.find((d) => d.value === (answerDepth ?? "auto"))?.title}
+            onChange={(event) =>
+              dispatch({
+                type: "set-answer-depth",
+                depth: event.target.value === "auto" ? null : (event.target.value as AnswerDepth),
+              })
+            }
+            aria-label="Answer length"
+          >
+            {DEPTHS.map((depth) => (
+              <option key={depth.value} value={depth.value} title={depth.title}>
+                {depth.label}
+              </option>
+            ))}
+          </select>
+          {history.length > 0 ? (
+            <span className="composer__context" title="Earlier turns sent with your next question">
+              continuing from {history.length} earlier turn{history.length === 1 ? "" : "s"}
+              <button
+                type="button"
+                className="btn btn--small"
+                onClick={() => dispatch({ type: "new-topic" })}
+                title="Answer the next question on its own; the thread stays visible"
+              >
+                New topic
+              </button>
+            </span>
           ) : null}
           <label className="composer__memory" title="Let remembered assertions inform the answer">
             <input
@@ -299,25 +367,76 @@ function AgentTrace({ steps }: { steps: NonNullable<ChatAnswer["steps"]> }) {
 function AnswerTurn({
   answer,
   onCitationClick,
+  onAsk,
+  sessionId,
+  sourceName,
 }: {
   answer: ChatAnswer;
   onCitationClick: (nodeId: string | undefined) => void;
+  onAsk: (text: string) => void;
+  sessionId: string | null;
+  sourceName: string | null;
 }) {
   const byIndex = new Map(answer.citations.map((c) => [c.index, c]));
+  // A visual asked for after the fact — of the whole answer, or of one
+  // passage. Held per turn: it belongs to this answer, not the conversation.
+  const [drawn, setDrawn] = useState<VisualResponse | null>(null);
+  const draw = useMutation({
+    mutationFn: (citations: Citation[]) =>
+      api.visualize({
+        request: answer.question,
+        node_ids: citations
+          .map((citation) => citation.chunk_id ?? citation.node_id)
+          .filter((id): id is string => Boolean(id))
+          .slice(0, 12),
+        session_id: sessionId,
+        source_name: sourceName,
+      }),
+    onSuccess: setDrawn,
+  });
+  const cited = answer.citations.filter((citation) => citation.used);
+  const chosen = drawn?.visual ?? answer.visual ?? null;
+  // An image gallery repeats nothing the answer already shows inline: the
+  // figures the text names are drawn in place, so only the rest belong here.
+  const visual =
+    chosen?.type === "images" && (chosen.figures ?? []).every((figure) => figure.shown)
+      ? null
+      : chosen;
+  const visualCitations = drawn ? drawn.citations : answer.citations;
   return (
     <div className="msg">
       <div className="msg__answer">
         <AnswerBody
           text={answer.answer}
           onCite={(index) => onCitationClick(byIndex.get(index)?.node_id)}
+          figures={answer.figures ?? []}
+          onFigure={(figure) => onCitationClick(figure.node_id)}
         />
       </div>
+      {visual ? (
+        <div className="msg__visual">
+          <McpAppFrame
+            result={{ visual, citations: visualCitations, figures: answer.figures ?? [] }}
+            onAsk={onAsk}
+            title={visual.diagram?.title ?? "Visual"}
+          />
+        </div>
+      ) : null}
       {answer.citations.length > 0 ? (
-        <SourceStrip citations={answer.citations} onSelect={onCitationClick} />
+        <SourceStrip
+          citations={answer.citations}
+          onSelect={onCitationClick}
+          onVisualize={(citation) => draw.mutate([citation])}
+        />
       ) : null}
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
       <div className="msg__meta">
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
+        {answer.route && answer.route.depth !== "short" ? (
+          <span className="pill" title={answer.route.why?.depth}>
+            {answer.route.depth}
+          </span>
+        ) : null}
         {answer.mode === "llm" ? (
           <span>
             {answer.provider}
@@ -334,6 +453,18 @@ function AnswerTurn({
             <span>{answer.facts.length} graph facts</span>
           </>
         ) : null}
+        {answer.citations.length > 0 ? (
+          <button
+            type="button"
+            className="btn btn--small"
+            disabled={draw.isPending}
+            onClick={() => draw.mutate(cited.length ? cited : answer.citations)}
+            title="A diagram whose every element cites one of these passages"
+          >
+            {draw.isPending ? "Drawing…" : "Draw a diagram"}
+          </button>
+        ) : null}
+        {draw.isError ? <span className="error">· {(draw.error as Error).message}</span> : null}
         {answer.error ? <span className="error">· {answer.error}</span> : null}
       </div>
     </div>

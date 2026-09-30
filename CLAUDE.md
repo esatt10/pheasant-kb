@@ -99,10 +99,13 @@ pheasant-kb/
 │   │                            slack, confluence, imap
 │   ├── ingestion/             ← pipeline, chunking, content_types, taxonomy,
 │   │                            extractor (7 doc formats), captioner,
-│   │                            transcriber, office, msdoc
+│   │                            transcriber, office, msdoc, media (image
+│   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
 │   │                            sql (the serving read surface), builder,
-│   │                            enrichment, capacity, traversal
+│   │                            enrichment, capacity, traversal,
+│   │                            media_links (documents -> images they show),
+│   │                            figures (what an answer can show)
 │   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
 │   │                            graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
@@ -122,10 +125,18 @@ pheasant-kb/
 │   │                            code and a retryable flag), retrieval,
 │   │                            graph, assistant, ingestion (submission and
 │   │                            receipts), snapshots (seal and the drift
-│   │                            refusal)
-│   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools)
-│   ├── api/app.py             ← the HTTP surface
-│   ├── assistant/             ← grounded answering + workflows
+│   │                            refusal), media (image bytes by node)
+│   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
+│   │                            assistant_tools (answer, visuals, images),
+│   │                            apps/knowledge_view.html (the MCP App view)
+│   ├── api/app.py             ← the HTTP surface (+ per-plane routers:
+│   │                            assistant_routes, readiness_routes, …)
+│   ├── assistant/             ← grounded answering + workflows: answering
+│   │                            (around every workflow), routing (depth,
+│   │                            visual, shape), conversation, longform,
+│   │                            visuals, visual_specs (the shape grammar),
+│   │                            visual_uml (class/activity/state/use case),
+│   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host
 │   ├── security/              ← path_policy (what may be read),
@@ -135,7 +146,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 132 pytest modules, offline by design
+└── tests/                     ← 140 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -820,6 +831,55 @@ guard.
   for that reason; the *contract* is not, because a 404 there is
   indistinguishable from an old build that has none.
   `docs/stress-test-readiness.md`.
+
+### Answering: length, conversations, visuals, figures
+
+`services.assistant.answer` is one operation behind `POST /assistant/chat`, its
+stream, and MCP `ask_knowledge_base` — they had drifted (HTTP refused when
+`assistant.enabled` was off and MCP answered; the stream dropped `memory`).
+Around whichever workflow runs, `assistant.answering` applies the parts every
+workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`.
+
+- **Three axes, none costs a call to decide.** Intent (existing), **depth**
+  (`short` — the unchanged default, so baselines stay comparable — `medium`,
+  `long`) and **visual** (`none`, `diagram`, `image`), read by rules
+  (`assistant.routing`, with a labelled set in `tests/test_intent_routing.py`)
+  and overruled by the planner's existing JSON only when unpinned. "Show me
+  the X diagram" is `image` (a picture the corpus holds) and "draw a diagram
+  of X" is `diagram`; the verb and the article are the difference.
+- **Long answers are outlined, then written section by section** from only
+  each section's passages under their *original* numbers (so `verify_node`
+  still works), in parallel under a deadline; a failed or late section is
+  written from its passages and the trace says so (`assistant.longform`).
+- **The region keeps no chat state.** The caller sends `history`; a follow-up
+  is rewritten into a standalone *search* question (model when connected,
+  joined to the previous question otherwise), the previous question is
+  **re-searched, never fetched by the ids a caller sends** (that would bypass
+  ACL), and earlier answers reach the prompt with `[n]` stripped. No history
+  is a byte-identical prompt, asserted.
+- **A visual is grounded or declined, in any shape.** The model returns a
+  spec in one of eighteen kinds (`assistant.visual_specs`: flow, sequence,
+  hierarchy, mindmap, concept, cycle, timeline, swimlane, layers, groups,
+  table, quadrant, chart, canvas, and UML class, activity, state and use case
+  in `assistant.visual_uml`) whose every node, edge, lane and table cell
+  `cites` passages — UML pseudo-nodes (start, end, fork/join, choice) are
+  notation and exempt, in both directions; `validate_spec` drops unknown citations, marks uncited
+  elements `inferred`, marks a chart value no cited passage states as
+  unverified, and declines a mostly-inferred visual. The question names the
+  shape (routing) or the model picks; `visual.redraw` lets a viewer redraw the
+  same passages as another kind through `create_visual`. It reads the whole
+  documents the answer read (`answering.visual_documents`), never 500-character
+  previews. No model: the graph's own edges. Never markup from model output —
+  each kind has a renderer in the view; Mermaid/Markdown are escaped exports.
+- **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
+  to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
+  kept off the WASM resolver's inputs); the indexer stores image bytes in a
+  content-addressed media store so a replica with no source mount can show
+  them; `[fig:n]` is verified like `[n]`.
+- **MCP Apps.** The three assistant tools declare
+  `ui://pheasant/knowledge-view.html` (`text/html;profile=mcp-app`); the web UI
+  hosts the same file in `sandbox="allow-scripts"` and speaks the host half of
+  the protocol, so one renderer serves agents and people.
 
 ### Retrieval telemetry
 
@@ -1807,6 +1867,59 @@ Each of these cost real time. They are listed because the shape recurs.
   from something an agent *read*, so that path alone refuses non-public
   addresses (`security/url_policy.py`); an operator indexing an intranet wiki
   from YAML is doing a normal thing.
+
+- **Leaving a `ThreadPoolExecutor` block waits for every task, so a deadline
+  inside one is a suggestion.** The long-form section fill timed each future
+  out correctly and then sat in `__exit__` until the slowest model call
+  returned anyway. A deadline needs `shutdown(wait=False, cancel_futures=True)`.
+  The same code needed `contextvars.copy_context().run` per task, because
+  token accounting is a `ContextVar` and pool threads start with an empty
+  context — without it, the tokens of a long answer's sections silently
+  counted as zero.
+- **An adapter that "helpfully" coerces input hides the refusal the service
+  would have given.** The MCP facade wrapped `history` in `list(...)`, which
+  turns the string `"not a list"` into ten one-character turns and a
+  different, misleading refusal. Pass what arrived; the service owns the
+  message. Found by the both-surfaces refusal test, not by reading.
+- **A document is never shorter than the frame showing it.** The MCP App view
+  first reported `documentElement.scrollHeight` as its size, which is at least
+  the iframe's own height — so a host could grow the frame and never shrink it,
+  and every answer kept the tallest frame it had ever had. Measure the content
+  element. Found by looking at a screenshot, which no test would have done.
+- **Enrichment that only upserts cannot express "this link is gone".**
+  `embeds` edges are added when a page links an image, and re-indexing a page
+  re-asserted the links it still had without retracting the one it had
+  dropped — so an edit that deleted an image kept showing it as the page's
+  figure, in every answer, forever. `GraphBuilder.add_artifact` drops the
+  artifact's own `embeds` before applying enrichment now. Scoped to `embeds`
+  deliberately: `references` has the same shape and the same fix would change
+  what an incremental sync does to every cross-source link, which wants its
+  own evidence (as the chunk leak above does). Found by running the fleet
+  (`deploy/compose/ci/fleet-smoke/process_fleet.py`), whose edit check was then
+  run with the fix removed to watch it fail; the offline twin is in
+  `tests/test_sync_idempotency.py`. The fleet check had to assert on
+  `embedded_in`, not on "no figures": an image whose own caption matches the
+  question is a figure of itself, and the first version of the check blamed
+  that correct answer.
+- **A second consumer of evidence gets the evidence the first one got, or it
+  draws a different picture.** The answer's prompt read whole documents
+  (`hydrate_citations`); the diagram built beside it called `build_prompt`
+  without them, so it read each passage's 500-character search preview. A
+  five-step process whose steps started past character 500 came out as three
+  boxes — correctly grounded, which is what made it convincing: every element
+  cited a passage, and the grounding share was 100%. `visual_documents` hands
+  every visual path (inline, deferred, on-demand, redraw) the same reassembly.
+  Found by looking at a demo screenshot of a pipeline with two steps missing;
+  `tests/test_visual_shapes.py` asserts step five reaches the prompt and fails
+  with the hydration stubbed out.
+- **An `except` whose reason stopped being true catches only what it was not
+  written for.** `_sync_all_queued` swallowed every publish failure at debug
+  as "already queued" — right when a duplicate `INSERT` raised, and dead once
+  the local queue re-armed through `ON CONFLICT` and JetStream deduped on a
+  publish id. From then on the only thing reaching it was a broker refusing
+  the task, and a sync with NATS's storage gone indexed nothing and reported
+  success. It is an ERROR and a `queue_unavailable` result now. Found while
+  running the fleet, by a log that should have said something and did not.
 
 ---
 

@@ -11,6 +11,7 @@ from pheasant.graph.enrichment import (
     MarkdownDocumentEnrichmentPass,
     resolve_cross_source_edges,
 )
+from pheasant.graph.media_links import MEDIA_NODE_TYPES, resolve_image_edges
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact, utc_now
@@ -246,8 +247,37 @@ class GraphBuilder:
             )
             self.upsert_edge(artifact.id, chunk_id, "has_chunk", {"source_id": source.name})
         self.add_headings(source, artifact)
+        self._drop_embeds(artifact.id)
         self.apply_enrichment(enrichment)
         return enrichment
+
+    def _drop_embeds(self, artifact_id: str) -> None:
+        """Forget which images a document showed before this index of it.
+
+        Enrichment is upserted, so on an incremental re-index an edge the new
+        text no longer implies would otherwise survive — the pre-existing
+        behaviour for `references`, and a visible one for `embeds`: an answer
+        would keep showing a figure the document stopped containing. The
+        document's `embeds` edges are therefore re-derived from its current
+        text every time it is indexed; the ones it still has come straight
+        back from `apply_enrichment` and the global resolution pass.
+
+        Only pairs whose every edge is `embeds` are dropped, so a parallel edge
+        of another type between the same two nodes is never collateral. Scoped
+        to `embeds` deliberately: doing the same for `references` changes what
+        an incremental sync means for every corpus and needs its own evidence
+        (CLAUDE.md §6, the chunk-node leak).
+        """
+
+        if artifact_id not in self.graph:
+            return
+        pairs = [
+            (source, target)
+            for source, target, edge_map in self.graph.out_edges(artifact_id)
+            if edge_map and all(data.get("type") == "embeds" for data in edge_map.values())
+        ]
+        if pairs:
+            self.graph.remove_edges_from(pairs)
 
     def add_memory_edges(self, state: Any, max_targets: int | None = None) -> dict[str, Any]:
         """Wire memory records into the graph (Step 33.7). Returns a report.
@@ -576,6 +606,13 @@ class GraphBuilder:
         """
 
         ref_edges: list[tuple[str, str, str, str | None]] = []
+        # Image links resolve separately (`resolve_image_edges`): they target
+        # `image` nodes, which the document resolver and its WASM twin must not
+        # be handed, since neither was measured or specified on them.
+        media: list[tuple[str, dict[str, Any]]] = []
+        referrers: dict[str, dict[str, Any]] = {}
+        ext_nodes: dict[str, dict[str, Any]] = {}
+        image_edges: list[tuple[str, str]] = []
         # One lock hold, no copying: this walks every edge in the graph, so
         # snapshotting them first (1.5M dict copies on a real index) cost more
         # than the pass itself.
@@ -594,6 +631,8 @@ class GraphBuilder:
                 node_type = attrs.get("type")
                 if node_type == "external_reference" or node_type in ARTIFACT_TYPES:
                     nodes.append((node_id, dict(attrs)))
+                elif node_type in MEDIA_NODE_TYPES:
+                    media.append((node_id, dict(attrs)))
             node_map = self.graph.node_map()
             for (source, target), edge_map in self.graph.iter_edges():
                 target_attrs = node_map.get(target)
@@ -601,10 +640,19 @@ class GraphBuilder:
                     continue
                 for data in edge_map.values():
                     edge_type = data.get("type")
+                    if edge_type == "embeds":
+                        image_edges.append((source, target))
+                        continue
                     if edge_type not in {"imports", "references"}:
                         continue
                     ref_edges.append((source, target, edge_type, data.get("reference_type")))
+            if image_edges and media:
+                for source, target in image_edges:
+                    ext_nodes[target] = dict(node_map.get(target) or {})
+                    referrers[source] = dict(node_map.get(source) or {})
         resolved = self._resolve_cross_source_edges(nodes, ref_edges)
+        if image_edges and media:
+            resolved += resolve_image_edges(referrers, media, ext_nodes, image_edges)
         for index, edge in enumerate(resolved):
             self.upsert_edge(edge.source, edge.target, edge.type, dict(edge.attrs))
             if index % 500 == 499:

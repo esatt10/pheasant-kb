@@ -10,12 +10,15 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from pheasant.config.schema import SourceConfig
+from pheasant.graph.media_links import image_links
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact
 
 ENRICHED_NODE_TYPES = {"symbol", "entity", "concept", "external_reference"}
 ENRICHED_EDGE_TYPES = {
     "references",
+    # document -> image it shows (`![](x.png)`, `<img src>`, `![[x.png]]`).
+    "embeds",
     "imports",
     "calls",
     "similar_to",
@@ -225,6 +228,18 @@ class MarkdownDocumentEnrichmentPass:
         enrichment = _base_concepts(kb_id, source, artifact, text)
         for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", text):
             _add_concept(enrichment, kb_id, source, artifact, _clean_inline(heading), 2.0)
+        images, text = image_links(text)
+        for target, alt in images:
+            _add_external_reference(
+                enrichment,
+                kb_id,
+                source,
+                artifact,
+                target,
+                "embeds",
+                "image_link",
+                extra={"alt": alt} if alt else None,
+            )
         for target in _markdown_links(text):
             ref_type = "url" if target.startswith(("http://", "https://")) else "document_link"
             _add_external_reference(
@@ -604,6 +619,7 @@ def _add_external_reference(
     target: str,
     edge_type: str,
     reference_type: str,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     label = _reference_label(target)
     node_id = _node_id("external_reference", kb_id, source.name, reference_type, target)
@@ -613,6 +629,7 @@ def _add_external_reference(
         "reference": target,
         "reference_type": reference_type,
         "enrichment_pass": "reference_extraction",
+        **(extra or {}),
     }
     enrichment.nodes.append(EnrichmentNode(node_id, "external_reference", label, attrs))
     enrichment.edges.append(

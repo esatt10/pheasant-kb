@@ -65,6 +65,15 @@ other direction, set `intent: procedural`.
 
 ---
 
+### Length, conversations and visuals
+
+Beside the answer *shape*, every question is also routed to a **depth**
+(`short`, `medium`, `long`) and an optional **visual** (`diagram`, `image`),
+and may carry the conversation so far (`history`). All three work for every
+workflow, a plugin included — they are applied around it in
+`assistant.answering`. See
+[answer length, conversations, visuals and figures](conversations-and-visuals.md).
+
 ## The agentic graph
 
 ```

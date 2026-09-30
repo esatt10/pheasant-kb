@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import type { ReactNode } from "react";
+import type { Figure } from "../api/types";
+import { FigureImage } from "./FigureImage";
 
 /**
  * Renders an answer as rich text, turning `[1]` markers into clickable chips.
@@ -16,18 +18,32 @@ import type { ReactNode } from "react";
  * numbered lists, > blockquotes, --- rules, and [links](url). Anything else
  * renders as its literal text — never as raw HTML, since nothing here builds
  * markup from model output.
+ *
+ * `[fig:n]` alone on a line shows figure n — an image a cited document holds —
+ * and inline it is a chip. The image comes from the answer's verified
+ * `figures` list, never from the text: the model picks a number, the server
+ * already dropped any number that names no figure.
  */
 export function AnswerBody({
   text,
   onCite,
+  figures = [],
+  onFigure,
 }: {
   text: string;
   onCite: (index: number) => void;
+  figures?: Figure[];
+  onFigure?: (figure: Figure) => void;
 }) {
-  return <>{renderBlocks(text, onCite)}</>;
+  return <>{renderBlocks(text, onCite, figures, onFigure)}</>;
 }
 
-function renderBlocks(text: string, onCite: (index: number) => void): ReactNode[] {
+function renderBlocks(
+  text: string,
+  onCite: (index: number) => void,
+  figures: Figure[] = [],
+  onFigure?: (figure: Figure) => void,
+): ReactNode[] {
   const out: ReactNode[] = [];
   // Split fenced code out first: its contents must survive verbatim, with no
   // inline formatting and no citation chips inside.
@@ -44,11 +60,29 @@ function renderBlocks(text: string, onCite: (index: number) => void): ReactNode[
       );
       return;
     }
-    segment
-      .split(/\n{2,}/)
-      .forEach((block, blockIndex) =>
-        out.push(...renderBlock(block, `${segmentIndex}-${blockIndex}`, onCite)),
-      );
+    segment.split(/\n{2,}/).forEach((block, blockIndex) => {
+      const key = `${segmentIndex}-${blockIndex}`;
+      // A figure line can share a block with prose; split it out so the image
+      // stands on its own and the prose around it still renders as prose.
+      let prose: string[] = [];
+      const flush = (suffix: string) => {
+        if (prose.length) out.push(...renderBlock(prose.join("\n"), `${key}-${suffix}`, onCite));
+        prose = [];
+      };
+      block.split("\n").forEach((line, lineIndex) => {
+        const only = line.match(/^\s*\[fig:(\d{1,2})\]\s*$/);
+        const figure = only ? figures.find((f) => f.figure === Number(only[1])) : undefined;
+        if (!figure) {
+          prose.push(line);
+          return;
+        }
+        flush(`p${lineIndex}`);
+        out.push(
+          <FigureImage key={`${key}-f${lineIndex}`} figure={figure} onOpen={() => onFigure?.(figure)} />,
+        );
+      });
+      flush("end");
+    });
   });
   return out;
 }
@@ -109,7 +143,8 @@ function renderBlock(
  * text still becomes a chip, and code before emphasis so `*` inside code is
  * literal.
  */
-const INLINE = /(\[\d{1,2}\])|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))/;
+const INLINE =
+  /(\[fig:\d{1,2}\])|(\[\d{1,2}\])|(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(\[[^\]]+\]\([^)\s]+\))/;
 
 function inline(text: string, onCite: (index: number) => void): ReactNode[] {
   const out: ReactNode[] = [];
@@ -124,7 +159,13 @@ function inline(text: string, onCite: (index: number) => void): ReactNode[] {
     if (match.index > 0) out.push(<Fragment key={key++}>{rest.slice(0, match.index)}</Fragment>);
     const token = match[0];
 
-    if (/^\[\d{1,2}\]$/.test(token)) {
+    if (token.startsWith("[fig:")) {
+      out.push(
+        <span key={key++} className="cite-chip cite-chip--figure" title="A figure shown in this answer">
+          fig {token.slice(5, -1)}
+        </span>,
+      );
+    } else if (/^\[\d{1,2}\]$/.test(token)) {
       const index = Number(token.slice(1, -1));
       out.push(
         <button

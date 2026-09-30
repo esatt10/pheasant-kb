@@ -102,6 +102,7 @@ actually behind. See [Monitor indexing](../how-to/monitor-indexing.md).
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/search` | Search (`mode`: `text` / `graph` / `vector` / `hybrid`). Also takes `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`, `section` and `memory`. Every hit reports `provenance.source_type` — the kind of source it came from. The response carries `graph_generation`: which graph answered, so a diagnosis can tell "not indexed" from "this replica has not picked up the index that has it". |
+| POST | `/search/batch` | Bulk context retrieval: `queries` (up to 25, at most 1,000 hits in total) under every criterion `/search` takes. Each query is answered exactly as `/search` would answer it. `results` is the merged context, deduplicated and ordered by rank across queries, each hit carrying a `batch` block (`best_rank`, `matched_queries`); `searches` holds the per-query payloads unless `per_query: false`. A `snapshot_id` pin is verified once. Malformed batches are refused with `422` / `INVALID_REQUEST` and a message saying how to split the call. The MCP tool is `search_context_batch`. |
 | POST | `/relevant-files` | Rank relevant files for a task/query. |
 | GET | `/files/summary` | Summarize a file node. |
 | GET | `/nodes/content` | Fetch a node's content. |
@@ -244,8 +245,11 @@ See [Stress-test readiness](../stress-test-readiness.md).
 | POST | `/assistant/key` | Hand the server an API key for this session only. Held in process memory behind an opaque token; never written to config, `/state`, or logs. |
 | DELETE | `/assistant/key` | Revoke a session key immediately. |
 | GET | `/assistant/workflows` | Available answering workflows, which one `auto` currently resolves to, whether the `[agent]` extra is installed, and each workflow's option defaults. |
-| POST | `/assistant/chat` | Ask a question. Returns the answer, numbered citations, graph facts, the nodes to focus, and the workflow's step trace. Accepts `workflow` and `options` overrides. |
-| POST | `/assistant/chat/stream` | Stream completed workflow steps followed by the same answer. |
+| POST | `/assistant/chat` | Ask a question. Returns the answer, numbered citations, graph facts, the nodes to focus, and the workflow's step trace. Accepts `workflow` and `options` overrides, `history` (the conversation so far, `[{question, answer}]` — the region keeps no chat state), `depth` (`short` / `medium` / `long`) and `visual` (`diagram` / `image` / `none`, or a shape such as `timeline` or `table` for a diagram drawn that way). The answer adds `route`, `figures` (images the cited documents show, for `[fig:n]` markers), `visual`, and `search_question` when a follow-up was searched in context. Same operation as the MCP `ask_knowledge_base` tool. |
+| POST | `/assistant/chat/stream` | Stream completed workflow steps followed by the same answer. When the route asked for a visual, the `answer` event carries `visual.status: "pending"` and a final `visual` event follows — the text is never held back for the picture. |
+| POST | `/assistant/visual` | A grounded visual of named passages (`node_ids`, up to 12) or of what a search for `request` finds, in the shape `kind` names (`flow`, `sequence`, `hierarchy`, `mindmap`, `concept`, `cycle`, `timeline`, `swimlane`, `layers`, `groups`, `table`, `quadrant`, `chart`, `canvas`, and UML `class`, `activity`, `state`, `usecase`) or the request implies; `kind: "image"` returns the images those passages hold. Every element cites its passages; a mostly-inferred visual is declined with a reason; `visual.redraw` names the passages to redraw it as another shape. Same operation as the MCP `create_visual` tool. |
+| GET | `/assistant/apps/knowledge-view` | pheasant's MCP App view (the `ui://pheasant/knowledge-view.html` resource), for the web UI to host in a sandboxed frame. Served with a `sandbox` CSP. |
+| GET | `/media?node_id=…` | An indexed image's bytes (`image/png`, `jpeg`, `webp`, `gif`; never SVG), `nosniff` and a `sandbox` CSP, under the same read check as other content. `404 UNKNOWN_MEDIA` for a node that is not a stored image. Same operation as the MCP `get_image` tool. |
 
 Each step reports `duration_seconds`, `input_tokens`, and `output_tokens`.
 Token counts are provider-reported, not estimated: `null` means the provider

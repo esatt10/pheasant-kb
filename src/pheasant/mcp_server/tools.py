@@ -21,6 +21,7 @@ from pheasant.config.schema import (
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
+from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
@@ -72,7 +73,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools(ReadinessTools):
+class PheasantTools(ReadinessTools, AssistantTools):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)
@@ -878,6 +879,42 @@ class PheasantTools(ReadinessTools):
                 exclude_source_types=exclude_source_types,
                 snapshot_id=snapshot_id,
                 as_of=as_of,
+            ),
+        )
+
+    def search_context_batch(
+        self,
+        knowledge_base: str,
+        queries: list[str],
+        mode: str = "hybrid",
+        max_results: int = 10,
+        per_query: bool = True,
+        **criteria: Any,
+    ) -> dict:
+        """Retrieve passages for many queries in one call.
+
+        ``criteria`` are the keyword criteria ``search_context`` takes, by the
+        same names, applied to every query — passed straight into the service's
+        ``SearchRequest`` so a criterion added there needs no edit here. The MCP
+        tool in ``server.py`` declares them one by one, because that is the
+        schema an agent reads. ``results`` is the merged context, ordered by
+        rank across queries; ``searches`` holds each query's own payload unless
+        ``per_query`` is false.
+        """
+        self._require_knowledge_base(knowledge_base)
+        # Transport adapter. The operation is `services.retrieval.search_batch`.
+        return retrieval_service.search_batch(
+            self.services,
+            retrieval_service.BatchSearchRequest(
+                queries=tuple(queries) if isinstance(queries, list) else queries,
+                criteria=retrieval_service.SearchRequest(
+                    query="",
+                    knowledge_base=knowledge_base,
+                    mode=mode,
+                    max_results=max_results,
+                    **criteria,
+                ),
+                per_query=per_query,
             ),
         )
 
@@ -1736,53 +1773,6 @@ class PheasantTools(ReadinessTools):
                 "assistant.retrieval in pheasant.yaml (`pheasant setup --advanced`)."
             ),
         }
-
-    def ask_knowledge_base(
-        self,
-        knowledge_base: str,
-        question: str,
-        workflow: str | None = None,
-        mode: str = "hybrid",
-        max_results: int = 8,
-        source_name: str | None = None,
-        principal: str | None = None,
-        principal_groups: list[str] | None = None,
-        options: dict | None = None,
-        source_types: list[str] | None = None,
-        exclude_source_types: list[str] | None = None,
-    ) -> dict:
-        """Answer a question from the knowledge base, with citations and graph facts.
-
-        Runs the configured question-answering workflow — by default the
-        LangGraph agent when the ``[agent]`` extra is installed and a model
-        is reachable, otherwise a single retrieval pass. Prefer this over
-        ``search_context`` when you want a synthesized answer rather than
-        raw passages to reason over yourself; the returned ``steps`` show
-        what the agent actually did.
-
-        With no model configured the answer is extractive (the retrieved
-        passages, attributed), so this is always safe to call.
-        """
-        from pheasant.assistant.chat import answer_question
-
-        self._require_knowledge_base(knowledge_base)
-        return answer_question(
-            question,
-            search=self.searcher,
-            knowledge_base=knowledge_base or self.config.knowledge_base_id,
-            config=self.config,
-            graph=self.graph,
-            state=self.state,
-            mode=mode,
-            max_results=max_results,
-            source_name=source_name,
-            principal=principal,
-            principal_groups=principal_groups,
-            workflow=workflow,
-            options=options,
-            source_types=source_types,
-            exclude_source_types=exclude_source_types,
-        )
 
     def get_relevant_files(
         self,

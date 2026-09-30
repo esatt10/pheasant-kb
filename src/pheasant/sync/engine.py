@@ -22,6 +22,7 @@ from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, TEXT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
+from pheasant.ingestion.media import MAX_MEDIA_BYTES, media_store_for_config
 from pheasant.ingestion.pipeline import (
     ParsedArtifact,
     git_state,
@@ -206,6 +207,16 @@ class _PreparedItem:
     #: indexed" and nothing like each other — a control folded into a routine
     #: counter is one nobody can see working.
     refused_by: str | None = None
+    #: An image's bytes, carried to the single writer so it can store them in
+    #: the media store (`ingestion.media`). Only images, only under the store's
+    #: size cap: everything else is text the chunks already hold.
+    media: bytes | None = None
+
+
+def _media_bytes(parsed: ParsedArtifact | None, content: bytes) -> bytes | None:
+    if parsed is None or parsed.type != "image" or len(content) > MAX_MEDIA_BYTES:
+        return None
+    return content
 
 
 _PROCESS_SAFE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
@@ -286,7 +297,9 @@ def _prepare_filesystem_item_process(
             fetched=True,
             skipped=True,
         )
-    return _PreparedItem(position, item, previous, parsed=parsed, fetched=True)
+    return _PreparedItem(
+        position, item, previous, parsed=parsed, fetched=True, media=_media_bytes(parsed, content)
+    )
 
 
 class SyncEngine:
@@ -375,6 +388,7 @@ class SyncEngine:
         # captioning network call possible). Default provider is the offline
         # deterministic stub.
         self.captioner = captioner_from_config(config) if initialize_indexing_components else None
+        self.media_store = media_store_for_config(config)
         # Multi-modal audio ingestion (Synapse 25.4 session B): None unless a
         # source's include globs admit audio extensions — same opt-in,
         # zero-network-when-absent contract as the image captioner above.
@@ -611,6 +625,12 @@ class SyncEngine:
             graph = self.graph_builder.graph
             return graph.number_of_nodes(), graph.number_of_edges()
         return self.graph_store.counts(self.config.knowledge_base_id)
+
+    def _not_indexed(self, source_name: str, status: str, details: dict) -> SyncResult:
+        """A source that was not indexed this run, and says why rather than reporting zero."""
+
+        self.state.mark_source_status(source_name, status)
+        return SyncResult(source_name, 0, 0, *self._graph_counts(), status, details)
 
     #: Above this many changed nodes, rebuild the FTS index wholesale instead
     #: of deleting each stale row individually. `node_id` on graph_nodes_fts
@@ -965,6 +985,7 @@ class SyncEngine:
             return source_progress
 
         published = 0
+        unqueued: list[SyncResult] = []
         for source in sources:
             digest = hashlib.sha256(
                 f"{self.config.knowledge_base_id}\0{source.name}\0{mode}".encode()
@@ -976,12 +997,18 @@ class SyncEngine:
                 payload={"max_depth": max_depth, "full_scan": bool(full_scan)},
                 max_attempts=max(1, int(settings.max_attempts or 1)),
             )
+            # No backend raises for a duplicate, so this is the broker refusing
+            # the task. It was logged at debug as "already queued", and the
+            # drain then found nothing while the sync reported success.
             try:
                 queue.publish(task)
                 published += 1
-            except Exception as exc:  # noqa: BLE001 - an existing task is not an error
-                logger.debug("Index task for %s already queued (%s)", source.name, exc)
-        logger.info("Queued %d of %d source(s) for indexing", published, len(sources))
+            except Exception as exc:  # noqa: BLE001 - one source's failure is reported, not fatal
+                logger.error("Could not queue %s for indexing: %s", source.name, exc, exc_info=True)
+                details = {"error": f"could not queue the index task: {exc}", "task_id": task.id}
+                unqueued.append(self._not_indexed(source.name, "queue_unavailable", details))
+        log = logger.info if published == len(sources) else logger.warning
+        log("Queued %d of %d source(s) for indexing", published, len(sources))
 
         def run(task: Any) -> SyncResult:
             return self.sync_source(
@@ -1010,7 +1037,9 @@ class SyncEngine:
                 ]
                 results = [item for future in futures for item in future.result()]
         order = {source.name: position for position, source in enumerate(sources)}
-        return sorted(results, key=lambda result: order.get(result.source_id, len(order)))
+        return sorted(
+            [*results, *unqueued], key=lambda result: order.get(result.source_id, len(order))
+        )
 
     def _prepare_item(
         self,
@@ -1112,6 +1141,7 @@ class SyncEngine:
             previous,
             parsed=parsed,
             fetched=True,
+            media=_media_bytes(parsed, payload.content),
         )
 
     def _remote_precheck(
@@ -1192,7 +1222,14 @@ class SyncEngine:
             return _PreparedItem(
                 position, item, previous, parsed=parsed, fetched=True, skipped=True
             )
-        return _PreparedItem(position, item, previous, parsed=parsed, fetched=True)
+        return _PreparedItem(
+            position,
+            item,
+            previous,
+            parsed=parsed,
+            fetched=True,
+            media=_media_bytes(parsed, payload.content),
+        )
 
     def _prepare_batch_remote(
         self,
@@ -1957,14 +1994,8 @@ class SyncEngine:
             # the operator sees *why* nothing was indexed instead of a clean
             # zero. (validate() only runs in validate_only mode.)
             if source.type in FILESYSTEM_SOURCE_TYPES and not source.path.exists():
-                self.state.mark_source_status(source.name, "path_missing")
-                graph_nodes, graph_edges = self._graph_counts()
-                return SyncResult(
+                return self._not_indexed(
                     source.name,
-                    0,
-                    0,
-                    graph_nodes,
-                    graph_edges,
                     "path_missing",
                     {
                         "connector_type": connector.connector_type,
@@ -1983,14 +2014,8 @@ class SyncEngine:
                 # rather than indexing a prefix of it: a partial index is
                 # non-deterministic, and the operator needs to make a choice
                 # (narrow it, or ask for it explicitly with full_scan).
-                self.state.mark_source_status(source.name, "limit_exceeded")
-                graph_nodes, graph_edges = self._graph_counts()
-                return SyncResult(
+                return self._not_indexed(
                     source.name,
-                    0,
-                    0,
-                    graph_nodes,
-                    graph_edges,
                     "limit_exceeded",
                     {
                         "connector_type": connector.connector_type,
@@ -2132,6 +2157,13 @@ class SyncEngine:
                     }
                     for chunk in parsed.chunks
                 ]
+                if prepared.media is not None:
+                    # Before the commit, and outside the mutex: content-addressed
+                    # and atomic, so a sync that fails after this leaves an
+                    # unreferenced file rather than a referenced missing one.
+                    self.media_store.put(
+                        parsed.sha256, Path(parsed.relative_path).suffix, prepared.media
+                    )
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)

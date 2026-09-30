@@ -24,6 +24,8 @@ It covers the full retrieval surface, not just "search":
   search again.
 * ``content`` — full indexed text for a single node.
 * ``facts`` — one-hop subject–predicate–object triples off the graph.
+* ``figures`` — the images cited documents show (``embeds`` edges), numbered
+  for ``[fig:n]`` markers.
 * ``capabilities`` — what this region can do right now *and how it is
   shaped*: sources and their types, directory layout, languages, the
   vocabulary its own documents use, the symbols its code defines. A planner
@@ -35,6 +37,7 @@ Every method is read-only and side-effect free.
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,6 +45,8 @@ from typing import Any
 from pheasant.graph.traversal import neighbors as _graph_neighbors
 from pheasant.graph.traversal import slice_ as _graph_slice
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
+
+logger = logging.getLogger(__name__)
 
 VALID_MODES = ("hybrid", "text", "graph", "vector")
 
@@ -689,6 +694,27 @@ class PheasantRetriever:
                 if added >= per_node:
                     break
         return found
+
+    def figures(self, citations: list[dict], limit: int = 8) -> list[dict]:
+        """Images the cited documents show, numbered against ``citations``.
+
+        Best-effort: a graph that cannot answer degrades the answer to one
+        without figures, never to an error.
+        """
+        from pheasant.assistant.answering import number_figures
+        from pheasant.graph.figures import collect_figures, with_full_captions
+
+        node_ids: list[str] = []
+        for citation in citations:
+            node_id = citation.get("node_id")
+            if node_id and node_id not in node_ids:
+                node_ids.append(str(node_id))
+        try:
+            found = with_full_captions(self.state, collect_figures(self.graph, node_ids, limit))
+        except Exception:  # pragma: no cover - figures are never load-bearing
+            logger.debug("could not collect figures", exc_info=True)
+            return []
+        return number_figures(found, citations)
 
     def facts(self, node_ids: list[str], limit: int = 12) -> list[dict]:
         """One-hop subject–predicate–object triples around these nodes."""
