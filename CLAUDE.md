@@ -93,7 +93,8 @@ pheasant-kb/
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
-│   │                            authority ceiling), worker_pool,
+│   │                            authority ceiling), preparation (what a
+│   │                            file worker hands the writer), worker_pool,
 │   │                            worker_transport, grpc
 │   ├── connectors/            ← first-party SDK plugins: notion, gdrive,
 │   │                            slack, confluence, imap
@@ -110,7 +111,9 @@ pheasant-kb/
 │   │                            graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
 │   │                            block's declared shape), criteria, vector,
-│   │                            ranking (the tunable parameters, fleet-scoped)
+│   │                            vector_indexer (embed-on-sync, off the
+│   │                            commit loop), ranking (the tunable
+│   │                            parameters, fleet-scoped)
 │   ├── memory/                ← store, projection, policy, steering, salience,
 │   │                            bridge, maintenance, formation, benchmark
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
@@ -146,7 +149,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 141 pytest modules, offline by design
+└── tests/                     ← 145 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1926,6 +1929,59 @@ Each of these cost real time. They are listed because the shape recurs.
   the task, and a sync with NATS's storage gone indexed nothing and reported
   success. It is an ERROR and a `queue_unavailable` result now. Found while
   running the fleet, by a log that should have said something and did not.
+
+- **A check made inside one executor's entry point is a door the other
+  executors walk around.** The corpus denylist was enforced in
+  `_prepare_item`, the thread path, and the *process* executor has its own
+  module-level entry point that went straight to the sha256 test -- so with
+  `file_executor: process` a denylisted file was indexed and the thread
+  executor refused it. The existing test that set `file_executor: process`
+  used archive members, which force the thread fallback, so it never ran the
+  door it named. The decision is `_decide_before_read` now, on the caller's
+  thread before any executor is handed the item, and
+  `tests/test_corpus_denylist_executors.py` runs every local executor.
+- **A cleanup method with no caller is the unbounded growth it was written to
+  prevent.** `LocalQueue.purge_completed` existed and nothing called it.
+  Index tasks never needed it (content-addressed ids re-arm one row), which is
+  presumably why nobody missed it -- but every *log* batch has a new id, so
+  `log_tasks` kept each observation batch and its whole payload forever. The
+  log maintenance pass calls it now. Grepping for a method's callers is
+  cheaper than inferring from its docstring that it runs.
+- **"Unreachable" must not read as "empty".** `NatsQueue.depth()` caught every
+  broker error and returned zeros, the one reading an autoscaler scales *down*
+  on; and before it could, the initial connect sat in nats-py's own retry loop
+  (60 attempts, 2s apart) for minutes. It raises `QueueUnavailable` inside a
+  bounded connect now, and every caller already treated an exception as
+  unknown. JetStream had two siblings, both found against a real broker: the
+  stream kept every acked task (`limits` retention, no limits), and a task
+  that killed its worker was redelivered forever, because the attempt cap
+  lived only in `nack`, which a crash never reaches.
+- **A test whose pool has two connections can pass by picking the other one.**
+  The check that a standalone read restores the connection to transactional
+  mode still passed with the restore deleted: the pool handed the next write
+  the *other* connection. Pinned to a pool of one, the mutant dies. The shape
+  is the mutation-harness trap above, one layer up: a check needs to be seen
+  failing before it is trusted.
+- **"Nothing is in flight" is not "my work is stored".** The background
+  embedder's first `flush()` waited for the in-flight batch and then returned
+  if the queue was empty -- and with several sources sharing one indexer,
+  another source could hand this source's last chunks to a background batch in
+  between. The source then recorded its manifest with its vectors still out,
+  and a crash there leaves chunks no incremental sync re-embeds. `flush()`
+  bookkeeps sequence numbers now and returns when every chunk outstanding at
+  its call has landed. A stress test over the race passed against the broken
+  logic 750 times in 750, because the window is a few instructions wide;
+  `tests/test_vector_background.py` forces the interleaving at the lock
+  release instead, and that one fails on the old logic every time.
+- **A profiler over many tiny calls overstates them, and a plausible fix can
+  measure as nothing.** cProfile put glob matching at half an unchanged
+  re-sync; unprofiled it was about a quarter (0.49s against 0.14s per 3,000
+  paths, after compiling the glob lists). The same pass found eight file
+  threads slower than one on small files (1.81s against 0.64s) and batched the
+  pool's futures to cut the handoffs -- 2.02s, no better, because the cost is
+  the threads contending for the GIL on the read-and-hash path, not the
+  handoffs. Reverted. `max_parallel_files` is a tuning question for that
+  shape, not a code change.
 
 ---
 

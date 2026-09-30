@@ -412,11 +412,20 @@ class _OrchestrationSupervisor:
 def _durable_backlog_depth(cfg, state) -> int:
     """Pending/in-flight durable work that should outrank startup scans."""
 
-    from pheasant.sync.queue import queue_from_config
+    from pheasant.sync.queue import QueueUnavailable, queue_from_config
 
     queue = queue_from_config(cfg, state)
     try:
         depth = queue.depth() if queue is not None else {}
+    except QueueUnavailable as exc:
+        # Unknown, not empty. Proceeding is what an unreadable queue always
+        # led to here (it used to read as zeros); now it says so.
+        import logging
+
+        logging.getLogger("pheasant.cli").warning(
+            "Durable queue depth unavailable (%s); not deferring startup reconciliation", exc
+        )
+        depth = {}
     finally:
         if queue is not None:
             queue.close()
@@ -1353,12 +1362,17 @@ def _progress_emitter():
     writes the sync pays for and nobody reads. Updates are emitted on phase
     changes, then at most every 25 items or once a second.
     """
+    import threading as _threading
     import time as _time
 
     # Throttle per source, not globally: with `max_parallel_sources > 1` a
     # single counter meant a fast source could suppress every update from a
     # slow one, which is precisely the source a watcher cares about.
     last: dict[str, dict[str, float | int | str]] = {}
+    # Called from several threads -- one per source, and the background
+    # embedder's -- and `print` writes the line and its newline separately,
+    # so two emitters could splice a line the parent then cannot parse.
+    lock = _threading.Lock()
 
     def emit(
         phase: str,
@@ -1366,6 +1380,16 @@ def _progress_emitter():
         total: int | None,
         detail: str,
         meta: dict | None = None,
+    ) -> None:
+        with lock:
+            _emit_locked(phase, current, total, detail, meta)
+
+    def _emit_locked(
+        phase: str,
+        current: int,
+        total: int | None,
+        detail: str,
+        meta: dict | None,
     ) -> None:
         source = str((meta or {}).get("source") or "")
         now = _time.monotonic()

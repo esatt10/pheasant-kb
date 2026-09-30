@@ -24,6 +24,7 @@ the SQLite path executing byte-identical SQL.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -139,9 +140,23 @@ class Dialect:
 
         if not self.is_postgres:
             return sql
-        sql = _GROUP_CONCAT.sub("string_agg(", sql)
-        sql = _INSERT_OR_REPLACE.sub("INSERT INTO", sql)
-        return _rewrite_placeholders(sql)
+        return _translate_postgres(sql)
+
+
+@functools.lru_cache(maxsize=2048)
+def _translate_postgres(sql: str) -> str:
+    """The Postgres rewrite, memoized: a pure function of the text.
+
+    Two regex passes and a string-literal scan ran on every statement --
+    11-28us each, measured -- and the statement texts a process issues are a
+    small fixed set. Bounded, because a text carrying an ``IN (?,?,...)`` list
+    varies with the list's length (`Dialect.in_clause` avoids that on the hot
+    paths, and a cache miss is only the old cost).
+    """
+
+    sql = _GROUP_CONCAT.sub("string_agg(", sql)
+    sql = _INSERT_OR_REPLACE.sub("INSERT INTO", sql)
+    return _rewrite_placeholders(sql)
 
 
 def _rewrite_placeholders(sql: str) -> str:

@@ -18,10 +18,28 @@ fast, split sources into another shard instead of adding writers to the same
 graph.
 
 Keep the dispatch window bounded. A remote batch holds every file's bytes on
-the indexer and worker, so the practical in-flight payload is roughly
-`max_parallel_files * remote_worker_batch_size`. The fleet profile uses 16 x
-16 (256 files), four worker containers with two request threads each, and 8
-embedding requests in flight. That leaves CPU and memory for Postgres, NATS,
+the indexer and worker. Each source keeps
+`remote_worker_max_inflight_batches` batches in flight (default: two per
+configured URL, never more than `max_parallel_files`), with the same number
+again queued behind them, so the practical in-flight payload is roughly
+`2 * remote_worker_max_inflight_batches * remote_worker_batch_size` files.
+
+The two-per-URL default is right for a list of individual workers and wrong
+for one URL that is a load-balanced Service: it cannot see the pods behind it,
+so a source kept two of them busy however many the autoscaler started. Set
+`remote_worker_max_inflight_batches` explicitly in that case. It spreads the
+work; whether it also shortens the sync depends on which side is slower. On a
+1,200-file code corpus against three workers behind one URL, raising it from
+the default to 6 moved the third worker from zero requests to a third of them
+and left wall time within noise (9.2s against 8.9-9.2s), because the indexer
+spent 0.06s of an 11.5s profiled sync waiting on preparation: commit and
+enrichment were the ceiling. It can only shorten a sync whose indexer is
+waiting on its workers -- plausibly one of large documents, which was not
+measured.
+
+The fleet profile uses 16 x 16 (256 files), four worker containers with two
+request threads each, `remote_worker_max_inflight_batches: 8` to match them,
+and 8 embedding requests in flight. That leaves CPU and memory for Postgres, NATS,
 the API and the graph owner on an 8-core development host.
 
 ## Choose a local executor

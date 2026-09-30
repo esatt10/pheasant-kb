@@ -417,6 +417,21 @@ class PostgresBackend(StateBackend):
 
     def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
         conn = self._conn()
+        # A read with nothing pending on this thread was always its own
+        # transaction: `_finish` hands the connection back straight after it.
+        # With autocommit off that transaction cost two extra round trips the
+        # read never needed -- psycopg sends `BEGIN` before the statement and
+        # `release()` sends `ROLLBACK` after it, so every serving-path read was
+        # three trips to the server. Measured with pg_stat_statements: 200
+        # reads, 200 BEGIN + 200 ROLLBACK. Autocommit for exactly that read
+        # sends the statement alone, and `rollback()` on an idle connection
+        # sends nothing. Toggling the flag on an idle connection is local.
+        #
+        # A read *inside* pending work stays in its transaction, because it
+        # has to see that transaction's own uncommitted writes.
+        standalone = not self._pending
+        if standalone:
+            conn.autocommit = True
         try:
             with conn.cursor() as cursor:
                 cursor.execute(self.dialect.translate(sql), params or None)
@@ -428,10 +443,30 @@ class PostgresBackend(StateBackend):
                         Row(dict(zip(columns, values, strict=True))) for values in cursor.fetchall()
                     ]
         except Exception:
+            if standalone:
+                self._restore_transactional(conn)
             self._abort()
             raise
+        if standalone:
+            self._restore_transactional(conn)
         self._finish()
         return result
+
+    @staticmethod
+    def _restore_transactional(conn: Any) -> None:
+        """Put a connection back in the mode every writer relies on.
+
+        Before it can reach the pool or the next statement: the write path is
+        transactional (``replace_artifact_chunks`` deletes then re-inserts),
+        and a pooled connection left in autocommit would commit each half.
+        """
+
+        try:
+            conn.autocommit = False
+        except Exception:  # pragma: no cover - a broken connection
+            # The pool discards a connection it cannot reset, which is the
+            # right outcome for one that refused this.
+            logger.debug("Could not restore transactional mode", exc_info=True)
 
     def statement(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[Row], int]:
         """Run a statement that may write, returning ``(rows, rowcount)``.

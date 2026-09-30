@@ -174,6 +174,88 @@ def test_resync_of_unchanged_content_performs_zero_embedder_calls(tmp_path: Path
     assert store.count() == baseline_count
 
 
+def test_background_embedding_resyncs_to_the_same_vector_state(tmp_path: Path) -> None:
+    """The engine embeds off the commit loop; the store must not notice.
+
+    A queue of one chunk sends every file's batch to the background thread,
+    which the default queue never does on a corpus this small. After each
+    sync the store holds exactly the chunks the state store holds -- nothing
+    missing, nothing stale -- and an unchanged re-sync embeds nothing.
+    """
+
+    engine = make_vector_engine(tmp_path)
+    engine.vectors.queue_size = 1
+    assert engine.vectors.background is True
+
+    def stored_equals_live() -> set[str]:
+        live = {str(row["id"]) for row in engine.state.rows("SELECT id FROM chunks")}
+        assert engine.vectors.store.existing_ids(sorted(live)) == live
+        assert engine.vectors.store.count() == len(live)
+        return live
+
+    run_sync(engine, source_name="notes", mode="full")
+    first = stored_equals_live()
+    calls = engine.vectors.embedder.calls
+    run_sync(engine, source_name="notes", mode="full")
+    run_sync(engine, source_name="notes", mode="incremental")
+    assert stored_equals_live() == first
+    assert engine.vectors.embedder.calls == calls
+
+    notes = Path(engine.config.sources[0].path)
+    (notes / "kitchen.md").write_text("# Kitchen\n\nRestock the pantry weekly.\n")
+    run_sync(engine, source_name="notes", mode="incremental")
+    edited = stored_equals_live()
+    assert edited != first  # the edited file's chunk was replaced, not added beside
+
+
+def test_thread_and_process_executors_index_the_same_state(tmp_path: Path) -> None:
+    """Which executor prepared a file is invisible in what was committed."""
+
+    docs = tmp_path / "workspace" / "docs"
+    docs.mkdir(parents=True)
+    for index in range(12):
+        (docs / f"note{index:02d}.md").write_text(
+            f"# Note {index}\n\nSee [next](note{(index + 1) % 12:02d}.md). text {index}\n"
+        )
+    (docs / "answer_key.md").write_text("# Answers\n\nnever indexed\n")
+
+    def index_with(executor: str) -> dict[str, object]:
+        root = tmp_path / executor
+        config = PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "executors",
+                    "state_path": str(root / "state"),
+                    "workspace_root": str(tmp_path / "workspace"),
+                    "exports_path": str(root / "exports"),
+                },
+                "readiness": {"corpus_denylist": ["answer_key.md"]},
+                "sync": {"concurrency": {"file_executor": executor, "max_parallel_files": 3}},
+                "sources": [{"name": "docs", "type": "markdown_folder", "path": str(docs)}],
+            }
+        )
+        engine = SyncEngine(config)
+        try:
+            engine.sync_source("docs", "full")
+            second = engine.sync_source("docs", "incremental")
+            return {
+                "artifacts": sorted(
+                    str(row["id"]) for row in engine.state.rows("SELECT id FROM artifacts")
+                ),
+                "chunks": sorted(
+                    str(row["id"]) for row in engine.state.rows("SELECT id FROM chunks")
+                ),
+                "resync_indexed": second.indexed_artifacts,
+            }
+        finally:
+            engine.close()
+
+    thread, process = index_with("thread"), index_with("process")
+    assert thread == process
+    assert len(thread["artifacts"]) == 12  # the denylisted file under neither
+    assert thread["resync_indexed"] == 0
+
+
 def test_incremental_noop_does_not_materialize_the_persisted_graph(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

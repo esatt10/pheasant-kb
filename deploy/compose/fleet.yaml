@@ -117,6 +117,9 @@ sync:
     remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
     remote_worker_timeout_seconds: 120
     remote_worker_batch_size: 16
+    # Four worker containers x two request threads. The default (two per URL)
+    # would keep two of those eight slots busy per source.
+    remote_worker_max_inflight_batches: 8
     worker_transport: grpc
     lock_timeout_seconds: 300
   queue:

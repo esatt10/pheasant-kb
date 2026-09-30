@@ -20,11 +20,10 @@ from pheasant.capacity import project as project_capacity
 from pheasant.config.schema import FILESYSTEM_SOURCE_TYPES, PheasantConfig, SourceConfig
 from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
-from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, TEXT_EXTENSIONS
+from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
-from pheasant.ingestion.media import MAX_MEDIA_BYTES, media_store_for_config
+from pheasant.ingestion.media import media_store_for_config
 from pheasant.ingestion.pipeline import (
-    ParsedArtifact,
     git_state,
     parse_connector_payload,
     sha256_bytes,
@@ -55,7 +54,6 @@ from pheasant.sync.checkpoint_interval import (
 )
 from pheasant.sync.connectors import (
     ConnectorItem,
-    ConnectorPayload,
     ItemNotModified,
     connector_for_source,
 )
@@ -69,6 +67,14 @@ from pheasant.sync.fingerprint import (
 from pheasant.sync.graph_events import notifier_from_config as graph_notifier_from_config
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
+from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
+    _media_bytes,
+    _prepare_filesystem_item_process,
+    _PreparedItem,
+    _process_cpu_capacity,
+    _process_safe_text_path,
+    _remote_inflight_batches,
+)
 from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
 
@@ -191,117 +197,6 @@ class SyncResult:
     details: dict = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class _PreparedItem:
-    """Immutable worker output consumed by the single coordinated writer."""
-
-    position: int
-    item: ConnectorItem
-    previous: dict[str, Any] | None
-    parsed: ParsedArtifact | None = None
-    fetched: bool = False
-    skipped: bool = False
-    transfer_skipped: bool = False
-    #: The `readiness.corpus_denylist` pattern that refused this item. Separate
-    #: from `skipped` because an unchanged file and a refused one are both "not
-    #: indexed" and nothing like each other — a control folded into a routine
-    #: counter is one nobody can see working.
-    refused_by: str | None = None
-    #: An image's bytes, carried to the single writer so it can store them in
-    #: the media store (`ingestion.media`). Only images, only under the store's
-    #: size cap: everything else is text the chunks already hold.
-    media: bytes | None = None
-
-
-def _media_bytes(parsed: ParsedArtifact | None, content: bytes) -> bytes | None:
-    if parsed is None or parsed.type != "image" or len(content) > MAX_MEDIA_BYTES:
-        return None
-    return content
-
-
-_PROCESS_SAFE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
-
-
-def _process_safe_text_path(path: str) -> bool:
-    candidate = Path(path)
-    return (
-        candidate.suffix.lower() in _PROCESS_SAFE_TEXT_EXTENSIONS
-        or candidate.name.lower() == "dockerfile"
-    )
-
-
-def _process_cpu_capacity() -> int:
-    """CPU count visible to this process (affinity/cgroup aware where available)."""
-
-    process_cpu_count = getattr(os, "process_cpu_count", None)
-    if process_cpu_count is not None:
-        return max(1, int(process_cpu_count() or 1))
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:
-        return max(1, int(os.cpu_count() or 1))
-
-
-def _prepare_filesystem_item_process(
-    source: SourceConfig,
-    mode: SyncMode,
-    git_metadata: tuple[str | None, str | None, bool] | None,
-    position: int,
-    item: ConnectorItem,
-    previous: dict[str, Any] | None,
-) -> _PreparedItem:
-    """Stateless process-worker entry point for ordinary filesystem text."""
-
-    if (
-        mode == "incremental"
-        and previous is not None
-        and item.sha256 is not None
-        and previous.get("sha256") == item.sha256
-    ):
-        return _PreparedItem(
-            position,
-            item,
-            previous,
-            skipped=True,
-            transfer_skipped=True,
-        )
-    path = Path(str(item.metadata["path"]))
-    content = path.read_bytes()
-    content_hash = sha256_bytes(content)
-    if mode == "incremental" and previous and previous.get("sha256") == content_hash:
-        return _PreparedItem(
-            position,
-            item,
-            previous,
-            fetched=True,
-            skipped=True,
-        )
-    payload = ConnectorPayload(
-        item=item,
-        content=content,
-        mime_type=item.mime_type,
-        size_bytes=item.size_bytes,
-        sha256=content_hash,
-        mtime=item.mtime,
-        metadata={"path": str(path)},
-    )
-    parsed = parse_connector_payload(source, item, payload, git_metadata)
-    if parsed is None:
-        return _PreparedItem(position, item, previous, fetched=True)
-    if mode == "incremental" and previous and previous.get("sha256") == parsed.sha256:
-        return _PreparedItem(
-            position,
-            item,
-            previous,
-            parsed=parsed,
-            fetched=True,
-            skipped=True,
-        )
-    return _PreparedItem(
-        position, item, previous, parsed=parsed, fetched=True, media=_media_bytes(parsed, content)
-    )
-
-
 class SyncEngine:
     def __init__(
         self,
@@ -380,7 +275,10 @@ class SyncEngine:
         # search.embeddings.enabled is false, leaving sync byte-identical
         # to pre-21.4 behavior (no vector dir, no embedder calls).
         self.vectors = (
-            vector_indexer_from_config(config) if initialize_indexing_components else None
+            # `background`: embed off the commit loop -- see VectorIndexer.
+            vector_indexer_from_config(config, background=True)
+            if initialize_indexing_components
+            else None
         )
         # Multi-modal image ingestion (Synapse 25.4 session A): None unless a
         # source's include globs admit image extensions, so a text-only region
@@ -1041,23 +939,34 @@ class SyncEngine:
             [*results, *unqueued], key=lambda result: order.get(result.source_id, len(order))
         )
 
-    def _prepare_item(
+    def _decide_before_read(
         self,
-        connector: Any,
-        source: SourceConfig,
         mode: SyncMode,
         artifacts: dict[str, Any],
-        git_metadata: tuple[str | None, str | None, bool] | None,
         position: int,
         item: ConnectorItem,
-    ) -> _PreparedItem:
-        """Read and parse one item without mutating authoritative state."""
+    ) -> _PreparedItem | None:
+        """The outcomes that need no bytes, or ``None`` when the item must be read.
+
+        One implementation for every executor, run by the caller before any
+        work is handed out. The reason is **the denylist**: a denylisted path
+        is not content this region declines to *re*-index, it is content this
+        region must never hold, so it is refused before any bytes are read.
+        The process executor's entry point never made this check -- it went
+        straight to the sha256 test -- so with ``file_executor: process`` a
+        denylisted file was indexed while the thread executor refused it.
+        Deciding here, on the caller's thread, closes that door for every
+        executor at once rather than once per entry point. Read live rather
+        than cached, so adding a pattern applies without a restart. See
+        `security/corpus_policy.py`.
+
+        The unchanged-file skip rides along because it too needs no bytes,
+        and it spares a pool round trip for a connector that lists content
+        hashes. It is *not* a speedup for filesystem sources, which hash only
+        when they read, so their unchanged skip still happens in the pool.
+        """
 
         previous = artifacts.get(item.relative_path)
-        # Before the sha256 skip and before any bytes are read: a denylisted
-        # path is not content this region declines to *re*-index, it is content
-        # this region must never hold. Read live rather than cached, so adding
-        # a pattern applies without a restart. See `security/corpus_policy.py`.
         denylist = corpus_policy.denylist_of(self.config)
         refused = corpus_policy.denied_by(item.relative_path, denylist) or corpus_policy.denied_by(
             item.metadata.get("archive_member", ""), denylist
@@ -1079,6 +988,24 @@ class SyncEngine:
                 skipped=True,
                 transfer_skipped=True,
             )
+        return None
+
+    def _prepare_item(
+        self,
+        connector: Any,
+        source: SourceConfig,
+        mode: SyncMode,
+        artifacts: dict[str, Any],
+        git_metadata: tuple[str | None, str | None, bool] | None,
+        position: int,
+        item: ConnectorItem,
+    ) -> _PreparedItem:
+        """Read and parse one item without mutating authoritative state."""
+
+        previous = artifacts.get(item.relative_path)
+        decided = self._decide_before_read(mode, artifacts, position, item)
+        if decided is not None:
+            return decided
         try:
             payload = connector.read_item(item)
         except ItemNotModified:
@@ -1162,18 +1089,9 @@ class SyncEngine:
         """
 
         previous = artifacts.get(item.relative_path)
-        denylist = corpus_policy.denylist_of(self.config)
-        refused = corpus_policy.denied_by(item.relative_path, denylist) or corpus_policy.denied_by(
-            item.metadata.get("archive_member", ""), denylist
-        )
-        if refused:
-            return _PreparedItem(
-                position, item, previous, skipped=True, transfer_skipped=True, refused_by=refused
-            ), None
-        if self._can_skip_before_read(mode, previous, item):
-            return _PreparedItem(
-                position, item, previous, skipped=True, transfer_skipped=True
-            ), None
+        decided = self._decide_before_read(mode, artifacts, position, item)
+        if decided is not None:
+            return decided, None
         try:
             payload = connector.read_item(item)
         except ItemNotModified:
@@ -1411,7 +1329,12 @@ class SyncEngine:
             max_workers=workers,
             **({} if process_safe else {"thread_name_prefix": f"pheasant-file-{source.name}"}),
         ) as executor:
-            pending: deque[Future[_PreparedItem]] = deque()
+            # Futures and already-decided items share one FIFO, so discovery
+            # order -- and with it every stable ID and the committed graph --
+            # is exactly what it was. The look-ahead window counts only the
+            # futures: a decided item holds no bytes.
+            pending: deque[Future[_PreparedItem] | _PreparedItem] = deque()
+            in_flight = 0
             iterator = iter(enumerate(items, start=1))
 
             def submit(position: int, item: ConnectorItem) -> Future[_PreparedItem]:
@@ -1436,16 +1359,28 @@ class SyncEngine:
                     item,
                 )
 
-            for _ in range(min(len(items), workers * 2)):
-                position, item = next(iterator)
-                pending.append(submit(position, item))
+            def fill() -> None:
+                nonlocal in_flight
+                while in_flight < workers * 2:
+                    try:
+                        position, item = next(iterator)
+                    except StopIteration:
+                        return
+                    decided = self._decide_before_read(mode, artifacts, position, item)
+                    if decided is not None:
+                        pending.append(decided)
+                    else:
+                        pending.append(submit(position, item))
+                        in_flight += 1
+
+            fill()
             while pending:
-                yield pending.popleft().result()
-                try:
-                    position, item = next(iterator)
-                except StopIteration:
-                    continue
-                pending.append(submit(position, item))
+                head = pending.popleft()
+                if isinstance(head, Future):
+                    in_flight -= 1
+                    head = head.result()
+                yield head
+                fill()
 
     def _prepared_items_remote(
         self,
@@ -1514,7 +1449,12 @@ class SyncEngine:
         )
         try:
             pool.publish_health()
-            remote_workers = max(1, min(workers, len(batches), len(remote_urls) * 2))
+            remote_workers = _remote_inflight_batches(
+                workers,
+                len(batches),
+                len(remote_urls),
+                int(getattr(concurrency, "remote_worker_max_inflight_batches", 0) or 0),
+            )
             with ThreadPoolExecutor(
                 max_workers=remote_workers,
                 thread_name_prefix=f"pheasant-remote-{source.name}",
@@ -1688,6 +1628,21 @@ class SyncEngine:
     ) -> int:
         """Finalize one source while holding the coordinated writer mutex."""
 
+        if self.vectors is not None:
+            # Finish provider work before advertising a saved, completed
+            # source. Network batches run concurrently inside this call;
+            # the vector-store upsert itself remains ordered. Before the
+            # mutex rather than inside it: this waits on the provider, and
+            # nothing here needs the graph -- holding the commit authority
+            # through it stalled every other source's commits for the
+            # length of a provider round trip.
+            self.vectors.flush(on_progress=embedding_progress)
+            report(
+                "embedding",
+                embedded_chunks,
+                embedded_chunks,
+                f"embedded {embedded_chunks} changed chunk(s)",
+            )
         with self._sync_mutex:
             pruned_vectors = 0
             if self.vectors is not None:
@@ -1723,17 +1678,6 @@ class SyncEngine:
                     if pending_enrich:
                         self.state.clear_fingerprint(dirty_scope)
 
-            if self.vectors is not None:
-                # Finish provider work before advertising a saved, completed
-                # source. Network batches run concurrently inside this call;
-                # the vector-store upsert itself remains ordered.
-                self.vectors.flush(on_progress=embedding_progress)
-                report(
-                    "embedding",
-                    embedded_chunks,
-                    embedded_chunks,
-                    f"embedded {embedded_chunks} changed chunk(s)",
-                )
             graph_changed = bool(indexed or mode == "full")
             report(
                 "saving",
@@ -2167,15 +2111,6 @@ class SyncEngine:
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)
-                    if self.vectors is not None:
-                        # Chunk ids are content-addressed (text_hash in the id),
-                        # so only new/changed chunk text reaches the embedder.
-                        embedded_chunks += self.vectors.index_artifact(
-                            source.name,
-                            parsed.id,
-                            chunk_rows,
-                            on_progress=embedding_progress,
-                        )
                     enrichment = self.graph_builder.add_artifact(source, parsed)
                     self.state.replace_artifact_enrichment(
                         parsed.id,
@@ -2192,6 +2127,18 @@ class SyncEngine:
                     }
                     changed_ids.add(parsed.id)
                     self._maybe_checkpoint(source.name, manifest)
+                if self.vectors is not None:
+                    # Chunk ids are content-addressed (text_hash in the id),
+                    # so only new/changed chunk text reaches the embedder.
+                    # Outside the commit mutex: the indexer is thread-safe on
+                    # its own, and a full queue waiting for a provider batch
+                    # to land must not stop another source committing.
+                    embedded_chunks += self.vectors.index_artifact(
+                        source.name,
+                        parsed.id,
+                        chunk_rows,
+                        on_progress=embedding_progress,
+                    )
                 indexed += 1
                 # Compatibility phase retained for existing CLI/API/MCP
                 # progress consumers; ``committing`` is the more precise new

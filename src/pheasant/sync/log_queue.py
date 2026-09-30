@@ -477,6 +477,34 @@ def publish_depth(queue: TaskQueue | None) -> None:
     REGISTRY.set("pheasant_log_dead_letters", float(depth.get("dead", 0)))
 
 
+#: How long a written batch's ``log_tasks`` row outlives it. Its only use
+#: afterwards is deduplicating a republish of the same batch, and the event
+#: insert is ``ON CONFLICT (id) DO NOTHING`` anyway, so a day is generous.
+COMPLETED_BATCH_RETENTION_SECONDS = 86_400.0
+
+
+def _purge_completed_batches(state: Any, config: Any) -> int:
+    """Delete ``log_tasks`` rows for batches already written.
+
+    Every batch id is content-addressed over its events, so unlike an index
+    task (one id per source, re-armed) no id repeats: each observation batch
+    was a new row, and each row keeps its whole payload after it is done.
+    `LocalQueue.purge_completed` existed for this and nothing called it, so
+    the table grew with request traffic and stored every observation a
+    second time. JetStream needs nothing here: the broker removes an acked
+    message itself.
+    """
+
+    try:
+        queue = log_queue_from_config(config, state)
+        if not isinstance(queue, LogQueue):
+            return 0
+        return queue.purge_completed(COMPLETED_BATCH_RETENTION_SECONDS)
+    except Exception:  # noqa: BLE001 - the beat's contract: never raise
+        logger.warning("Could not purge completed log batches", exc_info=True)
+        return 0
+
+
 def run_log_maintenance(
     state: Any,
     config: Any,
@@ -500,6 +528,9 @@ def run_log_maintenance(
     if spool:
         report["spooled"] = ingest_spool(state, Path(spool))
 
+    purged = _purge_completed_batches(state, config)
+    if purged:
+        report["purged_batches"] = purged
     exports_path = getattr(config.pheasant, "exports_path", None) or Path("exports")
     report.update(roll(state, settings, exports_path=exports_path, now=now))
     dropped = drop_expired_partitions(exports_path, settings, now=now)

@@ -650,3 +650,59 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
         assert LogQueue(store).depth()[DONE] == 1
     finally:
         store.close()
+
+
+def test_maintenance_purges_written_batches_and_keeps_the_rest(
+    state: StateStore, tmp_path: Path
+) -> None:
+    """A written batch's row is removed, with its payload, after a day.
+
+    Batch ids are content-addressed over their events, so no id repeats and
+    every observation batch was a new ``log_tasks`` row holding its whole
+    payload -- kept forever, because `purge_completed` had no caller.
+    """
+
+    queue = LogQueue(state)
+    for index in range(5):
+        queue.publish_batch(f"log-{index}", {"kind": "interactions", "kb_id": "kb", "events": []})
+    drain(queue, lambda task: 1)
+    queue.publish_batch("log-waiting", {"kind": "interactions", "kb_id": "kb", "events": []})
+    two_days_ago = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    state.execute(
+        "UPDATE log_tasks SET updated_at=? WHERE id IN (?, ?, ?, ?)",
+        (two_days_ago, "log-0", "log-1", "log-2", "log-3"),
+    )
+
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {"name": "kb", "exports_path": str(tmp_path / "exports")},
+            "observability": {
+                "interactions": {"enabled": True, "queue": {"enabled": True, "backend": "local"}}
+            },
+        }
+    )
+    report = run_log_maintenance(state, config)
+
+    assert report is not None and report["purged_batches"] == 4
+    remaining = {
+        str(row["id"]): str(row["status"]) for row in state.rows("SELECT id, status FROM log_tasks")
+    }
+    # A batch finished within the window stays (it still dedups a republish),
+    # and one not yet written is never touched.
+    assert remaining == {"log-4": DONE, "log-waiting": PENDING}
+
+
+def test_purge_and_requeue_count_what_they_changed(state: StateStore) -> None:
+    queue = LocalQueue(state)
+    for index in range(3):
+        queue.publish(IndexTask(id=f"t{index}", source_id=f"s{index}", max_attempts=1))
+    while (task := queue.claim("worker")) is not None:
+        queue.nack(task, "boom")  # one attempt allowed: straight to dead
+    assert queue.depth()[DEAD] == 3
+    assert queue.requeue_dead() == 3
+    assert queue.depth()[DEAD] == 0 and queue.depth()[PENDING] == 3
+    assert queue.requeue_dead() == 0
+
+    drain(queue, lambda task: 1)
+    assert queue.purge_completed(older_than_seconds=-1) == 3
+    assert queue.purge_completed(older_than_seconds=-1) == 0
