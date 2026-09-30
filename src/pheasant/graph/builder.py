@@ -226,11 +226,13 @@ class GraphBuilder:
         )
         self.upsert_edge(source_node, artifact.id, "indexes", {"source_id": source.name})
         self.upsert_edge(parent_node, artifact.id, "contains", {"source_id": source.name})
+        current_chunks: set[str] = set()
         for chunk in artifact.chunks:
             chunk_id = (
                 f"chunk:{source.name}:{artifact.relative_path}:"
                 f"sha256={chunk.text_hash}:chunk={chunk.index:04d}"
             )
+            current_chunks.add(chunk_id)
             self.upsert_node(
                 chunk_id,
                 "chunk",
@@ -246,10 +248,36 @@ class GraphBuilder:
                 },
             )
             self.upsert_edge(artifact.id, chunk_id, "has_chunk", {"source_id": source.name})
+        self._drop_stale_chunks(artifact.id, current_chunks)
         self.add_headings(source, artifact)
         self._drop_embeds(artifact.id)
         self.apply_enrichment(enrichment)
         return enrichment
+
+    def _drop_stale_chunks(self, artifact_id: str, current: set[str]) -> int:
+        """Remove chunk nodes an earlier index of this artifact left behind.
+
+        Chunk ids embed the chunk's sha256, so an edit mints new nodes and the
+        old ones — still reachable by a `has_chunk` edge from the artifact —
+        were never retracted on the incremental path (a full sync cleared the
+        source first, which hid it). Walks only the artifact's own out-edges,
+        so the cost is the artifact's, not the graph's. A chunk id is unique
+        to one artifact (source and path are in it), so nothing shared is
+        removed; `remove_nodes_from` takes the incident edges with it.
+        """
+
+        if artifact_id not in self.graph:
+            return 0
+        stale = [
+            target
+            for _, target, edge_map in self.graph.out_edges(artifact_id)
+            if target not in current
+            and edge_map
+            and all(data.get("type") == "has_chunk" for data in edge_map.values())
+        ]
+        if stale:
+            self.graph.remove_nodes_from(stale)
+        return len(stale)
 
     def _drop_embeds(self, artifact_id: str) -> None:
         """Forget which images a document showed before this index of it.
