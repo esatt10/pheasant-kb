@@ -122,7 +122,8 @@ def visual_for(
             question, citations, facts, llm, kind if kind != "image" else None, documents
         )
         drawn["fallback_from"] = "image"
-        drawn["note"] = "none of the cited sources shows an image; drawn from the passages instead"
+        note = "none of the cited sources shows an image; drawn from the passages instead"
+        drawn["note"] = f"{note}; {drawn['note']}" if drawn.get("note") else note
         return drawn
     if visual != "diagram":
         return None
@@ -159,7 +160,7 @@ def _diagram(
         for c in citations
         if c.get("index") is not None
     }
-    return visuals.build_diagram(
+    drawn = visuals.build_diagram(
         question,
         citations,
         llm,
@@ -167,6 +168,24 @@ def _diagram(
         kind=kind,
         evidence=evidence,
     )
+    if drawn.get("status") == "ok":
+        return drawn
+    # The model could not draw it — no reply, nothing readable after a repair,
+    # or a picture mostly of guesses. The index's own links between the same
+    # cited sources are grounded by construction and need no model, so a
+    # reader who asked for a visual gets one, told which it is and why.
+    fallback = visuals.graph_diagram(citations, facts)
+    if fallback.get("status") != "ok":
+        return drawn
+    reason = str(drawn.get("reason") or "declined")
+    fallback["fallback_from"] = "model"
+    fallback["model_declined"] = reason
+    fallback["note"] = (
+        f"the model's drawing could not be used ({reason}); "
+        "drawn as a concept map from the index's own links instead"
+    )
+    visuals.record_model_outcome(llm, "fallback")
+    return fallback
 
 
 def visual_documents(

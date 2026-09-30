@@ -142,6 +142,9 @@ MAX_LABEL = 80
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+#: A number standing alone as a token — after a bracket, a comma, a space, a
+#: ``#`` or the start — never the tail of an identifier such as ``n1``.
+_CITE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])#?(\d{1,4})(?![A-Za-z0-9_.])")
 
 #: What each kind needs at least, beyond the grounding share: a table of one
 #: cell or a chart of one bar is not a picture of anything.
@@ -230,16 +233,27 @@ def label(value: Any, limit: int = MAX_LABEL) -> str:
 
 
 def cites(value: Any, valid: set[int]) -> list[int]:
+    """The passage numbers ``value`` names that were given, in order, once each.
+
+    Read the ways a model writes them: ``2``, ``"[2]"``, ``"[1][3]"``,
+    ``"1, 3"``, ``"passage 2"``, ``"#2"``. A token that is not a bare number
+    (``"n1"`` — a node id in the wrong field) is not read as one: a
+    citation this check invents is worse than one it misses.
+    """
+
     if not isinstance(value, list):
         value = [value] if value is not None else []
     out: list[int] = []
     for item in value:
-        try:
-            number = int(str(item).strip("[] "))
-        except (TypeError, ValueError):
+        if isinstance(item, bool):
             continue
-        if number in valid and number not in out:
-            out.append(number)
+        if isinstance(item, (int, float)):
+            numbers = [int(item)] if float(item).is_integer() else []
+        else:
+            numbers = [int(token) for token in _CITE_TOKEN_RE.findall(str(item))]
+        for number in numbers:
+            if number in valid and number not in out:
+                out.append(number)
     return out
 
 

@@ -38,9 +38,21 @@ class LLM:
         """Use another model with the same provider, credentials and limits."""
         return replace(self, model=model)
 
-    def complete(self, system: str, prompt: str, *, max_output_tokens: int | None = None) -> str:
-        """One turn. Raises :class:`ProviderError` on failure."""
+    def complete(
+        self,
+        system: str,
+        prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> str:
+        """One turn. Raises :class:`ProviderError` on failure.
+
+        ``json_mode`` asks for a reply that is one JSON object where the
+        provider can be told so; the caller still parses defensively.
+        """
         note_model_call()
+        kwargs: dict[str, Any] = {"json_mode": True} if json_mode else {}
         return complete(
             self.provider,
             api_key=self.api_key,
@@ -50,6 +62,7 @@ class LLM:
             base_url=self.base_url,
             max_output_tokens=max_output_tokens or self.max_output_tokens,
             timeout=self.timeout,
+            **kwargs,
         )
 
     def try_complete(self, system: str, prompt: str, **kwargs: Any) -> str | None:

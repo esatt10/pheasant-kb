@@ -151,6 +151,30 @@ drawn with all of them. With no model connected the visual is the graph's own
 edges between the cited sources, grounded by construction (as a concept map,
 and it says so if you asked for another shape).
 
+### Any model can draw
+
+Which model is behind `assistant.model` should not decide whether a visual
+appears. Models differ in exactly the ways that used to turn a request into
+"No visual": a reasoning model (GPT-6, Gemini 2.5) spends hidden thinking
+tokens out of the same output cap its reply comes from, some wrap JSON in
+prose or a fence, and each spells the grammar its own way (`source`/`target`,
+`citations`, nested `children`). The drawing path now absorbs all of it, and
+none of it lowers the grounding bar:
+
+| Layer | What it does |
+|---|---|
+| Prompt (`assistant.visual_prompt`) | States the reply contract at both ends of the call, lists the passage numbers that may be cited, and shows a worked reply of the shape being drawn |
+| Provider | Asks for JSON where the wire can say so (OpenAI `response_format`, Gemini `responseMimeType`), and drops the field if an endpoint rejects it |
+| Budget | 8,192 output tokens (or `assistant.max_output_tokens`, if higher) — room to think *and* write; a reply cut off before any text is asked again with twice the room |
+| Dialect (`assistant.visual_dialect`) | Reads the spellings models use onto the grammar before the check: renames and restructures, never adds a citation |
+| Repair | A reply that still cannot be *read* gets one more turn saying what was wrong. A visual declined as *ungrounded* does not — asking for citations until the check passes would be asking the model to pass the check |
+| Fallback | If the model still cannot draw, the visual is the graph's own edges between the cited sources, with `fallback_from: "model"` and a `note` saying why |
+
+`pheasant_assistant_visual_model_total{provider,outcome}` counts how the
+model half went — `drawn`, `repaired`, `ungrounded`, `unreadable`,
+`no_reply`, `fallback`. After changing `assistant.model`, a rise in
+`unreadable` or `no_reply` is a prompt or budget problem, not a corpus one.
+
 `visual.mermaid` is the same visual as Mermaid text where Mermaid has the
 shape (flowchart, sequence, mindmap, timeline, quadrantChart, xychart);
 `visual.markdown` is a table as Markdown. In a streamed answer the text

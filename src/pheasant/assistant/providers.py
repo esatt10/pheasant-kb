@@ -49,6 +49,19 @@ class ProviderError(RuntimeError):
     """A chat provider could not produce an answer."""
 
 
+class OutputBudgetExhausted(ProviderError):
+    """The model stopped at its output cap having written no visible text.
+
+    Distinct from an empty reply because the remedy is different. A reasoning
+    model (GPT-6, Gemini 2.5, any model thinking before it answers) spends
+    hidden tokens out of the same ``max_completion_tokens`` /
+    ``maxOutputTokens`` the answer comes from, so a cap sized for the *answer*
+    can be spent entirely on thinking — a 200 with an empty message and
+    ``finish_reason: length``. A caller that knows this can ask again with
+    more room; one that reads it as "the model had nothing to say" cannot.
+    """
+
+
 @dataclass
 class TokenUsage:
     """Actual provider-reported usage for one workflow node, never estimated."""
@@ -199,8 +212,17 @@ def complete(
     base_url: str | None = None,
     max_output_tokens: int = 4096,
     timeout: float = DEFAULT_TIMEOUT,
+    json_mode: bool = False,
 ) -> str:
-    """Single-turn completion. Returns the assistant's text."""
+    """Single-turn completion. Returns the assistant's text.
+
+    ``json_mode`` asks the provider for a reply that is one JSON object, where
+    the wire has a way to say so (OpenAI ``response_format``, Gemini
+    ``responseMimeType``). It is a request, not a guarantee: Anthropic's
+    messages API has no such switch, an OpenAI-compatible endpoint may reject
+    the field (it is then dropped and the call retried), and every caller
+    still parses what comes back defensively.
+    """
     spec = PROVIDERS.get(provider)
     if spec is None:
         raise ProviderError(
@@ -214,8 +236,12 @@ def complete(
     if provider == "anthropic":
         return _anthropic(base, api_key, model, system, prompt, max_output_tokens, timeout)
     if provider == "openai":
-        return _openai(base, api_key, model, system, prompt, max_output_tokens, timeout)
-    return _gemini(base, api_key, model, system, prompt, max_output_tokens, timeout)
+        return _openai(
+            base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
+        )
+    return _gemini(
+        base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
+    )
 
 
 def _anthropic(
@@ -242,12 +268,24 @@ def _anthropic(
     ]
     text = "".join(parts).strip()
     if not text:
+        if data.get("stop_reason") == "max_tokens":
+            raise OutputBudgetExhausted(
+                f"Anthropic stopped at its {max_tokens}-token output cap before writing any text"
+            )
         raise ProviderError("empty response from Anthropic")
     return text
 
 
 def _openai(
-    base: str, key: str, model: str, system: str, prompt: str, max_tokens: int, timeout: float
+    base: str,
+    key: str,
+    model: str,
+    system: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: float,
+    *,
+    json_mode: bool = False,
 ) -> str:
     # GPT-6 models reject the legacy cap. Other OpenAI-compatible endpoints
     # keep their existing spelling and the error-driven retry below.
@@ -260,41 +298,90 @@ def _openai(
         ],
         token_field: max_tokens,
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     headers = {"authorization": f"Bearer {key}"}
     url = f"{base}/chat/completions"
-    try:
-        data = _http_json(url, payload, headers, timeout)
-    except ProviderError as exc:
-        # Reasoning-era models renamed the output cap and reject the old key.
-        if "max_tokens" not in payload or "max_tokens" not in str(exc):
-            raise
-        payload.pop("max_tokens")
-        payload["max_completion_tokens"] = max_tokens
-        data = _http_json(url, payload, headers, timeout)
+    # Each rejection names the one field an endpoint does not accept, and each
+    # is adjusted at most once, so this is bounded by the number of fields.
+    while True:
+        try:
+            data = _http_json(url, payload, headers, timeout)
+            break
+        except ProviderError as exc:
+            reason = str(exc)
+            if "max_tokens" in payload and "max_tokens" in reason:
+                # Reasoning-era models renamed the output cap and reject the old key.
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+            elif "response_format" in payload and "response_format" in reason:
+                # JSON mode is a request; an endpoint that does not know it
+                # still gets asked, and the caller parses what comes back.
+                payload.pop("response_format")
+            else:
+                raise
     reported = data.get("usage") or {}
     _record_usage(reported.get("prompt_tokens"), reported.get("completion_tokens"))
     choices = data.get("choices") or []
-    text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+    choice = choices[0] if choices else {}
+    message = choice.get("message") or {}
+    content = message.get("content")
+    if isinstance(content, list):
+        # Some OpenAI-compatible servers return content parts, as the
+        # Responses API does, rather than one string.
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    text = (content or "").strip()
     if not text:
+        if message.get("refusal"):
+            raise ProviderError("the model declined to answer this question")
+        if choice.get("finish_reason") == "length":
+            raise OutputBudgetExhausted(
+                f"OpenAI model {model} spent its {max_tokens}-token output budget "
+                "(reasoning included) before writing any text"
+            )
         raise ProviderError("empty response from OpenAI")
     return text
 
 
 def _gemini(
-    base: str, key: str, model: str, system: str, prompt: str, max_tokens: int, timeout: float
+    base: str,
+    key: str,
+    model: str,
+    system: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: float,
+    *,
+    json_mode: bool = False,
 ) -> str:
+    generation: dict = {"maxOutputTokens": max_tokens}
+    if json_mode:
+        generation["responseMimeType"] = "application/json"
     payload = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens},
+        "generationConfig": generation,
     }
     headers = {"x-goog-api-key": key}
-    data = _http_json(f"{base}/models/{model}:generateContent", payload, headers, timeout)
+    url = f"{base}/models/{model}:generateContent"
+    try:
+        data = _http_json(url, payload, headers, timeout)
+    except ProviderError as exc:
+        if "responseMimeType" not in generation or "responseMimeType" not in str(exc):
+            raise
+        generation.pop("responseMimeType")
+        data = _http_json(url, payload, headers, timeout)
     reported = data.get("usageMetadata") or {}
     _record_usage(reported.get("promptTokenCount"), reported.get("candidatesTokenCount"))
     candidates = data.get("candidates") or []
     parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
-    text = "".join(part.get("text", "") for part in parts).strip()
+    # A thinking model returns its thought summary as parts flagged
+    # ``thought``; they are not the answer.
+    text = "".join(part.get("text", "") for part in parts if not part.get("thought")).strip()
     if not text:
+        if candidates and candidates[0].get("finishReason") == "MAX_TOKENS":
+            raise OutputBudgetExhausted(
+                f"Gemini model {model} spent its {max_tokens}-token output budget "
+                "(thinking included) before writing any text"
+            )
         raise ProviderError("empty response from Gemini")
     return text

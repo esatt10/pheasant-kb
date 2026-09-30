@@ -509,6 +509,16 @@ def register_default_metrics(version: str) -> None:
         "Visuals built for answers, by type and status (ok / declined).",
         ("type", "status"),
     )
+    # How the *model* half of a diagram went, per provider — the signal a
+    # model switch moves. `unreadable` and `no_reply` rising after a change of
+    # assistant.model is a prompt or budget problem, not a corpus one;
+    # `fallback` counts diagrams the index's own edges drew instead.
+    REGISTRY.counter(
+        "pheasant_assistant_visual_model_total",
+        "Model diagram attempts, by provider and outcome "
+        "(drawn / repaired / ungrounded / unreadable / no_reply / fallback).",
+        ("provider", "outcome"),
+    )
 
     # Retrieval, per pipeline stage.
     #

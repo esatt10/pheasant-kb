@@ -874,6 +874,16 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   documents the answer read (`answering.visual_documents`), never 500-character
   previews. No model: the graph's own edges. Never markup from model output —
   each kind has a renderer in the view; Mermaid/Markdown are escaped exports.
+- **A visual does not depend on the model drawing it.** Between the reply and
+  `validate_spec` sit: a prompt stating the contract at both ends, the citable
+  passage numbers and a worked example of the shape (`assistant.visual_prompt`,
+  every example asserted valid); JSON mode where the wire has one; an 8,192-token
+  floor with one doubled retry on `OutputBudgetExhausted`; a dialect reader
+  (`assistant.visual_dialect`) that renames and restructures but never adds a
+  claim; one repair turn for an *unreadable* reply and none for an
+  *ungrounded* one; and, last, the graph's own edges with `fallback_from:
+  "model"`. `pheasant_assistant_visual_model_total{provider,outcome}` is the
+  signal a model switch moves. `tests/test_visual_robustness.py`.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
@@ -1925,6 +1935,20 @@ Each of these cost real time. They are listed because the shape recurs.
   Found by looking at a demo screenshot of a pipeline with two steps missing;
   `tests/test_visual_shapes.py` asserts step five reaches the prompt and fails
   with the hydration stubbed out.
+- **An output cap sized for the answer is spent on thinking by a model that
+  thinks.** The drawing call asked for 1,600 tokens. On the model it was tuned
+  against that was plenty; on GPT-6 (and Gemini 2.5) hidden reasoning comes
+  out of the same `max_completion_tokens`, so the reply was an empty 200 with
+  `finish_reason: length`, `try_complete` turned that into `None`, and the
+  visual said "the model did not return a diagram" — indistinguishable from a
+  model that ignored the prompt. Nothing about it was specific to diagrams
+  except the small cap. `OutputBudgetExhausted` names the case now so a caller
+  can ask again with room. Around it, the prompt had been tuned to one model's
+  habits and the check read one spelling of the grammar, so the same switch
+  also broke every reply that said `source`/`target` or wrapped its JSON in a
+  sentence: a strict *spelling* check is a decline that reads like a
+  grounding judgement and is not one. `tests/test_visual_robustness.py`
+  drives the real provider wire, so it fails if the cap comes back.
 - **An `except` whose reason stopped being true catches only what it was not
   written for.** `_sync_all_queued` swallowed every publish failure at debug
   as "already queued" — right when a duplicate `INSERT` raised, and dead once
