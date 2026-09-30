@@ -1791,21 +1791,20 @@ Each of these cost real time. They are listed because the shape recurs.
   the fix was to split `state` from `timing` in the payload, and then to assert
   in `tests/test_readiness_plane.py` that `retrieval_ms` stays the *only* such
   field. Otherwise the next one arrives as a test quietly ignoring one more key.
-- **An incremental sync leaks a chunk node per edit. Open, pre-existing, not
-  fixed here.** Chunk node ids embed the chunk's sha256, so editing a file
-  produces *new* chunk nodes — and nothing removes the old ones on the
-  incremental path: `remove_artifact_nodes` exists and does exactly the right
-  thing, but its only caller is memory maintenance. A full sync is correct,
-  because it clears the source first. Measured on a real region: one file
-  edited three times ends with **four** chunk nodes and four `has_chunk`
-  edges, and the count rises by one on every subsequent edit, so an actively
-  edited corpus accumulates orphaned chunks without bound — graph memory,
-  traversal budget and `graph_nodes` rows spent on content that no longer
-  exists. Reproduced identically on the commit before the working-set changes,
-  so it is not one of theirs. Left alone deliberately: wiring removal into the
-  incremental path changes what an incremental sync *does*, which is a
-  correctness change with its own blast radius and deserves its own evidence
-  rather than riding along with an efficiency pass.
+- **An incremental sync used to leak a chunk node per edit. Fixed.** Chunk node
+  ids embed the chunk's sha256, so an edit mints new chunk nodes, and nothing
+  retracted the old ones on the incremental path (a full sync cleared the
+  source first, which hid it): one file edited three times ended with four
+  chunk nodes and four `has_chunk` edges, rising by one per edit.
+  `GraphBuilder._drop_stale_chunks` runs in `add_artifact` and removes the
+  artifact's `has_chunk` targets that are not in the current chunk set,
+  walking only the artifact's own out-edges (O(artifact), not O(graph)).
+  Safe because a chunk id carries source and path, so none is shared.
+  `tests/test_sync_idempotency.py` edits a file three times and asserts the
+  chunk count is flat in the working set and the persisted rows, and that an
+  unchanged re-sync leaves the generation id alone. Scoped to `chunk`:
+  `references` and headings have the same upsert-only shape and were left
+  for their own evidence, as with `embeds`.
 - **A stand-in that implements *part* of a mapping fails only on the backend
   nobody tests, in production.** `SqlGraph.node_map()` returns a `_LazyNodeMap`
   — a per-scan cache built for `_scan_edges`, which calls `get()` and nothing

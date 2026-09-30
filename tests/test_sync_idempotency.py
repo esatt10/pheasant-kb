@@ -707,3 +707,59 @@ def test_an_edit_that_drops_an_image_link_drops_the_figure(tmp_path: Path) -> No
     engine.reload_graph()
     assert collect_figures(engine.serving_graph(), [doc]) == []
     engine.close()
+
+
+def test_editing_a_file_incrementally_retracts_its_old_chunk_nodes(tmp_path: Path) -> None:
+    """Chunk ids embed the chunk's sha256, so each edit mints new chunk nodes.
+    The incremental path used to leave the old ones (and their `has_chunk`
+    edges) behind; a full sync cleared the source first and hid it. After any
+    number of edits the artifact must own exactly its current chunks, in the
+    working set and in the persisted rows, and an unchanged re-sync must not
+    move the graph generation."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    page = workspace / "notes.md"
+    page.write_text("# Notes\n\nversion zero\n", encoding="utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "chunk-leak",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(workspace),
+                    "include": ["**/*.md"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+
+    def chunk_nodes(graph) -> list[str]:
+        return sorted(
+            node_id for node_id, attrs in graph.iter_nodes() if attrs.get("type") == "chunk"
+        )
+
+    engine.sync_source("docs", "full")
+    baseline = len(chunk_nodes(engine.graph_builder.graph))
+    assert baseline >= 1
+
+    for edit in range(1, 4):
+        page.write_text(f"# Notes\n\nversion {edit}\n", encoding="utf-8")
+        engine.sync_source("docs", "incremental")
+        assert len(chunk_nodes(engine.graph_builder.graph)) == baseline
+
+    before = engine.loaded_graph_generation
+    engine.sync_source("docs", "incremental")
+    assert engine.loaded_graph_generation == before
+
+    engine.reload_graph()
+    assert len(chunk_nodes(engine.serving_graph())) == baseline
+    engine.close()
