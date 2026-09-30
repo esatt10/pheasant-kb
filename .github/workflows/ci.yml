@@ -59,6 +59,35 @@ jobs:
       - name: Run pytest suite
         run: python -m pytest -q
 
+  mcp-app-browser:
+    # The MCP App view is one HTML file whose behaviour is where an SVG ends
+    # up after a drag, which no jsdom lays out. The test skips where there is
+    # no Chromium (like lancedb and wasmtime elsewhere); here there is one and
+    # PHEASANT_REQUIRE_BROWSER makes not finding it a failure, so this job
+    # cannot go green by testing nothing.
+    name: MCP App view in a real browser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project, Playwright and Chromium
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,mcp]" playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run the view's browser tests
+        env:
+          PHEASANT_REQUIRE_BROWSER: "1"
+        run: python -m pytest tests/test_mcp_app_expand.py -q
+
   backend-parity:
     # The scale-out backend, on EVERY pull request.
     #

@@ -14,7 +14,8 @@ import { useAppliedTheme } from "../hooks/useTheme";
  * (so an image is read under the region's ACL exactly as over MCP) and
  * `tools/call create_visual` to `/assistant/visual` (the view's "Redraw as"),
  * resizes
- * on `ui/notifications/size-changed`, and turns `ui/message` — "tell me more
+ * on `ui/notifications/size-changed`, gives the view the whole window when it
+ * asks (`ui/request-display-mode`, "fullscreen" and back to "inline"), and turns `ui/message` — "tell me more
  * about this node" — into the next question in the conversation.
  *
  * One renderer for agents and people, so a diagram looks the same in Claude
@@ -28,6 +29,10 @@ import { useAppliedTheme } from "../hooks/useTheme";
 const PROTOCOL_VERSION = "2026-01-26";
 const MIN_HEIGHT = 80;
 const MAX_HEIGHT = 900;
+
+/** What this host can give a view: its slot in the chat, or the whole window. */
+type DisplayMode = "inline" | "fullscreen";
+const DISPLAY_MODES: DisplayMode[] = ["inline", "fullscreen"];
 
 interface JsonRpc {
   jsonrpc: "2.0";
@@ -50,6 +55,7 @@ export function McpAppFrame({
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(MIN_HEIGHT * 3);
   const [ready, setReady] = useState(false);
+  const [mode, setMode] = useState<DisplayMode>("inline");
   const theme = useAppliedTheme();
   const view = useQuery({
     queryKey: ["mcp-app-knowledge-view"],
@@ -58,8 +64,8 @@ export function McpAppFrame({
   });
 
   // Latest values for the message handler, which is registered once.
-  const latest = useRef({ result, onAsk, theme });
-  latest.current = { result, onAsk, theme };
+  const latest = useRef({ result, onAsk, theme, mode });
+  latest.current = { result, onAsk, theme, mode };
 
   useEffect(() => {
     const post = (message: Record<string, unknown>) =>
@@ -81,13 +87,29 @@ export function McpAppFrame({
             protocolVersion: PROTOCOL_VERSION,
             hostInfo: { name: "pheasant-ui", version: "1" },
             hostCapabilities: { openLinks: {}, serverTools: {} },
-            hostContext: { theme: latest.current.theme, displayMode: "inline" },
+            hostContext: {
+              theme: latest.current.theme,
+              displayMode: latest.current.mode,
+              availableDisplayModes: DISPLAY_MODES,
+            },
           });
           return;
         case "ui/notifications/initialized":
           setReady(true);
           return;
+        case "ui/request-display-mode": {
+          // The view asks; the host decides, and answers with the mode it is
+          // actually in, which is not always the one asked for.
+          const asked = params.mode as DisplayMode;
+          if (DISPLAY_MODES.includes(asked)) setMode(asked);
+          reply(message.id, {
+            mode: DISPLAY_MODES.includes(asked) ? asked : latest.current.mode,
+          });
+          return;
+        }
         case "ui/notifications/size-changed": {
+          // Expanded, the frame is the window: its height is not the content's.
+          if (latest.current.mode === "fullscreen") return;
           const next = Number(params.height);
           if (Number.isFinite(next)) setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, next + 4)));
           return;
@@ -165,16 +187,49 @@ export function McpAppFrame({
     );
   }, [ready, theme]);
 
+  // Tell the view when its mode changed, however it changed (its own button,
+  // Escape here, or the host closing it).
+  useEffect(() => {
+    if (!ready) return;
+    frameRef.current?.contentWindow?.postMessage(
+      { jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { displayMode: mode } },
+      "*",
+    );
+  }, [ready, mode]);
+
+  // Fullscreen is an overlay over the app, so the app must not scroll behind
+  // it, and Escape must always be a way out even when the view has no focus.
+  useEffect(() => {
+    if (mode !== "fullscreen") return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMode("inline");
+    };
+    window.addEventListener("keydown", onKey);
+    frameRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [mode]);
+
   if (view.isError) return <div className="muted">The visual view could not be loaded.</div>;
   if (!view.data) return <div className="muted">Loading the visual…</div>;
+  const fullscreen = mode === "fullscreen";
+  // The frame is the same element in both modes — moving it in the tree would
+  // reload it and lose the layout being rearranged — so fullscreen is a style
+  // on it, and the slot keeps the chat from collapsing while it is away.
   return (
-    <iframe
-      ref={frameRef}
-      className="mcp-app-frame"
-      title={title}
-      sandbox="allow-scripts"
-      srcDoc={view.data}
-      style={{ height }}
-    />
+    <div className="mcp-app-slot" style={{ height }}>
+      <iframe
+        ref={frameRef}
+        className={fullscreen ? "mcp-app-frame mcp-app-frame--fullscreen" : "mcp-app-frame"}
+        title={title}
+        sandbox="allow-scripts"
+        srcDoc={view.data}
+        style={fullscreen ? undefined : { height }}
+      />
+    </div>
   );
 }

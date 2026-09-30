@@ -146,7 +146,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 140 pytest modules, offline by design
+└── tests/                     ← 141 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -879,7 +879,13 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
 - **MCP Apps.** The three assistant tools declare
   `ui://pheasant/knowledge-view.html` (`text/html;profile=mcp-app`); the web UI
   hosts the same file in `sandbox="allow-scripts"` and speaks the host half of
-  the protocol, so one renderer serves agents and people.
+  the protocol, so one renderer serves agents and people. A view **expands**
+  through `ui/request-display-mode` and only when the host lists `fullscreen` in
+  `hostContext.availableDisplayModes`; expanded, the shapes whose nodes are free
+  to move (twelve of eighteen — not sequence, timeline, 2×2, chart, table,
+  groups) can be dragged and their edges follow. The layout is view state only:
+  never sent to the host, never persisted. `tests/test_mcp_app_expand.py` drives
+  it in a real browser against the real validator.
 
 ### Retrieval telemetry
 

@@ -115,6 +115,32 @@
   svg .lifeline { stroke: var(--line); stroke-dasharray: 3 3; }
   button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
     font: inherit; }
+  /* Expand / collapse and, when expanded, reset. Hidden unless the host says
+     it can give the view the whole window (hostContext.availableDisplayModes). */
+  .tools { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .tool { display: inline-flex; align-items: center; gap: 5px; font: 12px system-ui, sans-serif;
+    color: var(--fg); background: var(--node); border: 1px solid var(--line); border-radius: 12px;
+    padding: 2px 10px; cursor: pointer; }
+  .tool:hover { border-color: var(--accent); color: var(--accent); }
+  .tool svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .hint { font-size: 12px; color: var(--muted); }
+  /* Expanded: the visual is the whole page. Everything else in the result is
+     still there, and is shown again on collapse. */
+  body.fs { overflow: hidden; }
+  body.fs main { padding: 0; }
+  body.fs #root > :not(.fs-target) { display: none; }
+  body.fs .fs-target { margin: 0; height: 100vh; box-sizing: border-box; padding: 10px 14px;
+    display: flex; flex-direction: column; }
+  body.fs .fs-target details.source { display: none; }
+  body.fs .fs-target .diagram { flex: 1; min-height: 0; position: relative; }
+  body.fs .fs-target .diagram > svg { max-width: none !important; }
+  body.fs .fs-target .diagram.movable { overflow: hidden; }
+  body.fs .fs-target .diagram.movable > svg { position: absolute; inset: 0; width: 100%; height: 100%;
+    max-width: none !important; min-width: 0 !important; touch-action: none; user-select: none; }
+  body.fs .diagram.movable svg .node { cursor: grab !important; }
+  body.fs .diagram.movable svg .node.dragging { cursor: grabbing !important; }
+  body.fs .diagram.movable svg .node.dragging > :first-child { stroke-width: 2.4; }
 </style>
 </head>
 <body>
@@ -154,16 +180,34 @@
     if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
   });
 
+  // What the host said about itself: the display modes it can give this view
+  // (the Expand button exists only if "fullscreen" is among them) and the one
+  // it is in now.
+  let hostContext = {};
+  let expanded = null;        // the visual currently shown fullscreen
+  let requested = null;       // the visual whose Expand was just clicked
+  const visuals = new Set();  // every visual on the page, for refreshTools
   function applyContext(context) {
-    if (context && (context.theme === "dark" || context.theme === "light")) {
+    if (!context) return;
+    if (context.theme === "dark" || context.theme === "light") {
       document.documentElement.dataset.theme = context.theme;
     }
+    if (Array.isArray(context.availableDisplayModes)) {
+      hostContext.availableDisplayModes = context.availableDisplayModes;
+      for (const holder of [...visuals]) refreshTools(holder);
+    }
+    // The host can collapse the view itself (its own close control, a
+    // navigation): follow it rather than insisting on the mode we asked for.
+    if (typeof context.displayMode === "string") applyMode(context.displayMode);
   }
 
   // The content's own height, not the document's: a document is never
   // shorter than the frame showing it, so measuring it would let a host grow
   // the frame and never shrink it back.
   function reportSize() {
+    // Expanded, the frame is the host's whole window and its size is not ours
+    // to report: the answer would be the window's own height, fed back.
+    if (expanded) return;
     const box = root.getBoundingClientRect();
     notify("ui/notifications/size-changed", {
       width: Math.ceil(box.width),
@@ -213,6 +257,10 @@
 
   // ---------------------------------------------------------------- render
   function render(result) {
+    // A new result replaces the visual that was expanded; leave the mode
+    // (and tell the host) rather than strand it in fullscreen on nothing.
+    if (expanded) collapse();
+    visuals.clear();
     root.replaceChildren();
     const image = (result.content || []).find((block) => block.type === "image");
     const payload = payloadOf(result);
@@ -390,6 +438,8 @@
     const diagram = visual.diagram || {};
     const head = el("div", { class: "visual__head" }, el("h1", {}, diagram.title || "Diagram"));
     if (diagram.viewpoint) head.append(el("span", { class: "badge" }, "Viewpoint: " + diagram.viewpoint));
+    const tools = el("div", { class: "tools" });
+    head.append(tools);
     holder.append(head);
     if (visual.note) holder.append(el("p", { class: "muted" }, visual.note));
     if (diagram.summary) holder.append(el("p", { class: "muted" }, diagram.summary));
@@ -398,6 +448,10 @@
     try { body.append(draw(diagram)); }
     catch (_) { body.append(layeredSvg(diagram, true)); }
     holder.append(body);
+    holder.__tools = tools;
+    holder.__body = body;
+    holder.__canvas = body.firstElementChild instanceof SVGElement ? body.firstElementChild : null;
+    visuals.add(holder);
     const grounding = visual.grounding || {};
     holder.append(el("p", { class: "muted" },
       `${grounding.cited || 0} of ${(grounding.cited || 0) + (grounding.inferred || 0)} elements ` +
@@ -410,6 +464,280 @@
       holder.append(el("details", { class: "source" }, el("summary", {}, source[0] + " source"),
         el("pre", {}, el("code", {}, source[1]))));
     }
+    // A redraw while expanded stays expanded, on the new picture.
+    if (holder === expanded) mountStage(holder);
+    refreshTools(holder);
+  }
+
+  // ---------------------------------------------------------------- expand
+  //
+  // "Expand" asks the host for the whole window (`ui/request-display-mode`,
+  // MCP Apps 2026-01-26) and shows the button only where the host says it can
+  // ("fullscreen" in hostContext.availableDisplayModes). Expanded, the diagram
+  // fills the frame and its nodes can be dragged; the edges follow. Collapsing
+  // returns to the inline picture, which keeps whatever layout was made.
+  // Nothing about a drag reaches the host or the region: a layout is a view
+  // of the same cited passages, not new knowledge.
+
+  const ICONS = {
+    expand: "M9.5 2H14v4.5 M6.5 14H2V9.5 M14 2 9 7 M2 14l5-5",
+    collapse: "M14 6.5H9.5V2 M2 9.5h4.5V14 M9.5 6.5 14 2 M6.5 9.5 2 14",
+    reset: "M2.5 8a5.5 5.5 0 1 0 1.8-4 M2.5 2.5v3h3",
+  };
+  function tool(label, icon, title, onClick) {
+    const icons = svg("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" });
+    icons.append(svg("path", { d: ICONS[icon] }));
+    const button = el("button", { class: "tool", type: "button", title, "aria-label": title });
+    button.append(icons, document.createTextNode(label));
+    button.addEventListener("click", onClick);
+    return button;
+  }
+  const canExpand = () => (hostContext.availableDisplayModes || []).includes("fullscreen");
+
+  function refreshTools(holder) {
+    const tools = holder && holder.__tools;
+    if (!tools) return;
+    tools.replaceChildren();
+    if (holder === expanded) {
+      if (movable(holder)) {
+        tools.append(el("span", { class: "hint" }, "Drag a node to move it"),
+          tool("Reset layout", "reset", "Put every node back where it was drawn", () => resetLayout(holder)));
+      }
+      tools.append(tool("Collapse", "collapse", "Back to the normal size (Esc)", collapse));
+    } else if (canExpand()) {
+      tools.append(tool("Expand", "expand", "Open at full size and rearrange the nodes", () => {
+        requested = holder;
+        request("ui/request-display-mode", { mode: "fullscreen" })
+          .then((result) => applyMode((result && result.mode) || "fullscreen"))
+          .catch(() => { requested = null; });
+      }));
+    }
+  }
+
+  function collapse() {
+    request("ui/request-display-mode", { mode: "inline" })
+      .catch(() => {});
+    // Do not wait on the host to leave: a host that never answers must not
+    // leave the view stuck covering the conversation.
+    applyMode("inline");
+  }
+
+  function applyMode(mode) {
+    if (mode === "fullscreen") {
+      const holder = requested;
+      requested = null;
+      if (!holder || expanded === holder || !holder.isConnected) return;
+      expanded = holder;
+      document.body.classList.add("fs");
+      holder.classList.add("fs-target");
+      mountStage(holder);
+      refreshTools(holder);
+      return;
+    }
+    requested = null;
+    if (!expanded) return;
+    const holder = expanded;
+    expanded = null;
+    unmountStage(holder);
+    holder.classList.remove("fs-target");
+    document.body.classList.remove("fs");
+    refreshTools(holder);
+    reportSize();
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && expanded) collapse();
+  });
+  window.addEventListener("resize", () => { if (expanded) fitStage(expanded); });
+
+  // ---- the scene: what can be moved, and what has to follow it
+
+  function scene(canvas) {
+    return canvas.__scene || (canvas.__scene = { nodes: [], byBox: new Map(), edges: [], base: null });
+  }
+  function track(canvas, group, box) {
+    const record = { group, box, dx: 0, dy: 0 };
+    const s = scene(canvas);
+    s.nodes.push(record);
+    s.byBox.set(box, record);
+  }
+  function trackEdge(canvas, edge) {
+    const s = scene(canvas), a = s.byBox.get(edge.a), b = s.byBox.get(edge.b);
+    if (!a || !b) return;    // e.g. a sequence message: no boxes to follow
+    edge.from = a; edge.to = b;
+    edge.tx = edge.text ? [Number(edge.text.getAttribute("x")), Number(edge.text.getAttribute("y"))] : null;
+    s.edges.push(edge);
+  }
+  const movable = (holder) => !!(holder.__canvas && holder.__canvas.__scene && !holder.__canvas.__fixed
+    && holder.__canvas.__scene.nodes.length);
+
+  const now = (r) => ({ x: r.box.x + r.dx, y: r.box.y + r.dy, w: r.box.w, h: r.box.h, shape: r.box.shape });
+  const shifted = (r) => `translate(${r.dx} ${r.dy})`;
+
+  // Where a class diagram's multiplicity sits: a little way in from an end of
+  // the line, and a little to the side of it.
+  function multAt(x1, y1, x2, y2, end) {
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / len, uy = (y2 - y1) / len;
+    const sign = end === 0 ? 1 : -1, x = end === 0 ? x1 : x2, y = end === 0 ? y1 : y2;
+    return [x + ux * 16 * sign - uy * 9, y + uy * 16 * sign + ux * 9];
+  }
+
+  // A moved node's edges are redrawn as straight lines between the nodes'
+  // current borders; an edge whose ends are both home goes back to the path
+  // its layout drew, so Reset (or dragging a node back) is exact.
+  function reroute(edge) {
+    const { from, to } = edge;
+    const home = !from.dx && !from.dy && !to.dx && !to.dy;
+    if (from === to) {
+      // A self-transition is a loop hanging off its node: it moves with it.
+      const at = home ? null : shifted(from);
+      for (const part of [edge.group, edge.text]) {
+        if (!part) continue;
+        if (at) part.setAttribute("transform", at); else part.removeAttribute("transform");
+      }
+      return;
+    }
+    const a = now(from), b = now(to);
+    const [x1, y1] = border(a, b), [x2, y2] = border(b, a);
+    edge.line.setAttribute("d", home ? edge.d : `M${x1},${y1} L${x2},${y2}`);
+    if (edge.text) {
+      const [tx, ty] = home ? edge.tx : [(x1 + x2) / 2, (y1 + y2) / 2 - 5];
+      edge.text.setAttribute("x", tx); edge.text.setAttribute("y", ty);
+    }
+    for (const mult of edge.mults || []) {
+      const [px, py] = multAt(x1, y1, x2, y2, mult.end);
+      mult.node.setAttribute("x", px); mult.node.setAttribute("y", py);
+    }
+  }
+
+  function moveNode(canvas, record, dx, dy) {
+    record.dx = dx; record.dy = dy;
+    if (dx || dy) record.group.setAttribute("transform", shifted(record));
+    else record.group.removeAttribute("transform");
+    for (const edge of scene(canvas).edges) if (edge.from === record || edge.to === record) reroute(edge);
+  }
+
+  function resetLayout(holder) {
+    const canvas = holder.__canvas;
+    for (const record of scene(canvas).nodes) moveNode(canvas, record, 0, 0);
+    fitStage(holder);
+  }
+
+  // ---- the stage: the frame's own size, in the diagram's own units
+
+  function baseOf(canvas) {
+    const s = scene(canvas);
+    if (!s.base) { const box = canvas.viewBox.baseVal; s.base = { w: box.width, h: box.height }; }
+    return s.base;
+  }
+
+  // Expanded, the canvas grows to the frame at the scale that fits the
+  // drawing (capped, so a small diagram is not blown up into blur) and the
+  // spare room around it is somewhere a node can go.
+  function fitStage(holder) {
+    if (!movable(holder)) return;    // a table or a grid has no stage to fit
+    const canvas = holder.__canvas, base = baseOf(canvas);
+    const area = holder.__body.getBoundingClientRect();
+    if (!area.width || !area.height) return;
+    const scale = Math.min(area.width / base.w, area.height / base.h, 1.6);
+    const w = area.width / scale, h = area.height / scale;
+    const x = (base.w - w) / 2, y = (base.h - h) / 2;
+    canvas.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+    canvas.__stage = { x, y, w, h };
+    // A window that shrank must not strand a node outside it.
+    for (const record of scene(canvas).nodes) clampInto(canvas, record, record.dx, record.dy, true);
+  }
+
+  function clampInto(canvas, record, dx, dy, apply) {
+    const stage = canvas.__stage, pad = 4, box = record.box;
+    if (stage) {
+      dx = Math.min(Math.max(dx, stage.x + pad - box.x), stage.x + stage.w - pad - box.w - box.x);
+      dy = Math.min(Math.max(dy, stage.y + pad - box.y), stage.y + stage.h - pad - box.h - box.y);
+    }
+    if (apply && (dx !== record.dx || dy !== record.dy)) moveNode(canvas, record, dx, dy);
+    return [dx, dy];
+  }
+
+  // Back inline, the canvas takes the size its layout needs: the drawn size,
+  // or wider if a node was left outside it.
+  function fitExtent(canvas) {
+    const base = baseOf(canvas), pad = 16;
+    let x0 = 0, y0 = 0, x1 = base.w, y1 = base.h;
+    for (const record of scene(canvas).nodes) {
+      const b = now(record);
+      x0 = Math.min(x0, b.x - pad); y0 = Math.min(y0, b.y - pad);
+      x1 = Math.max(x1, b.x + b.w + pad); y1 = Math.max(y1, b.y + b.h + pad);
+    }
+    const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+    canvas.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+    canvas.setAttribute("width", w); canvas.setAttribute("height", h);
+    canvas.style.maxWidth = w + "px"; canvas.style.minWidth = Math.round(w * 0.7) + "px";
+  }
+
+  function mountStage(holder) {
+    if (!movable(holder)) return;
+    holder.__body.classList.add("movable");
+    const canvas = holder.__canvas;
+    fitStage(holder);
+    if (!canvas.__drag) canvas.__drag = attachDrag(canvas);
+  }
+
+  function unmountStage(holder) {
+    holder.__body.classList.remove("movable");
+    const canvas = holder.__canvas;
+    if (canvas && canvas.__scene && !canvas.__fixed) { canvas.__stage = null; fitExtent(canvas); }
+  }
+
+  // ---- dragging: pointer events, so a mouse, a pen and a finger all work
+
+  function attachDrag(canvas) {
+    let drag = null, swallow = false;
+    const point = (event) => {
+      const matrix = canvas.getScreenCTM();
+      return matrix ? new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()) : null;
+    };
+    const live = () => canvas.__stage;   // only while expanded
+    canvas.addEventListener("pointerdown", (event) => {
+      if (!live() || event.button !== 0) return;
+      const group = event.target.closest && event.target.closest("g.node");
+      const record = group && scene(canvas).nodes.find((r) => r.group === group);
+      const at = point(event);
+      if (!record || !at) return;
+      drag = { record, id: event.pointerId, at, from: [record.dx, record.dy],
+        client: [event.clientX, event.clientY], moved: false };
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (!drag.moved) {
+        // A click that wobbles is still a click.
+        if (Math.hypot(event.clientX - drag.client[0], event.clientY - drag.client[1]) < 4) return;
+        drag.moved = true;
+        drag.record.group.classList.add("dragging");
+        // Capture only now: capturing on press would retarget the click that
+        // ends a plain press, and nodes would stop answering it.
+        try { canvas.setPointerCapture(drag.id); } catch (_) { /* no capture: still works */ }
+      }
+      const at = point(event);
+      if (!at) return;
+      const [dx, dy] = clampInto(canvas, drag.record, drag.from[0] + at.x - drag.at.x,
+        drag.from[1] + at.y - drag.at.y, false);
+      moveNode(canvas, drag.record, dx, dy);
+    });
+    const finish = (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      drag.record.group.classList.remove("dragging");
+      // The click that follows a drag is not a request to ask about the node.
+      if (drag.moved) { swallow = true; setTimeout(() => { swallow = false; }, 0); }
+      drag = null;
+    };
+    canvas.addEventListener("pointerup", finish);
+    canvas.addEventListener("pointercancel", finish);
+    // Expanded, a click is not "tell me more": that message would land in a
+    // conversation the frame is covering. Inline it still is.
+    canvas.addEventListener("click", (event) => {
+      if (!live()) return;
+      if (swallow || (event.target.closest && event.target.closest("g.node"))) event.stopPropagation();
+    }, true);
+    return true;
   }
 
   // The same passages, another shape: create_visual with this visual's own
@@ -557,6 +885,7 @@
       role: "user", content: { type: "text", text: `Tell me more about ${node.label}` },
     }).catch(() => {}));
     canvas.append(group);
+    track(canvas, group, box);
     return group;
   }
 
@@ -587,11 +916,13 @@
       const [x1, y1] = border(a, b), [x2, y2] = border(b, a);
       d = `M${x1},${y1} L${x2},${y2}`; mx = (x1 + x2) / 2; my = (y1 + y2) / 2;
     }
-    group.append(svg("path", { d, "marker-end": options.arrow === false ? "" : "url(#arrow)" }));
+    const line = svg("path", { d, "marker-end": options.arrow === false ? "" : "url(#arrow)" });
+    group.append(line);
+    let text = null;
     if (edge.label) {
       // On top of everything, with a halo: a label a box covers is a claim
       // nobody can read.
-      const text = svg("text", { class: "edge-label", x: mx, y: my - 5, "text-anchor": "middle" });
+      text = svg("text", { class: "edge-label", x: mx, y: my - 5, "text-anchor": "middle" });
       text.textContent = edge.label;
       canvas.append(text);
     }
@@ -600,6 +931,7 @@
     group.append(title);
     // Under the nodes, over everything else (lane bands included).
     canvas.insertBefore(group, canvas.querySelector("g.node"));
+    trackEdge(canvas, { group, line, text, a, b, d, mx, my });
     return group;
   }
 
@@ -696,6 +1028,7 @@
     const width = 40 + nodes.length * lane;
     const height = top + 60 + diagram.edges.length * step + 20;
     const canvas = canvasOf(width, height, diagram.title);
+    canvas.__fixed = true;   // participants sit on their lifelines
     for (const node of nodes) {
       const cx = x.get(node.id), size = sizeOf(node);
       canvas.append(svg("line", { class: "lifeline", x1: cx, y1: top + size.h, x2: cx, y2: height - 10 }));
@@ -776,7 +1109,10 @@
     const area = Math.max(360, 120 * Math.sqrt(n)) ** 2 * 1.4, k = Math.sqrt(area / n);
     const p = nodes.map((_, i) => [Math.cos(2 * Math.PI * i / n) * k, Math.sin(2 * Math.PI * i / n) * k]);
     const index = new Map(nodes.map((node, i) => [node.id, i]));
-    let temperature = k;
+    // Start cool: a step longer than the distance to equilibrium overshoots it,
+    // and two linked nodes cross over onto the very same point and stay there
+    // (no direction is left to push them apart).
+    let temperature = k / 4;
     for (let step = 0; step < 300; step++) {
       const force = p.map(() => [0, 0]);
       for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
@@ -848,6 +1184,7 @@
     const step = Math.max(150, ...sizes.map((s) => s.w + 18));
     const width = 40 + step * nodes.length, axis = 150, height = 300;
     const canvas = canvasOf(width, height, diagram.title);
+    canvas.__fixed = true;   // events sit on the axis
     canvas.append(svg("line", { class: "axis", x1: 16, y1: axis, x2: width - 16, y2: axis, "marker-end": "url(#arrow)" }));
     nodes.forEach((node, i) => {
       const cx = 20 + step * i + step / 2, above = i % 2 === 0, s = sizes[i];
@@ -1154,28 +1491,34 @@
   function umlEdge(canvas, edge, a, b, style) {
     const group = svg("g", { class: "edge" + (edge.inferred ? " inferred" : "") + (style.dashed ? " dashed" : "") });
     let d, mx, my;
+    const mults = [];
     if (style.path) { [d, mx, my] = style.path; }
     else {
       const [x1, y1] = border(a, b), [x2, y2] = border(b, a);
       d = `M${x1},${y1} L${x2},${y2}`; mx = (x1 + x2) / 2; my = (y1 + y2) / 2;
       if (style.mults) {
-        const len = Math.hypot(x2 - x1, y2 - y1) || 1, ux = (x2 - x1) / len, uy = (y2 - y1) / len;
-        const place = (text, x, y, sign) => text && umlText(canvas, text, x + ux * 16 * sign - uy * 9,
-          y + uy * 16 * sign + ux * 9, { class: "mult", "text-anchor": "middle" });
-        place(style.mults[0], x1, y1, 1);
-        place(style.mults[1], x2, y2, -1);
+        // Multiplicities hug the two ends of the line; kept so a dragged
+        // class can carry them with it (see reroute).
+        [[0, x1, y1], [1, x2, y2]].forEach(([end, x, y]) => {
+          const text = style.mults[end];
+          if (!text) return;
+          const [px, py] = multAt(x1, y1, x2, y2, end);
+          mults.push({ end, node: umlText(canvas, text, px, py, { class: "mult", "text-anchor": "middle" }) });
+        });
       }
     }
     const attrs = { d };
     if (style.end) attrs["marker-end"] = `url(#${style.end})`;
     if (style.start) attrs["marker-start"] = `url(#${style.start})`;
-    group.append(svg("path", attrs));
+    const line = svg("path", attrs);
+    group.append(line);
     const title = svg("title");
     title.textContent = edge.inferred ? "not cited" : edge.structural ? "notation" : `sources ${(edge.cites || []).join(", ")}`;
     group.append(title);
     canvas.insertBefore(group, canvas.querySelector("g.node"));
     const label = style.label !== undefined ? style.label : edge.label;
-    if (label) umlText(canvas, label, mx, my - 5, { class: "edge-label", "text-anchor": "middle" });
+    const text = label ? umlText(canvas, label, mx, my - 5, { class: "edge-label", "text-anchor": "middle" }) : null;
+    trackEdge(canvas, { group, line, text, a, b, d, mx, my, mults });
     return group;
   }
 
@@ -1223,6 +1566,7 @@
       nodeTitle(group, n);
       askAbout(group, n.label);
       canvas.append(group);
+      track(canvas, group, box);
     }
     for (const e of diagram.edges) {
       const a = pos.get(e.from), b = pos.get(e.to);
@@ -1256,6 +1600,7 @@
     box.shape = node.type === "fork" || node.type === "join" ? "box" : node.type === "merge" || node.type === "choice" ? "diamond" : "circle";
     group.append(title);
     canvas.append(group);
+    track(canvas, group, box);
   }
 
   // ---- activity diagram
@@ -1350,6 +1695,7 @@
       nodeTitle(group, n);
       askAbout(group, n.label);
       canvas.append(group);
+      track(canvas, group, box);
     }
     const rank = new Map([...pos.entries()].map(([id, b]) => [id, across ? b.x : b.y]));
     edges.forEach((e, i) => {
@@ -1423,6 +1769,7 @@
       askAbout(group, n.label);
       canvas.append(group);
       b.shape = "box";
+      track(canvas, group, b);
     }
     for (const n of cases) drawNode(canvas, { ...n, shape: "ellipse" }, pos.get(n.id), sizes.get(n.id).lines);
     for (const e of edges) {

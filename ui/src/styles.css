@@ -3918,6 +3918,11 @@ select.text-input {
 .msg__visual { margin: 10px 0 6px; }
 .mcp-app-frame { width: 100%; border: 1px solid var(--border); border-radius: 10px;
   background: var(--bg-raised); display: block; }
+.mcp-app-slot { position: relative; }
+/* Fullscreen is the same frame restyled, not moved: a moved iframe reloads. */
+.mcp-app-frame--fullscreen { position: fixed; inset: 12px; z-index: 1000;
+  width: calc(100vw - 24px); height: calc(100vh - 24px); border-radius: 12px;
+  box-shadow: 0 0 0 100vmax rgba(8, 10, 14, 0.6); }
 .source-chip-wrap { display: inline-flex; align-items: stretch; gap: 2px; }
 .source-chip__visualize { border: 1px solid var(--border); background: var(--bg-raised);
   color: var(--muted); border-radius: 6px; padding: 0 6px; cursor: pointer; font-size: 11px; }
