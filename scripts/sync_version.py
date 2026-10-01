@@ -172,6 +172,7 @@ def replacements(version: str) -> list[Replacement]:
                 Path("deploy/compose/docker-compose.fresh.yml"): 1,
                 Path("deploy/compose/docker-compose.advanced.yml"): 1,
                 Path("deploy/compose/docker-compose.scale.yml"): 7,
+                Path("deploy/compose/docker-compose.pheasant-lab.yml"): 7,
                 Path("deploy/kubernetes/scaled/api-deployment.yaml"): 1,
                 Path("deploy/kubernetes/scaled/graph-deployment.yaml"): 1,
                 Path("deploy/kubernetes/scaled/indexer-statefulset.yaml"): 1,

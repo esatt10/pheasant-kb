@@ -135,6 +135,42 @@ def upload_root(state_path: Path, source_name: str) -> Path:
     return root
 
 
+def owned_upload_directory(
+    state_path: Path,
+    source_name: str,
+    source_type: str,
+    source_path: str | Path,
+) -> Path | None:
+    """Return the upload namespace owned by this source, if its path proves it.
+
+    Ordinary folder sources point at user data and must never be deleted as a
+    side effect of removing their index. UI uploads are different: each source
+    has one reserved child of ``<state>/uploads``. Require the registered path
+    to resolve to that exact child and refuse symlinks before returning it.
+    """
+    if source_type != "document_folder":
+        return None
+
+    state_root = Path(state_path).resolve()
+    upload_base = state_root / "uploads"
+    if upload_base.is_symlink():
+        return None
+
+    candidate = upload_base / safe_filename(source_name, fallback="uploads")
+    if candidate.parent != upload_base or candidate.is_symlink():
+        return None
+
+    registered = Path(source_path)
+    if registered.is_symlink():
+        return None
+    try:
+        if registered.resolve() != candidate.resolve():
+            return None
+    except OSError:
+        return None
+    return candidate
+
+
 @dataclass
 class StoredUpload:
     filename: str

@@ -384,13 +384,7 @@ class PheasantTools(ReadinessTools, AssistantTools):
             raise RuntimeError(
                 "source removal changes the graph and must run on the indexer/control plane"
             )
-        self.engine.graph_builder.remove_source_content(source_name)
-        self.engine.graph_store.save(self.config.knowledge_base_id, self.engine.graph_builder.graph)
-        self.engine.manifests.delete(source_name)
-        self.state.delete_source(source_name)
-        self.config.sources = [
-            source for source in self.config.sources if source.name != source_name
-        ]
+        self.engine.remove_source(source_name)
         self._audit(source_name, "remove_source", actor, transport, client_id, utc_now())
         return {"status": "removed", "source_name": source_name}
 

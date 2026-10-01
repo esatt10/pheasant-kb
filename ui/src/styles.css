@@ -826,6 +826,31 @@ select.text-input {
   margin-bottom: 5px;
 }
 
+.msg__answer table {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.msg__answer th,
+.msg__answer td {
+  min-width: 110px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.msg__answer th {
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-weight: 650;
+}
+
 /* Rich text: headings step down from the answer's own size rather than the
    document's, so a model emitting `##` does not shout. */
 .msg__answer h3,
