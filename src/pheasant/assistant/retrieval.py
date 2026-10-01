@@ -562,21 +562,34 @@ class PheasantRetriever:
         # (measured 3.45s → 0.16s over four queries); vector searches are
         # numpy similarity scans that do not, and racing them made things
         # *worse* (5.10s → 8.65s). So: everything else in a pool, vector in
-        # sequence.
+        # sequence. The vector embeddings are batched and overlapped with
+        # those other searches; the LanceDB scans remain sequential.
         concurrent = [pair for pair in pairs if pair[1] != "vector"]
         sequential = [pair for pair in pairs if pair[1] == "vector"]
         batches: list[list[Passage]] = []
-        if len(concurrent) > 1:
+        vector_queries = list(dict.fromkeys(query for query, _mode in sequential))
+        vector_searcher = getattr(self.search_engine, "vector", None)
+        embed_queries = getattr(vector_searcher, "embed_queries", None)
+        batch_vector_embeddings = len(vector_queries) > 1 and callable(embed_queries)
+
+        if len(concurrent) > 1 or batch_vector_embeddings:
             # SQLite benefits strongly from broad read fan-out.  Postgres text
             # ranking is CPU work inside the database; sending four planner
             # queries at once made each one take minutes on a two-core local
             # container and left the stream parked on its last "plan" event.
             # Two keeps network/vector overlap without turning query latency
-            # into CPU contention.
+            # into CPU contention. One extra slot lets the batched embedding
+            # request overlap with text retrieval.
             postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
-            max_workers = 2 if postgres else 8
-            with ThreadPoolExecutor(max_workers=min(len(concurrent), max_workers)) as pool:
+            search_workers = 2 if postgres else 8
+            pool_workers = min(len(concurrent), search_workers) + int(batch_vector_embeddings)
+            with ThreadPoolExecutor(max_workers=max(1, pool_workers)) as pool:
+                embedding_future = (
+                    pool.submit(embed_queries, vector_queries) if batch_vector_embeddings else None
+                )
                 batches.extend(pool.map(run, concurrent))
+                if embedding_future is not None:
+                    embedding_future.result()
         else:
             batches.extend(run(pair) for pair in concurrent)
         batches.extend(run(pair) for pair in sequential)

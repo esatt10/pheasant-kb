@@ -1030,20 +1030,46 @@ class VectorSearcher:
         self.store = store
         self.state = state
         self._query_cache: dict[str, list[float]] = {}
+        self._query_cache_lock = threading.RLock()
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a query, reusing a recent identical one."""
 
-        cached = self._query_cache.get(query)
-        if cached is not None:
-            return cached
-        vector = self.embedder.embed([query])[0]
-        if len(self._query_cache) >= self._QUERY_CACHE_SIZE:
-            # Plain FIFO eviction: dicts keep insertion order, and at this size
-            # the difference between FIFO and LRU is not worth the bookkeeping.
-            self._query_cache.pop(next(iter(self._query_cache)), None)
-        self._query_cache[query] = vector
-        return vector
+        return self.embed_queries([query])[0]
+
+    def embed_queries(self, queries: list[str]) -> list[list[float]]:
+        """Embed several queries in one provider request when possible.
+
+        Agentic retrieval often plans multiple queries before searching. The
+        vector scans remain sequential because they contend for the GIL, but
+        their network-bound embeddings can share one provider round trip.
+        """
+
+        unique = list(dict.fromkeys(queries))
+        with self._query_cache_lock:
+            vectors = {
+                query: self._query_cache[query] for query in unique if query in self._query_cache
+            }
+        missing = [query for query in unique if query not in vectors]
+        if missing:
+            embedded = self.embedder.embed(missing)
+            if len(embedded) != len(missing):
+                raise ValueError(
+                    "Embedding provider returned an unexpected number of query vectors"
+                )
+            with self._query_cache_lock:
+                for query, vector in zip(missing, embedded, strict=True):
+                    cached = self._query_cache.get(query)
+                    if cached is None:
+                        if len(self._query_cache) >= self._QUERY_CACHE_SIZE:
+                            # Plain FIFO eviction: dicts keep insertion order,
+                            # and at this size FIFO vs. LRU is not worth the
+                            # bookkeeping.
+                            self._query_cache.pop(next(iter(self._query_cache)), None)
+                        self._query_cache[query] = vector
+                        cached = vector
+                    vectors[query] = cached
+        return [vectors[query] for query in queries]
 
     def search(
         self,
