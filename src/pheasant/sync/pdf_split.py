@@ -2,27 +2,26 @@
 
 Remote preparation parallelizes *across files*: a file is one task on one
 worker. One 8,000-page PDF is therefore one task, read on one thread wherever
-it lands -- and on a taxonomy-enabled source, which remote preparation
-refuses, on the indexer with the fleet idle. Extraction is where such a file's
+it lands. Extraction is where such a file's
 time goes (pymupdf reads ~600 pages a second; section detection and chunking
 the result take a fraction of a second), and it is the one step that does not
 need the whole document, because a page's text depends only on that page.
 
 So only that step is split. The indexer counts the pages, sends every worker
-the same bytes and a different range (`ExtractPages`), and joins the answers
-in page order; tidying, section detection and chunking stay on the indexer,
-which is why a taxonomy-enabled source can use this when it cannot use
-remote preparation at all.
+the same bytes and a different range -- the gRPC ``ExtractPages`` call or
+``POST /internal/indexing/extract-pages``, whichever transport the fleet runs
+-- and joins the answers in page order; tidying, section detection and
+chunking stay on the indexer, because they need the whole document.
 
 **The text is identical to reading the file locally**, and that is a
 property of the construction rather than a hope. A worker reads its range
-with :func:`~pheasant.ingestion.extractor.pdf_page_texts`, the same function
+with :func:`~pheasant.ingestion.pdf_pages.pdf_page_texts`, the same function
 the native extractor reads a whole PDF with, and returns pages untidied; a
 worker on a different pymupdf release is refused rather than trusted. Every
 range the fleet cannot read -- a worker down, a deadline, an old worker
-answering UNIMPLEMENTED, the HTTP transport, which has no page route -- is
-read here by that same function. A PDF pymupdf cannot read fails the same way
-both ways and takes the native extractor's builtin fallback.
+answering UNIMPLEMENTED or 404 -- is read here by that same function. A PDF
+pymupdf cannot read fails the same way both ways and takes the native
+extractor's builtin fallback.
 
 Sending whole bytes per range rather than carving a sub-PDF per range costs
 network (bytes x ranges) and buys exactness: a carved document re-serializes
@@ -59,6 +58,7 @@ class RemotePdfPages:
         timeout: float,
         max_parallel_files: int = 1,
         max_inflight: int = 0,
+        transport: str = "grpc",
         pool_factory: Any = None,
     ) -> None:
         self.urls = list(urls)
@@ -67,6 +67,7 @@ class RemotePdfPages:
         self.timeout = float(timeout)
         self.max_parallel_files = max(1, int(max_parallel_files or 1))
         self.max_inflight = int(max_inflight or 0)
+        self.transport = transport
         self._pool_factory = pool_factory
         self._pool: Any = None
         self._lock = threading.Lock()
@@ -139,7 +140,7 @@ class RemotePdfPages:
                     # worker too old to know `ExtractPages` must not trip the
                     # breaker that decides whether it gets whole files.
                     self._pool = WorkerPool(
-                        self.urls, token, timeout=self.timeout, transport_name="grpc"
+                        self.urls, token, timeout=self.timeout, transport_name=self.transport
                     )
             return self._pool
 
@@ -156,12 +157,7 @@ def remote_pdf_pages(config: Any) -> RemotePdfPages | None:
     concurrency = config.sync.concurrency
     urls = list(concurrency.remote_worker_urls or [])
     pages_per_task = int(getattr(concurrency, "remote_worker_pdf_pages_per_task", 0) or 0)
-    if (
-        str(concurrency.file_executor or "").lower() != "remote"
-        or not urls
-        or str(concurrency.worker_transport or "").lower() != "grpc"
-        or pages_per_task <= 0
-    ):
+    if str(concurrency.file_executor or "").lower() != "remote" or not urls or pages_per_task <= 0:
         return None
     return RemotePdfPages(
         urls,
@@ -170,6 +166,7 @@ def remote_pdf_pages(config: Any) -> RemotePdfPages | None:
         timeout=float(concurrency.remote_worker_timeout_seconds or 120),
         max_parallel_files=int(concurrency.max_parallel_files or 1),
         max_inflight=int(getattr(concurrency, "remote_worker_max_inflight_batches", 0) or 0),
+        transport=str(concurrency.worker_transport or "http").lower(),
     )
 
 

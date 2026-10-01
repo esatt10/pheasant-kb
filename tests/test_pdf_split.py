@@ -134,13 +134,12 @@ def test_a_standalone_region_is_unchanged() -> None:
 @pytest.mark.parametrize(
     "change",
     [
-        {"worker_transport": "http"},
         {"file_executor": "thread"},
         {"remote_worker_urls": []},
         {"remote_worker_pdf_pages_per_task": 0},
     ],
 )
-def test_only_a_grpc_fleet_gets_a_page_reader(change: dict[str, Any]) -> None:
+def test_only_a_remote_fleet_gets_a_page_reader(change: dict[str, Any]) -> None:
     concurrency = {
         "file_executor": "remote",
         "worker_transport": "grpc",
@@ -254,12 +253,121 @@ def test_a_worker_on_another_pymupdf_is_not_trusted(grpc_worker: Any) -> None:
     assert split == AutoExtractor().extract(content, "tariff.pdf")
 
 
-def test_the_http_transport_reads_pages_locally() -> None:
-    from pheasant.sync.worker_pool import TaskRejected, WorkerPool
+class _HttpWorker:
+    """A real HTTP preparation worker on a loopback port, as Kubernetes runs it."""
 
-    pool = WorkerPool(["http://worker:8765"], "t", transport_name="http")
-    with pytest.raises(TaskRejected, match="page ranges"):
-        pool.extract_pages(b"", 0, 1)
+    def __init__(self, app: Any) -> None:
+        import threading
+
+        import uvicorn
+
+        self.server = uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+        )
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+
+    def __enter__(self) -> str:
+        import time
+
+        self.thread.start()
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if self.server.started and self.server.servers:
+                sockets = self.server.servers[0].sockets
+                if sockets:
+                    return f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
+            time.sleep(0.02)
+        raise RuntimeError("the worker did not start")
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.server.should_exit = True
+        self.thread.join(timeout=30)
+
+
+@pytest.fixture
+def http_worker(tmp_path: Path, monkeypatch: Any):  # type: ignore[no-untyped-def]
+    from pheasant.api.app import create_app
+
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "http-worker",
+                "state_path": str(tmp_path / "worker-state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "worker-exports"),
+            },
+            "sync": {"concurrency": {"remote_worker_enabled": True}},
+        }
+    )
+    monkeypatch.setenv(TOKEN_ENV, "http-token")
+    with _HttpWorker(create_app(config)) as url:
+        yield url
+
+
+def _local_reads(monkeypatch: Any) -> list[tuple[int, int | None]]:
+    """Record every range the coordinator had to read itself."""
+
+    from pheasant.sync import pdf_split
+
+    reads: list[tuple[int, int | None]] = []
+    real = pdf_split.pdf_page_texts
+
+    def counting(content: bytes, first: int = 0, stop: int | None = None) -> list[str]:
+        reads.append((first, stop))
+        return real(content, first, stop)
+
+    monkeypatch.setattr(pdf_split, "pdf_page_texts", counting)
+    return reads
+
+
+def test_an_http_fleet_reads_the_pages_too(http_worker: str, monkeypatch: Any) -> None:
+    """The Kubernetes manifests run HTTP workers; a long PDF reaches them."""
+
+    content = _pdf(30)
+    expected = AutoExtractor().extract(content, "tariff.pdf")
+    reads = _local_reads(monkeypatch)
+    provider = RemotePdfPages(
+        [http_worker],
+        TOKEN_ENV,
+        pages_per_task=7,
+        timeout=30,
+        max_parallel_files=4,
+        transport="http",
+    )
+    try:
+        assert AutoExtractor(pdf_pages=provider).extract(content, "tariff.pdf") == expected
+    finally:
+        provider.close()
+    assert reads == [], "a range fell back to the indexer"
+
+
+@pytest.mark.parametrize("token", ["wrong-token", None])
+def test_an_http_worker_that_refuses_is_read_around(
+    http_worker: str, monkeypatch: Any, token: str | None
+) -> None:
+    """A wrong token (401) and a worker too old for the route (404, simulated
+    by a path the worker does not serve) both end in a local read of the
+    same text."""
+
+    content = _pdf(30)
+    expected = AutoExtractor().extract(content, "tariff.pdf")
+    url = http_worker if token else http_worker + "/not-a-worker"
+    # The worker in this process reads TOKEN_ENV; the coordinator gets its own.
+    monkeypatch.setenv("COORDINATOR_TOKEN", token or "http-token")
+    reads = _local_reads(monkeypatch)
+    provider = RemotePdfPages(
+        [url],
+        "COORDINATOR_TOKEN",
+        pages_per_task=7,
+        timeout=30,
+        max_parallel_files=4,
+        transport="http",
+    )
+    try:
+        assert AutoExtractor(pdf_pages=provider).extract(content, "tariff.pdf") == expected
+    finally:
+        provider.close()
+    assert sorted(reads) == [(0, 7), (7, 14), (14, 21), (21, 28), (28, 30)]
 
 
 @pytest.mark.parametrize("taxonomy", [True, False])

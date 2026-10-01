@@ -82,6 +82,12 @@ something in pheasant's design, so they are stated with the reason:
 | `pheasant-indexer` | StatefulSet, 1 replica | not autoscaled | Owns the watcher and scheduler. **One per shard**, not one per cluster: two indexers on one shard is not faster, it is two processes taking turns. |
 | `pheasant-worker` | Deployment | queue depth (HPA/KEDA) | Parse/chunk only. The elastic tier — no state, no credentials, safe to kill. |
 
+Chunking is planned per file (`sync.source_processing.chunk_strategy: auto`),
+and a PDF longer than 500 pages has its text read by several worker pods at
+once in page ranges (`remote_worker_pdf_pages_per_task`) — over the same HTTP
+Service, so no extra port, probe or NetworkPolicy rule. See
+`docs/how-to/dynamic-chunking.md`.
+
 Sharding across several knowledge bases means one of these stacks per shard,
 each with its own `pheasant.name` and its own database. `pheasant shard plan`
 proposes the split.

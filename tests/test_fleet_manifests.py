@@ -1016,3 +1016,71 @@ def test_the_ci_topology_exercises_the_whole_ledger_path() -> None:
     # PostgreSQL, because that is the backend the fleet actually runs and the
     # one whose migration path differs.
     assert config.storage.backend == "postgres"
+
+
+# -- dynamic chunking and fleet PDF reading are the fleet's defaults ---------
+
+COMPOSE = REPO_ROOT / "deploy" / "compose"
+
+
+def _fleet_configs() -> dict[str, Any]:
+    import json
+
+    docs = list(yaml.safe_load_all((SCALED / "configmap.yaml").read_text(encoding="utf-8")))
+    k8s = next(
+        doc
+        for doc in docs
+        if doc and doc.get("kind") == "ConfigMap" and "pheasant.yaml" in doc.get("data", {})
+    )
+    return {
+        "compose fleet.yaml": PheasantConfig.model_validate(
+            yaml.safe_load((COMPOSE / "fleet.yaml").read_text(encoding="utf-8"))
+        ),
+        "kubernetes scaled": PheasantConfig.model_validate(
+            yaml.safe_load(k8s["data"]["pheasant.yaml"])
+        ),
+        **{
+            f"answers/{name}.json": json.loads((COMPOSE / "answers" / f"{name}.json").read_text())
+            for name in ("scalable", "pheasant-lab")
+        },
+    }
+
+
+def _probe_source(config: PheasantConfig) -> Any:
+    probe = PheasantConfig.model_validate(
+        {"sources": [{"name": "probe", "type": "document_folder", "path": "/tmp"}]}
+    ).sources[0]
+    return config.effective_source(probe)
+
+
+@pytest.mark.parametrize("name", ["compose fleet.yaml", "kubernetes scaled"])
+def test_every_fleet_chunks_by_plan_and_reads_long_pdfs_on_its_workers(name: str) -> None:
+    from pheasant.ingestion.chunk_plan import strategy_of
+    from pheasant.sync.pdf_split import remote_pdf_pages
+
+    config = _fleet_configs()[name]
+    assert strategy_of(_probe_source(config)) == "auto"
+    reader = remote_pdf_pages(config)
+    assert reader is not None and reader.pages_per_task == 500
+    assert reader.transport == config.sync.concurrency.worker_transport
+
+
+@pytest.mark.parametrize("name", ["answers/scalable.json", "answers/pheasant-lab.json"])
+def test_the_fleet_answer_files_regenerate_the_same_defaults(name: str) -> None:
+    """`fleet.yaml` is regenerated from its answer file; a default that lives
+    only in the YAML is one regeneration away from disappearing."""
+
+    answers = _fleet_configs()[name]
+    assert answers["sync.source_processing.chunk_strategy"] == "auto"
+    assert answers["sync.concurrency.remote_worker_pdf_pages_per_task"] == 500
+
+
+@pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])
+def test_standalone_profiles_keep_fixed_chunking(path: Path) -> None:
+    """Rule 7: one container keeps exactly what it indexed before."""
+
+    from pheasant.ingestion.chunk_plan import strategy_of
+
+    config = PheasantConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    assert strategy_of(_probe_source(config)) == "fixed"
+    assert strategy_of(_probe_source(PheasantConfig())) == "fixed"

@@ -66,6 +66,13 @@ data:
         interval_seconds: 900
       watcher:
         enabled: true
+      # Chunk each file the way it is written rather than in fixed windows:
+      # code by top-level block, Markdown by heading, spreadsheets by row, and
+      # PDFs/Word by a bounded structural scan that turns on only the heading
+      # rules a document uses (docs/how-to/dynamic-chunking.md). Switching it
+      # re-indexes every source once; `fixed` restores the previous behaviour.
+      source_processing:
+        chunk_strategy: auto
       concurrency:
         max_parallel_sources: 4
         max_parallel_files: 8
@@ -84,6 +91,10 @@ data:
         # 2 x this x remote_worker_batch_size files.
         remote_worker_max_inflight_batches: 8
         worker_transport: http
+        # A PDF longer than this is read by the workers in page ranges, several
+        # pods at once, instead of whole by one; the indexer keeps taxonomy and
+        # chunking and the text is identical. 0 turns it off.
+        remote_worker_pdf_pages_per_task: 500
     ingestion:
       # Manual ingestion — the UI drop zone, an agent's `ingest_submit`, the
       # readiness probe's scratch source — writes bytes before the normal

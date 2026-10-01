@@ -48,6 +48,9 @@ logger = logging.getLogger(__name__)
 
 BATCH_PATH = "/internal/indexing/prepare-batch"
 SINGLE_PATH = "/internal/indexing/prepare"
+#: One page range of one long PDF (`sync/pdf_split.py`). A worker that predates
+#: it answers 404, which `_decode` turns into "read it locally".
+EXTRACT_PAGES_PATH = "/internal/indexing/extract-pages"
 
 #: Header carrying the caller's remaining budget. The worker declines a task
 #: whose caller has already given up rather than computing an answer nobody
@@ -155,6 +158,56 @@ class HttpTransport:
             return self._post_legacy(None, url, tasks, keys, token, timeout, deadline_seconds)
         reuse = self._release(connection, headers)
         return self._decode(status, headers, raw, url), reuse
+
+    def extract_pages(
+        self,
+        url: str,
+        content: bytes,
+        first: int,
+        stop: int,
+        *,
+        token: str,
+        timeout: float,
+    ) -> list[str]:
+        """The text of PDF pages ``[first, stop)`` from one worker.
+
+        A connection of its own, closed after the answer: a long PDF is a
+        handful of ranges, and holding one of the pool's keep-alive sockets for
+        a multi-megabyte body would make a file's preparation wait behind it.
+        """
+
+        import base64
+
+        from pheasant.ingestion.pdf_pages import pdf_reader_version
+        from pheasant.sync.worker_pool import TaskRejected
+
+        prefix = urlsplit(url).path.rstrip("/")
+        body = {
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "first_page": first,
+            "stop_page": stop,
+        }
+        connection = None
+        try:
+            status, headers, raw, connection = self._request(
+                None, url, prefix + EXTRACT_PAGES_PATH, body, token, timeout, timeout, []
+            )
+        except OSError as exc:
+            raise _retryable(f"transport error: {exc}") from exc
+        finally:
+            if connection is not None:
+                self.discard(connection)
+        decoded = self._decode(status, headers, raw, url)
+        version = str(decoded.get("reader_version") or "")
+        if version != pdf_reader_version():
+            raise TaskRejected(
+                f"worker reads PDFs with pymupdf {version or '(none)'}, "
+                f"this process with {pdf_reader_version() or '(none)'}"
+            )
+        pages = decoded.get("pages")
+        if not isinstance(pages, list) or not all(isinstance(page, str) for page in pages):
+            raise _retryable("worker returned malformed pages")
+        return pages
 
     def _post_legacy(
         self,

@@ -32,6 +32,11 @@ sync:
     chunk_strategy: auto
 ```
 
+**It is the default in every shipped fleet profile** — `deploy/compose/fleet.yaml`
+(and the `scalable`/`pheasant-lab` answer files it is generated from) and
+`deploy/kubernetes/scaled/configmap.yaml` — and not in any single-container
+profile, which keeps `fixed`.
+
 Changing the strategy re-indexes the affected sources once, on their next
 sync. `fixed` (or the legacy default spelling `semantic`) is the old behaviour
 byte for byte, so leaving it alone changes nothing.
@@ -146,7 +151,10 @@ than the first 2,000 headings and one huge remainder.
 
 Remote preparation now carries headings and the chunk plan, so taxonomy-
 enabled and `auto` sources are prepared by the worker fleet instead of being
-refused to the indexer. A worker on a different planner version is refused for
+refused to the indexer. A PDF longer than
+`sync.concurrency.remote_worker_pdf_pages_per_task` (500) has its text read by
+all the workers in page ranges, over gRPC or HTTP alike, and is then planned
+and chunked on the indexer, which needs the whole document. A worker on a different planner version is refused for
 that file, and the indexer prepares it itself.
 
 ## Re-indexing

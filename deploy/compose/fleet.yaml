@@ -127,11 +127,10 @@ sync:
     # would keep two of those eight slots busy per source.
     remote_worker_max_inflight_batches: 8
     worker_transport: grpc
-    # One long PDF is one file, so the batching above sends it whole to one
-    # worker -- and taxonomy_enabled (above) keeps every source off remote
-    # preparation entirely. Past this many pages a PDF's text is read by all
-    # the workers in ranges instead, and the indexer keeps taxonomy and
-    # chunking; the indexed text is identical. 0 turns it off.
+    # One long PDF is one file, so the batching above would send it whole to
+    # one worker. Past this many pages its text is read by all the workers in
+    # page ranges instead, and the indexer keeps taxonomy and chunking, which
+    # need the whole document; the indexed text is identical. 0 turns it off.
     remote_worker_pdf_pages_per_task: 500
     lock_timeout_seconds: 300
   queue:

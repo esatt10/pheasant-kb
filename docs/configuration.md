@@ -468,7 +468,7 @@ per-source setting unchanged, so standalone behavior is unchanged.
 |---|---|---|---|
 | `chunk_max_chars` | integer\|null | `null` | Override the maximum characters per chunk. Must exceed the source's overlap. |
 | `taxonomy_enabled` | bool\|null | `null` | Enable or disable structural heading extraction across all sources. Can mistake numbered prose for headings. |
-| `chunk_strategy` | string\|null | `null` | Set `chunking.strategy` (`fixed`, `sections`, `auto`) for every source. `auto` is the safer region-wide choice than `taxonomy_enabled: true`: it turns heading rules on per file, only where the document uses them. |
+| `chunk_strategy` | string\|null | `null` | Set `chunking.strategy` (`fixed`, `sections`, `auto`) for every source. `auto` in every shipped fleet profile (`deploy/compose/fleet.yaml`, `deploy/kubernetes/scaled/`); unset, so `fixed`, in a single container. `auto` is the safer region-wide choice than `taxonomy_enabled: true`: it turns heading rules on per file, only where the document uses them. |
 
 Changing either setting invalidates the affected source's index; its next
 incremental sync escalates to a full pass. The fleet preset sets `2000` and
@@ -527,7 +527,7 @@ standing behavior of a scheduled one.
 | `concurrency.remote_worker_max_inflight_batches` | integer | `0` | Batches in flight to the worker fleet, per source. `0` means two per configured URL, which is right when each URL is one worker; set it explicitly when one URL is a Service fronting many pods, which the default cannot see. Capped by `max_parallel_files`. |
 | `concurrency.remote_worker_batch_size` | integer | `8` | Files per request. A batch amortizes request overhead and carries one deadline for the group, but every task in it holds its file's bytes in memory on both sides — so treat this as a memory knob as much as a throughput one. |
 | `concurrency.worker_transport` | string | `http` | `http` (stdlib, no extra) or `grpc` (needs the `[grpc]` extra). Changes only the wire format: retry, failover, breakers, deadlines and idempotency are transport-independent. |
-| `concurrency.remote_worker_pdf_pages_per_task` | integer | `500` | A PDF longer than this many pages is read by the gRPC worker fleet in ranges of this size, several workers at once, with tidying, taxonomy and chunking left on the indexer — so it applies to taxonomy-enabled sources too. Needs `file_executor: remote` and `worker_transport: grpc`; `0` turns it off. The indexed text is identical either way. See [Speed up indexing](how-to/indexing-performance.md#one-large-pdf). |
+| `concurrency.remote_worker_pdf_pages_per_task` | integer | `500` | A PDF longer than this many pages is read by the worker fleet in ranges of this size, several workers at once, with tidying, taxonomy and chunking left on the indexer. Needs `file_executor: remote`; works over both `worker_transport` values; `0` turns it off. On in every shipped fleet profile. The indexed text is identical either way. See [Speed up indexing](how-to/indexing-performance.md#one-large-pdf). |
 | `concurrency.lock_timeout_seconds` | integer | `120` | How long an in-process sync waits for an already-active lock on the same source. The interactive engine lease remains fail-fast; server-owned subprocess workers use their existing explicit lease wait. |
 
 ### Worker durability

@@ -366,7 +366,10 @@ heading rules a document uses and sizes chunks to its sections.
 splits only what exceeds the ceiling, and overlaps only inside a split.
 `fixed` (alias `semantic`, the default) is byte-identical to before; the
 other strategies put `PLANNER_VERSION` in the source fingerprint and record
-the plan on the artifact node as `chunk_plan`.
+the plan on the artifact node as `chunk_plan`. Every shipped fleet profile
+(`deploy/compose/fleet.yaml` and its answer files, `deploy/kubernetes/scaled/`)
+sets `sync.source_processing.chunk_strategy: auto`; single-container profiles
+stay `fixed` (rule 7), and `tests/test_fleet_manifests.py` holds both.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. Five ship first-party: Notion,
@@ -2056,9 +2059,12 @@ Each of these cost real time. They are listed because the shape recurs.
   the indexer with four workers idle and no log line saying so at INFO. The
   scan is a `bisect` now (byte-identical chunks, 118 s -> 29.5 s), and a long
   PDF's *extraction* -- the one step that needs no whole-document view -- is
-  split across the gRPC fleet by page range (`sync/pdf_split.py`) while
-  taxonomy and chunking stay on the indexer. `tests/test_pdf_split.py` holds
-  the text identical over real gRPC, through failures and a pymupdf mismatch;
+  split across the fleet by page range (`sync/pdf_split.py`, gRPC
+  `ExtractPages` or HTTP `/internal/indexing/extract-pages`) while taxonomy
+  and chunking stay on the indexer. Both, with `chunk_strategy: auto`, are
+  the defaults of every shipped fleet profile and of no single-container one.
+  `tests/test_pdf_split.py` holds the text identical over real gRPC and HTTP
+  workers, through failures and a pymupdf mismatch;
   `tests/test_chunking_scale.py` bounds lines executed per chunk.
 
 ---

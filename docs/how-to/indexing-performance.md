@@ -49,7 +49,7 @@ Everything above parallelizes *across files*. A single long PDF — an
 whole to one worker, and a source with `taxonomy` on (which remote
 preparation refuses) parses it on the indexer while the fleet sits idle.
 
-With `file_executor: remote` over `worker_transport: grpc`, a PDF longer than
+With `file_executor: remote` (over either worker transport), a PDF longer than
 `remote_worker_pdf_pages_per_task` pages (default 500) is read by the fleet
 in page ranges instead: every worker gets the same bytes and a different
 range, the indexer joins the pages in order, and tidying, section detection
@@ -57,8 +57,10 @@ and chunking stay on the indexer. That is also why it works for
 taxonomy-enabled sources. The indexed text is identical to a local read: a
 worker reads its range with the same function the extractor reads a whole PDF
 with, a worker on a different pymupdf release is not trusted, and any range
-the fleet cannot read is read locally. Over HTTP workers the PDF is read
-locally as before; there is no page route.
+the fleet cannot read is read locally. gRPC workers answer the
+`ExtractPages` call and HTTP workers `POST /internal/indexing/extract-pages`;
+a worker too old for either is read around. It is on in every shipped fleet
+profile (`deploy/compose/fleet.yaml`, `deploy/kubernetes/scaled/`).
 
 ```yaml
 sync:
