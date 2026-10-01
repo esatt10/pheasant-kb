@@ -38,6 +38,8 @@ Every method is read-only and side-effect free.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -530,6 +532,8 @@ class PheasantRetriever:
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        on_fanout: Callable[[dict[str, Any]], None] | None = None,
+        query_label: str = "query",
     ) -> list[Passage]:
         """Fan out over queries × modes and merge, de-duplicated.
 
@@ -538,17 +542,28 @@ class PheasantRetriever:
         produces the same evidence in the same order.
         """
         modes = [m for m in (modes or ["hybrid"]) if m in VALID_MODES] or ["hybrid"]
+        if "hybrid" in modes:
+            # Hybrid already runs text, vector, and graph in parallel. A
+            # configured list such as ["hybrid", "vector", "graph"] must not
+            # issue those same arms a second time. Staged retrieval requests
+            # standalone graph/vector first by omitting hybrid for that pass.
+            modes = ["hybrid"]
         merged: dict[str, Passage] = {}
         # Every (query, mode) is an independent read, and the vector arm waits
         # on a remote embedding — running them one after another made the plan
         # cost the sum of its parts. Results are merged in the original
         # deterministic order below, so concurrency changes the latency and
         # nothing else.
-        pairs = [(query, mode) for query in queries for mode in modes]
+        pairs = [
+            (query_index, query, mode)
+            for query_index, query in enumerate(queries)
+            for mode in modes
+        ]
 
-        def run(pair: tuple[str, str]) -> list[Passage]:
-            query, mode = pair
-            return self.search(
+        def run(pair: tuple[int, str, str]) -> tuple[list[Passage], dict[str, Any]]:
+            query_index, query, mode = pair
+            started = time.perf_counter()
+            passages = self.search(
                 query,
                 mode=mode,
                 limit=limit,
@@ -556,6 +571,16 @@ class PheasantRetriever:
                 principal=principal,
                 principal_groups=principal_groups,
             )
+            return passages, {
+                "mode": mode,
+                "phase": "search",
+                "query_index": query_index,
+                "query_label": (
+                    f"{query_label} {query_index + 1}" if query_label == "query" else query_label
+                ),
+                "duration_seconds": time.perf_counter() - started,
+                "passages": len(passages),
+            }
 
         # Only the arms that actually benefit are run concurrently. Text
         # searches are SQLite reads that release the GIL and parallelize well
@@ -564,15 +589,46 @@ class PheasantRetriever:
         # *worse* (5.10s → 8.65s). So: everything else in a pool, vector in
         # sequence. The vector embeddings are batched and overlapped with
         # those other searches; the LanceDB scans remain sequential.
-        concurrent = [pair for pair in pairs if pair[1] != "vector"]
-        sequential = [pair for pair in pairs if pair[1] == "vector"]
+        concurrent = [pair for pair in pairs if pair[2] != "vector"]
+        sequential = [pair for pair in pairs if pair[2] == "vector"]
         batches: list[list[Passage]] = []
-        vector_queries = list(dict.fromkeys(query for query, _mode in sequential))
+        fanout_timings: list[dict[str, Any]] = []
+        vector_queries = list(dict.fromkeys(query for _index, query, _mode in sequential))
         vector_searcher = getattr(self.search_engine, "vector", None)
         embed_queries = getattr(vector_searcher, "embed_queries", None)
-        batch_vector_embeddings = len(vector_queries) > 1 and callable(embed_queries)
+        batch_vector_embeddings = callable(embed_queries) and (
+            len(vector_queries) > 1 or ("vector" in modes and "hybrid" not in modes)
+        )
 
-        if len(concurrent) > 1 or batch_vector_embeddings:
+        def collect(results: list[tuple[list[Passage], dict[str, Any]]]) -> None:
+            for passages, timing in results:
+                batches.append(passages)
+                fanout_timings.append(timing)
+
+        def embed_batch() -> float:
+            started = time.perf_counter()
+            embed_queries(vector_queries)
+            return time.perf_counter() - started
+
+        # Hybrid search has its own vector arm. For multi-query hybrid fanout,
+        # warm the shared query cache before those searches start so their
+        # per-query embed calls cannot race the explicit batch. A standalone
+        # vector arm (including one query) is embedded alongside graph/text
+        # work below, then its local index scan reuses that cached vector.
+        vector_batch_ready = False
+        if batch_vector_embeddings and "hybrid" in modes:
+            fanout_timings.append(
+                {
+                    "mode": "vector",
+                    "phase": "embedding",
+                    "query_count": len(vector_queries),
+                    "duration_seconds": embed_batch(),
+                }
+            )
+            vector_batch_ready = True
+
+        embed_in_pool = batch_vector_embeddings and not vector_batch_ready
+        if len(concurrent) > 1 or embed_in_pool:
             # SQLite benefits strongly from broad read fan-out.  Postgres text
             # ranking is CPU work inside the database; sending four planner
             # queries at once made each one take minutes on a two-core local
@@ -582,17 +638,29 @@ class PheasantRetriever:
             # request overlap with text retrieval.
             postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
             search_workers = 2 if postgres else 8
-            pool_workers = min(len(concurrent), search_workers) + int(batch_vector_embeddings)
+            pool_workers = min(len(concurrent), search_workers) + int(embed_in_pool)
             with ThreadPoolExecutor(max_workers=max(1, pool_workers)) as pool:
-                embedding_future = (
-                    pool.submit(embed_queries, vector_queries) if batch_vector_embeddings else None
-                )
-                batches.extend(pool.map(run, concurrent))
+                embedding_future = pool.submit(embed_batch) if embed_in_pool else None
+                collect(list(pool.map(run, concurrent)))
                 if embedding_future is not None:
-                    embedding_future.result()
+                    embedding_seconds = embedding_future.result()
+                    fanout_timings.append(
+                        {
+                            "mode": "vector",
+                            "phase": "embedding",
+                            "query_count": len(vector_queries),
+                            "duration_seconds": embedding_seconds,
+                        }
+                    )
         else:
-            batches.extend(run(pair) for pair in concurrent)
-        batches.extend(run(pair) for pair in sequential)
+            collect([run(pair) for pair in concurrent])
+        collect([run(pair) for pair in sequential])
+        if on_fanout is not None:
+            for timing in fanout_timings:
+                try:
+                    on_fanout(timing)
+                except Exception:  # telemetry must never fail retrieval
+                    logger.debug("fanout timing callback failed", exc_info=True)
         for batch in batches:
             for passage in batch:
                 existing = merged.get(passage.key())
@@ -730,10 +798,15 @@ class PheasantRetriever:
         return number_figures(found, citations)
 
     def facts(self, node_ids: list[str], limit: int = 12) -> list[dict]:
-        """One-hop subject–predicate–object triples around these nodes."""
+        """Best-effort one-hop triples; a stalled graph must not stall answers."""
         from pheasant.assistant.chat import collect_facts
+        from pheasant.graph.query_service import GraphQueryError
 
-        return collect_facts(self.graph, node_ids, limit)
+        try:
+            return collect_facts(self.graph, node_ids, limit)
+        except GraphQueryError as exc:
+            logger.warning("graph facts unavailable; continuing without them: %s", exc)
+            return []
 
     # --------------------------------------------------------------- content
 

@@ -20,6 +20,7 @@ reading the workflow module's docstring. It lived in `api/app.py`, and
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,6 +28,8 @@ from typing import Any
 
 from pheasant.services import ServiceContext
 from pheasant.services.errors import AssistantDisabled, EmptyQuestion, InvalidRequest
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -179,6 +182,7 @@ def visualize(
 
     from pheasant.assistant import answering, chat
     from pheasant.graph.figures import collect_figures, with_full_captions
+    from pheasant.graph.query_service import GraphQueryError
 
     if request.node_ids:
         citations = _named_citations(context, request)
@@ -199,9 +203,12 @@ def visualize(
         citations = chat.build_citations(found.get("results") or [], MAX_VISUAL_PASSAGES)
     node_ids = [str(c["node_id"]) for c in citations if c.get("node_id")]
     facts = chat.collect_facts(context.graph, node_ids, 12)
-    figures = answering.number_figures(
-        with_full_captions(context.state, collect_figures(context.graph, node_ids)), citations
-    )
+    try:
+        found_figures = collect_figures(context.graph, node_ids)
+    except GraphQueryError as exc:
+        logger.warning("graph figures unavailable; continuing without them: %s", exc)
+        found_figures = []
+    figures = answering.number_figures(with_full_captions(context.state, found_figures), citations)
     kind = (request.kind or "").strip().lower() or None
     llm = answering.resolve_llm(context.config, credential, env)
     visual = answering.visual_for(

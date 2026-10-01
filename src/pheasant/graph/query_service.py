@@ -86,7 +86,14 @@ class GraphQueryClient:
         original_host = host if parsed.port is None else f"{host}:{parsed.port}"
         return target, original_host
 
-    def query(self, operation: str, **parameters: Any) -> Any:
+    def query(
+        self,
+        operation: str,
+        *,
+        timeout_seconds: float | None = None,
+        retries: int | None = None,
+        **parameters: Any,
+    ) -> Any:
         token = os.environ.get(self.token_env or "", "")
         if not token:
             raise GraphQueryError(
@@ -97,7 +104,9 @@ class GraphQueryClient:
             separators=(",", ":"),
         ).encode("utf-8")
         last: Exception | None = None
-        for attempt in range(self.retries + 1):
+        timeout = self.timeout if timeout_seconds is None else max(0.1, float(timeout_seconds))
+        retry_count = self.retries if retries is None else max(0, int(retries))
+        for attempt in range(retry_count + 1):
             target, host_header = self._target()
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -113,7 +122,7 @@ class GraphQueryClient:
             inject_traceparent(headers)
             request = Request(target, data=body, method="POST", headers=headers)
             try:
-                with self._opener.open(request, timeout=self.timeout) as response:
+                with self._opener.open(request, timeout=timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 if not isinstance(payload, dict) or "result" not in payload:
                     raise GraphQueryError("graph service returned an invalid response")
@@ -132,7 +141,7 @@ class GraphQueryClient:
                 last = exc
             except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
                 last = exc
-            if attempt < self.retries:
+            if attempt < retry_count:
                 time.sleep(0.05 * (attempt + 1))
         raise GraphQueryError(
             f"graph service at {self.base_url!r} could not answer {operation!r}: {last}"
@@ -243,10 +252,32 @@ class RemoteGraph:
         return dict(self.client.query("taxonomy", source=source, path=path, max_nodes=max_nodes))
 
     def remote_facts(self, node_ids: list[str], limit: int = 12) -> list[dict[str, Any]]:
-        return list(self.client.query("facts", node_ids=node_ids, limit=limit) or [])
+        # Facts decorate an answer but do not ground it. Keep a congested graph
+        # service from holding synthesis for its full query deadline or retry.
+        return list(
+            self.client.query(
+                "facts",
+                timeout_seconds=min(self.client.timeout, 3.0),
+                retries=0,
+                node_ids=node_ids,
+                limit=limit,
+            )
+            or []
+        )
 
     def remote_figures(self, node_ids: list[str], limit: int = 8) -> list[dict[str, Any]]:
-        return list(self.client.query("figures", node_ids=node_ids, limit=limit) or [])
+        # Figures decorate an answer; keep a congested graph from holding the
+        # answer for the full query deadline or retry window.
+        return list(
+            self.client.query(
+                "figures",
+                timeout_seconds=min(self.client.timeout, 3.0),
+                retries=0,
+                node_ids=node_ids,
+                limit=limit,
+            )
+            or []
+        )
 
     def remote_memory_coverage(self, artifact_ids: list[str]) -> dict[str, Any]:
         return dict(self.client.query("memory_coverage", artifact_ids=artifact_ids))

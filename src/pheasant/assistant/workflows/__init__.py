@@ -96,6 +96,9 @@ class WorkflowStep:
     duration_seconds: float | None = None
     input_tokens: int | None = 0
     output_tokens: int | None = 0
+    #: Individual query/mode fan-outs that make up a retrieval step. Entries
+    #: include their mode, query index, phase, elapsed time, and result count.
+    fanout_timings: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

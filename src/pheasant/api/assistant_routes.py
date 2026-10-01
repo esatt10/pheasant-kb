@@ -192,6 +192,7 @@ def register_assistant_routes(
                             "duration_seconds": step.duration_seconds,
                             "input_tokens": step.input_tokens,
                             "output_tokens": step.output_tokens,
+                            "fanout_timings": step.fanout_timings,
                         }
                     ),
                 )

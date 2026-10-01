@@ -9,6 +9,7 @@ import type {
   ChatAnswer,
   HistoryTurn,
   VisualResponse,
+  WorkflowStep,
   ConfigResponse,
   EmbeddingsStatus,
   ExplainResponse,
@@ -392,7 +393,7 @@ export const api = {
       depth?: AnswerDepth | null;
       visual?: "none" | "diagram" | "image" | null;
     },
-    onStep: (step: { name: string; detail: string; passages: number }) => void,
+    onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,
     /**
      * Called with the answer the moment its text exists, and again when a

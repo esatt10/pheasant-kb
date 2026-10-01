@@ -8,6 +8,7 @@ import type {
   ChatAnswer,
   Citation,
   VisualResponse,
+  WorkflowStep,
 } from "../api/types";
 import { historyFor, useSession } from "../state/session";
 import { AnswerBody } from "./AnswerBody";
@@ -28,6 +29,7 @@ interface ChatPanelProps {
 const STEP_LABELS: Record<string, string> = {
   plan: "Planning the search…",
   retrieve: "Searching your sources…",
+  hybrid: "Broadening the search with hybrid retrieval…",
   expand: "Following links in the graph…",
   grade: "Checking the evidence…",
   replan: "Evidence was thin — searching again…",
@@ -76,7 +78,7 @@ export function ChatPanel({
   const turnRefs = useRef(new Map<string, HTMLDivElement>());
   // Live workflow steps for the in-flight question. Local, not session state:
   // they describe one request and are meaningless once it resolves.
-  const [progress, setProgress] = useState<{ name: string; detail: string }[]>([]);
+  const [progress, setProgress] = useState<WorkflowStep[]>([]);
   // Whether this region's remembered assertions may inform the answer. The
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
@@ -96,7 +98,7 @@ export function ChatPanel({
           history,
           depth: answerDepth,
         },
-        (step) => setProgress((prev) => [...prev, { name: step.name, detail: step.detail }]),
+        (step) => setProgress((prev) => [...prev, step]),
         undefined,
         // The text lands as soon as it exists; a visual follows and replaces
         // the pending placeholder in the same turn.
@@ -346,7 +348,10 @@ function AgentTrace({ steps }: { steps: NonNullable<ChatAnswer["steps"]> }) {
           {steps.map((step, index) => (
             <li key={`${step.name}-${index}`}>
               <span className="trace__name">{step.name}</span>
-              <span className="trace__detail">{step.detail}</span>
+              <div className="trace__detail">
+                <div>{step.detail}</div>
+                <FanoutBreakdown timings={step.fanout_timings} />
+              </div>
               <span className="trace__metrics">
                 {step.passages > 0 ? (
                   <span>{step.passages} {step.name === "read" ? "files" : "passages"}</span>
@@ -361,6 +366,27 @@ function AgentTrace({ steps }: { steps: NonNullable<ChatAnswer["steps"]> }) {
           ))}
         </ol>
       ) : null}
+    </div>
+  );
+}
+
+function FanoutBreakdown({ timings }: { timings?: WorkflowStep["fanout_timings"] }) {
+  if (!timings?.length) return null;
+  return (
+    <div className="trace__fanouts">
+      {timings.map((timing, index) => {
+        const label =
+          timing.phase === "embedding"
+            ? `${timing.mode} embeddings · ${timing.query_count ?? 0} queries`
+            : `${timing.mode} · ${timing.query_label ?? `query ${(timing.query_index ?? 0) + 1}`}`;
+        return (
+          <span className="trace__fanout" key={`${timing.mode}-${timing.phase}-${index}`}>
+            <span>{label}</span>
+            {timing.passages == null ? null : <span>{timing.passages} passages</span>}
+            <span className="trace__fanout-time">{timing.duration_seconds.toFixed(3)}s</span>
+          </span>
+        );
+      })}
     </div>
   );
 }

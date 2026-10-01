@@ -429,11 +429,19 @@ def collect_facts(graph: Any, node_ids: list[str], limit: int = 12) -> list[dict
     same question over an unchanged graph yields the same facts in the same
     sequence.
     """
-    if graph is None:
+    if graph is None or limit <= 0 or not node_ids:
         return []
     remote = getattr(graph, "remote_facts", None)
     if callable(remote):
-        return remote(node_ids=node_ids, limit=limit)
+        from pheasant.graph.query_service import GraphQueryError
+
+        try:
+            return remote(node_ids=node_ids, limit=limit)
+        except GraphQueryError as exc:
+            # Facts enrich an answer or visual, but the cited passages remain
+            # usable if the remote graph is busy or unavailable.
+            logger.warning("graph facts unavailable; continuing without them: %s", exc)
+            return []
 
     def label_of(node_id: str) -> str:
         try:

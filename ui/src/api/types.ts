@@ -403,6 +403,16 @@ export interface GraphFact {
 }
 
 /** One recorded step of an agent workflow, for the "what did it do" trace. */
+export interface QueryFanoutTiming {
+  mode: string;
+  phase: "search" | "embedding";
+  query_index?: number | null;
+  query_label?: string;
+  query_count?: number;
+  duration_seconds: number;
+  passages?: number;
+}
+
 export interface WorkflowStep {
   name: string;
   detail: string;
@@ -410,6 +420,7 @@ export interface WorkflowStep {
   duration_seconds?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  fanout_timings?: QueryFanoutTiming[];
 }
 
 export interface WorkflowInfo {

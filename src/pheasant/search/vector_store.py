@@ -771,6 +771,10 @@ class LanceDBVectorStore:
     #: pay an O(total) rewrite. A first index of a large corpus crosses it
     #: straight away, which is where the fragment count is worst.
     COMPACT_AT_SMALL_FRAGMENTS = 64
+    #: Keep the first request off cold file pages for a small index. Above
+    #: this cap, eagerly scanning the whole corpus at API startup costs more
+    #: than letting the first real query warm the OS page cache.
+    WARMUP_MAX_VECTORS = 10_000
 
     #: Version manifests older than this are dropped when compacting. Nothing
     #: here reads an old version: every call re-opens the table at its latest.
@@ -925,6 +929,22 @@ class LanceDBVectorStore:
             )
             for hit in hits
         ]
+
+    def warm(self) -> bool:
+        """Touch a small index once so its first user query avoids cold I/O."""
+        table = self._table()
+        if table is None:
+            return False
+        rows = table.count_rows()
+        if rows <= 0 or rows > self.WARMUP_MAX_VECTORS:
+            return False
+        width = getattr(table.schema.field("vector").type, "list_size", None)
+        if not width:
+            return False
+        probe = [0.0] * int(width)
+        probe[0] = 1.0
+        table.search(probe).distance_type("cosine").limit(1).to_list()
+        return True
 
     def count(self) -> int:
         table = self._table()

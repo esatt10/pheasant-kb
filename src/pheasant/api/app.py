@@ -1032,6 +1032,18 @@ def create_app(
         usage_tracking=config.memory.usage_tracking,
         stage_sample_rate=config.observability.interactions.stage_sample_rate,
     )
+    if role_policy.role is Role.API and search.vector is not None:
+        warm_vector_store = getattr(getattr(search.vector, "store", None), "warm", None)
+        if callable(warm_vector_store):
+            try:
+                if warm_vector_store():
+                    logger.info("Warmed the small vector index before serving queries")
+            except Exception:
+                # Warm-up affects only cold-query latency; a missing/temporarily
+                # unavailable index must not prevent the API from starting.
+                logger.warning(
+                    "Vector index warm-up failed; first query will warm it", exc_info=True
+                )
 
     # The application layer's collaborators, assembled once. Every operation
     # below that has an MCP counterpart takes this and nothing else, which is

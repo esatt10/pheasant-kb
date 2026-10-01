@@ -140,11 +140,13 @@
   "assistant.request_timeout_seconds": 180.0,
   "assistant.max_facts": 16,
   "assistant.workflow": "agentic",
+  "assistant.workflow_options.agentic.staged_retrieval": true,
   "assistant.retrieval.max_rounds": 2,
   "assistant.retrieval.per_query_results": 10,
   "assistant.retrieval.max_context_passages": 16,
   "assistant.retrieval.retrieval_modes": [
-    "text",
+    "hybrid",
+    "graph",
     "vector"
   ],
   "assistant.retrieval.expand_graph": true,

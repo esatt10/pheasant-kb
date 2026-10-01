@@ -82,6 +82,10 @@ DEFAULTS: dict[str, Any] = {
     "depth": "auto",
     # How many plan→retrieve→grade rounds before answering with what we have.
     "max_rounds": 3,
+    # When hybrid is selected, run it directly before planning. If hybrid is
+    # unavailable, stage graph/vector before searching the remaining arms.
+    # Existing deployments opt in explicitly.
+    "staged_retrieval": False,
     # Search modes to fan out over. "vector" is dropped automatically when no
     # vector index is built, so leaving it on is safe.
     #
@@ -250,6 +254,8 @@ class AgentState(TypedDict, total=False):
     modes: list[str]
     passages: list
     round: int
+    fallback_done: bool
+    broadening_grade_pending: bool
     plan_notes: list[str]
     grade: dict
     citations: list[dict]
@@ -343,6 +349,14 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     available = [m for m in options["retrieval_modes"] if m in capabilities.modes]
     if not available:
         available = ["hybrid"]
+    if (
+        options.get("staged_retrieval")
+        and state.get("fallback_done")
+        and "hybrid" in available
+    ):
+        # Once a broad hybrid pass has run, a grader-suggested query uses one
+        # targeted hybrid pass instead of separate calls to its component arms.
+        available = ["hybrid"]
 
     # A follow-up round already knows what was missing — use the grader's
     # suggestion rather than re-planning from scratch.
@@ -394,8 +408,8 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
                 queries = _dedupe([searched, *planned])[:4]
                 notes = str(parsed.get("reasoning") or "planned")
             planned_modes = [str(m) for m in parsed.get("modes", []) if m in capabilities.modes]
-            # An explicit retrieval_modes list is a fanout contract, not just
-            # a menu for the planner to narrow. The fleet pins all three arms.
+            # In the standard flow an explicit retrieval_modes list pins the
+            # fan-out. Staged mode searches only arms not already covered.
             if planned_modes and "retrieval_modes" not in state.get("explicit_options", []):
                 available = planned_modes
             # The planner reads the question with the corpus in front of it,
@@ -448,18 +462,33 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
 
 
 def retrieve_node(state: AgentState, ctx: dict) -> dict:
-    """Fan out across every planned query and mode, then merge."""
+    """Run the fast first pass, or the modes selected by a later plan."""
     retriever = ctx["retriever"]
     request: WorkflowRequest = ctx["request"]
     options = resolve_options(state)
+    planned = bool(state.get("queries"))
+    queries = state.get("queries") or [state.get("search_question") or state["question"]]
+    configured_modes = list(options.get("retrieval_modes") or ["hybrid"])
+    fast_modes = [mode for mode in configured_modes if mode in {"graph", "vector"}]
+    staged_retrieval = bool(options.get("staged_retrieval"))
+    if staged_retrieval and "hybrid" in configured_modes:
+        # Hybrid already runs text, vector, and graph together. Keep this a
+        # single call so the fast-path setup does not repeat its own arms.
+        first_pass_modes = ["hybrid"]
+    else:
+        first_pass_modes = (fast_modes or configured_modes) if staged_retrieval else configured_modes
+    modes = state.get("modes") if planned else (first_pass_modes or ["hybrid"])
+    modes = list(modes or ["hybrid"])
+    fanout_timings: list[dict[str, Any]] = []
 
     found = retriever.multi_search(
-        state.get("queries") or [state["question"]],
-        modes=state.get("modes") or ["hybrid"],
+        queries,
+        modes=modes,
         limit=int(options["per_query_results"]),
         source_name=request.source_name,
         principal=request.principal,
         principal_groups=request.principal_groups,
+        on_fanout=fanout_timings.append,
     )
     merged = _merge_passages(state.get("passages", []), found)
     # A follow-up keeps the previous question's evidence in play, on the first
@@ -471,23 +500,91 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
             merged,
             retriever.multi_search(
                 [carried],
-                modes=state.get("modes") or ["hybrid"],
+                modes=modes,
                 limit=int(options["per_query_results"]),
                 source_name=request.source_name,
                 principal=request.principal,
                 principal_groups=request.principal_groups,
+                on_fanout=fanout_timings.append,
+                query_label="prior question",
             ),
         )
     return {
         "passages": merged,
+        "queries": queries,
+        "modes": modes,
+        "fallback_done": (
+            not staged_retrieval
+            or "hybrid" in modes
+            or not any(mode in {"graph", "vector"} for mode in modes)
+        ),
         "steps": [
             *state.get("steps", []),
             WorkflowStep(
                 name="retrieve",
-                detail=f"{len(found)} passages from {len(state.get('queries') or [])} "
-                f"quer{'y' if len(state.get('queries') or []) == 1 else 'ies'} "
-                f"across {', '.join(state.get('modes') or ['hybrid'])}",
+                detail=f"{len(found)} passages from {len(queries)} "
+                f"quer{'y' if len(queries) == 1 else 'ies'} "
+                f"across {', '.join(modes)}",
                 passages=len(found),
+                fanout_timings=fanout_timings,
+            ),
+        ],
+    }
+
+
+def broaden_node(state: AgentState, ctx: dict) -> dict:
+    """Search the remaining hybrid arms without repeating completed work."""
+    retriever = ctx["retriever"]
+    request: WorkflowRequest = ctx["request"]
+    options = resolve_options(state)
+    queries = state.get("queries") or [state.get("search_question") or state["question"]]
+    searched_modes = set(state.get("modes") or [])
+    modes = [mode for mode in ("text", "vector", "graph") if mode not in searched_modes]
+    fanout_timings: list[dict[str, Any]] = []
+    found = (
+        retriever.multi_search(
+            queries,
+            modes=modes,
+            limit=int(options["per_query_results"]),
+            source_name=request.source_name,
+            principal=request.principal,
+            principal_groups=request.principal_groups,
+            on_fanout=fanout_timings.append,
+        )
+        if modes
+        else []
+    )
+    merged = _merge_passages(state.get("passages", []), found)
+    carried = conversation.carried_question(state.get("history") or [])
+    if carried and state.get("search_question") and not state.get("round"):
+        extra = retriever.multi_search(
+            [carried],
+            modes=modes,
+            limit=int(options["per_query_results"]),
+            source_name=request.source_name,
+            principal=request.principal,
+            principal_groups=request.principal_groups,
+            on_fanout=fanout_timings.append,
+            query_label="prior question",
+        )
+        merged = conversation.carry(merged, extra)
+    previous_modes = ", ".join(state.get("modes") or ["graph", "vector"])
+    added_modes = ", ".join(modes) or "no additional modes"
+    return {
+        "passages": merged,
+        "modes": modes,
+        "fallback_done": True,
+        "broadening_grade_pending": True,
+        "steps": [
+            *state.get("steps", []),
+            WorkflowStep(
+                name="broaden",
+                detail=(
+                    f"{previous_modes} evidence was insufficient; searched remaining modes: "
+                    f"{added_modes}"
+                ),
+                passages=len(found),
+                fanout_timings=fanout_timings,
             ),
         ],
     }
@@ -532,18 +629,21 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
     llm = ctx.get("grader_llm", ctx["llm"])
     options = resolve_options(state)
     passages = state.get("passages", [])
-    round_index = state.get("round", 0) + 1
+    fallback_grade = bool(state.get("broadening_grade_pending"))
+    round_index = state.get("round", 0) + (0 if fallback_grade else 1)
 
     # Deterministic floor: nothing found is definitively insufficient, and
     # with no model there is nobody to ask, so take what we have.
     if not passages:
         return {
             "round": round_index,
+            "broadening_grade_pending": False,
             "grade": {"sufficient": False, "missing": "no matching passages", "next_query": ""},
         }
     if llm is None or not options["grade_evidence"]:
         return {
             "round": round_index,
+            "broadening_grade_pending": False,
             "grade": {"sufficient": True, "missing": "", "next_query": ""},
         }
 
@@ -586,6 +686,7 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
     }
     return {
         "round": round_index,
+        "broadening_grade_pending": False,
         "grade": grade,
         "steps": [
             *state.get("steps", []),
@@ -738,11 +839,13 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
 
 
 def should_retry(state: AgentState, ctx: dict) -> str:
-    """Conditional edge: loop back to planning, or go answer."""
+    """Choose broadening, a replan, or synthesis from the current grade."""
     options = resolve_options(state)
     grade = state.get("grade") or {}
     if grade.get("sufficient", True):
         return "synthesize"
+    if options.get("staged_retrieval") and not state.get("fallback_done"):
+        return "broaden"
     if state.get("round", 0) >= int(options["max_rounds"]):
         return "synthesize"
     if not grade.get("next_query") and not state.get("passages"):
@@ -752,10 +855,16 @@ def should_retry(state: AgentState, ctx: dict) -> str:
     return "plan"
 
 
+def route_after_classify(state: AgentState, ctx: dict) -> str:
+    """Use the direct fast pass only when staged retrieval is enabled."""
+    return "retrieve" if resolve_options(state).get("staged_retrieval") else "plan"
+
+
 NODES = {
     "classify": classify_node,
     "plan": plan_node,
     "retrieve": retrieve_node,
+    "broaden": broaden_node,
     "expand": expand_node,
     "grade": grade_node,
     "synthesize": synthesize_node,
@@ -813,7 +922,16 @@ def build_graph(options: dict[str, Any], nodes: dict[str, Any] | None = None):
     is_default = nodes is None
     nodes = nodes or NODES
     builder = StateGraph(AgentState)
-    for name in ("classify", "plan", "retrieve", "expand", "grade", "synthesize", "verify"):
+    for name in (
+        "classify",
+        "plan",
+        "retrieve",
+        "broaden",
+        "expand",
+        "grade",
+        "synthesize",
+        "verify",
+    ):
         # LangGraph calls node(state, config); ctx rides on the config so the
         # nodes stay plain, testable functions of (state, ctx).
         builder.add_node(
@@ -821,18 +939,22 @@ def build_graph(options: dict[str, Any], nodes: dict[str, Any] | None = None):
             _bind(nodes[name]),
         )
     builder.add_edge(START, "classify")
-    # classify runs once, ahead of the loop: how the question was read does
-    # not change because a search came back thin, so the replan edge below
-    # re-enters at `plan`, not here.
-    builder.add_edge("classify", "plan")
+    # classify runs once. Most configured flows plan next; staged retrieval
+    # starts with a direct graph/vector pass and plans only after escalation.
+    builder.add_conditional_edges(
+        "classify",
+        _bind_router(route_after_classify),
+        {"plan": "plan", "retrieve": "retrieve"},
+    )
     builder.add_edge("plan", "retrieve")
     builder.add_edge("retrieve", "expand")
     builder.add_edge("expand", "grade")
     builder.add_conditional_edges(
         "grade",
         _bind_router(should_retry),
-        {"plan": "plan", "synthesize": "synthesize"},
+        {"broaden": "broaden", "plan": "plan", "synthesize": "synthesize"},
     )
+    builder.add_edge("broaden", "expand")
     builder.add_edge("synthesize", "verify")
     builder.add_edge("verify", END)
     compiled = builder.compile()
