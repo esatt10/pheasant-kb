@@ -13,10 +13,12 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from pheasant.config.schema import ExtractorSettings, PheasantConfig, SourceConfig
+from pheasant.ingestion.chunk_plan import PLANNER_VERSION
 from pheasant.ingestion.chunking import TextChunk
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, TEXT_EXTENSIONS
 from pheasant.ingestion.extractor import build_extractor
 from pheasant.ingestion.pipeline import ParsedArtifact, parse_connector_payload
+from pheasant.ingestion.taxonomy import Ordinal, SectionHeading
 from pheasant.sync.connectors import ConnectorItem, ConnectorPayload
 
 
@@ -62,11 +64,42 @@ def configured_token(env_name: str) -> str:
     return token
 
 
+class IncompatibleResult(RemoteWorkerError):
+    """A worker's answer was produced by a different chunk planner.
+
+    Planning is deterministic only *per version*: a worker on another release
+    could cut the same file differently, and committing that would make the
+    indexed chunks depend on which replica answered. The coordinator prepares
+    such a file itself.
+    """
+
+
+def _heading_to_wire(heading: SectionHeading) -> dict[str, Any]:
+    payload = asdict(heading)
+    payload["ordinal"] = asdict(heading.ordinal) if heading.ordinal is not None else None
+    return payload
+
+
+def _heading_from_wire(payload: dict[str, Any]) -> SectionHeading:
+    raw = dict(payload)
+    ordinal = raw.pop("ordinal", None)
+    if ordinal is not None:
+        ordinal = Ordinal(**{**ordinal, "parts": tuple(ordinal["parts"])})
+    return SectionHeading(**raw, ordinal=ordinal)
+
+
 def parsed_to_wire(parsed: ParsedArtifact | None) -> dict[str, Any] | None:
+    """A worker's answer, headings and chunk plan included.
+
+    Headings used to be refused here, so remote preparation turned away every
+    taxonomy-enabled source -- and a region that enables taxonomy everywhere
+    (the compose fleet does) parsed every file on its indexer with the fleet
+    idle. Section detection is as deterministic as chunking, so the outline
+    travels with the chunks it labels.
+    """
+
     if parsed is None:
         return None
-    if parsed.headings:
-        raise RemoteWorkerError("Remote text workers do not accept taxonomy-bearing results")
     return {
         "id": parsed.id,
         "source_id": parsed.source_id,
@@ -80,13 +113,20 @@ def parsed_to_wire(parsed: ParsedArtifact | None) -> dict[str, Any] | None:
         "git_branch": parsed.git_branch,
         "git_commit": parsed.git_commit,
         "chunks": [asdict(chunk) for chunk in parsed.chunks],
-        "headings": [],
+        "headings": [_heading_to_wire(heading) for heading in parsed.headings],
+        "chunk_plan": parsed.chunk_plan,
     }
 
 
 def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
     if payload is None:
         return None
+    plan = payload.get("chunk_plan")
+    if plan is not None and plan.get("planner") != PLANNER_VERSION:
+        raise IncompatibleResult(
+            f"worker planned chunks with {plan.get('planner')!r}, this process with "
+            f"{PLANNER_VERSION!r}"
+        )
     return ParsedArtifact(
         id=str(payload["id"]),
         source_id=str(payload["source_id"]),
@@ -100,7 +140,8 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
         git_branch=payload.get("git_branch"),
         git_commit=payload.get("git_commit"),
         chunks=[TextChunk(**row) for row in payload.get("chunks") or []],
-        headings=[],
+        headings=[_heading_from_wire(row) for row in payload.get("headings") or []],
+        chunk_plan=plan,
     )
 
 
@@ -146,8 +187,6 @@ def prepare_task(task: dict[str, Any]) -> dict[str, Any] | None:
 
     source = PheasantConfig.model_validate({"sources": [task["source"]]}).sources[0]
     item = ConnectorItem(**task["item"])
-    if source.taxonomy.enabled:
-        raise RemoteWorkerError("Remote preparation does not support taxonomy-enabled sources")
     extractor_raw = task.get("extractor")
     extractor_settings = (
         PheasantConfig.model_validate(

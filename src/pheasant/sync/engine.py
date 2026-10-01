@@ -69,6 +69,7 @@ from pheasant.sync.fingerprint import (
 from pheasant.sync.graph_events import notifier_from_config as graph_notifier_from_config
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
+from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
     _media_bytes,
     _prepare_filesystem_item_process,
@@ -1180,6 +1181,11 @@ class SyncEngine:
             done, payload = self._remote_precheck(
                 connector, source, mode, artifacts, position, item
             )
+            if done is None and reads_locally(self.extractor, item.relative_path, payload.content):
+                parsed = parse_connector_payload(
+                    source, item, payload, git_metadata, extractor=self.extractor
+                )
+                done = self._finish_remote(source, mode, artifacts, position, item, payload, parsed)
             if done is not None:
                 finished[position] = done
             else:
@@ -1276,7 +1282,6 @@ class SyncEngine:
             remote_content_safe = (
                 connector.connector_type == "filesystem"
                 and mode != "repair"
-                and not bool(getattr(source.taxonomy, "enabled", False))
                 and all(
                     _remote_preparation_path(
                         item.relative_path,
@@ -1306,7 +1311,7 @@ class SyncEngine:
         elif requested_executor == "remote" and not remote_safe:
             logger.warning(
                 "Source %s cannot use remote workers (requires URLs and supported text/document "
-                "content without taxonomy/repair); using thread workers",
+                "content, not repair); using thread workers",
                 source.name,
             )
         if remote_safe:
@@ -1524,6 +1529,7 @@ class SyncEngine:
         """
         if self.extractor is None and source_includes_documents(source):
             self.extractor = extractor_from_config(self.config, source=source)
+        self.extractor = attach_fleet_pages(self.extractor, self.config)
         if self.captioner is None and source_includes_images(source):
             self.captioner = captioner_from_config(self.config, source=source)
         if self.transcriber is None and source_includes_audio(source):

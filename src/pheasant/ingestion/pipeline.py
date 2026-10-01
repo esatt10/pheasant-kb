@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pheasant.config.schema import SourceConfig
+from pheasant.ingestion.chunk_plan import plan_chunks, strategy_of
 from pheasant.ingestion.chunking import TextChunk, chunk_text
 from pheasant.ingestion.content_types import (
     AUDIO_EXTENSIONS,
@@ -23,10 +24,13 @@ from pheasant.ingestion.content_types import (
     artifact_type,
 )
 from pheasant.ingestion.extractor import EXTRACT_SIDECAR_SUFFIX, HTML_EXTENSIONS
+from pheasant.ingestion.packing import pack
 from pheasant.ingestion.taxonomy import (
     SectionHeading,
+    detect_headings,
     heading_path_for_line,
     headings_for_source,
+    max_depth_for_source,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +64,10 @@ class ParsedArtifact:
     #: `pheasant.ingestion.taxonomy`. The graph builder turns these into
     #: `heading` nodes; `chunks[*].heading_path` is derived from them.
     headings: list[SectionHeading] = field(default_factory=list)
+    #: How this file was chunked, when its source's ``chunking.strategy`` is
+    #: ``sections`` or ``auto`` (`ingestion/chunk_plan.py`); ``None`` for
+    #: ``fixed``, so a fixed source's artifacts are byte-identical to before.
+    chunk_plan: dict[str, Any] | None = None
 
 
 def utc_now() -> str:
@@ -228,8 +236,8 @@ def extract_to_text(
 
 
 def _chunks_and_headings(
-    source: SourceConfig, text: str
-) -> tuple[list[TextChunk], list[SectionHeading]]:
+    source: SourceConfig, text: str, relative_path: str = ""
+) -> tuple[list[TextChunk], list[SectionHeading], dict[str, Any] | None]:
     """Detect headings and cut chunks, minus any agent-memory frontmatter.
 
     Both parse entry points route through here so normalization cannot be applied
@@ -252,10 +260,26 @@ def _chunks_and_headings(
 
     text = text.replace("\x00", "")
     text, line_offset = _strip_memory_frontmatter(source, text)
-    headings = headings_for_source(source, text)
-    chunks = chunks_for_source(source, text, headings)
+    plan = None
+    if source.chunking.enabled and strategy_of(source) != "fixed":
+        plan = plan_chunks(source, relative_path, text)
+        headings = (
+            detect_headings(
+                text,
+                rules=plan.rules,
+                max_depth=max_depth_for_source(source),
+                max_headings=plan.max_headings,
+            )
+            if plan.rules
+            else []
+        )
+        chunks = pack(text, plan, headings)
+    else:
+        headings = headings_for_source(source, text)
+        chunks = chunks_for_source(source, text, headings)
+    recorded = plan.as_dict() if plan is not None else None
     if not line_offset:
-        return chunks, headings
+        return chunks, headings, recorded
     chunks = [
         replace(
             chunk,
@@ -265,7 +289,7 @@ def _chunks_and_headings(
         for chunk in chunks
     ]
     headings = [replace(heading, line=heading.line + line_offset) for heading in headings]
-    return chunks, headings
+    return chunks, headings, recorded
 
 
 def _strip_memory_frontmatter(source: SourceConfig, text: str) -> tuple[str, int]:
@@ -477,7 +501,7 @@ def parse_file(
         )
     else:
         text = read_text(path, extractor)
-    chunks, headings = _chunks_and_headings(source, text)
+    chunks, headings, chunk_plan = _chunks_and_headings(source, text, relative)
     stat = path.stat()
     artifact_id = f"file:{source.name}:{relative}:branch={branch or 'none'}"
     return ParsedArtifact(
@@ -497,6 +521,7 @@ def parse_file(
         git_commit=commit,
         chunks=chunks,
         headings=headings,
+        chunk_plan=chunk_plan,
     )
 
 
@@ -565,7 +590,7 @@ def parse_connector_payload(
         )
     else:
         text = read_text_bytes(payload.content, item.relative_path, extractor)
-    chunks, headings = _chunks_and_headings(source, text)
+    chunks, headings, chunk_plan = _chunks_and_headings(source, text, item.relative_path)
     artifact_id = f"file:{source.name}:{item.relative_path}:branch={branch or 'none'}"
     return ParsedArtifact(
         id=artifact_id,
@@ -581,6 +606,7 @@ def parse_connector_payload(
         git_commit=commit,
         chunks=chunks,
         headings=headings,
+        chunk_plan=chunk_plan,
     )
 
 

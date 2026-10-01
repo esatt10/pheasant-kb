@@ -727,6 +727,11 @@ class SyncConcurrencySettings(ModelMixin):
     #: Retry, failover, breakers and deadlines are transport-independent, so
     #: this changes bytes on the wire and nothing about durability.
     worker_transport: str = "http"
+    #: A PDF longer than this many pages is read by the worker fleet in ranges
+    #: of this many, several workers at once, instead of whole by one thread
+    #: (``file_executor: remote``, either transport; ``0`` turns it off). The
+    #: indexed text is identical either way: see ``sync/pdf_split.py``.
+    remote_worker_pdf_pages_per_task: int = 500
     lock_timeout_seconds: int = 120
 
 
@@ -772,6 +777,9 @@ class SourceProcessingSettings(ModelMixin):
 
     chunk_max_chars: int | None = None
     taxonomy_enabled: bool | None = None
+    #: ``fixed`` | ``sections`` | ``auto`` for every source; see
+    #: ``ingestion/chunk_plan.py``. Changing it re-indexes the sources it moves.
+    chunk_strategy: str | None = None
 
 
 @dataclass
@@ -2135,6 +2143,8 @@ class PheasantConfig(ModelMixin):
             resolved.chunking.max_chars = processing.chunk_max_chars
         if processing.taxonomy_enabled is not None:
             resolved.taxonomy.enabled = processing.taxonomy_enabled
+        if processing.chunk_strategy is not None:
+            resolved.chunking.strategy = processing.chunk_strategy
         if self.security.default_exclude_secrets:
             existing = list(resolved.exclude or [])
             for pattern in SECRET_EXCLUDES:

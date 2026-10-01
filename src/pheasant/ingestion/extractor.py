@@ -73,18 +73,18 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
-
-# MuPDF's global caches are not safe to drive concurrently from many threads
-# in one worker process.  Serialize native MuPDF access per process; horizontal
-# worker replicas still extract separate documents in parallel.
-_NATIVE_MUPDF_LOCK = threading.Lock()
+from pheasant.ingestion.pdf_pages import (
+    _NATIVE_MUPDF_LOCK,
+    PdfPages,
+    _pymupdf,
+    pdf_page_texts,
+)
 
 if TYPE_CHECKING:
     from pheasant.config.schema import ExtractorSettings
@@ -553,10 +553,11 @@ class NativeExtractor:
     that one format instead of failing the sync.
     """
 
-    def __init__(self, model: str = "native"):
+    def __init__(self, model: str = "native", pdf_pages: PdfPages | None = None):
         self.model = model
         self.calls = 0
         self._builtin = BuiltinExtractor()
+        self.pdf_pages = pdf_pages
 
     def extract(self, content: bytes, relative_path: str, sidecar: bytes | None = None) -> str:
         authored = _sidecar_text(sidecar)
@@ -579,18 +580,14 @@ class NativeExtractor:
         return extract_builtin(kind, content)
 
     def _extract_pdf(self, content: bytes, relative_path: str) -> str:
+        if _pymupdf() is None:
+            logger.debug("pymupdf unavailable; using builtin PDF extraction")
+            return extract_pdf_text_builtin(content)
         try:
-            import pymupdf  # type: ignore[import-not-found]
-        except ModuleNotFoundError:
-            try:
-                import fitz as pymupdf  # type: ignore[import-not-found,no-redef]
-            except ModuleNotFoundError:
-                logger.debug("pymupdf unavailable; using builtin PDF extraction")
-                return extract_pdf_text_builtin(content)
-        try:
-            with _NATIVE_MUPDF_LOCK:
-                with pymupdf.open(stream=content, filetype="pdf") as document:
-                    pages = [page.get_text() or "" for page in document]
+            if self.pdf_pages is None:
+                pages = pdf_page_texts(content)
+            else:
+                pages = self.pdf_pages(content, relative_path)
             return _tidy("\n\n".join(pages))
         except Exception as exc:
             # A corrupt/encrypted PDF must not abort a sync: fall back to the
@@ -653,11 +650,19 @@ class AutoExtractor:
     between indexing a document and silently dropping it.
     """
 
-    def __init__(self, model: str = "auto"):
+    def __init__(self, model: str = "auto", pdf_pages: PdfPages | None = None):
         self.model = model
         self.calls = 0
-        self._native = NativeExtractor()
+        self._native = NativeExtractor(pdf_pages=pdf_pages)
         self._builtin = BuiltinExtractor()
+
+    @property
+    def pdf_pages(self) -> PdfPages | None:
+        return self._native.pdf_pages
+
+    @pdf_pages.setter
+    def pdf_pages(self, provider: PdfPages | None) -> None:
+        self._native.pdf_pages = provider
 
     def extract(self, content: bytes, relative_path: str, sidecar: bytes | None = None) -> str:
         authored = _sidecar_text(sidecar)

@@ -27,6 +27,16 @@ service PreparationWorker {
 
   // Cheap liveness probe for the coordinator's circuit breaker.
   rpc Check(HealthRequest) returns (HealthResponse);
+
+  // The text of one page range of a PDF, one string per page, untidied.
+  //
+  // How one long PDF is read by several workers at once: the coordinator
+  // sends each worker the same bytes and a different range, joins the pages
+  // in order, and does everything after that itself — tidying, section
+  // detection, chunking — because those need the whole document. A worker
+  // that predates this RPC answers UNIMPLEMENTED and the coordinator reads
+  // that range locally, so nothing a worker does can change the text.
+  rpc ExtractPages(ExtractPagesRequest) returns (ExtractPagesResponse);
 }
 
 message PrepareRequest {
@@ -62,4 +72,24 @@ message HealthRequest {}
 message HealthResponse {
   bool ready = 1;
   string version = 2;
+}
+
+message ExtractPagesRequest {
+  // The whole PDF. Pages are resolved against the document, not a carved-out
+  // subset, so a range reads exactly what the full document would.
+  bytes content = 1;
+  // [first_page, stop_page), zero-based.
+  uint32 first_page = 2;
+  uint32 stop_page = 3;
+}
+
+message ExtractPagesResponse {
+  repeated string pages = 1;
+  // Set when pymupdf could not read the range. The coordinator reads it
+  // locally, where the same failure takes the same builtin fallback.
+  string error = 2;
+  // The PDF reader's version. A coordinator whose own differs reads the
+  // range itself: two pymupdf releases may lay out one page differently, and
+  // the text must not depend on which replica answered.
+  string reader_version = 3;
 }

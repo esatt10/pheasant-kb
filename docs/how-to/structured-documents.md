@@ -49,6 +49,14 @@ register_source(knowledge_base="...", name="contracts",
 
 Then sync. It runs automatically on every sync from then on.
 
+!!! tip "Or let each file decide"
+    `taxonomy.enabled` is one answer for a whole source, and every rule runs on
+    every file. `chunking.strategy: auto` decides per file instead: a bounded
+    scan turns on only the heading rules a document actually uses, tells a
+    numbered outline from a numbered list, scales the heading cap with the
+    document's length, and packs short clauses together instead of making one
+    chunk each. See [Dynamic chunking](dynamic-chunking.md).
+
 ## What you get
 
 **Search tells you which section matched.** Every result carries

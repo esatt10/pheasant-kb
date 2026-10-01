@@ -76,6 +76,7 @@ nav:
       - Configure sources: how-to/sources.md
       - Ingest PDFs & Word documents: how-to/document-ingest.md
       - Extract a taxonomy from structured documents: how-to/structured-documents.md
+      - Chunk each file the way it is written: how-to/dynamic-chunking.md
       - Multi-modal ingest: how-to/multimodal-ingest.md
       - Vector self-search: how-to/vector-search.md
       - Speed up indexing: how-to/indexing-performance.md

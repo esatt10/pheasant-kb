@@ -42,6 +42,59 @@ request threads each, `remote_worker_max_inflight_batches: 8` to match them,
 and 8 embedding requests in flight. That leaves CPU and memory for Postgres, NATS,
 the API and the graph owner on an 8-core development host.
 
+## One large PDF
+
+Everything above parallelizes *across files*. A single long PDF — an
+8,000-page utility tariff, say — is one file, so remote preparation sends it
+whole to one worker, and a source with `taxonomy` on (which remote
+preparation refuses) parses it on the indexer while the fleet sits idle.
+
+With `file_executor: remote` (over either worker transport), a PDF longer than
+`remote_worker_pdf_pages_per_task` pages (default 500) is read by the fleet
+in page ranges instead: every worker gets the same bytes and a different
+range, the indexer joins the pages in order, and tidying, section detection
+and chunking stay on the indexer. That is also why it works for
+taxonomy-enabled sources. The indexed text is identical to a local read: a
+worker reads its range with the same function the extractor reads a whole PDF
+with, a worker on a different pymupdf release is not trusted, and any range
+the fleet cannot read is read locally. gRPC workers answer the
+`ExtractPages` call and HTTP workers `POST /internal/indexing/extract-pages`;
+a worker too old for either is read around. It is on in every shipped fleet
+profile (`deploy/compose/fleet.yaml`, `deploy/kubernetes/scaled/`).
+
+```yaml
+sync:
+  concurrency:
+    file_executor: remote
+    worker_transport: grpc
+    remote_worker_urls: [grpc://worker:8766]
+    remote_worker_max_inflight_batches: 8      # ranges in flight, like batches
+    remote_worker_pdf_pages_per_task: 500      # 0 turns the split off
+```
+
+Measured on a synthetic 8,000-page tariff-style PDF (41M characters, 27,452
+chunks, taxonomy on), one 4-core host, SQLite, stub embedder:
+
+| | time |
+|---|---|
+| full sync before the chunking fix | 118 s |
+| full sync, indexer reads the PDF | 29.5 s |
+| full sync, three local gRPC workers read it | 24.4 s |
+| PDF text extraction alone, indexer | 13.6 s |
+| PDF text extraction alone, three workers (250 / 500 / 1,000 pages a range) | 8.1 / 7.7 / 8.3 s |
+
+The first row was a quadratic in `chunk_text` (a reverse scan of every line
+offset per chunk), made worst by the taxonomy's 2,000-heading cap leaving
+most of the document as one section; it is fixed for every executor. The
+extraction speedup is below 3x because the indexer and all three workers
+shared four cores, every range carries the whole file, and the final tidy
+pass over the joined text is not splittable. Each worker peaked at
+~250-280 MB with two ranges in flight on a 15 MB PDF, against ~520 MB to
+parse that file whole in one process — which matters on the 512 MB worker
+limit the compose fleet sets. What a split cannot shorten is everything after
+extraction: commit, graph enrichment, and embedding the resulting chunks,
+where the provider's tokens-per-minute limit is usually the ceiling.
+
 ## Choose a local executor
 
 ```yaml

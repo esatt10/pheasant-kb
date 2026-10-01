@@ -251,6 +251,46 @@ class GrpcTransport:
         # exclusive HTTP connection pool.
         return {"results": results}, None
 
+    def extract_pages(
+        self,
+        url: str,
+        content: bytes,
+        first: int,
+        stop: int,
+        *,
+        token: str,
+        timeout: float,
+    ) -> list[str]:
+        """One page range of one PDF, on whichever replica the channel picks."""
+
+        import grpc
+
+        from pheasant.sync.worker_pool import TaskRejected
+
+        channel = self._channel(url)
+        stub = self._pb2_grpc.PreparationWorkerStub(channel)
+        request = self._pb2.ExtractPagesRequest(content=content, first_page=first, stop_page=stop)
+        try:
+            response = stub.ExtractPages(
+                request,
+                timeout=timeout,
+                metadata=(("authorization", f"Bearer {token}"),),
+            )
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.UNIMPLEMENTED:
+                self._drop_channel(url, channel)
+            raise _from_rpc_error(exc, url) from exc
+        if response.error:
+            raise TaskRejected(response.error)
+        from pheasant.ingestion.pdf_pages import pdf_reader_version
+
+        if response.reader_version != pdf_reader_version():
+            raise TaskRejected(
+                f"worker reads PDFs with pymupdf {response.reader_version or '(none)'}, "
+                f"this process with {pdf_reader_version() or '(none)'}"
+            )
+        return list(response.pages)
+
     def close(self) -> None:
         with self._channels_lock:
             channels = list(self._channels.values())
@@ -422,6 +462,39 @@ class PreparationWorkerServicer:
             cached_count,
             refused_count,
         )
+
+    def ExtractPages(self, request: Any, context: Any):  # noqa: N802 - gRPC spelling
+        """Read one page range with the extractor's own page reader.
+
+        No source, no config, no cache: the answer is a pure function of the
+        bytes and the range, and a range is re-read in under a second, so a
+        retry costs less than the bookkeeping to avoid it.
+        """
+
+        import grpc
+
+        from pheasant.ingestion.pdf_pages import pdf_page_texts, pdf_reader_version
+
+        pb2, _ = load_protos()
+        self._authenticate(context)
+        remaining = context.time_remaining()
+        if remaining is not None and remaining <= 0:
+            context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, "caller deadline passed")
+        first, stop = int(request.first_page), int(request.stop_page)
+        if stop < first:
+            return pb2.ExtractPagesResponse(error=f"empty page range [{first}, {stop})")
+        try:
+            pages = pdf_page_texts(request.content, first, stop)
+            # A protobuf ``string`` must be valid UTF-8. A lone surrogate would
+            # fail serialization after this returns, which the coordinator
+            # sees as a retryable error and retries on every replica; refusing
+            # here sends it straight to the local read.
+            for page in pages:
+                page.encode("utf-8")
+        except Exception as exc:  # noqa: BLE001 - any pymupdf failure is the task's
+            return pb2.ExtractPagesResponse(error=f"{type(exc).__name__}: {exc}"[:500])
+        logger.info("gRPC page extraction complete: pages %d-%d", first, first + len(pages))
+        return pb2.ExtractPagesResponse(pages=pages, reader_version=pdf_reader_version())
 
     def Check(self, request: Any, context: Any):  # noqa: N802 - gRPC spelling
         pb2, _ = load_protos()

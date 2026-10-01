@@ -763,3 +763,74 @@ def test_editing_a_file_incrementally_retracts_its_old_chunk_nodes(tmp_path: Pat
     engine.reload_graph()
     assert len(chunk_nodes(engine.serving_graph())) == baseline
     engine.close()
+
+
+def test_auto_chunking_resyncs_to_the_same_state_and_switching_reindexes_once(
+    tmp_path: Path,
+) -> None:
+    """`chunking.strategy: auto` plans per file, so pillar 1 has to hold per
+    planner version: an unchanged re-sync re-reads nothing and moves no graph
+    generation, turning it on re-indexes exactly once, and the default spelled
+    `fixed` re-indexes nothing at all."""
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "tariff.txt").write_text(
+        "ARTICLE I DEFINITIONS\n\n"
+        + "".join(
+            f"1.{n} Defined Term {n}\n\nThe term {n} means the obligations of the provider.\n\n"
+            for n in range(1, 10)
+        )
+        + "ARTICLE II SERVICE\n\n2.1 Network Service\n\n"
+        + "Service shall be provided pursuant to this section. " * 120,
+        encoding="utf-8",
+    )
+    (corpus / "notes.md").write_text("# Notes\n\n## One\n\nalpha\n\n## Two\n\nbeta\n", "utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "auto-chunking",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(corpus),
+                    "include": ["**/*.txt", "**/*.md"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        assert engine.sync_source("docs", "full").indexed_artifacts == 2
+        config.sources[0].chunking.strategy = "fixed"
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+
+        config.sync.source_processing.chunk_strategy = "auto"
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 2
+        before = engine.loaded_graph_generation
+        chunks_before = engine.state.rows(
+            "SELECT id, text, heading_path FROM chunks ORDER BY id", ()
+        )
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+        assert engine.loaded_graph_generation == before
+
+        graph = engine.graph_builder.graph
+        artifact = dict(graph.nodes["file:docs:tariff.txt:branch=none"])
+        assert artifact["chunk_plan"]["profile"] == "structured"
+        headings = [n for n, attrs in graph.iter_nodes() if attrs.get("type") == "heading"]
+        assert headings, "auto should emit the outline it chunked by"
+
+        # A full re-index under the same planner reproduces every chunk.
+        engine.sync_source("docs", "full")
+        assert (
+            engine.state.rows("SELECT id, text, heading_path FROM chunks ORDER BY id", ())
+            == chunks_before
+        )
+    finally:
+        engine.close()

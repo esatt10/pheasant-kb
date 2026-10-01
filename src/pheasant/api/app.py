@@ -383,6 +383,14 @@ class QuickAddRequest(BaseModel):
     wait: bool = True
 
 
+class RemoteExtractPagesRequest(BaseModel):
+    """One page range of one PDF: ``[first_page, stop_page)``, zero-based."""
+
+    content_base64: str
+    first_page: int
+    stop_page: int
+
+
 class RemotePrepareRequest(BaseModel):
     """Immutable coordinator task accepted by an opt-in indexing worker."""
 
@@ -1749,6 +1757,34 @@ def create_app(
         encoded = str(payload.get("content_base64") or "")
         if max_mb is not None and len(encoded) > int(max_mb) * 1024 * 1024 * 4 // 3 + 4:
             raise HTTPException(status_code=413, detail="indexing task exceeds max_file_size_mb")
+
+    @app.post("/internal/indexing/extract-pages")
+    def remote_extract_pages(
+        req: RemoteExtractPagesRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict:
+        """One page range of one long PDF, for `sync/pdf_split.py`.
+
+        The HTTP twin of the gRPC worker's ``ExtractPages``, so a fleet of HTTP
+        workers (the Kubernetes manifests) reads a long PDF in parallel too.
+        Pages come back untidied; the coordinator joins and tidies them, which
+        is what keeps the text identical to a local read.
+        """
+
+        import base64
+
+        from pheasant.ingestion.pdf_pages import pdf_page_texts, pdf_reader_version
+
+        _authorize_worker(authorization)
+        _check_task_size({"content_base64": req.content_base64})
+        if req.stop_page < req.first_page or req.first_page < 0:
+            raise HTTPException(status_code=422, detail="empty or negative page range")
+        try:
+            content = base64.b64decode(req.content_base64, validate=True)
+            pages = pdf_page_texts(content, req.first_page, req.stop_page)
+        except Exception as exc:  # noqa: BLE001 - any reader failure is the task's
+            raise HTTPException(status_code=422, detail=f"{type(exc).__name__}: {exc}") from exc
+        return {"pages": pages, "reader_version": pdf_reader_version()}
 
     @app.post("/internal/indexing/prepare")
     def remote_prepare(
