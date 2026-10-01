@@ -1802,7 +1802,8 @@ class SyncEngine:
                 # Vectors live in their own LanceDB store, outside the
                 # relational rows removed below. Prune them after publishing
                 # the graph delta so a retry can finish cleanup idempotently.
-                self.vectors.prune_source(source_name, set())
+                if self.vectors is not None:
+                    self.vectors.prune_source(source_name, set())
                 # Uploaded bytes live outside the index under a per-source
                 # namespace. Delete only when the registered source path proves
                 # ownership of that exact directory; normal folder sources keep
