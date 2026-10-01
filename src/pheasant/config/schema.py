@@ -777,6 +777,9 @@ class SourceProcessingSettings(ModelMixin):
 
     chunk_max_chars: int | None = None
     taxonomy_enabled: bool | None = None
+    #: ``fixed`` | ``sections`` | ``auto`` for every source; see
+    #: ``ingestion/chunk_plan.py``. Changing it re-indexes the sources it moves.
+    chunk_strategy: str | None = None
 
 
 @dataclass
@@ -2140,6 +2143,8 @@ class PheasantConfig(ModelMixin):
             resolved.chunking.max_chars = processing.chunk_max_chars
         if processing.taxonomy_enabled is not None:
             resolved.taxonomy.enabled = processing.taxonomy_enabled
+        if processing.chunk_strategy is not None:
+            resolved.chunking.strategy = processing.chunk_strategy
         if self.security.default_exclude_secrets:
             existing = list(resolved.exclude or [])
             for pattern in SECRET_EXCLUDES:

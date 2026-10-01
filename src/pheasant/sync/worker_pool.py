@@ -55,6 +55,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from pheasant.sync.remote_worker import (
+    IncompatibleResult,
     ParsedArtifact,
     RemoteWorkerError,
     parsed_from_wire,
@@ -539,7 +540,12 @@ class WorkerPool:
                 raise _Retryable("worker returned a malformed result entry")
             if entry.get("error"):
                 raise TaskRejected(str(entry["error"]))
-            prepared.append(parsed_from_wire(entry.get("parsed")))
+            try:
+                prepared.append(parsed_from_wire(entry.get("parsed")))
+            except IncompatibleResult as exc:
+                # Every replica on that release would answer alike; failing
+                # over is latency, so the caller prepares locally.
+                raise TaskRejected(str(exc)) from exc
         return prepared
 
 

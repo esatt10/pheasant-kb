@@ -681,9 +681,14 @@ def _reconcile(candidates: list[_Candidate]) -> list[SectionHeading]:
     resolved: list[SectionHeading] = []
     parents: list[int | None] = []
     open_chain: list[int] = []  # indices of currently-open ancestors
+    # Latest heading carrying each absolute, suffix-free ordinal: what the
+    # prefix match looks up. It used to scan every resolved heading backwards,
+    # which is O(headings) per heading and quadratic in a document whose
+    # numbers rarely have a parent present (8 s at 10,720 tariff headings).
+    latest: dict[tuple[int, ...], int] = {}
 
     for candidate in candidates:
-        parent = _prefix_parent(candidate, resolved)
+        parent = _prefix_parent(candidate, latest)
         if parent is None:
             parent = _compatible_parent(candidate, resolved, open_chain)
 
@@ -705,6 +710,9 @@ def _reconcile(candidates: list[_Candidate]) -> list[SectionHeading]:
         )
         index = len(resolved) - 1
         parents.append(parent)
+        ordinal = candidate.ordinal
+        if ordinal is not None and ordinal.absolute and not ordinal.suffix:
+            latest[ordinal.parts] = index
         # Reopen the chain down to this heading's parent, then push it.
         open_chain = _ancestry(parents, parent) + [index]
     return resolved
@@ -722,21 +730,15 @@ def _ancestry(parents: list[int | None], index: int | None) -> list[int]:
     return list(reversed(chain))
 
 
-def _prefix_parent(candidate: _Candidate, resolved: list[SectionHeading]) -> int | None:
-    """Index of the heading whose ordinal is exactly this one's prefix."""
+def _prefix_parent(candidate: _Candidate, latest: dict[tuple[int, ...], int]) -> int | None:
+    """Index of the latest heading whose ordinal is exactly this one's prefix."""
     ordinal = candidate.ordinal
     if ordinal is None or not ordinal.absolute:
         return None
     prefix = ordinal.prefix
     if not prefix:
         return None
-    for index in range(len(resolved) - 1, -1, -1):
-        other = resolved[index].ordinal
-        if other is None or not other.absolute or other.suffix:
-            continue
-        if other.parts == prefix:
-            return index
-    return None
+    return latest.get(tuple(prefix))
 
 
 # A `_series_compatible` gate used to sit on the match above, refusing a prefix

@@ -467,3 +467,54 @@ def test_the_worker_cli_refuses_to_start_when_the_role_is_not_enabled(
 
     assert main(["worker", "--config", str(config_path)]) == 1
     assert "remote_worker_enabled is false" in capsys.readouterr().out
+
+
+def test_a_taxonomy_source_is_prepared_by_the_fleet_and_matches_local(
+    tmp_path: Path, monkeypatch: Any, grpc_worker: Any
+) -> None:
+    """Remote preparation used to refuse taxonomy-enabled sources outright, so
+    a region with taxonomy on everywhere parsed every file on its indexer.
+    Headings and the chunk plan now travel with the chunks they label."""
+
+    def indexed(engine: SyncEngine) -> list[tuple[Any, ...]]:
+        return [
+            tuple(row)
+            for row in engine.state.rows(
+                "SELECT id, text, start_line, end_line, heading_path FROM chunks ORDER BY id", ()
+            )
+        ]
+
+    def corpus(name: str) -> Path:
+        workspace = tmp_path / name
+        workspace.mkdir()
+        for index in range(3):
+            (workspace / f"guide-{index}.md").write_text(
+                f"# Guide {index}\n\n## Install\n\n"
+                + "Run the installer. " * 80
+                + "\n\n## Configure\n\nSet the token.\n",
+                encoding="utf-8",
+            )
+        return workspace
+
+    results = []
+    for name, remote in (("over-grpc", True), ("local", False)):
+        config = _config(tmp_path, corpus(name), state_name=f"{name}-state")
+        config.sources[0].taxonomy.enabled = True
+        config.sources[0].chunking.strategy = "auto"
+        if remote:
+            config.sync.concurrency.file_executor = "remote"
+            config.sync.concurrency.worker_transport = "grpc"
+            config.sync.concurrency.remote_worker_urls = [grpc_worker.url]
+            config.sync.concurrency.max_parallel_files = 2
+            monkeypatch.setenv("PHEASANT_INDEX_WORKER_TOKEN", "grpc-token")
+        engine = SyncEngine(config)
+        try:
+            assert engine.sync_source("docs", "full").indexed_artifacts == 3
+            results.append(indexed(engine))
+        finally:
+            engine.close()
+
+    assert len(grpc_worker.servicer.cache) >= 3, "the fleet answered nothing"
+    over_grpc, locally = results
+    assert over_grpc == locally
+    assert any(row[4] for row in locally)

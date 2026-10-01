@@ -99,7 +99,9 @@ pheasant-kb/
 │   │                            long PDF's pages read by the fleet)
 │   ├── connectors/            ← first-party SDK plugins: notion, gdrive,
 │   │                            slack, confluence, imap
-│   ├── ingestion/             ← pipeline, chunking, content_types, taxonomy,
+│   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
+│   │                            file planner), packing (units to chunks),
+│   │                            content_types, taxonomy, pdf_pages,
 │   │                            extractor (7 doc formats), captioner,
 │   │                            transcriber, office, msdoc, media (image
 │   │                            bytes, content-addressed under /state)
@@ -150,7 +152,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 149 pytest modules, offline by design
+└── tests/                     ← 150 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -352,6 +354,19 @@ authored `<file>.caption.txt` / `.transcript.txt` sidecar always wins.
 rules detect headings across mixed conventions, ordinals are parsed and
 reconciled so a document's two spellings of "four" are one number, and chunks
 are cut at section boundaries so one chunk is one section.
+
+**Chunking is planned per file** when `chunking.strategy` is `auto`
+(`ingestion/chunk_plan.py`): the source type and extension pick a profile for
+free (code by top-level block, config by blank-line block, Markdown by heading,
+memory one record per chunk, Slack by message, spreadsheets by row with the
+header repeated), and everything else gets a bounded structural scan -- 32 KB
+plus 48 windows of 4 KB, ~3 ms on 41M characters -- that turns on only the
+heading rules a document uses and sizes chunks to its sections.
+`ingestion/packing.py` then merges a document's own units up to the target,
+splits only what exceeds the ceiling, and overlaps only inside a split.
+`fixed` (alias `semantic`, the default) is byte-identical to before; the
+other strategies put `PLANNER_VERSION` in the source fingerprint and record
+the plan on the artifact node as `chunk_plan`.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. Five ship first-party: Notion,

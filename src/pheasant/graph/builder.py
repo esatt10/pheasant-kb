@@ -203,11 +203,16 @@ class GraphBuilder:
         source_node = self.add_source(source)
         parent_node = self.add_directory_chain(source, artifact.relative_path, artifact.git_branch)
         enrichment = self.enrich_artifact(source, artifact)
+        # How the file was chunked, under `sections`/`auto` only: a `fixed`
+        # source's artifact node carries no new key, so its bytes -- and the
+        # content-addressed generation id over them -- do not move.
+        plan = getattr(artifact, "chunk_plan", None)
         self.upsert_node(
             artifact.id,
             artifact.type,
             artifact.relative_path,
             {
+                **({"chunk_plan": plan} if plan else {}),
                 "source_id": source.name,
                 "hash": f"sha256:{artifact.sha256}",
                 "path": str(artifact.path),

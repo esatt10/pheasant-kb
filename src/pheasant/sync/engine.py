@@ -1282,7 +1282,6 @@ class SyncEngine:
             remote_content_safe = (
                 connector.connector_type == "filesystem"
                 and mode != "repair"
-                and not bool(getattr(source.taxonomy, "enabled", False))
                 and all(
                     _remote_preparation_path(
                         item.relative_path,
@@ -1312,7 +1311,7 @@ class SyncEngine:
         elif requested_executor == "remote" and not remote_safe:
             logger.warning(
                 "Source %s cannot use remote workers (requires URLs and supported text/document "
-                "content without taxonomy/repair); using thread workers",
+                "content, not repair); using thread workers",
                 source.name,
             )
         if remote_safe:

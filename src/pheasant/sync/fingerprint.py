@@ -29,6 +29,7 @@ import json
 from typing import Any
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
+from pheasant.ingestion.chunk_plan import PLANNER_VERSION, strategy_of
 
 SOURCE_SCOPE = "source:{name}"
 EMBEDDING_SCOPE = "embeddings"
@@ -69,6 +70,7 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
 
     chunking = getattr(source, "chunking", None)
     source_type = getattr(source.type, "value", str(source.type))
+    strategy = strategy_of(source)
     payload: dict[str, Any] = {
         "type": source_type,
         "path": str(getattr(source, "path", "") or ""),
@@ -78,11 +80,22 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
         "max_depth": getattr(source, "max_depth", None),
         "chunking": {
             "enabled": getattr(chunking, "enabled", None),
-            "strategy": getattr(chunking, "strategy", None),
+            # `fixed` keeps the spelling every stored fingerprint was taken
+            # with, so writing `strategy: fixed` for the default `semantic`
+            # (one behaviour, two names) re-indexes nothing, and a value
+            # nothing ever read is still fingerprinted as it was written.
+            "strategy": "semantic"
+            if str(getattr(chunking, "strategy", "") or "").strip().lower() == "fixed"
+            else getattr(chunking, "strategy", None),
             "max_chars": getattr(chunking, "max_chars", None),
             "overlap_chars": getattr(chunking, "overlap_chars", None),
         },
     }
+    if strategy != "fixed":
+        # The planner decides chunk sizes and heading rules per file, so its
+        # rules are part of what text a source produces: bumping
+        # PLANNER_VERSION re-indexes exactly the sources that use it.
+        payload["chunk_planner"] = PLANNER_VERSION
     taxonomy = source.taxonomy
     if taxonomy.enabled:
         # Off is omitted so existing non-taxonomy sources keep their stored

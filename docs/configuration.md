@@ -468,6 +468,7 @@ per-source setting unchanged, so standalone behavior is unchanged.
 |---|---|---|---|
 | `chunk_max_chars` | integer\|null | `null` | Override the maximum characters per chunk. Must exceed the source's overlap. |
 | `taxonomy_enabled` | bool\|null | `null` | Enable or disable structural heading extraction across all sources. Can mistake numbered prose for headings. |
+| `chunk_strategy` | string\|null | `null` | Set `chunking.strategy` (`fixed`, `sections`, `auto`) for every source. `auto` is the safer region-wide choice than `taxonomy_enabled: true`: it turns heading rules on per file, only where the document uses them. |
 
 Changing either setting invalidates the affected source's index; its next
 incremental sync escalates to a full pass. The fleet preset sets `2000` and
@@ -1531,9 +1532,9 @@ server restart.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `true` | When false, each artifact is indexed as one full-content chunk. |
-| `strategy` | string | `semantic` | Chunking algorithm (semantic/heading/page-oriented, etc.). |
-| `max_chars` | integer | `4000` | Maximum chunk size. |
-| `overlap_chars` | integer | `400` | Overlap between adjacent chunks. |
+| `strategy` | string | `semantic` | `fixed` (alias `semantic`, the default): fixed windows, or one chunk per section with taxonomy on — unchanged behaviour. `sections`: detect headings with this source's taxonomy rules and pack sections up to `max_chars`. `auto`: a per-file plan from the source type, the extension and a bounded structural scan. Changing it re-indexes the source once. See [Dynamic chunking](how-to/dynamic-chunking.md). |
+| `max_chars` | integer | `4000` | Maximum chunk size. Under `sections`/`auto` it is a ceiling the plan never exceeds. |
+| `overlap_chars` | integer | `400` | Overlap between adjacent chunks. Under `sections`/`auto`, applied only inside a section that had to be split, and capped by the plan. |
 
 ### `sources[].sync`
 
