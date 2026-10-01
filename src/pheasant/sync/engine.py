@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -22,6 +23,7 @@ from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
+from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.ingestion.media import media_store_for_config
 from pheasant.ingestion.pipeline import (
     git_state,
@@ -1777,6 +1779,17 @@ class SyncEngine:
         report("claimed", 0, 1, f"removing {source_name}")
         with self._source_write_lock(source_name):
             with self._sync_mutex:
+                registered_source = self.state.get_source(source_name)
+                uploaded_files = (
+                    owned_upload_directory(
+                        self.paths.state,
+                        str(registered_source["name"]),
+                        str(registered_source["type"]),
+                        str(registered_source["path"]),
+                    )
+                    if registered_source
+                    else None
+                )
                 self._ensure_persisted_graph_loaded()
                 self.graph_builder.remove_source_content(source_name)
                 self.flush_node_index()
@@ -1790,6 +1803,12 @@ class SyncEngine:
                 # relational rows removed below. Prune them after publishing
                 # the graph delta so a retry can finish cleanup idempotently.
                 self.vectors.prune_source(source_name, set())
+                # Uploaded bytes live outside the index under a per-source
+                # namespace. Delete only when the registered source path proves
+                # ownership of that exact directory; normal folder sources keep
+                # their original user files.
+                if uploaded_files is not None and uploaded_files.exists():
+                    shutil.rmtree(uploaded_files)
                 self.manifests.delete(source_name)
                 self.state.delete_source(source_name)
                 self.config.sources = [s for s in self.config.sources if s.name != source_name]
