@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from bisect import bisect_right
 from dataclasses import dataclass
 
 
@@ -27,10 +28,14 @@ def chunk_text(
     if not text:
         return []
     lines = text.splitlines()
-    line_offsets: list[tuple[int, int]] = []
+    # Offset of each line's first character; line N starts at offsets[N - 1].
+    # Strictly increasing, so "the last line starting at or before p" is a
+    # binary search. It used to be a reverse linear scan per chunk, which made
+    # chunking O(chunks x lines): 360 s of a 400 s sync for one 8,000-page PDF.
+    offsets: list[int] = []
     pos = 0
-    for idx, line in enumerate(lines, start=1):
-        line_offsets.append((pos, idx))
+    for line in lines:
+        offsets.append(pos)
         pos += len(line) + 1
     chunks: list[TextChunk] = []
     start = 0
@@ -43,12 +48,8 @@ def chunk_text(
                 end = newline
         chunk = text[start:end].strip()
         if chunk:
-            start_line = next(
-                (line for offset, line in reversed(line_offsets) if offset <= start), 1
-            )
-            end_line = next(
-                (line for offset, line in reversed(line_offsets) if offset <= end), len(lines) or 1
-            )
+            start_line = bisect_right(offsets, start) or 1
+            end_line = bisect_right(offsets, end) or len(lines) or 1
             chunks.append(
                 TextChunk(
                     index=index,
