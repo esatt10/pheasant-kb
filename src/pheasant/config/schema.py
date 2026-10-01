@@ -727,6 +727,11 @@ class SyncConcurrencySettings(ModelMixin):
     #: Retry, failover, breakers and deadlines are transport-independent, so
     #: this changes bytes on the wire and nothing about durability.
     worker_transport: str = "http"
+    #: A PDF longer than this many pages is read by the worker fleet in ranges
+    #: of this many, several workers at once, instead of whole by one thread
+    #: (``file_executor: remote`` over ``grpc`` only; ``0`` turns it off). The
+    #: indexed text is identical either way: see ``sync/pdf_split.py``.
+    remote_worker_pdf_pages_per_task: int = 500
     lock_timeout_seconds: int = 120
 
 

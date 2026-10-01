@@ -252,6 +252,10 @@ sync:
     # and idempotency keys are transport-independent — this changes only the
     # bytes on the wire.
     worker_transport: http
+    # gRPC fleets only: a PDF longer than this many pages has its text read
+    # by every worker in page ranges, rather than whole by one thread. The
+    # indexed text is identical. 0 turns it off.
+    remote_worker_pdf_pages_per_task: 500
     lock_timeout_seconds: 120
 
   # The durable index work queue. OFF by default: with it off, a sync holds

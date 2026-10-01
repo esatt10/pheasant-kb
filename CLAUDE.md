@@ -95,7 +95,8 @@ pheasant-kb/
 │   │                            announcements), saturation (the commit-
 │   │                            authority ceiling), preparation (what a
 │   │                            file worker hands the writer), worker_pool,
-│   │                            worker_transport, grpc
+│   │                            worker_transport, grpc, pdf_split (one
+│   │                            long PDF's pages read by the fleet)
 │   ├── connectors/            ← first-party SDK plugins: notion, gdrive,
 │   │                            slack, confluence, imap
 │   ├── ingestion/             ← pipeline, chunking, content_types, taxonomy,
@@ -149,7 +150,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 148 pytest modules, offline by design
+└── tests/                     ← 149 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -2029,6 +2030,21 @@ Each of these cost real time. They are listed because the shape recurs.
   the threads contending for the GIL on the read-and-hash path, not the
   handoffs. Reverted. `max_parallel_files` is a tuning question for that
   shape, not a code change.
+- **A worker fleet that refuses a source's settings is a fleet that does
+  nothing, quietly.** One 8,000-page PDF took minutes on the fleet profile,
+  for two reasons neither of which was the fleet. `chunk_text` found each
+  chunk's line by scanning every line offset backwards -- O(chunks x lines),
+  invisible on source files and 360 s of a 403 s profiled sync here, worst
+  when the taxonomy's 2,000-heading cap leaves most of a document as one
+  section. And remote preparation refuses taxonomy-enabled sources, which
+  `fleet.yaml` turns on globally, so every file in that profile was parsed on
+  the indexer with four workers idle and no log line saying so at INFO. The
+  scan is a `bisect` now (byte-identical chunks, 118 s -> 29.5 s), and a long
+  PDF's *extraction* -- the one step that needs no whole-document view -- is
+  split across the gRPC fleet by page range (`sync/pdf_split.py`) while
+  taxonomy and chunking stay on the indexer. `tests/test_pdf_split.py` holds
+  the text identical over real gRPC, through failures and a pymupdf mismatch;
+  `tests/test_chunking_scale.py` bounds lines executed per chunk.
 
 ---
 

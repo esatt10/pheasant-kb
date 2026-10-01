@@ -394,10 +394,48 @@ class WorkerPool:
 
         if not tasks:
             return []
+        keys = [_idempotency_key(task) for task in tasks]
+        return self._with_failover(
+            lambda endpoint, remaining: self._dispatch(endpoint, tasks, keys, remaining),
+            deadline,
+        )
+
+    def extract_pages(
+        self,
+        content: bytes,
+        first: int,
+        stop: int,
+        *,
+        deadline: float | None = None,
+    ) -> list[str]:
+        """The text of PDF pages ``[first, stop)``, read by one worker.
+
+        Same retry, failover, breakers and deadline as :meth:`prepare_batch`,
+        and the same two exceptions meaning "do it locally". A transport that
+        cannot carry the request (HTTP has no page route) is a
+        :class:`TaskRejected`: every worker behind it would refuse alike.
+        """
+
+        extract = getattr(self._transport, "extract_pages", None)
+        if extract is None:
+            raise TaskRejected("this worker transport cannot extract PDF page ranges")
+
+        def call(endpoint: _Endpoint, remaining: float | None) -> list[str]:
+            timeout = (
+                self._timeout if remaining is None else max(0.001, min(self._timeout, remaining))
+            )
+            pages = extract(endpoint.url, content, first, stop, token=self._token, timeout=timeout)
+            if len(pages) != stop - first:
+                raise _Retryable(f"worker returned {len(pages)} pages for {stop - first}")
+            return pages
+
+        return self._with_failover(call, deadline)
+
+    def _with_failover(self, call: Any, deadline: float | None) -> Any:
+        """Run ``call(endpoint, remaining)`` against the fleet until one answers."""
+
         if not self._endpoints:
             raise AllWorkersFailed({})
-
-        keys = [_idempotency_key(task) for task in tasks]
         reasons: dict[str, str] = {}
         attempt = 0
         while attempt < MAX_ATTEMPTS:
@@ -418,7 +456,7 @@ class WorkerPool:
                 progressed = True
                 try:
                     with self._probe(endpoint):
-                        results = self._dispatch(endpoint, tasks, keys, remaining)
+                        results = call(endpoint, remaining)
                 except TaskRejected:
                     self._record_success(endpoint)  # the worker is fine; the task is not
                     raise
