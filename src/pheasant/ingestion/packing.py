@@ -144,22 +144,34 @@ def _top(path: str | None) -> str | None:
 
 
 def _label(paths: list[str]) -> str | None:
-    """The deepest heading every merged unit sits under, else the first one's.
+    """Every merged section, under the heading they share.
 
-    A chunk holding sections 4.1 and 4.2 is labelled "Article 4", which is
-    true of all of it; labelling it "4.1" would be true of half.
+    A chunk holding sections 4.1 and 4.2 is labelled
+    ``Article 4 > 4.1 Scope; 4.2 Term``. Labelling it ``4.1`` would be true of
+    half of it, and labelling it ``Article 4`` alone would hide both sections
+    from the ``section`` criterion -- a substring match on this label -- and
+    from the label column's double BM25 weight, which is how "what does 4.2
+    say" finds 4.2. Measured on this repository's docs, the parent-only label
+    cost a quarter of the section lookups that one-chunk-per-section answered.
     """
 
-    if not paths:
+    distinct = list(dict.fromkeys(paths))
+    if not distinct:
         return None
-    split = [path.split(PATH_SEPARATOR) for path in paths]
+    if len(distinct) == 1:
+        return distinct[0]
+    split = [path.split(PATH_SEPARATOR) for path in distinct]
     common: list[str] = []
     for parts in zip(*split, strict=False):
         if all(part == parts[0] for part in parts):
             common.append(parts[0])
         else:
             break
-    return PATH_SEPARATOR.join(common) if common else paths[0]
+    own = list(dict.fromkeys(parts[-1] for parts in split if len(parts) > len(common)))
+    tail = "; ".join(own)
+    if not common:
+        return tail
+    return PATH_SEPARATOR.join(common) + (PATH_SEPARATOR + tail if tail else "")
 
 
 def _pack_units(lines: list[str], units: list[_Unit], plan: ChunkPlan) -> list[TextChunk]:
@@ -183,6 +195,10 @@ def _pack_units(lines: list[str], units: list[_Unit], plan: ChunkPlan) -> list[T
                 grown > plan.max_chars
                 or (grown > plan.target_chars and size >= plan.min_chars)
                 or (size >= plan.min_chars and _top(unit.path) != _top(group[0].path))
+                # A section is a unit somebody asks for by name, so a chunk
+                # that can stand alone ends where the next section begins:
+                # only sections under `min_chars` are folded into a neighbour.
+                or (size >= plan.min_chars and unit.path is not None)
             ):
                 flush()
         group.append(unit)

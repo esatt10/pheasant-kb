@@ -106,6 +106,12 @@ sync:
   source_processing:
     chunk_max_chars: 2000
     taxonomy_enabled: true
+    # Plan each file: code by top-level block, Markdown by heading, Slack by
+    # message, spreadsheets by row, and PDFs/Word by a bounded structural scan
+    # that enables only the heading rules a document uses. chunk_max_chars is
+    # the ceiling. Switching it re-indexes every source once; `fixed` restores
+    # the previous behaviour. See docs/how-to/dynamic-chunking.md.
+    chunk_strategy: auto
   concurrency:
     max_parallel_sources: 4
     max_parallel_files: 16

@@ -59,7 +59,13 @@ def _region(state: Path, corpora: dict[str, Path], strategy: str, args: Any) -> 
             max_chars=args.max_chars, overlap_chars=args.overlap_chars
         )
         sources.append(
-            {"name": name, "type": "document_folder", "path": str(path), "include": INCLUDE, **block}
+            {
+                "name": name,
+                "type": "document_folder",
+                "path": str(path),
+                "include": INCLUDE,
+                **block,
+            }
         )
     config = PheasantConfig.model_validate(
         {
@@ -85,7 +91,11 @@ def _section_queries(corpora: dict[str, Path], per_corpus: int) -> list[dict[str
         for path in sorted(root.rglob("*.md")) + sorted(root.rglob("*.txt")):
             text = path.read_text(encoding="utf-8", errors="replace")
             lines = text.splitlines()
-            for heading in detect_headings(text, rules=("markdown", "keyword", "numbered")):
+            # A Markdown file's outline is its `#` lines; anything else gets the
+            # rules a contract or a procedure uses. Never `numbered` on
+            # Markdown, where it reads list items as sections.
+            rules = ("markdown",) if path.suffix == ".md" else ("keyword", "numbered")
+            for heading in detect_headings(text, rules=rules):
                 title = heading.title.strip()
                 if len(title.split()) >= 2:
                     found.append(
@@ -153,15 +163,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corpus", action="append", required=True, help="name=path")
     parser.add_argument("--judgements", type=Path)
     parser.add_argument("--section-queries", type=int, default=0)
+    parser.add_argument(
+        "--section-corpus",
+        action="append",
+        default=[],
+        help="draw section queries from this corpus only (repeatable; default: all)",
+    )
     parser.add_argument("--strategies", default=",".join(STRATEGIES))
     parser.add_argument("--modes", default="text,hybrid")
     parser.add_argument("--max-chars", type=int, default=4000)
     parser.add_argument("--overlap-chars", type=int, default=400)
     args = parser.parse_args(argv)
     args.modes = args.modes.split(",")
-    corpora = {pair.split("=", 1)[0]: Path(pair.split("=", 1)[1]) for pair in args.corpus}
+    corpora = {pair.split("=", 1)[0]: Path(pair.split("=", 1)[1]).resolve() for pair in args.corpus}
     judged = json.loads(args.judgements.read_text()) if args.judgements else None
-    sections = _section_queries(corpora, args.section_queries) if args.section_queries else []
+    drawn = (
+        {name: corpora[name] for name in args.section_corpus} if args.section_corpus else corpora
+    )
+    sections = _section_queries(drawn, args.section_queries) if args.section_queries else []
 
     report: dict[str, Any] = {}
     for strategy in args.strategies.split(","):
@@ -169,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
             tools = _region(Path(scratch), corpora, strategy, args)
             started = time.perf_counter()
             for name in corpora:
-                tools.engine.sync_source(name, "full")
+                result = tools.engine.sync_source(name, "full")
+                if result.status != "healthy" or not result.indexed_artifacts:
+                    raise SystemExit(f"{strategy}: source {name} indexed nothing ({result.status})")
             elapsed = time.perf_counter() - started
             rows = tools.engine.state.rows(
                 "SELECT COUNT(*) AS n, SUM(LENGTH(text)) AS chars FROM chunks", ()

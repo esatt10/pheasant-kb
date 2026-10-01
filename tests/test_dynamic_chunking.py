@@ -206,11 +206,18 @@ def test_small_sections_are_merged_under_their_common_heading() -> None:
     # Eight short definitions do not become eight chunks...
     definitions = [chunk for chunk in chunks if "Defined Term" in chunk.text]
     assert len(definitions) < 8
-    # ...and a chunk holding several of them is labelled with what they share.
+    # ...and a chunk holding several names every one of them under the heading
+    # they share, so the `section` criterion still finds each by number.
+    from pheasant.search.sqlite_store import section_matches
+
     merged = [chunk for chunk in definitions if chunk.text.count("Defined Term") > 1]
-    assert merged and all(
-        (chunk.heading_path or "").lower() == "article i definitions" for chunk in merged
-    )
+    assert merged
+    for chunk in merged:
+        label = chunk.heading_path or ""
+        assert label.lower().startswith("article i definitions > ")
+        for number in range(1, 9):
+            if f"1.{number} Defined Term {number}\n" in chunk.text + "\n":
+                assert section_matches(label, f"1.{number}"), (number, label)
     # A long clause is split, and its pieces keep the clause's own label.
     clause = [
         chunk for chunk in chunks if (chunk.heading_path or "").endswith("2.1 Service Clause 1")
