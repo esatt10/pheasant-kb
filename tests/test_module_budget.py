@@ -52,10 +52,14 @@ CEILINGS: dict[str, int] = {
     "analytics.py": 1100,
     "api/app.py": 5500,
     "assistant/chat.py": 950,
-    "assistant/retrieval.py": 1150,
-    "assistant/workflows/agentic.py": 1050,
+    # The latency candidate adds evidence authorization, two-phase hydration,
+    # request-bounded retrieval and combined evidence/answer handling. Keep
+    # these cohesive with their owning retriever/workflow and hold a fixed cap.
+    "assistant/retrieval.py": 1650,
+    "assistant/workflows/agentic.py": 1500,
     "cli.py": 3200,
-    "config/schema.py": 2200,
+    # Typed query budgets, admission and stage-specific Luna effort settings.
+    "config/schema.py": 2250,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -77,7 +81,9 @@ CEILINGS: dict[str, int] = {
     "persistence/schema.py": 1100,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
-    "search/vector_store.py": 1250,
+    # The bounded query embedding cache, single-flight registry and query-only
+    # retry policy now live with the existing vector cache and embedder.
+    "search/vector_store.py": 1500,
     "setup_wizard.py": 2200,
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`.

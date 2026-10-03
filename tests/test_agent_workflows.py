@@ -210,9 +210,9 @@ def test_retriever_merges_across_queries_and_modes_deterministically() -> None:
 
     assert [p.key() for p in first] == [p.key() for p in second]
     assert {p.title for p in first} >= {"docs/hashing.md", "docs/skip.md"}
-    # A passage found by two modes records both.
+    # Hybrid already includes the vector arm for the same query.
     multi = [p.mode for p in first if "+" in p.mode]
-    assert multi
+    assert not multi
     # …and always under one label. The mode string is shown to the user, so
     # two passages found by the same pair must not read "hybrid+vector" and
     # "vector+hybrid" depending on which query happened to hit first.
@@ -239,6 +239,39 @@ def test_graph_expansion_reaches_documents_search_cannot() -> None:
     assert all(p.mode == "graph-expand" for p in related)
     # Derived evidence must rank below the direct hit it came from.
     assert all(p.score < hits[0].score for p in related)
+
+
+def test_remote_graph_expansion_batches_hits_and_keeps_passage_order() -> None:
+    class BatchGraph:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def remote_neighbors_many(self, node_ids: list[str], depth: int) -> list[dict]:
+            assert depth == 1
+            self.calls.append(node_ids)
+            return [
+                {
+                    "node_id": node_id,
+                    "neighbors": [
+                        {
+                            "node_id": f"related:{node_id}",
+                            "node": {"type": "file", "label": f"related:{node_id}"},
+                        }
+                    ],
+                }
+                for node_id in node_ids
+            ]
+
+        def remote_neighbors(self, **_kwargs: object) -> dict:
+            raise AssertionError("expansion should use the batched operation")
+
+    graph = BatchGraph()
+    retriever = _retriever(graph=graph)
+    hits = [*retriever.search("hash", limit=5), *retriever.search("skip", limit=5)]
+    related = retriever.expand(hits, depth=1)
+
+    assert graph.calls == [[hit.node_id for hit in hits]]
+    assert [item.title for item in related] == [f"related:{hit.node_id}" for hit in hits]
 
 
 def test_capabilities_describe_what_the_region_can_do() -> None:
@@ -390,7 +423,8 @@ def test_agentic_audit_reports_configured_modes_usage_and_seconds(agentic, monke
         LLM(provider="openai", api_key="test-key", model="gpt-6-sol"),
     )
 
-    assert {mode for _query, mode in search.calls} == {"hybrid", "vector", "graph"}
+    # Standalone arms are suppressed because hybrid already runs them.
+    assert {mode for _query, mode in search.calls} == {"hybrid"}
     assert "hybrid, vector, graph" in next(s.detail for s in result.steps if s.name == "retrieve")
     for name, expected in {"plan": (101, 11), "grade": (202, 22), "synthesize": (303, 33)}.items():
         step = next(s for s in result.steps if s.name == name)

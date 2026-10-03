@@ -1,0 +1,93 @@
+{
+  "corpus": "remarkable.zip (46 indexed PDFs, 2026-10-02)",
+  "cases": [
+    {
+      "id": "graph-algorithms-authors",
+      "complexity": "moderate",
+      "answer_length": "short",
+      "depth": "short",
+      "question": "Who wrote the Graph Algorithms book in this collection?",
+      "answerable": true,
+      "expected_facts": [
+        "Mark Needham",
+        "Amy E. Hodler"
+      ],
+      "acceptable_passage_ids": [
+        "chunk:uploads:remarkable.zip/Graph Algorithms.pdf:sha256=920c1303ba53a39c03bde87d18a12c4b3a7d2145e6d43e80fc5920d40e09a00e:chunk=0000"
+      ]
+    },
+    {
+      "id": "knowledge-graphs-authors",
+      "complexity": "moderate",
+      "answer_length": "short",
+      "depth": "short",
+      "question": "Name the three authors of the Knowledge Graphs report in the uploaded collection.",
+      "answerable": true,
+      "expected_facts": [
+        "Jesús Barrasa",
+        "Amy E. Hodler",
+        "Jim Webber"
+      ],
+      "acceptable_passage_ids": [
+        "chunk:uploads:remarkable.zip/Knowledge Graphs.pdf:sha256=473f7f80d938a91a5d01b65e020711db5d029e17ad596333458be09852accf6d:chunk=0000"
+      ]
+    },
+    {
+      "id": "mlops-authors",
+      "complexity": "moderate",
+      "answer_length": "short",
+      "depth": "short",
+      "question": "Who authored Practitioners guide to MLOps?",
+      "answerable": true,
+      "expected_facts": [
+        "Khalid Salama",
+        "Jarek Kazmierczak",
+        "Donna Schut"
+      ],
+      "acceptable_passage_ids": [
+        "chunk:uploads:remarkable.zip/practitioners_guide_to_mlops_whitepaper.pdf:sha256=936feb9d60954cab2d467617642818ee7838d5d02fdc8be2191137390fa77762:chunk=0000"
+      ]
+    },
+    {
+      "id": "data-mesh-shift",
+      "complexity": "moderate",
+      "answer_length": "short",
+      "depth": "short",
+      "question": "What architecture shift does the data mesh article advocate?",
+      "answerable": true,
+      "expected_facts": [
+        [
+          "monolithic",
+          "centralized"
+        ],
+        "distributed"
+      ],
+      "acceptable_passage_ids": [
+        "chunk:uploads:remarkable.zip/How to Move Beyond a Monolithic Data Lake to a Distributed Data Mesh.pdf:sha256=16c986fce8945d3854d2748b92e6f317bca43f468a85852d8878c98cc587e8be:chunk=0000",
+        "chunk:uploads:remarkable.zip/How to Move Beyond a Monolithic Data Lake to a Distributed Data Mesh.pdf:sha256=7d37a8faab0456987b4f96a5d7b51d48ba7f0e6c547e320f38ce15a29802f025:chunk=0011",
+        "chunk:uploads:remarkable.zip/How to Move Beyond a Monolithic Data Lake to a Distributed Data Mesh.pdf:sha256=e6d38252ba63a8c6fa3195883ff8ddbf72f463d95af6815c5cf80499d6205964:chunk=0027"
+      ]
+    },
+    {
+      "id": "data-lake-parts-compare",
+      "complexity": "complex",
+      "answer_length": "medium",
+      "depth": "medium",
+      "question": "Compare the focus of parts 1 and 2 of Building Data Lakes Successfully. Which lifecycle concerns does each part cover?",
+      "answerable": true,
+      "expected_facts": [
+        "ingestion",
+        "storage",
+        "governance",
+        "consumption"
+      ],
+      "acceptable_passage_ids": [
+        "chunk:uploads:remarkable.zip/Building Data Lakes Successfully — Part 1 — Architecture, Ingestion, Storage and Processing.pdf:sha256=0fd2031840b4b1d0c78687f6231dbe80c5b7642cc760602b1169bb889c614045:chunk=0000",
+        "chunk:uploads:remarkable.zip/Building Data Lakes Successfully — Part 2 — Consumption, Governance and Operationalization.pdf:sha256=b2750054dc662873d9c7c636105454c1df1569337ca9aa17605d02ce9510bdba:chunk=0000",
+        "chunk:uploads:remarkable.zip/Building Data Lakes Successfully — Part 1 — Architecture, Ingestion, Storage and Processing.pdf:sha256=b86a06d78d3e570f348fa14843fd016caf9dbfaeb582d6a3636feed684541186:chunk=0003",
+        "chunk:uploads:remarkable.zip/Building Data Lakes Successfully — Part 2 — Consumption, Governance and Operationalization.pdf:sha256=e465cfbfdf9d6fddb363bcee59265c7af6ffeb1d3009ab6abcd5249f92007dc2:chunk=0022",
+        "chunk:uploads:remarkable.zip/Building Data Lakes Successfully — Part 2 — Consumption, Governance and Operationalization.pdf:sha256=3f695219af14ce2be2c6c3723505eb4d6e991c88d7e586690b442ff96f97e072:chunk=0002"
+      ]
+    }
+  ]
+}

@@ -58,7 +58,7 @@ SCHEMA = schema_for(SQLITE)
 
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 class StateStore:
@@ -551,7 +551,13 @@ class StateStore:
         enabled: bool,
         config: dict[str, Any],
         status: str = "registered",
+        *,
+        clear_removal: bool = True,
     ) -> None:
+        # Startup registration must never clear a concurrent removal intent.
+        # Only a deliberate re-registration revives the source.
+        if clear_removal:
+            self.conn.execute("DELETE FROM removed_sources WHERE source_id=?", (source_id,))
         self.conn.execute(
             """INSERT INTO sources(
                 id,knowledge_base_id,name,type,path,enabled,config_json,last_status
@@ -574,6 +580,17 @@ class StateStore:
                 json.dumps(config, default=str),
                 status,
             ),
+        )
+        self.conn.commit()
+
+    def source_removed(self, source_id: str) -> bool:
+        return bool(self.rows("SELECT 1 FROM removed_sources WHERE source_id=?", (source_id,)))
+
+    def mark_source_removed(self, source_id: str) -> None:
+        self.conn.execute(
+            "INSERT INTO removed_sources(source_id, removed_at) VALUES(?,?) "
+            "ON CONFLICT(source_id) DO UPDATE SET removed_at=excluded.removed_at",
+            (source_id, datetime.now(UTC).isoformat()),
         )
         self.conn.commit()
 
@@ -1499,6 +1516,11 @@ class StateStore:
 
     def delete_source(self, source_id: str) -> None:
         with self.conn:
+            self.conn.execute(
+                "INSERT INTO removed_sources(source_id, removed_at) VALUES(?,?) "
+                "ON CONFLICT(source_id) DO UPDATE SET removed_at=excluded.removed_at",
+                (source_id, datetime.now(UTC).isoformat()),
+            )
             self.conn.execute("DELETE FROM chunks_fts WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM chunks WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM symbols WHERE source_id=?", (source_id,))

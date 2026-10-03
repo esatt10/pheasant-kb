@@ -82,6 +82,11 @@ DEFAULTS: dict[str, Any] = {
     "depth": "auto",
     # How many plan→retrieve→grade rounds before answering with what we have.
     "max_rounds": 3,
+    "combine_grade_and_answer": False,
+    # First ask whether lexical/vector evidence suffices; run the graph arm
+    # and expansion only for a missing-evidence round. Opt-in because other
+    # corpora may depend on graph neighbors in the first answer packet.
+    "defer_graph_until_insufficient": False,
     # When hybrid is selected, run it directly before planning. If hybrid is
     # unavailable, stage graph/vector before searching the remaining arms.
     # Existing deployments opt in explicitly.
@@ -251,13 +256,21 @@ class AgentState(TypedDict, total=False):
     search_question: str
     capabilities: Any
     queries: list[str]
+    searched_queries: list[str]
     modes: list[str]
     passages: list
+    retrieval_rounds: int
+    round_start_evidence_ids: list[str]
+    no_new_evidence: bool
     round: int
     fallback_done: bool
+    graph_fallback_done: bool
     broadening_grade_pending: bool
     plan_notes: list[str]
     grade: dict
+    next_queries: list[str]
+    combined_answer: str
+    combined_error: str
     citations: list[dict]
     facts: list[dict]
     figures: list[dict]
@@ -288,6 +301,22 @@ def resolve_options(state: AgentState) -> dict:
     floor = int(options.get("min_context_passages") or 0)
     options["max_context_passages"] = max(int(options["max_context_passages"]), floor)
     return options
+
+
+def _defer_graph_for_request(state: AgentState, ctx: dict, options: dict) -> bool:
+    """Keep graph available as round two only for the validated short path."""
+    return bool(
+        options.get("defer_graph_until_insufficient")
+        and options.get("staged_retrieval")
+        and options.get("combine_grade_and_answer")
+        and options.get("grade_evidence")
+        and int(options.get("max_rounds") or 0) >= 2
+        and "hybrid" in (options.get("retrieval_modes") or [])
+        and state.get("depth") != "long"
+        and (state.get("options") or {}).get("visual") in {None, "none"}
+        and not ctx.get("custom_nodes")
+        and ctx.get("llm") is not None
+    )
 
 
 # --------------------------------------------------------------------- nodes
@@ -339,7 +368,7 @@ def classify_node(state: AgentState, ctx: dict) -> dict:
 
 def plan_node(state: AgentState, ctx: dict) -> dict:
     """Decide what to search for, and in which modes."""
-    retriever, llm = ctx["retriever"], ctx["llm"]
+    retriever, llm = ctx["retriever"], ctx.get("planner_llm", ctx["llm"])
     options = resolve_options(state)
     capabilities = state.get("capabilities") or retriever.capabilities()
     question = state["question"]
@@ -349,11 +378,7 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     available = [m for m in options["retrieval_modes"] if m in capabilities.modes]
     if not available:
         available = ["hybrid"]
-    if (
-        options.get("staged_retrieval")
-        and state.get("fallback_done")
-        and "hybrid" in available
-    ):
+    if options.get("staged_retrieval") and state.get("fallback_done") and "hybrid" in available:
         # Once a broad hybrid pass has run, a grader-suggested query uses one
         # targeted hybrid pass instead of separate calls to its component arms.
         available = ["hybrid"]
@@ -361,18 +386,53 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     # A follow-up round already knows what was missing — use the grader's
     # suggestion rather than re-planning from scratch.
     previous = state.get("grade") or {}
-    if round_index > 0 and previous.get("next_query"):
+    followups = previous.get("next_queries") or (
+        [previous["next_query"]] if previous.get("next_query") else []
+    )
+    if (
+        round_index > 0
+        and _defer_graph_for_request(state, ctx, options)
+        and not state.get("graph_fallback_done")
+        and "hybrid" in capabilities.modes
+    ):
+        searched = {_query_key(query) for query in state.get("searched_queries", [])}
+        novel = [str(query) for query in followups if _query_key(str(query)) not in searched]
+        # The original question is worth a second search because hybrid adds
+        # the graph arm that the first round deliberately omitted.
+        queries = _dedupe(novel)[:2] or [state.get("search_question") or question]
         return {
-            "queries": [str(previous["next_query"])],
+            "queries": queries,
+            "modes": ["hybrid"],
+            "graph_fallback_done": True,
+            "round_start_evidence_ids": [
+                passage.key() for passage in state.get("passages", []) if passage.key()
+            ],
+            "capabilities": capabilities,
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(
+                    name="replan",
+                    detail="direct evidence was insufficient; searching the graph arm",
+                ),
+            ],
+        }
+    if round_index > 0 and followups:
+        searched = {_query_key(query) for query in state.get("searched_queries", [])}
+        followups = [query for query in followups if _query_key(str(query)) not in searched]
+        return {
+            "queries": _dedupe([str(query) for query in followups])[:2],
+            "round_start_evidence_ids": [
+                passage.key() for passage in state.get("passages", []) if passage.key()
+            ],
             "modes": available,
             "capabilities": capabilities,
-            "plan_notes": [*state.get("plan_notes", []), f"refined: {previous['next_query']}"],
+            "plan_notes": [*state.get("plan_notes", []), f"refined: {', '.join(followups)}"],
             "steps": [
                 *state.get("steps", []),
                 WorkflowStep(
                     name="replan",
                     detail=f"evidence was thin ({previous.get('missing', 'unclear')}); "
-                    f"searching for “{previous['next_query']}”",
+                    f"searching for “{', '.join(followups)}”",
                 ),
             ],
         }
@@ -471,12 +531,23 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
     configured_modes = list(options.get("retrieval_modes") or ["hybrid"])
     fast_modes = [mode for mode in configured_modes if mode in {"graph", "vector"}]
     staged_retrieval = bool(options.get("staged_retrieval"))
-    if staged_retrieval and "hybrid" in configured_modes:
+    if (
+        not planned
+        and _defer_graph_for_request(state, ctx, options)
+        and "hybrid" in configured_modes
+    ):
+        available = ctx["retriever"].capabilities().modes
+        first_pass_modes = [mode for mode in ("text", "vector") if mode in available]
+        if not first_pass_modes:
+            first_pass_modes = ["hybrid"]
+    elif staged_retrieval and "hybrid" in configured_modes:
         # Hybrid already runs text, vector, and graph together. Keep this a
         # single call so the fast-path setup does not repeat its own arms.
         first_pass_modes = ["hybrid"]
     else:
-        first_pass_modes = (fast_modes or configured_modes) if staged_retrieval else configured_modes
+        first_pass_modes = (
+            (fast_modes or configured_modes) if staged_retrieval else configured_modes
+        )
     modes = state.get("modes") if planned else (first_pass_modes or ["hybrid"])
     modes = list(modes or ["hybrid"])
     fanout_timings: list[dict[str, Any]] = []
@@ -495,6 +566,7 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
     # round only: it is searched again under the same ACL and criteria as
     # everything else, and ranks below the follow-up's own hits.
     carried = conversation.carried_question(state.get("history") or [])
+    searched_queries = [*state.get("searched_queries", []), *queries]
     if carried and state.get("search_question") and not state.get("round"):
         merged = conversation.carry(
             merged,
@@ -509,9 +581,12 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
                 query_label="prior question",
             ),
         )
+        searched_queries.append(carried)
     return {
         "passages": merged,
         "queries": queries,
+        "searched_queries": _dedupe(searched_queries),
+        "retrieval_rounds": int(state.get("retrieval_rounds", 0)) + 1,
         "modes": modes,
         "fallback_done": (
             not staged_retrieval
@@ -599,25 +674,46 @@ def expand_node(state: AgentState, ctx: dict) -> dict:
     """
     retriever = ctx["retriever"]
     options = resolve_options(state)
-    if not options["expand_graph"]:
-        return {}
     passages = state.get("passages", [])
+    if _defer_graph_for_request(state, ctx, options) and not state.get("graph_fallback_done"):
+        return _expansion_result(state, passages, [], "graph expansion deferred until needed")
+    if not options["expand_graph"]:
+        return _expansion_result(state, passages, [], "graph expansion is disabled")
     if not passages:
-        return {}
+        return _expansion_result(state, passages, [], "no direct evidence to expand")
     related = retriever.expand(
         passages[:4],
         depth=int(options["expand_depth"]),
         per_node=int(options["expand_per_node"]),
     )
     if not related:
-        return {}
+        return _expansion_result(state, passages, [], "no authorized graph neighbors found")
+    return _expansion_result(
+        state, passages, related, f"followed graph edges to {len(related)} related document(s)"
+    )
+
+
+def _expansion_result(
+    state: AgentState, passages: list, related: list, detail: str
+) -> dict[str, Any]:
+    merged = _merge_passages(passages, related) if related else passages
+    baseline = set(state.get("round_start_evidence_ids", []))
+    current = {passage.key() for passage in merged if passage.key()}
+    no_new_evidence = bool(
+        state.get("round", 0) > 0
+        and state.get("round_start_evidence_ids") is not None
+        and not (current - baseline)
+    )
+    if no_new_evidence:
+        detail += "; follow-up added no new evidence"
     return {
-        "passages": _merge_passages(passages, related),
+        "passages": merged,
+        "no_new_evidence": no_new_evidence,
         "steps": [
             *state.get("steps", []),
             WorkflowStep(
                 name="expand",
-                detail=f"followed graph edges to {len(related)} related document(s)",
+                detail=detail,
                 passages=len(related),
             ),
         ],
@@ -626,8 +722,40 @@ def expand_node(state: AgentState, ctx: dict) -> dict:
 
 def grade_node(state: AgentState, ctx: dict) -> dict:
     """Decide whether the evidence answers the question."""
-    llm = ctx.get("grader_llm", ctx["llm"])
     options = resolve_options(state)
+    if (
+        options.get("combine_grade_and_answer")
+        and state.get("no_new_evidence")
+        and state.get("combined_answer")
+    ):
+        missing = str((state.get("grade") or {}).get("missing") or "the missing evidence")
+        answer = str(state["combined_answer"])
+        if "Evidence gap:" not in answer:
+            answer += f"\n\nEvidence gap: {missing}; the follow-up added no new evidence."
+        return {
+            "grade": {"sufficient": False, "missing": missing, "next_queries": []},
+            "next_queries": [],
+            "answer": answer,
+            "combined_answer": answer,
+            "answer_mode": state.get("answer_mode", "llm"),
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(
+                    name="grade_answer",
+                    detail="stopped after the follow-up added no new evidence",
+                    passages=len(state.get("passages", [])),
+                ),
+            ],
+        }
+    if (
+        options.get("combine_grade_and_answer")
+        and options.get("grade_evidence")
+        and state.get("depth") != "long"
+        and (state.get("options") or {}).get("visual") in {None, "none"}
+        and not ctx.get("custom_nodes")
+    ):
+        return combined_grade_and_answer_node(state, ctx)
+    llm = ctx.get("grader_llm", ctx["llm"])
     passages = state.get("passages", [])
     fallback_grade = bool(state.get("broadening_grade_pending"))
     round_index = state.get("round", 0) + (0 if fallback_grade else 1)
@@ -639,12 +767,26 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
             "round": round_index,
             "broadening_grade_pending": False,
             "grade": {"sufficient": False, "missing": "no matching passages", "next_query": ""},
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(name="grade", detail="no matching evidence to grade"),
+            ],
         }
     if llm is None or not options["grade_evidence"]:
         return {
             "round": round_index,
             "broadening_grade_pending": False,
             "grade": {"sufficient": True, "missing": "", "next_query": ""},
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(
+                    name="grade",
+                    detail="evidence grading skipped"
+                    if not options["grade_evidence"]
+                    else "no grader model",
+                    passages=len(passages),
+                ),
+            ],
         }
 
     # Grading stays on snippets, not whole files: it is a routing decision
@@ -701,6 +843,166 @@ def grade_node(state: AgentState, ctx: dict) -> dict:
             ),
         ],
     }
+
+
+def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
+    """Check evidence and produce a short, cited answer in one model call."""
+    started = time.perf_counter()
+    llm = ctx.get("llm")
+    options = resolve_options(state)
+    passages = state.get("passages", [])[: int(options["max_context_passages"])]
+    passages = _authorship_front_matter_first(state["question"], passages)
+    citations = passages_to_citations(passages, int(options["max_context_passages"]))
+    round_index = int(state.get("round", 0)) + 1
+    if llm is None:
+        answer = extractive_answer(state["question"], citations)
+        answer += "\n\nEvidence gap: no answer model was available."
+        return {
+            "round": round_index,
+            "grade": {"sufficient": False, "missing": "no model or no matching evidence"},
+            "combined_error": "no model or no matching evidence",
+            "citations": citations,
+            "combined_answer": answer,
+            "answer": answer,
+            "answer_mode": "extractive",
+        }
+
+    try:
+        documents = hydrate_citations(ctx["retriever"], citations, options)
+        facts = ctx["retriever"].facts(
+            [item["node_id"] for item in citations if item.get("node_id")],
+            int(options["max_facts"]),
+        )
+        system = (
+            system_prompt_for(
+                str(state.get("intent") or "knowledge"), str(state.get("depth") or "short")
+            )
+            + "\n\nFirst assess whether the passages contain enough evidence, then answer "
+            "in this same reply. Return one JSON object containing boolean "
+            '"sufficient", string "answer", string "missing", and array '
+            '"next_queries" with at most two distinct search queries. Do not mark '
+            "evidence sufficient unless the answer is grounded in cited passages. "
+            "Place each citation on the numbered passage that directly states "
+            "the claim, even when another passage comes from the same file. "
+            'Write "sufficient" before "answer" so a streaming client can show '
+            "provisional answer text as it is generated. "
+            "If evidence is insufficient, say what is missing and provide only "
+            "queries that could find that specific information."
+        )
+        word_caps = options.get("answer_max_words") or {"short": 150, "medium": 400}
+        word_cap = int(word_caps.get(str(state.get("depth") or "short"), 150))
+        system += f" Keep the answer at or below approximately {word_cap} words."
+        prompt = build_prompt(
+            state["question"],
+            citations,
+            facts,
+            documents,
+            history_text=conversation.history_block(state.get("history") or []),
+        )
+        output_caps = options.get("output_tokens_by_depth") or {"short": 512, "medium": 1024}
+        output_cap = int(output_caps.get(str(state.get("depth") or "short"), 1024))
+        completion_options: dict[str, Any] = {}
+        request = ctx.get("request")
+        if (
+            request is not None
+            and request.on_draft is not None
+            and getattr(llm, "provider", None) == "openai"
+            and getattr(llm, "model_id", None) == "gpt-6-luna"
+        ):
+            from pheasant.assistant.streaming import JsonAnswerPreview
+
+            completion_options["on_delta"] = JsonAnswerPreview(request.on_draft).feed
+        parsed = _parse_json(
+            llm.complete(
+                system,
+                prompt,
+                max_output_tokens=output_cap,
+                json_mode=True,
+                **completion_options,
+            )
+        )
+        if (
+            not isinstance(parsed, dict)
+            or type(parsed.get("sufficient")) is not bool
+            or not isinstance(parsed.get("answer"), str)
+            or not isinstance(parsed.get("missing"), str)
+            or not isinstance(parsed.get("next_queries", []), list)
+        ):
+            raise ValueError("combined evidence reply did not match its schema")
+        if any(not isinstance(query, str) for query in parsed.get("next_queries", [])):
+            raise ValueError("combined follow-up queries must be strings")
+        if len(parsed.get("next_queries", [])) > 2:
+            raise ValueError("combined evidence reply returned more than two follow-up queries")
+        answer = parsed["answer"].strip()
+        allowed = {str(item["index"]) for item in citations}
+        refs = re.findall(r"\[(\d+)\]", answer)
+        sufficient = bool(
+            parsed["sufficient"] and answer and refs and all(r in allowed for r in refs)
+        )
+        next_queries = _dedupe(
+            [str(query).strip() for query in parsed.get("next_queries", []) if str(query).strip()]
+        )[:2]
+        if not sufficient and not parsed["missing"].strip():
+            raise ValueError("an insufficient result must identify the missing evidence")
+        if not sufficient and parsed["sufficient"]:
+            raise ValueError("combined answer omitted valid evidence citations")
+        searched = {_query_key(query) for query in state.get("searched_queries", [])}
+        next_queries = [query for query in next_queries if _query_key(query) not in searched]
+        missing = parsed["missing"].strip()
+        exhausted = round_index >= int(options["max_rounds"])
+        if not sufficient and (not next_queries or exhausted):
+            gap = "Evidence gap: " + (missing or "the available passages are incomplete")
+            answer = f"{answer}\n\n{gap}" if answer else gap
+            if exhausted:
+                next_queries = []
+        detail = "combined evidence check and answer"
+        if not sufficient:
+            detail += f"; missing: {missing or 'evidence is insufficient'}"
+        return {
+            "round": round_index,
+            "grade": {
+                "sufficient": sufficient,
+                "missing": missing,
+                "next_query": next_queries[0] if next_queries else "",
+                "next_queries": next_queries,
+            },
+            "next_queries": next_queries,
+            "combined_answer": answer,
+            "answer": answer,
+            "citations": citations,
+            "facts": facts,
+            "answer_mode": "llm" if sufficient or answer else "extractive",
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(
+                    name="grade_answer",
+                    detail=detail,
+                    passages=len(citations),
+                    duration_seconds=time.perf_counter() - started,
+                ),
+            ],
+        }
+    except (ProviderError, ValueError) as exc:
+        answer = extractive_answer(state["question"], citations, reason=short_reason(str(exc)))
+        return {
+            "round": round_index,
+            "grade": {"sufficient": False, "missing": "combined answer could not be validated"},
+            "combined_error": str(exc),
+            "combined_answer": answer,
+            "answer": answer,
+            "error": str(exc),
+            "citations": citations,
+            "answer_mode": "extractive",
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(
+                    name="grade_answer",
+                    detail="combined reply unavailable or invalid; returned evidence excerpts",
+                    passages=len(citations),
+                    duration_seconds=time.perf_counter() - started,
+                ),
+            ],
+        }
 
 
 def synthesize_node(state: AgentState, ctx: dict) -> dict:
@@ -809,7 +1111,17 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
     citations = state.get("citations", [])
     if not options["verify_citations"] or not answer:
         mark_used_citations(answer, citations)
-        return {}
+        detail = (
+            "citation verification is disabled"
+            if not options["verify_citations"]
+            else "no answer text to verify"
+        )
+        return {
+            "steps": [
+                *state.get("steps", []),
+                WorkflowStep(name="verify", detail=detail, passages=len(citations)),
+            ]
+        }
 
     valid = {c["index"] for c in citations}
     dangling: set[int] = set()
@@ -824,15 +1136,18 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
     cleaned = re.sub(r"\[(\d{1,2})\]", replace, answer)
     cleaned = re.sub(r" +([.,;:])", r"\1", cleaned)
     mark_used_citations(cleaned, citations)
-    if not dangling:
-        return {"answer": cleaned}
     return {
         "answer": cleaned,
         "steps": [
             *state.get("steps", []),
             WorkflowStep(
                 name="verify",
-                detail=f"dropped {len(dangling)} citation marker(s) with no matching passage",
+                detail=(
+                    f"dropped {len(dangling)} citation marker(s) with no matching passage"
+                    if dangling
+                    else f"verified citation markers across {len(citations)} evidence item(s)"
+                ),
+                passages=len(citations),
             ),
         ],
     }
@@ -842,6 +1157,21 @@ def should_retry(state: AgentState, ctx: dict) -> str:
     """Choose broadening, a replan, or synthesis from the current grade."""
     options = resolve_options(state)
     grade = state.get("grade") or {}
+    if options.get("combine_grade_and_answer") and (
+        state.get("combined_error") or state.get("combined_answer")
+    ):
+        graph_fallback = (
+            _defer_graph_for_request(state, ctx, options)
+            and not state.get("graph_fallback_done")
+            and not state.get("combined_error")
+        )
+        if (
+            not grade.get("sufficient")
+            and (grade.get("next_queries") or graph_fallback)
+            and int(state.get("round", 0)) < int(options["max_rounds"])
+        ):
+            return "plan"
+        return "verify"
     if grade.get("sufficient", True):
         return "synthesize"
     if options.get("staged_retrieval") and not state.get("fallback_done"):
@@ -952,7 +1282,7 @@ def build_graph(options: dict[str, Any], nodes: dict[str, Any] | None = None):
     builder.add_conditional_edges(
         "grade",
         _bind_router(should_retry),
-        {"broaden": "broaden", "plan": "plan", "synthesize": "synthesize"},
+        {"broaden": "broaden", "plan": "plan", "synthesize": "synthesize", "verify": "verify"},
     )
     builder.add_edge("broaden", "expand")
     builder.add_edge("synthesize", "verify")
@@ -990,6 +1320,10 @@ def _bind(fn):
                     )
                 last.input_tokens = usage.reported_input
                 last.output_tokens = usage.reported_output
+                last.cached_input_tokens = usage.reported_cached_input
+                last.reasoning_tokens = usage.reported_reasoning
+                last.provider_calls = usage.calls
+                last.provider_retries = usage.retries
             for step in new_steps:
                 if request is None:
                     continue
@@ -1048,7 +1382,21 @@ class AgenticWorkflow:
         grader_model = options.get("grader_model")
         with_model = getattr(llm, "with_model", None)
         grader_llm = with_model(str(grader_model)) if grader_model and callable(with_model) else llm
-        ctx = {"retriever": retriever, "llm": llm, "grader_llm": grader_llm, "request": request}
+        with_effort = getattr(grader_llm, "with_reasoning_effort", None)
+        if callable(with_effort) and options.get("grader_reasoning_effort") is not None:
+            grader_llm = with_effort(str(options["grader_reasoning_effort"]))
+        planner_llm = llm
+        with_effort = getattr(planner_llm, "with_reasoning_effort", None)
+        if callable(with_effort) and options.get("planner_reasoning_effort") is not None:
+            planner_llm = with_effort(str(options["planner_reasoning_effort"]))
+        ctx = {
+            "retriever": retriever,
+            "llm": llm,
+            "planner_llm": planner_llm,
+            "grader_llm": grader_llm,
+            "custom_nodes": bool(self._nodes or overrides),
+            "request": request,
+        }
         initial: AgentState = {
             "question": request.question,
             "options": options,
@@ -1081,6 +1429,13 @@ class AgenticWorkflow:
         return WorkflowResult(
             answer=final.get("answer", ""),
             citations=citations,
+            retrieved_evidence_ids=list(
+                dict.fromkeys(
+                    str(p.chunk_id or p.node_id)
+                    for p in final.get("passages", [])
+                    if p.chunk_id or p.node_id
+                )
+            ),
             facts=final.get("facts", []),
             focus_node_ids=[c["node_id"] for c in citations if c.get("node_id")],
             mode=final.get("answer_mode", "extractive"),
@@ -1089,9 +1444,14 @@ class AgenticWorkflow:
             error=final.get("error"),
             search_mode="+".join(final.get("modes", [request.mode])),
             counts={
-                "rounds": final.get("round", 0),
+                "rounds": final.get("retrieval_rounds", final.get("round", 0)),
+                "model_call_rounds": final.get("round", 0),
+                "retrieval_rounds": final.get("retrieval_rounds", 0),
                 "passages": len(final.get("passages", [])),
                 "citations": len(citations),
+                "insufficient_evidence": not bool(
+                    (final.get("grade") or {}).get("sufficient", True)
+                ),
                 # How the question was read. Surfaced so a caller can tell a
                 # summary from a how-to without re-parsing the answer.
                 "intent": final.get("intent", "knowledge"),
@@ -1142,11 +1502,47 @@ def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for value in values:
-        key = value.strip().lower()
+        key = _query_key(value)
         if key and key not in seen:
             seen.add(key)
             out.append(value.strip())
     return out
+
+
+def _query_key(value: str) -> str:
+    """Normalize whitespace and case for follow-up query deduplication."""
+    return " ".join(str(value).split()).casefold()
+
+
+def _authorship_front_matter_first(question: str, passages: list) -> list:
+    """Put an already-retrieved title page first within its own document.
+
+    Whole-document hydration is attached to the first citation of a file.
+    For an authorship question, that made a later matching chunk the model's
+    preferred citation even when the actual byline was in a retrieved title
+    page. This only reorders evidence already selected from the same file.
+    """
+    if not re.search(r"\b(author|authors|authored|wrote|written)\b", question, re.I):
+        return passages
+    ordered = list(passages)
+    seen: set[str] = set()
+    for index, passage in enumerate(ordered):
+        node_id = str(getattr(passage, "node_id", "") or "")
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        front_index = next(
+            (
+                later
+                for later in range(index + 1, len(ordered))
+                if getattr(ordered[later], "node_id", None) == node_id
+                and str(getattr(ordered[later], "chunk_id", "") or "").endswith(":chunk=0000")
+            ),
+            None,
+        )
+        if front_index is not None:
+            ordered[index], ordered[front_index] = ordered[front_index], ordered[index]
+    return ordered
 
 
 def _merge_passages(existing: list, incoming: list) -> list:

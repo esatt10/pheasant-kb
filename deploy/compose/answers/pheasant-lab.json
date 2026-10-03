@@ -41,6 +41,10 @@
   "search.embeddings.api_key_env": "OPENAI_API_KEY",
   "search.embeddings.dimensions": 1536,
   "search.embeddings.batch_size": 128,
+  "search.embeddings.timeout_seconds": 30.0,
+  "search.embeddings.query_timeout_seconds": 1.0,
+  "search.embeddings.query_max_retries": 0,
+  "search.embeddings.query_rate_limit_max_wait_seconds": 0.0,
   "search.embeddings.max_retries": 10,
   "search.embeddings.retry_backoff_seconds": 2.0,
   "search.embeddings.rate_limit_max_wait_seconds": 900.0,
@@ -141,6 +145,17 @@
   "assistant.max_facts": 16,
   "assistant.workflow": "agentic",
   "assistant.workflow_options.agentic.staged_retrieval": true,
+  "assistant.workflow_options.agentic.combine_grade_and_answer": true,
+  "assistant.workflow_options.agentic.defer_graph_until_insufficient": true,
+  "assistant.workflow_options.agentic.output_tokens_by_depth": {
+    "short": 512,
+    "medium": 1024
+  },
+  "assistant.workflow_options.agentic.answer_max_words": {
+    "short": 150,
+    "medium": 400
+  },
+  "assistant.latency.max_concurrent_answers": 4,
   "assistant.retrieval.max_rounds": 2,
   "assistant.retrieval.per_query_results": 10,
   "assistant.retrieval.max_context_passages": 16,
@@ -197,6 +212,21 @@
         "on_file_change": "debounce",
         "on_git_commit": false,
         "interval_seconds": 60
+      }
+    },
+    {
+      "name": "uploads",
+      "type": "document_folder",
+      "path": "/state/uploads/uploads",
+      "enabled": true,
+      "include": [
+        "**/*"
+      ],
+      "sync": {
+        "on_startup": true,
+        "on_file_change": "debounce",
+        "on_git_commit": true,
+        "interval_seconds": null
       }
     }
   ]

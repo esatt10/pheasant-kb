@@ -401,6 +401,8 @@ export const api = {
      * first and the picture after, so the reader is not kept waiting for it.
      */
     onAnswer?: (answer: ChatAnswer) => void,
+    /** Provisional answer text; the final answer event replaces this preview. */
+    onDraft?: (delta: string) => void,
   ): Promise<ChatAnswer> => {
     const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
       method: "POST",
@@ -439,6 +441,9 @@ export const api = {
         if (!line) continue;
         const event = JSON.parse(line.slice(5).trim());
         if (event.type === "step") onStep(event);
+        else if (event.type === "draft" && typeof event.delta === "string") {
+          onDraft?.(event.delta);
+        }
         else if (event.type === "answer") {
           answer = event.answer as ChatAnswer;
           onAnswer?.(answer);

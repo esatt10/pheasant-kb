@@ -1,0 +1,1 @@
+A quarterly product briefing covering router fan-out latency and regional knowledge-base freshness.

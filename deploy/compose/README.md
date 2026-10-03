@@ -8,7 +8,7 @@ stored in YAML.
 |---|---|---|---|
 | `local-small.yaml` | Local SQLite, no broker or workers | BM25/text search and extractive answers; MCP and durable memory remain enabled | Laptop, offline, small corpus |
 | `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and an agentic workflow using GPT-6 Luna for evidence grading and GPT-6 Sol for answers | One capable workstation/container |
-| `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Vector + graph + hybrid assistant fanout with adaptive concurrency; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
+| `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Concurrent hybrid retrieval with bounded per-process answer admission; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
 
 The fleet chunks every source by plan (`chunk_strategy: auto`), including UI
 uploads: code by top-level block, Markdown by heading, spreadsheets by row, and
@@ -110,19 +110,49 @@ before using it.
 The UI is at <http://127.0.0.1:8765> and streamable HTTP MCP is at
 `http://127.0.0.1:8765/mcp` for both Docker profiles.
 
-## Fleet retrieval fanout
+## Assistant retrieval and Pheasant-lab
 
-Hybrid already runs lexical, vector, and graph retrieval concurrently. The
-fleet therefore does not add a separate `text` assistant fanout: it repeated
-the PostgreSQL lexical ranking query that stress testing identified as the
-slowest arm for common terms. Text remains available as an explicit API/MCP
-mode and remains part of every hybrid request. The explicit vector and graph
-modes preserve arm-specific candidates that can be truncated by hybrid fusion.
-Because the fleet explicitly configures all three, the planner cannot narrow
-that fanout for an individual question; the step audit names the modes searched.
+Hybrid already runs lexical, vector, and graph retrieval concurrently.
+`multi_search` removes standalone vector and graph modes when hybrid is chosen;
+listing `[hybrid, graph, vector]` does not create extra search arms. The lab
+starts with one hybrid pass, keeps graph expansion, and runs at most one
+bounded follow-up round when the evidence is insufficient. Search fanout
+timings and failed arms are reported with the completed answer.
 
-This is a fleet-profile choice, not a schema-default change. The small and
-advanced profiles and the setup wizard defaults are unchanged.
+The lab answer settings live in
+[`answers/pheasant-lab.json`](answers/pheasant-lab.json). Generate its runtime
+YAML from the typed schema and validate the deployment with:
+
+```powershell
+python -m pheasant setup --answers deploy/compose/answers/pheasant-lab.json --accept-defaults --plain --target compose --output pheasant.yaml --force
+python -m pheasant doctor -c pheasant.yaml --no-require-paths
+docker compose --env-file .env -f deploy/compose/docker-compose.pheasant-lab.yml config --quiet
+```
+
+Before regeneration, preserve existing secret values, source registrations,
+named volumes and workspace mounts. Keep one API, graph service and active
+indexer with four preparation workers and one logger until measurements justify
+a resource change. Worker scaling affects ingestion preparation, not answer
+latency; do not add indexer or graph replicas as an unmeasured answer fix.
+
+Use `scripts/benchmark_assistant_latency.py` for completed-answer timings. It
+separates HTTP completion, SSE workflow progress, first provisional answer
+text, and final-answer events, and supports MCP. Build separate development and
+held-out manifests from the deployment's
+own corpus; label expected facts and acceptable supporting passage IDs, then
+review claim support separately from citation-reference validity. Keep
+benchmark questions and reports outside indexed source roots and preserve the
+readiness denylist. A four-way, ten-repeat HTTP run can be started with:
+
+```powershell
+python scripts/benchmark_assistant_latency.py --base-url http://127.0.0.1:8765 --token-env PHEASANT_API_TOKEN --cases <held-out-cases.json> --concurrency 4 --repeats 10 --transport http --output-dir <report-directory>
+python scripts/benchmark_assistant_latency.py --base-url http://127.0.0.1:8765 --token-env PHEASANT_API_TOKEN --cases <held-out-cases.json> --concurrency 4 --repeats 10 --transport sse --output-dir <report-directory>
+```
+
+The harness marks reports invalid if the corpus or effective configuration
+changes during a run. Do not treat first progress, retrieval-only timing,
+cached-only results, incomplete answers, or unreviewed lexical matches as a
+latency/quality pass.
 
 ## Throughput and durability notes
 

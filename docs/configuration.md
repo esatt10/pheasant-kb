@@ -366,9 +366,13 @@ with body matches on rare ones. The top hit agrees on the gold set;
 | `embeddings.api_key_env` | string | `OPENAI_API_KEY` | Name of the env var holding the API key (key never lands in config/state). |
 | `embeddings.dimensions` | integer \| null | `null` | Unset by default — the `dimensions` request field is simply omitted, so the provider returns the model's own native size (e.g. 1536 for `text-embedding-3-small`, 3072 for `text-embedding-3-large`). Set an explicit number only to shrink vectors for storage (OpenAI's `-3` models support this) or to pin an exact size across a Synapse fleet. |
 | `embeddings.batch_size` | integer | `64` | Texts per embedding HTTP request. |
+| `embeddings.timeout_seconds` | number | `30.0` | Network timeout for an embedding request; used by indexing unless a separate query timeout is set. |
 | `embeddings.max_retries` | integer | `4` | Retries for transient transport and 5xx failures. Authentication and malformed requests fail immediately. |
 | `embeddings.retry_backoff_seconds` | number | `1.0` | Initial exponential-backoff delay. Locally chosen waits cap at 30 seconds and use jitter. |
 | `embeddings.rate_limit_max_wait_seconds` | number | `300.0` | Cumulative wait budget for provider 429 responses before the durable source task is allowed to fail. Provider `Retry-After`/quota-reset headers are honored in full; concurrent embedding threads share one cooldown and reduce/ramp concurrency adaptively. Set `0` to use ordinary bounded retries. |
+| `embeddings.query_timeout_seconds` | number \| null | `null` | Query-only timeout. `null` inherits `timeout_seconds`; a request deadline shortens it further. |
+| `embeddings.query_max_retries` | integer \| null | `null` | Query-only transient retry count. `null` inherits `max_retries`; set `0` to fail the vector arm immediately. Indexing retains its own retry policy. |
+| `embeddings.query_rate_limit_max_wait_seconds` | number \| null | `null` | Query-only rate-limit wait budget. `null` inherits the indexing value; set `0` to avoid query-time throttling sleeps. |
 | `vector_store.provider` | string | `lancedb` | `lancedb` (optional `[vector]` extra) or `numpy` (always-available flat file). |
 | `vector_store.path` | absolute path | `<state>/vectors` | Vector index root; vectors live under `<path>/<kb_id>/`. Created only when embeddings are enabled. |
 | `ranking.prefer_exact_path_matches` | bool | `true` (example) | Boost exact path matches. |
@@ -1374,7 +1378,9 @@ default and works fully offline.
 | `session_key_ttl_minutes` | int | `720` | Lifetime of a session-supplied key. |
 | `max_context_chunks` | int | `8` | Passages retrieved and offered to the model. |
 | `max_output_tokens` | int | `4096` | Per-answer output cap sent to the provider. |
-| `request_timeout_seconds` | float | `90.0` | Provider HTTP timeout. A timeout degrades to the extractive answer rather than erroring. |
+| `request_timeout_seconds` | float | `90.0` | Maximum provider-call timeout; an active assistant deadline shortens it. Provider truncation is reported as incomplete. |
+| `reasoning_effort` | str \| null | `null` | Optional Luna reasoning control (`none` or `low`). Unset preserves the model default. Unsupported settings fail explicitly. |
+| `latency` | block | unset | Optional end-to-end answer deadlines and process-wide answer admission. See below. |
 | `max_facts` | int | `12` | Graph facts surfaced per answer, collected round-robin across the cited sources. |
 | `workflow` | str | `auto` | Which agent workflow answers a question: `auto` \| `knowledge-summary` \| `agentic` \| `simple` \| any registered plugin name. `auto` = `agentic` when the `[agent]` extra is installed *and* a model is reachable, else `simple`. An unknown or failing workflow degrades to `simple` with the reason attached to the answer. |
 | `workflow_options` | dict | `{}` | Per-workflow tuning, keyed by workflow name, merged over that workflow's defaults. Callers may override any key per request. |
@@ -1398,19 +1404,19 @@ typed home, which is what makes them validated, editable from the UI
 | `expand_depth` | int \| null | `2` | Hops to walk when expanding. |
 | `expand_per_node` | int \| null | `4` | Neighbours taken per expanded node. |
 | `grade_evidence` | bool \| null | `true` | Ask the model to grade its own evidence before answering. |
-| `grader_model` | str \| null | `null` | Optional model for sufficiency checks in agentic workflows. The assistant model still plans and writes the answer; use a model from the configured provider. |
+| `grader_model` | str \| null | `null` | Optional separate model for evidence sufficiency checks when combined grade-and-answer is off. |
+| `planner_reasoning_effort` | str \| null | `null` | Optional Luna `none` or `low` override for planning; overrides `assistant.reasoning_effort`. |
+| `grader_reasoning_effort` | str \| null | `null` | Optional Luna `none` or `low` override for evidence grading; overrides `assistant.reasoning_effort`. |
 | `verify_citations` | bool \| null | `true` | Drop `[n]` markers that do not resolve to a real citation. |
 | `max_facts` | int \| null | `12` | Graph facts surfaced alongside the answer. |
 
-`hybrid` is already a concurrent fusion of text, vector, and graph. The
-generated scalable profile deliberately uses `[vector, graph, hybrid]` and
-omits a second standalone `text` fanout: stress testing found PostgreSQL
-full-text ranking to be the slowest arm for high-frequency terms, so repeating
-it had a weak cost/recall case. This does not disable text search. Explicit
-`mode=text` still serves exact-identifier queries and hybrid still contains
-lexical results. Vector and graph remain explicit to preserve arm-specific top
-candidates that may fall beyond hybrid's fused result limit. The schema
-default above and the local profile defaults are unchanged.
+`hybrid` is already a concurrent fusion of text, vector, and graph.
+`multi_search` drops redundant standalone vector and graph modes whenever
+hybrid is selected, so `[vector, graph, hybrid]` does not preserve extra
+candidates or add extra search arms. Text remains available through
+`mode=text` and is part of every hybrid request. Agentic staged retrieval may
+select standalone modes before a later hybrid pass. Schema and local-profile
+defaults are unchanged.
 
 **Precedence is deliberately low.** Values merge in this order, later winning:
 
@@ -1423,6 +1429,32 @@ this block's arrival, and an agent overriding a criterion for one call still
 wins over both. A field left `null` is **not merged at all** — the workflow's
 own default applies — which is what keeps this additive rather than a second
 source of truth for values it does not care about.
+
+Agentic workflow options also accept `combine_grade_and_answer` (default
+`false`). For short and medium answers it checks the hydrated evidence and
+writes the cited answer in one validated call. Long-form, visual, custom-node
+and explicitly ungraded requests keep their existing flow. Malformed or
+insufficient replies remain incomplete and may trigger at most two bounded
+follow-up searches. Pheasant-lab enables this option for measurement; it is not
+a global default.
+
+### `assistant.latency` â€” request budgets and answer admission
+
+Deadlines are optional and begin before history rewriting. They limit blocking
+calls and retries but do not relax benchmark latency targets. The answer limit
+is shared by HTTP, SSE and MCP within one process. Saturated requests return
+HTTP 429 with `Retry-After` and the stable `ASSISTANT_BUSY` code.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `short_deadline_seconds` | number \| null | `null` | End-to-end budget for short answers. |
+| `medium_deadline_seconds` | number \| null | `null` | End-to-end budget for medium answers. |
+| `long_deadline_seconds` | number \| null | `null` | End-to-end budget for long answers and visual work. |
+| `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. |
+
+The lab starts with 10-second short/medium safety deadlines, a 180-second long
+deadline and four active answer slots. These are operational bounds, not a
+claim that completed answers meet the 800 ms or 3-second targets.
 
 Editable live: `GET`/`PUT /assistant/retrieval`. Retrieval is query-time only,
 so a change applies to the next question with no restart and no re-index.

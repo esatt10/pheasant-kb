@@ -79,6 +79,7 @@ export function ChatPanel({
   // Live workflow steps for the in-flight question. Local, not session state:
   // they describe one request and are meaningless once it resolves.
   const [progress, setProgress] = useState<WorkflowStep[]>([]);
+  const [answerPreview, setAnswerPreview] = useState("");
   // Whether this region's remembered assertions may inform the answer. The
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
@@ -87,6 +88,7 @@ export function ChatPanel({
   const ask = useMutation({
     mutationFn: ({ id, question }: { id: string; question: string }) => {
       setProgress([]);
+      setAnswerPreview("");
       return api.chatStream(
         {
           question,
@@ -104,16 +106,20 @@ export function ChatPanel({
         // the pending placeholder in the same turn.
         (answer) => {
           setProgress([]);
+          setAnswerPreview("");
           dispatch({ type: "answered", id, answer });
         },
+        (delta) => setAnswerPreview((previous) => previous + delta),
       );
     },
     onSuccess: (answer, { id }) => {
       setProgress([]);
+      setAnswerPreview("");
       dispatch({ type: "answered", id, answer });
     },
     onError: (error: Error, { id }) => {
       setProgress([]);
+      setAnswerPreview("");
       dispatch({ type: "ask-failed", id, error: error.message });
     },
   });
@@ -212,6 +218,12 @@ export function ChatPanel({
                       ? "Searching your sources…"
                       : "Planning the search…"}
                 </span>
+                {answerPreview ? (
+                  <div className="msg__bubble" style={{ whiteSpace: "pre-wrap", marginTop: 12 }}>
+                    <small>Draft answer · checking citations</small>
+                    <div>{answerPreview}</div>
+                  </div>
+                ) : null}
                 {progress.length > 0 ? (
                   <ol className="progress">
                     {progress.map((step, index) => (

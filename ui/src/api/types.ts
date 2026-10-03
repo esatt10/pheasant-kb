@@ -77,6 +77,8 @@ export interface SourceRecord {
   last_status?: string;
   last_indexed_at?: string;
   checkpoint?: Record<string, unknown> | null;
+  /** ZIPs currently stored in this UI-owned upload source. */
+  uploaded_archives?: string[];
   /** A background sync (registered/triggered with `wait: false`) is running now. */
   syncing?: boolean;
   /** Error from the most recent *background* sync, cleared by the next one. Independent of `last_status`. */

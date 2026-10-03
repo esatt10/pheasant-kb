@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
@@ -369,7 +370,26 @@ class PostgresBackend(StateBackend):
 
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = self._pool.getconn()
+            from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+            remaining = remaining_seconds()
+            if remaining is not None and remaining <= 0:
+                raise DeadlineExceeded("assistant request deadline exceeded")
+            pool_wait_started = time.perf_counter()
+            try:
+                conn = (
+                    self._pool.getconn()
+                    if remaining is None
+                    else self._pool.getconn(timeout=remaining)
+                )
+            except Exception:
+                if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded") from None
+                raise
+            finally:
+                from pheasant.request_budget import record_active_timing
+
+                record_active_timing("postgres_pool_wait", time.perf_counter() - pool_wait_started)
             self._local.conn = conn
         return conn
 
@@ -417,6 +437,8 @@ class PostgresBackend(StateBackend):
 
     def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
         conn = self._conn()
+        from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
         # A read with nothing pending on this thread was always its own
         # transaction: `_finish` hands the connection back straight after it.
         # With autocommit off that transaction cost two extra round trips the
@@ -432,7 +454,20 @@ class PostgresBackend(StateBackend):
         standalone = not self._pending
         if standalone:
             conn.autocommit = True
+        remaining = remaining_seconds()
+        timeout_installed = remaining is not None
+        if timeout_installed and remaining <= 0:
+            self.release()
+            raise DeadlineExceeded("assistant request deadline exceeded")
+        read_started = time.perf_counter()
         try:
+            if timeout_installed:
+                milliseconds = max(1, int(remaining * 1000))
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT set_config('statement_timeout', %s, false)",
+                        (f"{milliseconds}ms",),
+                    )
             with conn.cursor() as cursor:
                 cursor.execute(self.dialect.translate(sql), params or None)
                 if cursor.description is None:
@@ -442,14 +477,70 @@ class PostgresBackend(StateBackend):
                     result = [
                         Row(dict(zip(columns, values, strict=True))) for values in cursor.fetchall()
                     ]
-        except Exception:
+        except Exception as exc:
+            if timeout_installed and standalone:
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute("RESET statement_timeout")
+                except Exception as reset_exc:
+                    logger.warning(
+                        "Could not restore PostgreSQL statement_timeout; discarding connection",
+                        exc_info=True,
+                    )
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    finally:
+                        self._local.conn = None
+                        self._local.adapter = None
+                    from pheasant.request_budget import record_active_timing
+
+                    record_active_timing("postgres_read", time.perf_counter() - read_started)
+                    if (remaining_seconds() or 0) <= 0.05:
+                        raise DeadlineExceeded(
+                            "assistant request deadline exceeded during a PostgreSQL read"
+                        ) from reset_exc
+                    raise
             if standalone:
                 self._restore_transactional(conn)
             self._abort()
+            from pheasant.request_budget import record_active_timing
+
+            record_active_timing("postgres_read", time.perf_counter() - read_started)
+            if timeout_installed and (remaining_seconds() or 0) <= 0.05:
+                raise DeadlineExceeded(
+                    "assistant request deadline exceeded during a PostgreSQL read"
+                ) from exc
             raise
+        if timeout_installed:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("RESET statement_timeout")
+            except Exception as exc:
+                logger.warning(
+                    "Could not restore PostgreSQL statement_timeout; discarding connection",
+                    exc_info=True,
+                )
+                try:
+                    self._pool.putconn(conn, close=True)
+                finally:
+                    self._local.conn = None
+                    self._local.adapter = None
+                from pheasant.request_budget import record_active_timing
+
+                record_active_timing("postgres_read", time.perf_counter() - read_started)
+                if (remaining_seconds() or 0) <= 0.05:
+                    raise DeadlineExceeded(
+                        "assistant request deadline exceeded restoring PostgreSQL settings"
+                    ) from exc
+                raise
         if standalone:
             self._restore_transactional(conn)
         self._finish()
+        from pheasant.request_budget import record_active_timing
+
+        record_active_timing("postgres_read", time.perf_counter() - read_started)
+        if timeout_installed and (remaining_seconds() or 0) <= 0:
+            raise DeadlineExceeded("assistant request deadline exceeded during a PostgreSQL read")
         return result
 
     @staticmethod

@@ -429,6 +429,42 @@ def test_chat_stream_reports_steps_before_the_answer(loaded_config) -> None:
     assert "citations" in answer
 
 
+def test_chat_stream_delivers_provisional_text_before_verified_answer(
+    loaded_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from pheasant.api.app import create_app
+    from pheasant.services import assistant as assistant_service
+
+    def fake_answer(_context, request, *, on_draft=None, **_kwargs):
+        assert on_draft is not None
+        on_draft("The answer")
+        on_draft(" is grounded.")
+        return {
+            "question": request.question,
+            "answer": "The answer is grounded. [1]",
+            "steps": [],
+            "citations": [{"index": 1, "node_id": "file:kb:doc", "used": True}],
+            "visual": {"status": "none"},
+        }
+
+    monkeypatch.setattr(assistant_service, "answer", fake_answer)
+    client = TestClient(create_app(config=loaded_config))
+    with client.stream(
+        "POST", "/assistant/chat/stream", json={"question": "Question?"}
+    ) as response:
+        events = [
+            json.loads(line[5:].strip())
+            for line in response.iter_lines()
+            if line.startswith("data:")
+        ]
+
+    assert [event["type"] for event in events] == ["draft", "draft", "answer"]
+    assert "".join(event["delta"] for event in events[:2]) == "The answer is grounded."
+    assert events[-1]["answer"]["answer"] == "The answer is grounded. [1]"
+
+
 def test_chat_stream_uses_an_async_generator_not_a_threadpool_wrapped_one(
     loaded_config, monkeypatch: pytest.MonkeyPatch
 ) -> None:

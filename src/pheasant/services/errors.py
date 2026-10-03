@@ -233,6 +233,28 @@ class RegionBusy(ServiceError):
         self.what = what
 
 
+class AssistantBusy(ServiceError):
+    """All configured answer slots are occupied on this serving process."""
+
+    status = 429
+    code = "ASSISTANT_BUSY"
+    retryable = True
+
+    def __init__(self) -> None:
+        super().__init__("Assistant is at its concurrent-answer limit; retry shortly")
+
+
+class AssistantDeadline(ServiceError):
+    """The answer request exceeded its configured end-to-end budget."""
+
+    status = 504
+    code = "ASSISTANT_DEADLINE_EXCEEDED"
+    retryable = True
+
+    def __init__(self) -> None:
+        super().__init__("Assistant request deadline exceeded")
+
+
 class LandingZoneUnwritable(ServiceError):
     """Submitted bytes have nowhere to land in this deployment.
 

@@ -481,6 +481,8 @@ def test_api_source_removal_is_an_ordered_writer_task(tmp_path: Path) -> None:
     row = client.app.state.state.get_source("src0")
     assert row is not None
     assert int(row["enabled"]) == 0
+    assert client.app.state.state.source_removed("src0")
+    assert not any(source["name"] == "src0" for source in client.get("/sources").json())
     queue = LocalQueue(client.app.state.state)
     task = queue.claim("test-control-writer")
     assert task is not None

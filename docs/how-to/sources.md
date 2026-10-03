@@ -55,6 +55,15 @@ supported files. Use `pheasant up path/to/archive.zip`, upload a ZIP, or add
 `archive.zip/path/to/file` identity. See [document ingestion](document-ingest.md)
 for filtering and limits.
 
+UI uploads appear under their source (normally `uploads`). The Sources page and
+Notebook source rail show the ZIP filename beneath that source. An upload-owned
+folder indexes all supported file types, including ZIPs, after a restart even
+if its generated source entry omitted an `include` list. Removing a source
+clears its indexed content and, for a UI-owned upload folder, its uploaded
+files. The removal remains in effect across restarts until the source is
+explicitly registered again; an old source entry in generated YAML does not
+silently revive it.
+
 ## Notion
 
 Create an internal integration at `notion.so/my-integrations`, share the

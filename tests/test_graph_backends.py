@@ -21,6 +21,7 @@ from unittest import mock
 
 import pytest
 
+from pheasant.assistant.chat import collect_facts
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph import builder as builder_module
 from pheasant.graph.simple import SimpleMultiDiGraph
@@ -88,7 +89,7 @@ def _config(
                     "name": "docs",
                     "type": "markdown_folder",
                     "path": str(workspace),
-                    "include": ["**/*.md"],
+                    "include": ["*.md", "**/*.md"],
                 }
             ],
         }
@@ -627,6 +628,42 @@ def test_streaming_reads_page_rather_than_materialize(tmp_path: Path) -> None:
         engine.close()
 
 
+def test_fact_collection_batches_row_backed_graph_reads(tmp_path: Path) -> None:
+    """The answer's fact panel keeps its contents without N+1 SQL reads."""
+    engine = _synced(tmp_path, "rows")
+    try:
+        graph = engine.graph_builder.graph
+        subjects = [f"perf:file:{index}" for index in range(4)]
+        for index, subject in enumerate(subjects):
+            graph.add_node(subject, type="file", label=f"note-{index}.md", source_id="docs")
+            for fact in range(3):
+                target = f"perf:concept:{index}:{fact}"
+                graph.add_node(target, type="concept", label=target, source_id="docs")
+                graph.add_edge(subject, target, type="mentions", source_id="docs")
+        engine.graph_store.save(KB, graph)
+        stored = SqlGraph(engine.state, KB)
+        subjects.append("perf:missing")
+
+        class SingleReadGraph:
+            nodes = stored.nodes
+
+            def __contains__(self, node_id: str) -> bool:
+                return node_id in stored
+
+            def out_edges(self, node_id: str) -> list:
+                return stored.out_edges(node_id)
+
+        expected = collect_facts(SingleReadGraph(), subjects)
+        assert expected, "the fixture must exercise a non-structural fact"
+        with mock.patch.object(engine.state, "rows", wraps=engine.state.rows) as reads:
+            actual = collect_facts(stored, subjects)
+
+        assert actual == expected
+        assert reads.call_count == 2, "one edge frontier and one node frontier query"
+    finally:
+        engine.close()
+
+
 # --------------------------------------------------------------------------
 # 5. The same thing, against a real Postgres
 # --------------------------------------------------------------------------
@@ -721,6 +758,30 @@ def test_the_row_backend_works_on_postgres(tmp_path: Path) -> None:
         assert neighbors(stored, start, depth=2, max_nodes=25)["neighbors"]
         assert list(stored.candidate_edges(["contains"]))
         assert not list(stored.candidate_edges(["zzzznotaword"]))
+    finally:
+        engine.close()
+
+
+@postgres
+def test_fact_collection_batches_postgres_reads(tmp_path: Path) -> None:
+    """The production row backend uses the same two-read fact frontier."""
+    _reset(DSN)
+    engine = SyncEngine(_config(tmp_path, "rows", backend="postgres"))
+    try:
+        graph = engine.graph_builder.graph
+        for index in range(4):
+            subject = f"perf:file:{index}"
+            target = f"perf:concept:{index}"
+            graph.add_node(subject, type="file", label=subject, source_id="docs")
+            graph.add_node(target, type="concept", label=target, source_id="docs")
+            graph.add_edge(subject, target, type="references", source_id="docs")
+        engine.graph_store.save(KB, graph)
+        stored = SqlGraph(engine.state, KB)
+        subjects = [f"perf:file:{index}" for index in range(4)]
+        with mock.patch.object(engine.state, "rows", wraps=engine.state.rows) as reads:
+            facts = collect_facts(stored, subjects)
+        assert [fact["subject_id"] for fact in facts] == subjects
+        assert reads.call_count == 2
     finally:
         engine.close()
 

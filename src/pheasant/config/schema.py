@@ -428,6 +428,7 @@ class EmbeddingsSettings(ModelMixin):
     api_key_env: str = "OPENAI_API_KEY"
     dimensions: int | None = None
     batch_size: int = 64
+    timeout_seconds: float = 30.0
     #: Bounded retry on *transient* embedding failures (TLS blips, 429s, 5xx).
     #: Indexing a large corpus is hundreds of HTTPS calls, and without this a
     #: single flaky one aborts the whole sync — a real 12,667-file run died
@@ -440,6 +441,26 @@ class EmbeddingsSettings(ModelMixin):
     #: error is allowed to escape and let the durable source queue retry it.
     #: Zero restores the ordinary ``max_retries`` behavior.
     rate_limit_max_wait_seconds: float = 300.0
+    #: Query-time vector search has a tighter failure budget than bulk
+    #: indexing. None inherits the indexing values for backward compatibility.
+    query_timeout_seconds: float | None = None
+    query_max_retries: int | None = None
+    query_rate_limit_max_wait_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds <= 0:
+            raise ValueError("search.embeddings.timeout_seconds must be greater than zero")
+        if self.query_timeout_seconds is not None and self.query_timeout_seconds <= 0:
+            raise ValueError("search.embeddings.query_timeout_seconds must be greater than zero")
+        if self.query_max_retries is not None and self.query_max_retries < 0:
+            raise ValueError("search.embeddings.query_max_retries cannot be negative")
+        if (
+            self.query_rate_limit_max_wait_seconds is not None
+            and self.query_rate_limit_max_wait_seconds < 0
+        ):
+            raise ValueError(
+                "search.embeddings.query_rate_limit_max_wait_seconds cannot be negative"
+            )
 
 
 @dataclass
@@ -909,10 +930,20 @@ class RetrievalSettings(ModelMixin):
     #: Optional model for evidence sufficiency checks; the assistant model
     #: still plans retrieval and writes the final answer.
     grader_model: str | None = None
+    #: Optional provider reasoning control for the planning turn.
+    planner_reasoning_effort: str | None = None
+    #: Optional provider reasoning control for evidence grading.
+    grader_reasoning_effort: str | None = None
     #: Drop [n] markers that do not resolve to a real citation.
     verify_citations: bool | None = True
     #: Graph facts surfaced alongside the answer.
     max_facts: int | None = 12
+
+    def __post_init__(self) -> None:
+        for name in ("planner_reasoning_effort", "grader_reasoning_effort"):
+            value = getattr(self, name)
+            if value is not None and value not in {"none", "low"}:
+                raise ValueError(f"assistant.retrieval.{name} must be 'none', 'low', or unset")
 
     def as_options(self) -> dict[str, Any]:
         """The subset that is actually set, as workflow-option keys."""
@@ -947,6 +978,10 @@ class AssistantSettings(ModelMixin):
     max_context_chunks: int = 8
     max_output_tokens: int = 4096
     request_timeout_seconds: float = 90.0
+    #: Optional default provider reasoning level. Unset preserves provider defaults.
+    reasoning_effort: str | None = None
+    #: Optional end-to-end request budgets and concurrent-answer admission.
+    latency: AssistantLatencySettings = field(default_factory=lambda: AssistantLatencySettings())
     max_facts: int = 12
     # Which question-answering workflow runs. "auto" picks the LangGraph
     # agent when the [agent] extra is installed AND a model is reachable,
@@ -959,6 +994,32 @@ class AssistantSettings(ModelMixin):
     workflow_options: dict[str, Any] = field(default_factory=dict)
     # Typed retrieval criteria (rounds, depth, breadth). See RetrievalSettings.
     retrieval: RetrievalSettings = field(default_factory=RetrievalSettings)
+
+    def __post_init__(self) -> None:
+        if self.reasoning_effort is not None and self.reasoning_effort not in {"none", "low"}:
+            raise ValueError("assistant.reasoning_effort must be 'none', 'low', or unset")
+
+
+@dataclass
+class AssistantLatencySettings(ModelMixin):
+    """Optional end-to-end assistant budgets and admission controls."""
+
+    short_deadline_seconds: float | None = None
+    medium_deadline_seconds: float | None = None
+    long_deadline_seconds: float | None = None
+    max_concurrent_answers: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "short_deadline_seconds",
+            "medium_deadline_seconds",
+            "long_deadline_seconds",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"assistant.latency.{name} must be greater than zero")
+        if self.max_concurrent_answers < 0:
+            raise ValueError("assistant.latency.max_concurrent_answers cannot be negative")
 
 
 @dataclass

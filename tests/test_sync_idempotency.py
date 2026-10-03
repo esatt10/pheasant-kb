@@ -10,10 +10,88 @@ import pytest
 from pheasant.config.loader import load_config
 from pheasant.config.schema import PheasantConfig
 from pheasant.persistence.graph_store import GraphStore
+from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.sqlite_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
+
+
+def test_configured_upload_source_keeps_zip_index_across_restart(tmp_path: Path) -> None:
+    state_path = tmp_path / "state"
+    upload_dir = state_path / "uploads" / "uploads"
+    upload_dir.mkdir(parents=True)
+    with zipfile.ZipFile(upload_dir / "remarkable.zip", "w") as archive:
+        archive.writestr("guide.txt", "A searchable test document inside the uploaded archive.")
+    payload = {
+        "pheasant": {
+            "name": "upload-restart",
+            "state_path": str(state_path),
+            "workspace_root": str(tmp_path),
+            "exports_path": str(tmp_path / "exports"),
+        },
+        "sources": [{"name": "uploads", "type": "document_folder", "path": str(upload_dir)}],
+    }
+    first = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert first.config.sources[0].include == ["**/*"]
+        assert first.sync_source("uploads", "full").indexed_artifacts == 1
+    finally:
+        first.close()
+
+    reopened = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert reopened.config.sources[0].include == ["**/*"]
+        assert reopened.sync_source("uploads", "incremental").indexed_artifacts == 0
+        assert len(reopened.state.rows("SELECT id FROM artifacts WHERE source_id='uploads'")) == 1
+    finally:
+        reopened.close()
+
+
+def test_removed_configured_source_stays_absent_after_restart_until_reregistered(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "guide.md").write_text("# Guide\n\nRemoval must persist.\n", encoding="utf-8")
+    payload = {
+        "pheasant": {
+            "name": "removal-lifecycle",
+            "state_path": str(tmp_path / "state"),
+            "workspace_root": str(tmp_path),
+            "exports_path": str(tmp_path / "exports"),
+        },
+        "sources": [
+            {
+                "name": "guide",
+                "type": "document_folder",
+                "path": str(corpus),
+                "include": ["*.md", "**/*.md"],
+            }
+        ],
+    }
+    first = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert first.sync_source("guide", "full").indexed_artifacts == 1
+        first.remove_source("guide")
+        assert first.state.source_removed("guide")
+        assert first.state.get_source("guide") is None
+        assert first.state.rows("SELECT 1 FROM artifacts WHERE source_id=?", ("guide",)) == []
+    finally:
+        first.close()
+
+    reopened = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert reopened.state.get_source("guide") is None
+        assert SourceRegistry(reopened.config, reopened.state).list_sources() == []
+        assert reopened.enabled_sources() == []
+        with pytest.raises(KeyError, match="Removed source"):
+            reopened.sync_source("guide", "full")
+        SourceRegistry(reopened.config, reopened.state).register_source(reopened.config.sources[0])
+        assert not reopened.state.source_removed("guide")
+        assert reopened.sync_source("guide", "full").indexed_artifacts == 1
+    finally:
+        reopened.close()
 
 
 def test_fleet_processing_policy_reindexes_once_when_enabled(tmp_path: Path) -> None:

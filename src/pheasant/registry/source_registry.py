@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from itertools import islice
 
 from pheasant.config.loader import config_hash
 from pheasant.config.schema import PheasantConfig, SourceConfig
+from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.persistence.state_store import StateStore
 
 
@@ -26,9 +28,25 @@ class SourceRegistry:
             now(),
         )
         for source in self.config.sources:
-            self.register_source(source)
+            if not self.state.source_removed(source.name):
+                # The UI-owned landing zone accepts every supported document.
+                # A generated config may name that same source with the
+                # code-shaped default include list. On restart the indexer
+                # would otherwise see no ZIP/PDF and prune their indexed rows.
+                if (
+                    owned_upload_directory(
+                        self.config.pheasant.state_path,
+                        source.name,
+                        source.type.value,
+                        source.path,
+                    )
+                    is not None
+                    and "**/*" not in source.include
+                ):
+                    source.include = ["**/*"]
+                self.register_source(source, revive=False)
 
-    def register_source(self, source: SourceConfig) -> None:
+    def register_source(self, source: SourceConfig, *, revive: bool = True) -> None:
         self.state.upsert_source(
             source.name,
             self.config.knowledge_base_id,
@@ -37,6 +55,7 @@ class SourceRegistry:
             str(source.path),
             source.enabled,
             source.model_dump(mode="json"),
+            clear_removal=revive,
         )
 
     def list_sources(
@@ -51,7 +70,10 @@ class SourceRegistry:
             checkpoint["source_id"]: checkpoint
             for checkpoint in self.state.list_source_checkpoints()
         }
-        where = []
+        where = [
+            "NOT EXISTS (SELECT 1 FROM removed_sources "
+            "WHERE removed_sources.source_id = sources.id)"
+        ]
         params: list[object] = []
         if enabled is not None:
             where.append("enabled=?")
@@ -71,6 +93,21 @@ class SourceRegistry:
         ):
             source = dict(row)
             source["checkpoint"] = checkpoints.get(source["id"])
+            upload_dir = owned_upload_directory(
+                self.config.pheasant.state_path,
+                str(source["name"]),
+                str(source["type"]),
+                str(source["path"]),
+            )
+            if upload_dir is not None and upload_dir.is_dir():
+                try:
+                    source["uploaded_archives"] = sorted(
+                        entry.name
+                        for entry in islice(upload_dir.iterdir(), 1000)
+                        if entry.is_file() and entry.suffix.lower() == ".zip"
+                    )[:20]
+                except OSError:
+                    source["uploaded_archives"] = []
             # URL-backed repositories carry commit evidence in their latest
             # checkpoint. Promote it to a stable source-status field so the UI
             # and MCP clients can answer the operational question directly:

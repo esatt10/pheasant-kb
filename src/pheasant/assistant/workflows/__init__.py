@@ -67,6 +67,9 @@ class WorkflowRequest:
     #: a workflow that ignores it still works, and an exception raised by the
     #: callback must never fail the answer.
     on_step: Callable[[WorkflowStep], None] | None = None
+    #: Provisional answer text for transports that can stream it. The final
+    #: verified answer remains the WorkflowResult returned by run().
+    on_draft: Callable[[str], None] | None = None
     #: Earlier turns (``assistant.conversation.Turn``), oldest first. Empty for
     #: a question with no conversation, which answers exactly as before.
     history: list[Any] = field(default_factory=list)
@@ -96,6 +99,10 @@ class WorkflowStep:
     duration_seconds: float | None = None
     input_tokens: int | None = 0
     output_tokens: int | None = 0
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    provider_calls: int | None = None
+    provider_retries: int | None = None
     #: Individual query/mode fan-outs that make up a retrieval step. Entries
     #: include their mode, query index, phase, elapsed time, and result count.
     fanout_timings: list[dict[str, Any]] = field(default_factory=list)
@@ -107,6 +114,7 @@ class WorkflowResult:
 
     answer: str
     citations: list[dict] = field(default_factory=list)
+    retrieved_evidence_ids: list[str] = field(default_factory=list)
     facts: list[dict] = field(default_factory=list)
     focus_node_ids: list[str] = field(default_factory=list)
     mode: str = "extractive"

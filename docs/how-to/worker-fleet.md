@@ -358,17 +358,20 @@ matters because idle workers are pure cost) and a plain HPA for clusters
 without it.
 
 The API tier scales on CPU with a five-minute scale-down window to avoid churn
-under bursty assistant fanout. It keeps only a bounded graph proxy. The graph
-tier owns snapshot residency; scale it independently on graph-query latency or
-CPU, and give every graph replica enough memory for the old and new snapshot
-during an atomic refresh.
+under bursty requests. It keeps only a bounded graph proxy and limits active
+answers per process. The graph tier owns snapshot residency; scale it
+independently on measured graph-query latency or CPU, and give every graph
+replica enough memory for the old and new snapshot during an atomic refresh.
+Preparation workers and indexer replicas address ingestion throughput, not
+completed-answer latency.
 
 ## The ceiling, and knowing when you have reached it
 
-Scale workers, not indexers — extra indexers for one shard are elected hot
-standbys, because the graph, the vectors and the graph FTS are one coordinated
-commit stream. That is a real consequence of a globally consistent graph, and
-it is fine right up until a team scales workers, watches ingest stop
+Scale preparation workers only when preparation backlog is the constrained
+stage. Extra indexers for one shard are elected hot standbys, because the
+graph, the vectors and the graph FTS are one coordinated commit stream. That
+is a real consequence of a globally consistent graph, and it is fine right up
+until a team scales workers, watches ingest stop
 improving, and has nothing to tell them which of the two problems they have:
 the commit authority is full, or retrieval is mistuned. Those look identical
 from outside — the queue drains more slowly than work arrives, and adding

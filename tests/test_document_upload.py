@@ -164,6 +164,15 @@ def test_uploaded_zip_indexes_nested_supported_files(loaded_config, config_path:
     )
 
     assert response.status_code == 200, response.text
+    uploaded = next(
+        source for source in client.get("/sources").json() if source["name"] == "zip-uploads"
+    )
+    assert uploaded["uploaded_archives"] == ["handbook.zip"]
+    assert next(
+        source
+        for source in client.get("/overview").json()["sources"]
+        if source["name"] == "zip-uploads"
+    )["uploaded_archives"] == ["handbook.zip"]
     hits = client.post("/search", json={"query": "cedar relay", "mode": "text"}).json()
     assert "handbook.zip/handbook/guides/overview.md" in str(hits)
 

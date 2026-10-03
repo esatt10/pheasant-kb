@@ -19,7 +19,9 @@ per-request orchestration on the other.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 from typing import Any
 
 from pheasant.assistant.chat import (
@@ -78,8 +80,6 @@ def verify_figures(answer: str, figures: list[dict]) -> tuple[str, int]:
 
 def resolve_llm(config: Any, credential: Any = None, env: dict[str, str] | None = None) -> Any:
     """The model to call for this request, or ``None`` (the extractive path)."""
-    import os
-
     from pheasant.assistant.llm import llm_from_selection
 
     settings = getattr(config, "assistant", None)
@@ -257,6 +257,7 @@ def answer_question(
     workflow: str | None = None,
     options: dict | None = None,
     on_step: Any = None,
+    on_draft: Any = None,
     memory: Any = None,
     source_types: list[str] | None = None,
     exclude_source_types: list[str] | None = None,
@@ -264,6 +265,7 @@ def answer_question(
     depth: str | None = None,
     visual: str | None = None,
     defer_visual: bool = False,
+    request_budget: Any = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -280,8 +282,6 @@ def answer_question(
     the route asked for is built — unless ``defer_visual``, which the
     streaming route uses to send the answer first and the picture after.
     """
-    import os
-
     from pheasant.assistant import conversation, routing
     from pheasant.assistant.retrieval import PheasantRetriever
     from pheasant.assistant.workflows import (
@@ -295,8 +295,18 @@ def answer_question(
     env = env if env is not None else dict(os.environ)
     max_results = max_results or int(getattr(settings, "max_context_chunks", 8) or 8)
 
+    from pheasant.request_budget import RequestBudget
+
+    latency = getattr(settings, "latency", None)
+    requested_depth = depth or (options or {}).get("depth")
+    routed_depth, _, _ = routing.classify_depth(question, requested_depth)
+    budget_seconds = getattr(latency, f"{routed_depth}_deadline_seconds", None)
+    budget = request_budget or RequestBudget(budget_seconds)
+
     selected = resolve_provider(config, credential, env)
     llm = resolve_llm(config, credential, env)
+    if llm is not None:
+        llm = llm.with_deadline(budget.deadline)
     retriever = PheasantRetriever(
         search=search,
         knowledge_base=knowledge_base,
@@ -306,6 +316,9 @@ def answer_question(
         memory=memory,
         source_types=source_types,
         exclude_source_types=exclude_source_types,
+        source_name=source_name,
+        principal=principal,
+        principal_groups=principal_groups,
     )
 
     name = resolve_workflow_name(
@@ -340,21 +353,40 @@ def answer_question(
         merged_options["depth"] = str(depth).lower()
     visual_pin = visual or merged_options.get("visual")
     visual_route, visual_why, visual_by = routing.classify_visual(question, visual_pin)
+    merged_options["visual"] = visual_route
     shape, shape_why = (
         routing.classify_shape(question, visual_pin) if visual_route == "diagram" else (None, "")
     )
 
     turns = conversation.normalize_history(history)
-    search_question, how = conversation.standalone_question(question, turns, llm)
+    rewrite_started = time.perf_counter()
+    from pheasant.assistant.providers import collect_token_usage
+
+    with collect_token_usage() as rewrite_usage:
+        search_question, how = conversation.standalone_question(question, turns, llm)
+    rewrite_seconds = time.perf_counter() - rewrite_started
     context_steps = []
+    context_steps.append(
+        WorkflowStep(
+            name="history_rewrite",
+            detail=how or "no conversational rewrite needed",
+            duration_seconds=rewrite_seconds,
+            input_tokens=rewrite_usage.reported_input,
+            output_tokens=rewrite_usage.reported_output,
+            cached_input_tokens=rewrite_usage.reported_cached_input,
+            reasoning_tokens=rewrite_usage.reported_reasoning,
+            provider_calls=rewrite_usage.calls,
+            provider_retries=rewrite_usage.retries,
+        )
+    )
     if how:
         context_steps.append(WorkflowStep(name="context", detail=f"follow-up: {how}"))
-        for step in context_steps:
-            if on_step is not None:
-                try:
-                    on_step(step)
-                except Exception:  # pragma: no cover - progress is never load-bearing
-                    logger.debug("progress callback failed", exc_info=True)
+    for step in context_steps:
+        if on_step is not None:
+            try:
+                on_step(step)
+            except Exception:  # pragma: no cover - progress is never load-bearing
+                logger.debug("progress callback failed", exc_info=True)
 
     request = WorkflowRequest(
         question=question,
@@ -367,13 +399,20 @@ def answer_question(
         # Live progress for callers that want it (the streaming chat route).
         # None keeps the workflow byte-identical to before.
         on_step=on_step,
+        on_draft=on_draft,
         history=turns,
         search_question=search_question if how else None,
     )
 
     try:
+        budget.check()
         result = build_workflow(name).run(request, retriever, llm)
-    except Exception as exc:  # a custom workflow must not take down the API
+    except Exception as exc:
+        from pheasant.request_budget import DeadlineExceeded
+
+        if isinstance(exc, DeadlineExceeded):
+            raise
+        # a custom workflow must not take down the API
         logger.exception("assistant workflow %r failed; falling back to simple", name)
         from pheasant.assistant.workflows.simple import SimpleWorkflow
 
@@ -401,12 +440,47 @@ def answer_question(
         route["why"]["shape"] = shape_why
     routing.record_route(route)
 
+    assistant_effort = getattr(settings, "reasoning_effort", None)
+    planner_effort = merged_options.get("planner_reasoning_effort")
+    grader_effort = merged_options.get("grader_reasoning_effort")
+    is_openai = getattr(llm, "provider", None) == "openai"
+
+    def effective_effort(requested: Any, model: str | None) -> str | None:
+        if not is_openai or model != "gpt-6-luna":
+            return None
+        return str(requested) if requested is not None else "medium"
+
+    effective_answer_effort = effective_effort(assistant_effort, result.model)
+    effective_planner_effort = effective_effort(planner_effort or assistant_effort, result.model)
+    effective_grader_effort = effective_effort(
+        grader_effort or assistant_effort,
+        str(merged_options.get("grader_model") or result.model or "") or None,
+    )
+
     payload = {
         "question": question,
         "answer": answer_text,
+        "answer_mode": result.mode,
         "mode": result.mode,
         "provider": result.provider,
         "model": result.model,
+        "reasoning_effort_requested": assistant_effort,
+        "reasoning_effort_effective": effective_answer_effort,
+        "reasoning_effort": {
+            "answer": {
+                "requested": assistant_effort,
+                "effective": effective_answer_effort,
+            },
+            "planner": {
+                "requested": planner_effort,
+                "effective": effective_planner_effort,
+            },
+            "grader": {
+                "requested": grader_effort,
+                "effective": effective_grader_effort,
+                "model": str(merged_options.get("grader_model") or result.model or "") or None,
+            },
+        },
         "credential_source": selected.get("source") if selected else None,
         "error": result.error,
         "citations": result.citations,
@@ -426,10 +500,35 @@ def answer_question(
                 "duration_seconds": step.duration_seconds,
                 "input_tokens": step.input_tokens,
                 "output_tokens": step.output_tokens,
+                "cached_input_tokens": step.cached_input_tokens,
+                "reasoning_tokens": step.reasoning_tokens,
+                "provider_calls": step.provider_calls,
+                "provider_retries": step.provider_retries,
                 "fanout_timings": step.fanout_timings,
             }
             for step in steps
         ],
+        "provider_call_count": sum(step.provider_calls or 0 for step in steps),
+        "provider_retry_count": sum(step.provider_retries or 0 for step in steps),
+        "retrieved_evidence_ids": result.retrieved_evidence_ids,
+        "termination_reason": (
+            "workflow_or_provider_error"
+            if result.error
+            else "insufficient_evidence"
+            if (result.counts or {}).get("insufficient_evidence")
+            else "extractive_fallback"
+            if result.mode == "extractive"
+            else "degraded_retrieval"
+            if retriever._arm_failures
+            else "completed"
+        ),
+        "retrieval_arm_failures": list(retriever._arm_failures),
+        "degraded": bool(
+            result.error
+            or retriever._arm_failures
+            or (result.counts or {}).get("insufficient_evidence")
+            or (llm is not None and result.mode == "extractive")
+        ),
     }
     if search_question and how:
         payload["search_question"] = search_question

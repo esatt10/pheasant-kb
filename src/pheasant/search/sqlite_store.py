@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from typing import Any
 
 from pheasant.persistence.state_store import StateStore
@@ -287,7 +288,17 @@ def _postgres_rank_expression(
 
     unique = list(dict.fromkeys(tokens))
     weights = ranking.ts_rank_weights
-    total, frequencies = _postgres_document_frequencies(state, unique, source_name)
+    started = time.perf_counter()
+    try:
+        total, frequencies = _postgres_document_frequencies(state, unique, source_name)
+    finally:
+        from pheasant.request_budget import record_active_timing
+
+        record_active_timing(
+            "postgres_lexical_frequency",
+            time.perf_counter() - started,
+            query_terms=len(unique),
+        )
     if not tokens or not total:
         return (
             f"ts_rank_cd('{{{weights}}}', chunks_fts.search_vector, "
@@ -465,7 +476,18 @@ class SearchStore:
             ORDER BY rank_score LIMIT ?
             """
         try:
-            rows = self.state.rows(sql, tuple(params))
+            started = time.perf_counter()
+            try:
+                rows = self.state.rows(sql, tuple(params))
+            finally:
+                if postgres:
+                    from pheasant.request_budget import record_active_timing
+
+                    record_active_timing(
+                        "postgres_lexical_rank",
+                        time.perf_counter() - started,
+                        query_terms=len(tokens),
+                    )
         except Exception:
             fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
             fallback_params: list[object] = [f"%{query}%", f"%{query}%"]

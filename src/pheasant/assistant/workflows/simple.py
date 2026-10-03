@@ -167,6 +167,10 @@ class SimpleWorkflow:
                         duration_seconds=time.perf_counter() - answer_started,
                         input_tokens=usage.reported_input,
                         output_tokens=usage.reported_output,
+                        cached_input_tokens=usage.reported_cached_input,
+                        reasoning_tokens=usage.reported_reasoning,
+                        provider_calls=usage.calls,
+                        provider_retries=usage.retries,
                     )
                 )
                 request.report(steps[-1])
@@ -180,6 +184,10 @@ class SimpleWorkflow:
                         duration_seconds=time.perf_counter() - answer_started,
                         input_tokens=usage.reported_input,
                         output_tokens=usage.reported_output,
+                        cached_input_tokens=usage.reported_cached_input,
+                        reasoning_tokens=usage.reported_reasoning,
+                        provider_calls=usage.calls,
+                        provider_retries=usage.retries,
                     )
                 )
                 request.report(steps[-1])
@@ -190,6 +198,11 @@ class SimpleWorkflow:
         return WorkflowResult(
             answer=answer,
             citations=citations,
+            retrieved_evidence_ids=list(
+                dict.fromkeys(
+                    str(p.chunk_id or p.node_id) for p in passages if p.chunk_id or p.node_id
+                )
+            ),
             facts=facts,
             focus_node_ids=node_ids,
             mode=answer_mode,

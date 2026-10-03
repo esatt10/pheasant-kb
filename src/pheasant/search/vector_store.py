@@ -60,6 +60,10 @@ import ssl
 import struct
 import threading
 import time
+from concurrent.futures import Future
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -77,6 +81,75 @@ if TYPE_CHECKING:
     from pheasant.persistence.state_store import StateStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QueryEmbeddingMetrics:
+    """Request-local query vector cache and provider observations."""
+
+    cache_hits: int = 0
+    fresh_misses: int = 0
+    singleflight_waits: int = 0
+    provider_requests: int = 0
+    provider_retries: int = 0
+    elapsed_seconds: float = 0.0
+    failed: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _failed_vectors: dict[tuple, BaseException] = field(default_factory=dict, repr=False)
+
+    def add(self, field_name: str, value: int | float) -> None:
+        with self._lock:
+            setattr(self, field_name, getattr(self, field_name) + value)
+
+    def remember_failure(self, keys: list[tuple], error: BaseException) -> None:
+        with self._lock:
+            for key in keys:
+                self._failed_vectors[key] = error
+
+    def prior_failure(self, key: tuple) -> BaseException | None:
+        with self._lock:
+            return self._failed_vectors.get(key)
+
+    def as_dict(self) -> dict[str, int | float]:
+        with self._lock:
+            return {
+                "cache_hits": self.cache_hits,
+                "fresh_misses": self.fresh_misses,
+                "singleflight_waits": self.singleflight_waits,
+                "provider_requests": self.provider_requests,
+                "provider_retries": self.provider_retries,
+                "elapsed_seconds": self.elapsed_seconds,
+                "failed": self.failed,
+            }
+
+
+_ACTIVE_QUERY_EMBEDDING_METRICS: ContextVar[QueryEmbeddingMetrics | None] = ContextVar(
+    "pheasant_query_embedding_metrics", default=None
+)
+
+
+@contextmanager
+def collect_query_embedding_metrics():
+    """Collect cache and provider outcomes for one assistant request."""
+    metrics = QueryEmbeddingMetrics()
+    token = _ACTIVE_QUERY_EMBEDDING_METRICS.set(metrics)
+    try:
+        yield metrics
+    finally:
+        _ACTIVE_QUERY_EMBEDDING_METRICS.reset(token)
+
+
+def _record_embedding_provider_request() -> None:
+    metrics = _ACTIVE_QUERY_EMBEDDING_METRICS.get()
+    if metrics is not None:
+        metrics.add("provider_requests", 1)
+
+
+def _record_embedding_provider_retry() -> None:
+    metrics = _ACTIVE_QUERY_EMBEDDING_METRICS.get()
+    if metrics is not None:
+        metrics.add("provider_retries", 1)
+
 
 # Planted synonym groups for the deterministic stub embedder. Tokens that
 # canonicalize to the same key share an embedding direction, which is how
@@ -264,21 +337,22 @@ class _AdaptiveRateGate:
             self._limit = self._ceiling
             self._condition.notify_all()
 
-    def acquire(self) -> None:
+    def acquire(self, timeout: float | None = None) -> None:
+        request_deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
-            deadline = 0.0
             with self._condition:
-                remaining = self._blocked_until - time.monotonic()
-                if remaining > 0:
-                    deadline = self._blocked_until
-                elif self._active < self._limit:
+                now = time.monotonic()
+                request_remaining = None if request_deadline is None else request_deadline - now
+                if request_remaining is not None and request_remaining <= 0:
+                    raise TimeoutError("embedding rate gate exceeded the request deadline")
+                cooldown = self._blocked_until - now
+                if cooldown <= 0 and self._active < self._limit:
                     self._active += 1
                     return
-                else:
-                    self._condition.wait(timeout=0.1)
-                    continue
-            time.sleep(max(0.0, deadline - time.monotonic()))
-            self.finish_cooldown(deadline)
+                wait = cooldown if cooldown > 0 else 0.1
+                if request_remaining is not None:
+                    wait = min(wait, request_remaining)
+                self._condition.wait(timeout=max(0.001, wait))
 
     def succeeded(self) -> None:
         with self._condition:
@@ -390,12 +464,44 @@ class OpenAISpecEmbedder:
         rate_limit_attempt = 0
         rate_limit_waited = 0.0
         last: Exception | None = None
+        from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+        def sleep_with_budget(seconds: float) -> None:
+            remaining = remaining_seconds()
+            if remaining is None:
+                time.sleep(seconds)
+                return
+            if remaining <= 0:
+                raise DeadlineExceeded("assistant request deadline exceeded")
+            if seconds >= remaining:
+                time.sleep(remaining)
+                raise DeadlineExceeded("assistant request deadline exceeded")
+            time.sleep(seconds)
+
         while True:
-            self._rate_gate.acquire()
+            remaining = remaining_seconds()
+            if remaining is not None and remaining <= 0:
+                raise DeadlineExceeded("assistant request deadline exceeded")
             try:
-                with urlopen(request, timeout=self.timeout) as response:
+                self._rate_gate.acquire(timeout=remaining)
+            except TimeoutError as exc:
+                if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded") from exc
+                raise
+            try:
+                remaining = remaining_seconds()
+                if remaining is not None and remaining <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded")
+                timeout = self.timeout if remaining is None else min(self.timeout, remaining)
+                _record_embedding_provider_request()
+                with urlopen(request, timeout=timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
+                if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded")
             except HTTPError as exc:  # noqa: PERF203 - retry loop
+                if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
+                    self._rate_gate.failed()
+                    raise DeadlineExceeded("assistant request deadline exceeded") from exc
                 headers = exc.headers
                 if exc.code == 429:
                     retry_after = headers.get("Retry-After") if headers else None
@@ -419,6 +525,8 @@ class OpenAISpecEmbedder:
                         or rate_limit_waited + wait > self.rate_limit_max_wait_seconds
                         or rate_limit_attempt > 100
                     )
+                    if not budget_exhausted:
+                        _record_embedding_provider_retry()
                     deadline = self._rate_gate.throttled(0.0 if budget_exhausted else wait)
                     if budget_exhausted:
                         raise
@@ -435,20 +543,24 @@ class OpenAISpecEmbedder:
                         rate_limit_attempt,
                         rate_limit_waited,
                     )
-                    time.sleep(wait)
+                    sleep_with_budget(wait)
                     self._rate_gate.finish_cooldown(deadline)
                     delay = min(delay * 2, _MAX_BACKOFF_SECONDS)
                     continue
                 self._rate_gate.failed()
                 if exc.code not in _RETRYABLE_STATUS or transient_attempt >= self.max_retries:
                     raise
+                _record_embedding_provider_retry()
                 last = exc
                 header = exc.headers.get("Retry-After") if exc.headers else None
                 wait = _retry_after_seconds(header, delay)
             except _TRANSIENT_ERRORS as exc:
                 self._rate_gate.failed()
+                if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded") from exc
                 if transient_attempt >= self.max_retries:
                     raise
+                _record_embedding_provider_retry()
                 last = exc
                 wait = random.uniform(delay * 0.75, delay * 1.25)
             except BaseException:
@@ -465,7 +577,7 @@ class OpenAISpecEmbedder:
                 transient_attempt,
                 self.max_retries,
             )
-            time.sleep(wait)
+            sleep_with_budget(wait)
             delay = min(delay * 2, _MAX_BACKOFF_SECONDS)
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
@@ -1044,12 +1156,14 @@ class VectorSearcher:
     #: sub-query, a user refining one word. Small and per-process on purpose:
     #: this is a latency cache, not a store.
     _QUERY_CACHE_SIZE = 256
+    _QUERY_INFLIGHT_MAX = 256
 
     def __init__(self, embedder: Embedder, store: VectorStore, state: StateStore):
         self.embedder = embedder
         self.store = store
         self.state = state
-        self._query_cache: dict[str, list[float]] = {}
+        self._query_cache: dict[tuple, list[float]] = {}
+        self._query_inflight: dict[tuple, Future[list[float]]] = {}
         self._query_cache_lock = threading.RLock()
 
     def embed_query(self, query: str) -> list[float]:
@@ -1064,31 +1178,112 @@ class VectorSearcher:
         vector scans remain sequential because they contend for the GIL, but
         their network-bound embeddings can share one provider round trip.
         """
+        started = time.perf_counter()
+        try:
+            return self._embed_query_batch(queries)
+        finally:
+            from pheasant.request_budget import record_active_timing
+
+            record_active_timing(
+                "query_embedding",
+                time.perf_counter() - started,
+                query_count=len(queries),
+            )
+
+    def _embed_query_batch(self, queries: list[str]) -> list[list[float]]:
+        if not queries:
+            return []
 
         unique = list(dict.fromkeys(queries))
+        model = str(getattr(self.embedder, "model", type(self.embedder).__name__))
+        provider = str(getattr(self.embedder, "provider", type(self.embedder).__name__))
+        base_url = str(getattr(self.embedder, "base_url", ""))
+        dimensions = getattr(self.embedder, "dimensions", getattr(self.embedder, "dim", None))
+        keys = {query: (provider, base_url, model, query, dimensions) for query in unique}
+        metrics = _ACTIVE_QUERY_EMBEDDING_METRICS.get()
+        if metrics is not None:
+            prior = next(
+                (metrics.prior_failure(keys[q]) for q in unique if metrics.prior_failure(keys[q])),
+                None,
+            )
+            if prior is not None:
+                raise prior
         with self._query_cache_lock:
             vectors = {
-                query: self._query_cache[query] for query in unique if query in self._query_cache
+                query: self._query_cache[keys[query]]
+                for query in unique
+                if keys[query] in self._query_cache
             }
-        missing = [query for query in unique if query not in vectors]
-        if missing:
-            embedded = self.embedder.embed(missing)
-            if len(embedded) != len(missing):
-                raise ValueError(
-                    "Embedding provider returned an unexpected number of query vectors"
-                )
-            with self._query_cache_lock:
-                for query, vector in zip(missing, embedded, strict=True):
-                    cached = self._query_cache.get(query)
-                    if cached is None:
+            owners: list[str] = []
+            waiting: dict[str, Future[list[float]]] = {}
+            untracked_owners: set[str] = set()
+            for query in unique:
+                if query in vectors:
+                    continue
+                future = self._query_inflight.get(keys[query])
+                if future is None:
+                    if len(self._query_inflight) < self._QUERY_INFLIGHT_MAX:
+                        future = Future()
+                        self._query_inflight[keys[query]] = future
+                    else:
+                        untracked_owners.add(query)
+                    owners.append(query)
+                else:
+                    waiting[query] = future
+        if metrics is not None:
+            metrics.add("cache_hits", len(vectors))
+            metrics.add("fresh_misses", len(owners))
+            metrics.add("singleflight_waits", len(waiting))
+        if owners:
+            started = time.perf_counter()
+            try:
+                embedded = self.embedder.embed(owners)
+                if len(embedded) != len(owners):
+                    raise ValueError(
+                        "Embedding provider returned an unexpected number of query vectors"
+                    )
+                with self._query_cache_lock:
+                    for query, vector in zip(owners, embedded, strict=True):
+                        key = keys[query]
                         if len(self._query_cache) >= self._QUERY_CACHE_SIZE:
-                            # Plain FIFO eviction: dicts keep insertion order,
-                            # and at this size FIFO vs. LRU is not worth the
-                            # bookkeeping.
                             self._query_cache.pop(next(iter(self._query_cache)), None)
-                        self._query_cache[query] = vector
-                        cached = vector
-                    vectors[query] = cached
+                        self._query_cache[key] = vector
+                        vectors[query] = vector
+                        future = self._query_inflight.pop(key, None)
+                        if future is not None:
+                            future.set_result(vector)
+            except BaseException as exc:
+                if metrics is not None:
+                    metrics.add("failed", len(owners))
+                    metrics.remember_failure([keys[query] for query in owners], exc)
+                with self._query_cache_lock:
+                    for query in owners:
+                        future = self._query_inflight.pop(keys[query], None)
+                        if future is not None:
+                            future.set_exception(exc)
+                raise
+            finally:
+                if metrics is not None:
+                    metrics.add("elapsed_seconds", time.perf_counter() - started)
+        wait_timeout = float(getattr(self.embedder, "timeout", 30.0) or 30.0)
+        for query, future in waiting.items():
+            from concurrent.futures import TimeoutError as FutureTimeoutError
+
+            from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+            remaining = remaining_seconds()
+            timeout = wait_timeout if remaining is None else min(wait_timeout, remaining)
+            if timeout <= 0:
+                raise DeadlineExceeded("assistant request deadline exceeded")
+            try:
+                vectors[query] = future.result(timeout=timeout)
+            except FutureTimeoutError as exc:
+                remaining = remaining_seconds()
+                if remaining is not None and remaining <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded") from exc
+                raise TimeoutError(
+                    "shared query embedding did not finish before its timeout"
+                ) from exc
         return [vectors[query] for query in queries]
 
     def search(
@@ -1153,6 +1348,7 @@ def build_embedder(settings: EmbeddingsSettings) -> Embedder:
             api_key_env=settings.api_key_env,
             dimensions=settings.dimensions,
             batch_size=settings.batch_size,
+            timeout=float(getattr(settings, "timeout_seconds", 30.0)),
             max_retries=getattr(settings, "max_retries", 4),
             retry_backoff_seconds=getattr(settings, "retry_backoff_seconds", 1.0),
             rate_limit_max_wait_seconds=getattr(settings, "rate_limit_max_wait_seconds", 300.0),
@@ -1240,4 +1436,19 @@ def vector_searcher_from_config(
     indexer = vector_indexer_from_config(config)
     if indexer is None:
         return None
-    return VectorSearcher(indexer.embedder, indexer.store, state)
+    settings = config.search.embeddings
+    query_settings = replace(
+        settings,
+        timeout_seconds=(settings.query_timeout_seconds or settings.timeout_seconds),
+        max_retries=(
+            settings.query_max_retries
+            if settings.query_max_retries is not None
+            else settings.max_retries
+        ),
+        rate_limit_max_wait_seconds=(
+            settings.query_rate_limit_max_wait_seconds
+            if settings.query_rate_limit_max_wait_seconds is not None
+            else settings.rate_limit_max_wait_seconds
+        ),
+    )
+    return VectorSearcher(build_embedder(query_settings), indexer.store, state)

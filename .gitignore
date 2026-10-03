@@ -51,6 +51,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.pytest_artifacts/
 
 # Translations
 *.mo
@@ -238,3 +239,6 @@ runs/
 # Benchmark corpora: fetched at benchmark time, never vendored.
 .benchmark-cache/
 .benchmark-corpus/
+
+# Local test/benchmark scratch output (pytest basetemp, perf runs, one-off scripts)
+/.pytest_artifacts/

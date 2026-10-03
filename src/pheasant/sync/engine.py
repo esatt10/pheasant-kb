@@ -1810,6 +1810,7 @@ class SyncEngine:
                 # the graph delta so a retry can finish cleanup idempotently.
                 if self.vectors is not None:
                     self.vectors.prune_source(source_name, set())
+                    self.vectors.flush()
                 # Uploaded bytes live outside the index under a per-source
                 # namespace. Delete only when the registered source path proves
                 # ownership of that exact directory; normal folder sources keep
@@ -2692,6 +2693,8 @@ class SyncEngine:
         ).as_dict()
 
     def _source(self, name: str) -> SourceConfig:
+        if self.state.source_removed(name):
+            raise KeyError(f"Removed source: {name}")
         for source in self.config.sources:
             if source.name == name:
                 return source
@@ -2718,7 +2721,11 @@ class SyncEngine:
         registry's stable alphabetical order.
         """
 
-        sources = [source for source in self.config.sources if source.enabled]
+        sources = [
+            source
+            for source in self.config.sources
+            if source.enabled and not self.state.source_removed(source.name)
+        ]
         seen = {source.name for source in sources}
         registry = SourceRegistry(self.config, self.state)
         for row in registry.list_sources(enabled=True, limit=100_000):

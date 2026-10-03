@@ -1287,6 +1287,7 @@ def create_app(
         """
 
         path = request.url.path
+        request.state.server_received_monotonic = time.perf_counter()
         if not limiter.acquire(path):
             metrics.REGISTRY.inc("pheasant_requests_shed_total", path=_metric_path(path))
             # A shed request is still an observation: it is exactly the signal
@@ -1301,11 +1302,39 @@ def create_app(
                         "retry, ideally against another replica"
                     )
                 },
-                headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+                headers={
+                    "Retry-After": str(RETRY_AFTER_SECONDS),
+                    "X-Pheasant-Server-Request-Ms": str(
+                        (time.perf_counter() - request.state.server_received_monotonic) * 1000
+                    ),
+                },
             )
         try:
+
+            async def continue_request():
+                """Carry only remaining duration across the internal graph hop."""
+
+                async def timed_response():
+                    response = await call_next(request)
+                    response.headers["X-Pheasant-Server-Request-Ms"] = str(
+                        (time.perf_counter() - request.state.server_received_monotonic) * 1000
+                    )
+                    return response
+
+                if path == "/internal/graph/query":
+                    try:
+                        remaining_ms = int(request.headers.get("x-pheasant-remaining-ms", ""))
+                    except (TypeError, ValueError):
+                        remaining_ms = 0
+                    if remaining_ms > 0:
+                        from pheasant.request_budget import activate
+
+                        with activate(time.monotonic() + remaining_ms / 1000):
+                            return await timed_response()
+                return await timed_response()
+
             if interaction_buffer is None or _metric_path(path) in UNOBSERVED_PATHS:
-                return await call_next(request)
+                return await continue_request()
             # One bounded append per request and nothing else. Everything the
             # ledger costs beyond this happens on the flusher thread or on the
             # log tier — see `pheasant.telemetry.interactions`.
@@ -1338,7 +1367,7 @@ def create_app(
                 # and no content, and three of the four formation rules would
                 # have worked for MCP agents only.
                 request.state.interaction = event
-                response = await call_next(request)
+                response = await continue_request()
                 event.status = "ok" if response.status_code < 400 else "error"
                 event.attributes["http_status"] = response.status_code
                 event.attributes["method"] = request.method
@@ -1613,6 +1642,7 @@ def create_app(
         """
 
         payload = exc.as_dict()
+        headers = {"Retry-After": "1"} if exc.status == 429 else None
         return JSONResponse(
             status_code=exc.status,
             content={
@@ -1620,6 +1650,7 @@ def create_app(
                 "code": payload["code"],
                 "retryable": payload["retryable"],
             },
+            headers=headers,
         )
 
     @app.get("/health")
@@ -2208,6 +2239,8 @@ def create_app(
                 "incremental",
                 task_payload={"operation": "delete_source"},
             )
+            if queued:
+                state.mark_source_removed(source_id)
         else:
             engine.remove_source(source_id)
         config.sources = [s for s in config.sources if s.name != source_id]
@@ -4250,6 +4283,16 @@ def create_app(
                 set(parameters.get("exclude_edge_types") or []) or None,
                 set(parameters.get("exclude_node_types") or []) or None,
             )
+        elif operation == "neighbors_many":
+            node_ids = parameters.get("node_ids")
+            if not isinstance(node_ids, list) or len(node_ids) > 16:
+                raise HTTPException(
+                    status_code=400, detail="neighbors_many requires at most 16 nodes"
+                )
+            result = [
+                graph_neighbors(graph_obj, str(node_id), int(parameters.get("depth") or 1))
+                for node_id in node_ids
+            ]
         elif operation == "slice":
             result = graph_slice(
                 graph_obj,

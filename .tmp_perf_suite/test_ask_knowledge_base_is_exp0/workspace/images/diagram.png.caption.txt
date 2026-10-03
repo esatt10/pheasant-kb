@@ -1,0 +1,1 @@
+A network architecture diagram showing a router connected to three brain regions over HTTP.
