@@ -67,6 +67,7 @@ pheasant-kb/
 │   ├── setup_wizard.py        ← `pheasant setup`, defaults read off the schema
 │   ├── quickstart.py          ← `pheasant up` config generation
 │   ├── capacity.py            ← the one home for sizing coefficients
+│   ├── request_budget.py      ← monotonic end-to-end deadlines for answers
 │   ├── analytics.py           ← Parquet exports + the DuckDB query surface
 │   ├── evalset.py             ← de-identified eval cases from the ledger
 │   ├── evaluation/            ← the evaluation plane: contracts, snapshots,
@@ -916,6 +917,17 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   (`assistant.replies`) and ask for JSON mode; a best-effort call that fell
   back names why in its step (`LLM.last_failure`). Do not "fix" a small cap
   at a call site. `tests/test_reasoning_models.py`.
+- **Latency is bounded, not promised.** `assistant.latency` (all off by
+  default) gives short/medium/long answers an end-to-end deadline that starts
+  before history rewriting (`request_budget.py`) and a per-process cap on
+  active answers shared by HTTP, SSE and MCP; over it the refusal is
+  `ASSISTANT_BUSY` (429, retryable). `staged_retrieval` runs one hybrid search
+  before planning, `combine_grade_and_answer` grades and writes a short answer
+  in one validated call, and `embeddings.query_*` give the vector arm a tighter
+  failure budget than indexing. `multi_search` drops standalone vector/graph
+  modes when hybrid is present, since hybrid already contains them. The stream
+  carries provisional `draft` events that the verified `answer` replaces.
+  `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a

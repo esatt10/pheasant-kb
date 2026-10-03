@@ -196,6 +196,15 @@ citations — and shows you the trace of what it did under the answer. A
 selection made here applies to your next question only; make it permanent with
 `assistant.workflow`.
 
+While a question is in flight the pane shows each workflow step as it
+finishes. When a short or medium answer is written and checked in one call, its
+draft streams in under a "Draft answer · checking citations" label and is
+replaced by the verified answer. The trace under a finished answer breaks a
+search step into its per-mode timings (for example `vector embeddings · 2
+queries` and `hybrid · query 1`). If the region caps concurrent answers
+(`assistant.latency.max_concurrent_answers`) and is full, the request is refused
+with `429` and `ASSISTANT_BUSY`; retry shortly.
+
 See [Customize the answering workflow](agent-workflows.md) for the tuning
 options and for writing your own.
 
