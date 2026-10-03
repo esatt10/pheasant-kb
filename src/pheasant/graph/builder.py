@@ -12,6 +12,7 @@ from pheasant.graph.enrichment import (
     resolve_cross_source_edges,
 )
 from pheasant.graph.media_links import MEDIA_NODE_TYPES, resolve_image_edges
+from pheasant.graph.okf import artifact_attrs as okf_artifact_attrs
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact, utc_now
@@ -213,6 +214,7 @@ class GraphBuilder:
             artifact.relative_path,
             {
                 **({"chunk_plan": plan} if plan else {}),
+                **okf_artifact_attrs(self.graph, artifact),  # same rule, graph/okf.py
                 "source_id": source.name,
                 "hash": f"sha256:{artifact.sha256}",
                 "path": str(artifact.path),

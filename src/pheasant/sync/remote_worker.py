@@ -115,6 +115,7 @@ def parsed_to_wire(parsed: ParsedArtifact | None) -> dict[str, Any] | None:
         "chunks": [asdict(chunk) for chunk in parsed.chunks],
         "headings": [_heading_to_wire(heading) for heading in parsed.headings],
         "chunk_plan": parsed.chunk_plan,
+        "okf": parsed.okf,
     }
 
 
@@ -127,6 +128,12 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
             f"worker planned chunks with {plan.get('planner')!r}, this process with "
             f"{PLANNER_VERSION!r}"
         )
+    if "okf" not in payload and str(payload.get("relative_path", "")).lower().endswith(".md"):
+        # A worker from before OKF parsing answers without the key at all, and
+        # committing that would make whether a concept joins its bundle depend
+        # on which replica prepared it. Markdown only, so a rolling upgrade
+        # does not send every other file back to the indexer.
+        raise IncompatibleResult("worker predates OKF parsing; preparing locally")
     return ParsedArtifact(
         id=str(payload["id"]),
         source_id=str(payload["source_id"]),
@@ -142,6 +149,7 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
         chunks=[TextChunk(**row) for row in payload.get("chunks") or []],
         headings=[_heading_from_wire(row) for row in payload.get("headings") or []],
         chunk_plan=plan,
+        okf=payload.get("okf"),
     )
 
 

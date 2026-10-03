@@ -19,6 +19,7 @@ from typing import Any, Literal
 from pheasant.capacity import GRAPH_SHARE_OF_RSS, RSS_BYTES_PER_NODE
 from pheasant.capacity import project as project_capacity
 from pheasant.config.schema import FILESYSTEM_SOURCE_TYPES, PheasantConfig, SourceConfig
+from pheasant.graph import okf as okf_graph
 from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
@@ -1682,6 +1683,10 @@ class SyncEngine:
                         changed_ids=None if mode == "full" else changed_ids,
                     )
                     self.graph_builder.add_cross_source_edges()
+                    try:  # OKF bundles (graph/okf.py); fail-soft, like every enrichment here
+                        okf_graph.apply_source(self.graph_builder, source.name)
+                    except Exception:
+                        logger.warning("OKF linking failed for %s", source.name, exc_info=True)
                     self._bridge_memory()
                     if pending_enrich:
                         self.state.clear_fingerprint(dirty_scope)

@@ -103,13 +103,15 @@ pheasant-kb/
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
-│   │                            extractor (7 doc formats), captioner,
+│   │                            extractor (7 doc formats), okf (OKF
+│   │                            frontmatter, per file), captioner,
 │   │                            transcriber, office, msdoc, media (image
 │   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
 │   │                            sql (the serving read surface), builder,
 │   │                            enrichment, capacity, traversal,
 │   │                            media_links (documents -> images they show),
+│   │                            okf (OKF bundle detection + its graph),
 │   │                            figures (what an answer can show)
 │   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
 │   │                            graph_search, hybrid, fusion (the one RRF
@@ -153,7 +155,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 152 pytest modules, offline by design
+└── tests/                     ← 153 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -371,6 +373,18 @@ the plan on the artifact node as `chunk_plan`. Every shipped fleet profile
 (`deploy/compose/fleet.yaml` and its answer files, `deploy/kubernetes/scaled/`)
 sets `sync.source_processing.chunk_strategy: auto`; single-container profiles
 stay `fixed` (rule 7), and `tests/test_fleet_manifests.py` holds both.
+
+**Open Knowledge Format bundles are detected, not registered**
+(`ingestion/okf.py` per file, `graph/okf.py` per source). A concept's
+frontmatter rides its artifact node as `okf`; once a source is indexed,
+`graph.okf.apply_source` decides which directories are bundles (an OKF
+`index.md`, `okf_version`, or a conformant tree corroborated by an
+OKF-only key; `type:` alone is Hugo too) and draws types, tags, links,
+provenance, computation contracts, listings and log history as a **diff**
+owned by `enrichment_pass: "okf"`. It walks the source rather than the graph
+and retracts per edge, so a `references` edge sharing a pair survives.
+Staleness is not stored because it is a function of the clock.
+`docs/how-to/okf-bundles.md`.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. Five ship first-party: Notion,

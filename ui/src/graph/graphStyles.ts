@@ -30,6 +30,12 @@ export const NODE_COLORS: Record<string, string> = {
   entity: "#9a5a58",
   concept: "#7c5d84",
   external_reference: "#7c776b",
+  // Open Knowledge Format: a detected bundle, its concept-type hubs and tags.
+  // The bundle shares the hub family with `source_type` (it groups); types
+  // and tags are warm so a bundle's classification reads apart from content.
+  okf_bundle: "#2f6f7a",
+  okf_type: "#b5832e",
+  tag: "#9c7a3c",
 };
 
 export const EDGE_COLORS: Record<string, string> = {
@@ -45,6 +51,10 @@ export const EDGE_COLORS: Record<string, string> = {
   links_to: "#6b8a9e",
   about: "#8a6f9e",
   supersedes: "#b0654f",
+  tagged_with: "#c2a36b",
+  executed_by: "#4f8a5b",
+  attested_by: "#3e7a4a",
+  computed_by: "#6a9a74",
 };
 
 export const ALL_EDGE_TYPES = Object.keys(EDGE_COLORS);
@@ -87,6 +97,9 @@ export const NODE_TYPE_SHAPES: Record<string, string> = {
   entity: "ellipse",
   concept: "ellipse",
   external_reference: "rectangle",
+  okf_bundle: "hexagon",
+  okf_type: "hexagon",
+  tag: "ellipse",
 };
 
 /** Base radius per type, so the graph has a visual hierarchy at rest. */
@@ -106,6 +119,9 @@ const NODE_SIZES: Record<string, number> = {
   entity: 18,
   concept: 14,
   external_reference: 16,
+  okf_bundle: 40,
+  okf_type: 30,
+  tag: 14,
 };
 
 export function colorForNode(type?: string): string {

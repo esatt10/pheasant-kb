@@ -912,3 +912,115 @@ def test_auto_chunking_resyncs_to_the_same_state_and_switching_reindexes_once(
         )
     finally:
         engine.close()
+
+
+def test_okf_bundle_graph_is_stable_across_resync_and_restart(tmp_path: Path) -> None:
+    """An OKF bundle's relationships are derived from what each concept
+    recorded about itself, so an incremental sync re-reads nothing and still
+    re-plans the bundle from the persisted artifact rows. Re-planning an
+    unchanged bundle -- in the same process, or after a restart that loads the
+    graph back from `/state` -- must upsert identical edges and move neither
+    the edge set nor the published graph generation."""
+
+    from tests.test_okf_bundles import write_bundle
+
+    corpus = write_bundle(tmp_path / "bundle")
+    payload = {
+        "pheasant": {
+            "name": "okf-idempotency",
+            "state_path": str(tmp_path / "state"),
+            "workspace_root": str(tmp_path),
+            "exports_path": str(tmp_path / "exports"),
+        },
+        "storage": {"graph_snapshots": False},
+        "sources": [{"name": "kb", "type": "document_folder", "path": str(corpus)}],
+    }
+
+    def okf_edges(graph) -> set[tuple[str, str, str]]:
+        return {
+            (source, target, data["type"])
+            for (source, target), edge_map in graph.iter_edges()
+            for data in edge_map.values()
+            if data.get("enrichment_pass") == "okf"
+        }
+
+    first = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        first.sync_source("kb", "full")
+        edges = okf_edges(first.graph_builder.graph)
+        generation = first.loaded_graph_generation
+        assert edges and "okf_bundle:kb:." in first.graph_builder.graph
+        assert first.sync_source("kb", "incremental").indexed_artifacts == 0
+        assert okf_edges(first.graph_builder.graph) == edges
+        assert first.loaded_graph_generation == generation
+    finally:
+        first.close()
+
+    reopened = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert okf_edges(reopened.serving_graph()) == edges
+        # Touch one file so the finalize pass (and with it the OKF re-plan)
+        # runs over a graph that came back from rows, not from this process.
+        readme = corpus / "README.md"
+        readme.write_text(readme.read_text(encoding="utf-8") + "\nMore.\n", encoding="utf-8")
+        assert reopened.sync_source("kb", "incremental").indexed_artifacts == 1
+        assert okf_edges(reopened.graph_builder.graph) == edges
+    finally:
+        reopened.close()
+
+
+def test_a_full_resync_does_not_leave_a_dropped_edge_in_the_rows(tmp_path: Path) -> None:
+    """A full sync drops the source from the working set and rebuilds it, so
+    each artifact is removed and re-added inside one delta. `add_node` used to
+    take a re-added node back out of the pending removals, which skipped the
+    row writer's cascade -- and an edge the rebuild no longer emitted (here a
+    deleted link's `references`) stayed in `/state`, gone from the working
+    set and back again after the next restart. Found by the OKF pass, whose
+    `graph.okf_bundles: false` retraction came back the same way."""
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.md").write_text("# A\n\nSee [b](b.md).\n", encoding="utf-8")
+    (workspace / "b.md").write_text("# B\n\nTarget.\n", encoding="utf-8")
+    payload = {
+        "pheasant": {
+            "name": "resync-cascade",
+            "state_path": str(tmp_path / "state"),
+            "workspace_root": str(tmp_path),
+            "exports_path": str(tmp_path / "exports"),
+        },
+        "storage": {"graph_snapshots": False},
+        "sources": [{"name": "docs", "type": "markdown_folder", "path": str(workspace)}],
+    }
+    a, b = "file:docs:a.md:branch=none", "file:docs:b.md:branch=none"
+
+    def link(graph) -> list[str]:
+        return [data["type"] for data in (graph.get_edge_data(a, b) or {}).values()]
+
+    engine = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        engine.sync_source("docs", "full")
+        assert link(engine.graph_builder.graph) == ["references"]
+        (workspace / "a.md").write_text("# A\n\nNo link any more.\n", encoding="utf-8")
+        engine.sync_source("docs", "full")
+        assert link(engine.graph_builder.graph) == []
+        rows = engine.graph_store.rows
+        maintained = engine.state.rows(
+            "SELECT nodes, edges, node_fold, edge_fold FROM graph_generations WHERE kb_id=?",
+            ("resync-cascade",),
+        )[0]
+        recomputed = rows.recompute_folds("resync-cascade")
+        assert str(maintained["edge_fold"]) == recomputed["edge_fold"]
+        assert str(maintained["node_fold"]) == recomputed["node_fold"]
+        assert (int(maintained["nodes"]), int(maintained["edges"])) == rows.recount(
+            "resync-cascade"
+        )
+    finally:
+        engine.close()
+
+    reopened = SyncEngine(PheasantConfig.model_validate(payload))
+    try:
+        assert link(reopened.graph_builder.graph) == []
+        assert link(reopened.serving_graph()) == []
+    finally:
+        reopened.close()

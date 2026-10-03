@@ -140,7 +140,14 @@ class SimpleMultiDiGraph:
             self._dirty_nodes.add(node)
             self._removed_nodes.discard(node)
             self._pending_nodes.add(node)
-            self._pending_removed_nodes.discard(node)
+            # Deliberately *not* discarded from `_pending_removed_nodes`. A
+            # node removed and re-added in one delta (a full sync drops a
+            # source and rebuilds it) still owes the row writer the cascade
+            # that removal implies: its edges that were not re-added. Dropping
+            # it from the set skipped that cascade, so an edge the rebuild no
+            # longer emits -- a deleted link's `references` -- stayed in
+            # `/state` and came back on the next restart. The writer deletes
+            # before it inserts, so the node and its current edges land intact.
 
     def add_edge(self, source, target, **attrs):
         with self._lock:
@@ -230,6 +237,38 @@ class SimpleMultiDiGraph:
                 self._pending_pairs.discard((source, target))
                 if dropped:
                     self._pending_removed_pairs.add((source, target))
+
+    def remove_edges_where(self, source, target, predicate) -> int:
+        """Remove only the edges between one pair that ``predicate(attrs)`` accepts.
+
+        :meth:`remove_edges_from` drops the whole pair, which is right when a
+        caller owns every edge in it and collateral damage otherwise: a body
+        link is both the reference resolver's `references` edge and the OKF
+        pass's `links_to`, and retracting one must not take the other. The
+        survivors are re-keyed from zero because `add_edge` keys by arrival
+        (``len(data)``), so a gap would make the next arrival overwrite one.
+        Returns how many edges went.
+        """
+
+        with self._lock:
+            data = self._edges.get((source, target))
+            if not data:
+                return 0
+            kept = [attrs for attrs in data.values() if not predicate(attrs)]
+            removed = len(data) - len(kept)
+            if not removed:
+                return 0
+            self._edge_count -= removed
+            if kept:
+                self._edges[(source, target)] = dict(enumerate(kept))
+                self._pending_pairs.add((source, target))
+                self._pending_removed_pairs.discard((source, target))
+            else:
+                self._edges.pop((source, target), None)
+                self._drop_adjacency(source, target)
+                self._pending_pairs.discard((source, target))
+                self._pending_removed_pairs.add((source, target))
+            return removed
 
     def _drop_adjacency(self, source: str, target: str) -> None:
         """Unlink one endpoint pair. Caller holds the lock."""
