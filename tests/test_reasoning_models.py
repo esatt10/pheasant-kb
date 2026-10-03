@@ -90,6 +90,41 @@ def test_a_small_cap_on_a_thinking_model_is_retried_with_room_then_remembered(
     assert _caps(seen) == [120 + REASONING_HEADROOM]
 
 
+def test_a_reply_cut_off_by_thinking_is_retried_with_room(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The 512-token short answer: thinking leaves room for half a JSON object,
+    # which arrives as visible text with ``finish_reason: length``.
+    seen: list[dict] = []
+
+    def fake_http(url, payload, headers, timeout):
+        seen.append(payload)
+        cap = payload.get("max_completion_tokens") or payload.get("max_tokens")
+        if cap <= 512:
+            return {
+                "choices": [
+                    {"message": {"content": '{"sufficient": true, "ans'}, "finish_reason": "length"}
+                ]
+            }
+        return {"choices": [{"message": {"content": "whole"}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(providers, "_http_json", fake_http)
+    llm = LLM(provider="openai", api_key="k", model="gpt-6-luna")
+    assert llm.complete("s", "p", max_output_tokens=512) == "whole"
+    assert _caps(seen) == [512, 512 + REASONING_HEADROOM]
+
+
+def test_a_streamed_preview_restarts_on_the_retry() -> None:
+    from pheasant.assistant.streaming import JsonAnswerPreview
+
+    drafts: list[str] = []
+    preview = JsonAnswerPreview(drafts.append)
+    preview('{"sufficient": true, "answer": "Pheas')
+    preview.restart()
+    preview('{"sufficient": true, "answer": "Pheasant [1]."}')
+    assert "".join(drafts) == "Pheasant [1]."
+
+
 def test_a_model_that_does_not_think_is_sent_exactly_its_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

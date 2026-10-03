@@ -12,9 +12,10 @@ makes the offline path real rather than an error branch.
 reasons before it writes — GPT-6, Gemini 2.5, any thinking model — spends
 hidden tokens out of that same cap, and a cap sized for a 300-token grade or
 a 120-token rewrite is spent on thinking alone: an empty reply, reported as
-:class:`OutputBudgetExhausted`. Every caller sized its cap for a model that
+:class:`OutputBudgetExhausted` — or, when the thinking leaves room for only
+part of the reply, :class:`OutputTruncated`. Every caller sized its cap for a model that
 does not think, and each would need re-sizing for every model that does, so
-the room is added here instead: the first exhaustion is retried once with
+the room is added here instead: the first exhaustion or truncation is retried once with
 :data:`REASONING_HEADROOM` on top, and the model is remembered as one that
 thinks, so every later call to it gets that room up front rather than paying
 for a wasted turn. A cap is a ceiling, not a spend — a model that does not
@@ -33,6 +34,7 @@ from typing import Any
 from pheasant.assistant.providers import (
     PROVIDERS,
     OutputBudgetExhausted,
+    OutputTruncated,
     ProviderError,
     complete,
     note_model_retry,
@@ -116,12 +118,18 @@ class LLM:
             return self._call(
                 system, prompt, cap + (REASONING_HEADROOM if thinks else 0), json_mode, on_delta
             )
-        except OutputBudgetExhausted:
+        except (OutputBudgetExhausted, OutputTruncated):
+            # Truncated is the same failure caught later: the hidden reasoning
+            # left room for only part of the reply, so a JSON answer arrives cut
+            # off mid-string. The remedy is the same room, once.
             if thinks:
                 raise
             note_model_retry()
             with _THINKING_LOCK:
                 _THINKING.add(key)
+            restart = getattr(on_delta, "restart", None)
+            if callable(restart):
+                restart()
             return self._call(system, prompt, cap + REASONING_HEADROOM, json_mode, on_delta)
 
     def _call(

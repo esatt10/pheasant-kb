@@ -911,7 +911,7 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
         ):
             from pheasant.assistant.streaming import JsonAnswerPreview
 
-            completion_options["on_delta"] = JsonAnswerPreview(request.on_draft).feed
+            completion_options["on_delta"] = JsonAnswerPreview(request.on_draft)
         parsed = _parse_json(
             llm.complete(
                 system,

@@ -22,6 +22,20 @@ class JsonAnswerPreview:
         self._raw = ""
         self._sent = ""
 
+    def __call__(self, delta: str) -> None:
+        self.feed(delta)
+
+    def restart(self) -> None:
+        """Forget a cut-off reply before :meth:`LLM.complete` asks again.
+
+        Pass the instance itself as ``on_delta`` (not ``.feed``) so the retry
+        can find this method.
+
+        ``_sent`` is kept so the retry's answer is emitted only past what the
+        preview already showed, and not at all if the retry diverges from it.
+        """
+        self._raw = ""
+
     def feed(self, delta: str) -> None:
         if not delta:
             return
