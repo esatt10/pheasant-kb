@@ -76,6 +76,17 @@ workflow, a plugin included — they are applied around it in
 
 ## The agentic graph
 
+For latency-sensitive deployments, `assistant.workflow_options.agentic.staged_retrieval: true`
+skips the initial planner call and runs one direct hybrid search. Hybrid searches text, vector,
+and graph together. If the grader finds that evidence insufficient, the workflow plans one
+targeted query and runs hybrid once more. Without this option, the standard plan-first flow below
+remains in effect.
+
+`hybrid` already fans out to text, vector and graph internally. When it appears
+alongside those modes, the workflow issues one hybrid search instead of repeating
+the standalone arms. Staged retrieval uses hybrid first, so its vector and graph
+candidates participate in the same fused result without separate duplicate calls.
+
 ```
                 ┌──────────────────── retry while evidence is thin
                 ▼                                                │
@@ -108,6 +119,7 @@ assistant:
     agentic:
       max_rounds: 3
       retrieval_modes: [hybrid, vector, graph]
+      staged_retrieval: true
       expand_depth: 2
       max_context_passages: 14
 ```
@@ -126,7 +138,8 @@ curl -X POST http://localhost:8765/assistant/chat \
 |---|---|---|
 | `intent` | `auto` | Answer shape: `auto` \| `knowledge` \| `procedural`. Also sets retrieval breadth-vs-depth and the sufficiency bar. |
 | `max_rounds` | `2` | plan → retrieve → grade loops before answering with what it has. |
-| `retrieval_modes` | `["hybrid", "vector"]` | Search modes to fan out over. Unavailable modes are dropped. |
+| `retrieval_modes` | `["hybrid", "vector"]` | Search modes to fan out over. If hybrid is selected, its text/vector/graph arms subsume those standalone modes for that query. Unavailable modes are dropped. |
+| `staged_retrieval` | `false` | When hybrid is available, search once with hybrid before planning; if evidence is insufficient, plan a targeted hybrid query. Without hybrid, use graph/vector first. |
 | `expand_graph` | `true` | Walk the graph out of the best hits. |
 | `expand_depth` | `1` | Hops the walk takes. |
 | `expand_per_node` | `3` | Related documents pulled in per hit. |

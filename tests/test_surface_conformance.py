@@ -622,6 +622,13 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # first and the picture after; MCP returns one result, built by `answer`.
     public.discard("admit")
     public.discard("render_visual")
+    # `acquire` and `create_request_budget` are `answer`'s admission and
+    # deadline, public for the same reason as `admit`: the HTTP routes take
+    # them before dispatch so a stream refuses with a status code and its
+    # deadline covers the work done before `answer` runs. MCP gets both inside
+    # `answer`.
+    public.discard("acquire")
+    public.discard("create_request_budget")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

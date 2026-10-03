@@ -74,26 +74,36 @@ class SimpleWorkflow:
             request.report(steps[-1])
 
         retrieve_started = time.perf_counter()
-        passages = retriever.search(
-            request.search_question or request.question,
-            mode=request.mode,
-            limit=limit,
-            source_name=request.source_name,
-            principal=request.principal,
-            principal_groups=request.principal_groups,
-        )
+        fanout_timings: list[dict[str, Any]] = []
+
+        def timed_search(query: str, query_index: int, query_label: str) -> list[Any]:
+            started = time.perf_counter()
+            found = retriever.search(
+                query,
+                mode=request.mode,
+                limit=limit,
+                source_name=request.source_name,
+                principal=request.principal,
+                principal_groups=request.principal_groups,
+            )
+            fanout_timings.append(
+                {
+                    "mode": request.mode,
+                    "phase": "search",
+                    "query_index": query_index,
+                    "query_label": query_label,
+                    "duration_seconds": time.perf_counter() - started,
+                    "passages": len(found),
+                }
+            )
+            return found
+
+        passages = timed_search(request.search_question or request.question, 0, "question")
         carried_from = conversation.carried_question(request.history)
         if request.search_question and carried_from:
             passages = conversation.carry(
                 passages,
-                retriever.search(
-                    carried_from,
-                    mode=request.mode,
-                    limit=limit,
-                    source_name=request.source_name,
-                    principal=request.principal,
-                    principal_groups=request.principal_groups,
-                ),
+                timed_search(carried_from, 1, "prior question"),
             )
         citations = passages_to_citations(passages, limit)
         node_ids = [c["node_id"] for c in citations if c.get("node_id")]
@@ -108,6 +118,7 @@ class SimpleWorkflow:
                 "previous question's sources",
                 passages=len(citations),
                 duration_seconds=time.perf_counter() - retrieve_started,
+                fanout_timings=fanout_timings,
             )
         )
         # Progress is reported by every workflow, not just the agentic one:
@@ -156,6 +167,10 @@ class SimpleWorkflow:
                         duration_seconds=time.perf_counter() - answer_started,
                         input_tokens=usage.reported_input,
                         output_tokens=usage.reported_output,
+                        cached_input_tokens=usage.reported_cached_input,
+                        reasoning_tokens=usage.reported_reasoning,
+                        provider_calls=usage.calls,
+                        provider_retries=usage.retries,
                     )
                 )
                 request.report(steps[-1])
@@ -169,6 +184,10 @@ class SimpleWorkflow:
                         duration_seconds=time.perf_counter() - answer_started,
                         input_tokens=usage.reported_input,
                         output_tokens=usage.reported_output,
+                        cached_input_tokens=usage.reported_cached_input,
+                        reasoning_tokens=usage.reported_reasoning,
+                        provider_calls=usage.calls,
+                        provider_retries=usage.retries,
                     )
                 )
                 request.report(steps[-1])
@@ -179,6 +198,11 @@ class SimpleWorkflow:
         return WorkflowResult(
             answer=answer,
             citations=citations,
+            retrieved_evidence_ids=list(
+                dict.fromkeys(
+                    str(p.chunk_id or p.node_id) for p in passages if p.chunk_id or p.node_id
+                )
+            ),
             facts=facts,
             focus_node_ids=node_ids,
             mode=answer_mode,

@@ -38,8 +38,13 @@ Every method is read-only and side-effect free.
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Any
 
 from pheasant.graph.traversal import neighbors as _graph_neighbors
@@ -49,6 +54,24 @@ from pheasant.ingestion.content_types import ARTIFACT_TYPES
 logger = logging.getLogger(__name__)
 
 VALID_MODES = ("hybrid", "text", "graph", "vector")
+
+
+def _timed_request_stage(name: str):
+    def decorate(fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                from pheasant.request_budget import record_active_timing
+
+                record_active_timing(name, time.perf_counter() - started)
+
+        return wrapped
+
+    return decorate
+
 
 #: ``(kb, artifacts, chunks)`` → :class:`RetrievalStructure`. The corpus's
 #: shape only changes when a sync does, so deriving it per question would be
@@ -384,6 +407,124 @@ def _reassemble(
     return "\n\n".join(parts), len(chosen), len(chosen) < len(rows)
 
 
+def _chunk_label(row: Any) -> str:
+    label_bits = []
+    if row["start_line"] is not None and row["end_line"] is not None:
+        label_bits.append(f"lines {row['start_line']}-{row['end_line']}")
+    heading = str(row["heading_path"] or "").strip()
+    if heading:
+        label_bits.append(heading)
+    return f"--- {' · '.join(label_bits)} ---\n" if label_bits else ""
+
+
+def _descriptor_selection(
+    rows: list[Any], anchor_ids: set[str], allowance: int, *, focused: bool
+) -> tuple[list[int], bool, bool]:
+    """Choose chunk positions from metadata without transferring their text.
+
+    Returns ``(positions, truncated, all_fit)`` with the same priority and
+    character accounting as :func:`_reassemble`.
+    """
+    lengths = [len(_chunk_label(row)) + int(row["text_length"] or 0) for row in rows]
+    anchors = [i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids]
+    if focused:
+        wanted = {0}
+        for anchor in anchors:
+            for offset in range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1):
+                if 0 <= anchor + offset < len(rows):
+                    wanted.add(anchor + offset)
+        order = sorted(wanted)
+    else:
+        if sum(length + 2 for length in lengths) <= allowance:
+            return list(range(len(rows))), False, True
+        order = [0, *anchors]
+        for anchor in anchors:
+            for offset in (1, -1, 2, -2):
+                if 0 <= anchor + offset < len(rows):
+                    order.append(anchor + offset)
+        order.extend(range(len(rows)))
+
+    chosen: list[int] = []
+    spent = 0
+    for index in order:
+        if index in chosen:
+            continue
+        cost = lengths[index] + 2
+        if spent + cost <= allowance:
+            chosen.append(index)
+            spent += cost
+    if not chosen and order:
+        return [order[0]], True, False
+    return sorted(chosen), len(chosen) < len(rows), False
+
+
+def _selected_output_length(
+    rows: list[Any],
+    selected: list[int],
+    text_limits: dict[str, int],
+    allowance: int,
+    *,
+    truncated: bool,
+    all_fit: bool,
+) -> int:
+    """Predict rendered characters from descriptors before fetching bodies."""
+    if not selected:
+        return 0
+    block_lengths = {
+        index: len(_chunk_label(rows[index]))
+        + min(int(rows[index]["text_length"] or 0), text_limits[str(rows[index]["id"])])
+        for index in selected
+    }
+    if all_fit:
+        return sum(block_lengths.values()) + 2 * max(0, len(selected) - 1)
+    if (
+        truncated
+        and len(selected) == 1
+        and len(_chunk_label(rows[selected[0]])) + int(rows[selected[0]]["text_length"] or 0)
+        > allowance
+    ):
+        return allowance
+    parts: list[int] = []
+    previous = -1
+    for index in selected:
+        gap = index - previous - 1
+        if gap > 0 and previous >= 0:
+            parts.append(len(f"--- … {gap} chunk(s) omitted … ---"))
+        parts.append(block_lengths[index])
+        previous = index
+    if previous < len(rows) - 1:
+        parts.append(len(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---"))
+    return sum(parts) + 2 * max(0, len(parts) - 1)
+
+
+def _reassemble_selected(
+    rows: list[Any],
+    selected: list[int],
+    texts: dict[str, str],
+    allowance: int,
+    *,
+    truncated: bool,
+    all_fit: bool,
+) -> tuple[str, int, bool]:
+    """Render selected chunks and omission markers after the bounded text read."""
+    blocks = [_chunk_label(row) + str(texts.get(str(row["id"]), "")) for row in rows]
+    if all_fit:
+        return "\n\n".join(blocks), len(blocks), False
+    if truncated and len(selected) == 1 and len(blocks[selected[0]]) > allowance:
+        return blocks[selected[0]][:allowance], 1, True
+    parts: list[str] = []
+    previous = -1
+    for index in selected:
+        gap = index - previous - 1
+        if gap > 0 and previous >= 0:
+            parts.append(f"--- … {gap} chunk(s) omitted … ---")
+        parts.append(blocks[index])
+        previous = index
+    if previous < len(rows) - 1:
+        parts.append(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---")
+    return "\n\n".join(parts), len(selected), truncated
+
+
 @dataclass
 class RetrievalCapabilities:
     """What this knowledge base can answer with, right now."""
@@ -433,6 +574,9 @@ class PheasantRetriever:
         memory: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
+        source_name: str | None = None,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
     ) -> None:
         self.search_engine = search
         self.knowledge_base = knowledge_base
@@ -452,13 +596,134 @@ class PheasantRetriever:
         # parameter through each call signature.
         self.source_types = list(source_types) if source_types else None
         self.exclude_source_types = list(exclude_source_types) if exclude_source_types else None
+        self.source_name = source_name
+        self.principal = principal
+        self.principal_groups = list(principal_groups or ())
         # Per-request memo: an agent loop re-issues overlapping queries, and
         # paying twice for the identical (query, mode, limit, source) tuple is
         # pure waste — pheasant's index does not change mid-answer.
         self._cache: dict[tuple, list[Passage]] = {}
+        self._metadata_cache: dict[tuple, dict[str, dict[str, Any]]] = {}
+        self._document_cache: dict[tuple, dict[str, Document]] = {}
+        self._source_type_cache: dict[str, str] | None = None
+        self._source_name_cache: dict[str, str] | None = None
+        self._memory_context: tuple[Any, dict[str, dict[str, Any]]] | None = None
+        self._acl_identity_cache: set[str] | None = None
+        self._arm_failures: list[dict[str, str]] = []
+        self._diagnostic_lock = threading.Lock()
+
+    def _artifact_allowed(
+        self,
+        artifact_id: str,
+        *,
+        source_id: str | None = None,
+        artifact_type: str | None = None,
+        relative_path: str | None = None,
+    ) -> bool:
+        """Reapply caller scope before graph or cached content becomes evidence."""
+        if self.state is not None and (
+            self.source_name or self.source_types or self.exclude_source_types
+        ):
+            self._load_source_mappings()
+        raw_source = str(source_id or "")
+        canonical_source = (self._source_name_cache or {}).get(raw_source, raw_source)
+        if self.source_name and self.source_name not in {raw_source, canonical_source}:
+            return False
+        source_type = (self._source_type_cache or {}).get(raw_source) or (
+            self._source_type_cache or {}
+        ).get(canonical_source)
+        if self.source_types and source_type not in self.source_types:
+            return False
+        if self.exclude_source_types and source_type in self.exclude_source_types:
+            return False
+
+        if self.state is not None:
+            from pheasant.memory.policy import (
+                MemoryPolicy,
+                admits,
+                load_memory_index,
+                utc_now_iso,
+            )
+
+            if self._memory_context is None:
+                configured_memory = getattr(
+                    getattr(self.config, "memory", None), "default_policy", None
+                )
+                policy = MemoryPolicy.parse(
+                    self.memory if self.memory is not None else configured_memory
+                )
+                self._memory_context = (policy, load_memory_index(self.state))
+            policy, memory_index = self._memory_context
+            memory_record = memory_index.get(artifact_id)
+            if not admits(policy, memory_record, now=utc_now_iso()):
+                return False
+
+        security = getattr(self.config, "security", None)
+        if security is not None and getattr(security, "acl_enforced", False):
+            if self.state is None:
+                return False
+            from pheasant.security.acl import expand_principal, is_allowed
+
+            if self._acl_identity_cache is None:
+                identities = expand_principal(
+                    self.principal, self.principal_groups, getattr(security, "groups", None)
+                )
+                if identities is not None and self.principal:
+                    from pheasant.security.idp import fresh_idp_groups
+
+                    identities |= fresh_idp_groups(self.state, self.principal, security.idp)
+                self._acl_identity_cache = identities or set()
+            identities = self._acl_identity_cache
+            acls = self.state.artifact_acls([artifact_id])
+            if artifact_id not in acls or not is_allowed(
+                acls[artifact_id],
+                identities,
+                default_public=getattr(security, "default_visibility", "public") != "private",
+            ):
+                return False
+        return True
+
+    def _load_source_mappings(self) -> None:
+        if self._source_type_cache is not None or self.state is None:
+            return
+        self._source_type_cache = {}
+        self._source_name_cache = {}
+        try:
+            for row in self.state.rows("SELECT id, name, type FROM sources"):
+                source_id_value = str(row["id"] or "")
+                source_name_value = str(row["name"] or "")
+                source_type_value = str(row["type"] or "")
+                if source_id_value:
+                    self._source_type_cache[source_id_value] = source_type_value
+                    self._source_name_cache[source_id_value] = source_name_value
+                if source_name_value:
+                    self._source_type_cache[source_name_value] = source_type_value
+                    self._source_name_cache[source_name_value] = source_name_value
+        except Exception:
+            pass
+
+    def _cached_passage_allowed(self, passage: Passage, source_name: str | None = None) -> bool:
+        """Recheck scope when request-local search results are reused."""
+        artifact_id = str(passage.node_id or "")
+        if not artifact_id or not self._artifact_allowed(
+            artifact_id,
+            source_id=passage.source_id,
+            artifact_type=passage.type,
+            relative_path=passage.relative_path,
+        ):
+            return False
+        requested_source = source_name or self.source_name
+        if requested_source:
+            self._load_source_mappings()
+            raw_source = str(passage.source_id or "")
+            canonical = (self._source_name_cache or {}).get(raw_source, raw_source)
+            if requested_source not in {raw_source, canonical}:
+                return False
+        return True
 
     # ---------------------------------------------------------------- search
 
+    @_timed_request_stage("retrieval_search")
     def search(
         self,
         query: str,
@@ -480,12 +745,17 @@ class PheasantRetriever:
             limit,
             source_name,
             principal,
+            tuple(sorted(set(principal_groups or ()))),
             str(self.memory),
             tuple(self.source_types or ()),
             tuple(self.exclude_source_types or ()),
         )
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            return [
+                passage
+                for passage in self._cache[cache_key]
+                if self._cached_passage_allowed(passage, source_name)
+            ]
 
         # The same over-fetch the two surfaces do, for the same reason and
         # through the same parameter. This path had none at all: it filtered
@@ -508,6 +778,12 @@ class PheasantRetriever:
             security=getattr(self.config, "security", None),
             memory=self.memory,
         )
+        failed_arms = payload.get("arm_failures") or []
+        if failed_arms:
+            with self._diagnostic_lock:
+                self._arm_failures.extend(
+                    {"query": query, "mode": mode, "arm": str(arm)} for arm in failed_arms
+                )
         hits = payload.get("results", [])
         if filtering:
             from pheasant.search.criteria import apply_retrieval_criteria
@@ -530,6 +806,8 @@ class PheasantRetriever:
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        on_fanout: Callable[[dict[str, Any]], None] | None = None,
+        query_label: str = "query",
     ) -> list[Passage]:
         """Fan out over queries × modes and merge, de-duplicated.
 
@@ -538,17 +816,28 @@ class PheasantRetriever:
         produces the same evidence in the same order.
         """
         modes = [m for m in (modes or ["hybrid"]) if m in VALID_MODES] or ["hybrid"]
+        if "hybrid" in modes:
+            # Hybrid already runs text, vector, and graph in parallel. A
+            # configured list such as ["hybrid", "vector", "graph"] must not
+            # issue those same arms a second time. Staged retrieval requests
+            # standalone graph/vector first by omitting hybrid for that pass.
+            modes = ["hybrid"]
         merged: dict[str, Passage] = {}
         # Every (query, mode) is an independent read, and the vector arm waits
         # on a remote embedding — running them one after another made the plan
         # cost the sum of its parts. Results are merged in the original
         # deterministic order below, so concurrency changes the latency and
         # nothing else.
-        pairs = [(query, mode) for query in queries for mode in modes]
+        pairs = [
+            (query_index, query, mode)
+            for query_index, query in enumerate(queries)
+            for mode in modes
+        ]
 
-        def run(pair: tuple[str, str]) -> list[Passage]:
-            query, mode = pair
-            return self.search(
+        def run(pair: tuple[int, str, str]) -> tuple[list[Passage], dict[str, Any]]:
+            query_index, query, mode = pair
+            started = time.perf_counter()
+            passages = self.search(
                 query,
                 mode=mode,
                 limit=limit,
@@ -556,30 +845,126 @@ class PheasantRetriever:
                 principal=principal,
                 principal_groups=principal_groups,
             )
+            return passages, {
+                "mode": mode,
+                "phase": "search",
+                "query_index": query_index,
+                "query_label": (
+                    f"{query_label} {query_index + 1}" if query_label == "query" else query_label
+                ),
+                "duration_seconds": time.perf_counter() - started,
+                "passages": len(passages),
+            }
 
         # Only the arms that actually benefit are run concurrently. Text
         # searches are SQLite reads that release the GIL and parallelize well
         # (measured 3.45s → 0.16s over four queries); vector searches are
         # numpy similarity scans that do not, and racing them made things
         # *worse* (5.10s → 8.65s). So: everything else in a pool, vector in
-        # sequence.
-        concurrent = [pair for pair in pairs if pair[1] != "vector"]
-        sequential = [pair for pair in pairs if pair[1] == "vector"]
+        # sequence. The vector embeddings are batched and overlapped with
+        # those other searches; the LanceDB scans remain sequential.
+        concurrent = [pair for pair in pairs if pair[2] != "vector"]
+        sequential = [pair for pair in pairs if pair[2] == "vector"]
         batches: list[list[Passage]] = []
-        if len(concurrent) > 1:
+        fanout_timings: list[dict[str, Any]] = []
+        # Hybrid includes its own vector arm. Include it here so multi-query
+        # plans batch embedding requests instead of embedding each arm alone.
+        vector_queries = list(
+            dict.fromkeys(
+                query
+                for _index, query, mode in pairs
+                if mode == "vector" or (mode == "hybrid" and len(queries) > 1)
+            )
+        )
+        vector_searcher = getattr(self.search_engine, "vector", None)
+        embed_queries = getattr(vector_searcher, "embed_queries", None)
+        batch_vector_embeddings = (
+            callable(embed_queries)
+            and bool(vector_queries)
+            and (
+                len(vector_queries) > 1
+                or "hybrid" in modes
+                or ("vector" in modes and "hybrid" not in modes)
+            )
+        )
+
+        def collect(results: list[tuple[list[Passage], dict[str, Any]]]) -> None:
+            for passages, timing in results:
+                batches.append(passages)
+                fanout_timings.append(timing)
+
+        def embed_batch() -> float:
+            started = time.perf_counter()
+            embed_queries(vector_queries)
+            return time.perf_counter() - started
+
+        # Start the embedding batch before the other submitted work so hybrid
+        # arms can join its in-flight futures, while lexical and graph work
+        # proceeds in parallel.
+        embed_in_pool = batch_vector_embeddings
+        if len(concurrent) > 1 or embed_in_pool:
             # SQLite benefits strongly from broad read fan-out.  Postgres text
             # ranking is CPU work inside the database; sending four planner
             # queries at once made each one take minutes on a two-core local
             # container and left the stream parked on its last "plan" event.
             # Two keeps network/vector overlap without turning query latency
-            # into CPU contention.
+            # into CPU contention. One extra slot lets the batched embedding
+            # request overlap with text retrieval.
             postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
-            max_workers = 2 if postgres else 8
-            with ThreadPoolExecutor(max_workers=min(len(concurrent), max_workers)) as pool:
-                batches.extend(pool.map(run, concurrent))
+            search_workers = 2 if postgres else 8
+            pool_workers = min(len(concurrent), search_workers) + int(embed_in_pool)
+            with ThreadPoolExecutor(max_workers=max(1, pool_workers)) as pool:
+                embedding_context = copy_context()
+                embedding_future = (
+                    pool.submit(embedding_context.run, embed_batch) if embed_in_pool else None
+                )
+
+                contextual_pairs = [(copy_context(), pair) for pair in concurrent]
+
+                def run_in_context(item: tuple[Any, tuple[int, str, str]]):
+                    context, pair = item
+                    return context.run(run, pair)
+
+                collect(list(pool.map(run_in_context, contextual_pairs)))
+                if embedding_future is not None:
+                    try:
+                        embedding_seconds = embedding_future.result()
+                        fanout_timings.append(
+                            {
+                                "mode": "vector",
+                                "phase": "embedding",
+                                "query_count": len(vector_queries),
+                                "duration_seconds": embedding_seconds,
+                            }
+                        )
+                    except Exception as exc:
+                        from pheasant.request_budget import DeadlineExceeded
+
+                        if isinstance(exc, DeadlineExceeded):
+                            raise
+                        fanout_timings.append(
+                            {
+                                "mode": "vector",
+                                "phase": "embedding",
+                                "query_count": len(vector_queries),
+                                "failed": True,
+                                "error_type": type(exc).__name__,
+                            }
+                        )
+                        logger.warning(
+                            "batched query embeddings failed; hybrid retrieval will "
+                            "continue with non-vector evidence",
+                            exc_info=True,
+                        )
         else:
-            batches.extend(run(pair) for pair in concurrent)
-        batches.extend(run(pair) for pair in sequential)
+            collect([run(pair) for pair in concurrent])
+        collect([run(pair) for pair in sequential])
+        if on_fanout is not None:
+            for timing in fanout_timings:
+                try:
+                    on_fanout(timing)
+                except Exception:  # telemetry must never fail retrieval
+                    logger.debug("fanout timing callback failed", exc_info=True)
         for batch in batches:
             for passage in batch:
                 existing = merged.get(passage.key())
@@ -646,6 +1031,7 @@ class PheasantRetriever:
             return {"node_id": node_id, "depth": depth, "nodes": [], "links": []}
         return _graph_slice(self.graph, node_id, depth, None, limit)
 
+    @_timed_request_stage("graph_expansion")
     def expand(
         self, passages: list[Passage], *, depth: int = 1, per_node: int = 4
     ) -> list[Passage]:
@@ -661,11 +1047,26 @@ class PheasantRetriever:
             return []
         seen = {p.node_id for p in passages if p.node_id}
         found: list[Passage] = []
+        remote_many = getattr(self.graph, "remote_neighbors_many", None)
+        expanded: dict[str, list[dict]] = {}
+        if callable(remote_many):
+            node_ids = list(dict.fromkeys(p.node_id for p in passages if p.node_id))
+            if node_ids:
+                responses = remote_many(node_ids=node_ids, depth=depth)
+                expanded = {
+                    node_id: response.get("neighbors", [])
+                    for node_id, response in zip(node_ids, responses, strict=True)
+                }
         for passage in passages:
             if not passage.node_id:
                 continue
             added = 0
-            for entry in self.neighbors(passage.node_id, depth):
+            entries = (
+                expanded[passage.node_id]
+                if callable(remote_many)
+                else self.neighbors(passage.node_id, depth)
+            )
+            for entry in entries:
                 node = entry.get("node") or {}
                 node_id = str(entry.get("node_id") or "")
                 if not node_id or node_id in seen:
@@ -673,6 +1074,14 @@ class PheasantRetriever:
                 # Only documents carry answerable prose; concept/chunk nodes
                 # are navigation, not evidence.
                 if node.get("type") not in ARTIFACT_TYPES:
+                    continue
+                source_id = str(node.get("source_id") or "") or None
+                if not self._artifact_allowed(
+                    node_id,
+                    source_id=source_id,
+                    artifact_type=str(node.get("type") or "") or None,
+                    relative_path=str(node.get("relative_path") or "") or None,
+                ):
                     continue
                 seen.add(node_id)
                 found.append(
@@ -716,17 +1125,36 @@ class PheasantRetriever:
             return []
         return number_figures(found, citations)
 
+    @_timed_request_stage("graph_facts")
     def facts(self, node_ids: list[str], limit: int = 12) -> list[dict]:
-        """One-hop subject–predicate–object triples around these nodes."""
+        """Best-effort one-hop triples; a stalled graph must not stall answers."""
         from pheasant.assistant.chat import collect_facts
+        from pheasant.graph.query_service import GraphQueryError
 
-        return collect_facts(self.graph, node_ids, limit)
+        try:
+            return collect_facts(self.graph, node_ids, limit)
+        except GraphQueryError as exc:
+            logger.warning("graph facts unavailable; continuing without them: %s", exc)
+            return []
 
     # --------------------------------------------------------------- content
 
     def content(self, node_id: str, max_chars: int = 6000) -> str | None:
         """Full indexed text for a node, when a preview is not enough."""
         if self.state is None:
+            return None
+        owner = self.state.rows("SELECT artifact_id FROM chunks WHERE id=? LIMIT 1", (node_id,))
+        artifact_id = str(owner[0]["artifact_id"]) if owner else node_id
+        artifacts = self.state.rows(
+            "SELECT source_id, type, relative_path FROM artifacts WHERE id=? LIMIT 1",
+            (artifact_id,),
+        )
+        if not artifacts or not self._artifact_allowed(
+            artifact_id,
+            source_id=str(artifacts[0]["source_id"] or ""),
+            artifact_type=str(artifacts[0]["type"] or ""),
+            relative_path=str(artifacts[0]["relative_path"] or ""),
+        ):
             return None
         rows = self.state.rows("SELECT text FROM chunks WHERE id=? LIMIT 1", (node_id,))
         if rows:
@@ -739,6 +1167,7 @@ class PheasantRetriever:
         content = rows[0]["content"] if rows else None
         return str(content)[:max_chars] if content else None
 
+    @_timed_request_stage("evidence_metadata")
     def metadata(self, node_ids: list[str]) -> dict[str, dict[str, Any]]:
         """What the index knows *about* these files, without reading them.
 
@@ -756,6 +1185,19 @@ class PheasantRetriever:
         wanted = list(dict.fromkeys(node_id for node_id in node_ids if node_id))
         if not wanted:
             return {}
+        cache_key = tuple(wanted)
+        cached = self._metadata_cache.get(cache_key)
+        if cached is not None:
+            return {
+                node_id: dict(value)
+                for node_id, value in cached.items()
+                if self._artifact_allowed(
+                    node_id,
+                    source_id=str(value.get("source_id") or ""),
+                    artifact_type=str(value.get("type") or ""),
+                    relative_path=str(value.get("relative_path") or ""),
+                )
+            }
         placeholders = ",".join("?" * len(wanted))
         params = tuple(wanted)
         out: dict[str, dict[str, Any]] = {}
@@ -765,7 +1207,15 @@ class PheasantRetriever:
                 f"FROM artifacts WHERE id IN ({placeholders})",
                 params,
             ):
-                out[str(row["id"])] = {
+                artifact_id = str(row["id"])
+                if not self._artifact_allowed(
+                    artifact_id,
+                    source_id=str(row["source_id"] or ""),
+                    artifact_type=str(row["type"] or ""),
+                    relative_path=str(row["relative_path"] or ""),
+                ):
+                    continue
+                out[artifact_id] = {
                     "relative_path": row["relative_path"],
                     "source_id": row["source_id"],
                     "type": row["type"],
@@ -799,8 +1249,10 @@ class PheasantRetriever:
                     entry["symbols"].append(str(row["name"]))
         except Exception:  # pragma: no cover - context is a bonus, never a blocker
             return out
+        self._metadata_cache[cache_key] = {node_id: dict(value) for node_id, value in out.items()}
         return out
 
+    @_timed_request_stage("evidence_hydration")
     def documents(
         self,
         node_ids: list[str],
@@ -855,6 +1307,27 @@ class PheasantRetriever:
         if not wanted:
             return {}
 
+        cache_key = (
+            tuple(wanted),
+            tuple((key, tuple(value)) for key, value in sorted((anchors or {}).items())),
+            max_chars,
+            code_max_chars,
+            large_file_bytes,
+            budget_chars,
+        )
+        cached_documents = self._document_cache.get(cache_key)
+        if cached_documents is not None:
+            return {
+                node_id: document
+                for node_id, document in cached_documents.items()
+                if self._artifact_allowed(
+                    node_id,
+                    source_id=document.source_id,
+                    artifact_type=document.type,
+                    relative_path=document.relative_path,
+                )
+            }
+
         placeholders = ",".join("?" * len(wanted))
         params = tuple(wanted)
         meta = {
@@ -865,13 +1338,29 @@ class PheasantRetriever:
                 params,
             )
         }
-        chunks: dict[str, list[Any]] = {}
+        meta = {
+            artifact_id: row
+            for artifact_id, row in meta.items()
+            if self._artifact_allowed(
+                artifact_id,
+                source_id=str(row["source_id"] or ""),
+                artifact_type=str(row["type"] or ""),
+                relative_path=str(row["relative_path"] or ""),
+            )
+        }
+        if not meta:
+            return {}
+        allowed_ids = list(meta)
+        placeholders = ",".join("?" * len(allowed_ids))
+        params = tuple(allowed_ids)
+        descriptors: dict[str, list[Any]] = {}
         for row in self.state.rows(
-            "SELECT artifact_id, id, chunk_index, heading_path, start_line, end_line, text "
+            "SELECT artifact_id, id, chunk_index, heading_path, start_line, end_line, "
+            "LENGTH(text) AS text_length "
             f"FROM chunks WHERE artifact_id IN ({placeholders}) ORDER BY artifact_id, chunk_index",
             params,
         ):
-            chunks.setdefault(str(row["artifact_id"]), []).append(row)
+            descriptors.setdefault(str(row["artifact_id"]), []).append(row)
         symbols: dict[str, list[str]] = {}
         languages: dict[str, str] = {}
         for row in self.state.rows(
@@ -888,41 +1377,102 @@ class PheasantRetriever:
 
         out: dict[str, Document] = {}
         spent = 0
+        planned_spent = 0
+        plans: dict[str, tuple[list[Any], list[int], int, bool, bool]] = {}
+        selected_chunk_ids: list[str] = []
+        text_limits: dict[str, int] = {}
         for node_id in wanted:
-            rows = chunks.get(node_id)
-            if not rows or spent >= budget_chars:
+            rows = descriptors.get(node_id)
+            if not rows or planned_spent >= budget_chars:
                 continue
             row = meta.get(node_id)
             relative_path = str(row["relative_path"]) if row and row["relative_path"] else None
             language = languages.get(node_id)
             size_bytes = int(row["size_bytes"]) if row and row["size_bytes"] else 0
-
             if _is_code(relative_path, language):
-                allowance, focused = min(code_max_chars, budget_chars - spent), False
+                allowance, focused = min(code_max_chars, budget_chars - planned_spent), False
             elif size_bytes > large_file_bytes:
-                allowance, focused = min(max_chars, budget_chars - spent), True
+                allowance, focused = min(max_chars, budget_chars - planned_spent), True
             else:
-                allowance, focused = min(max_chars, budget_chars - spent), False
+                allowance, focused = min(max_chars, budget_chars - planned_spent), False
 
-            text, included, truncated = _reassemble(
+            selected, truncated, all_fit = _descriptor_selection(
                 rows,
                 set(anchors.get(node_id, []) if anchors else []),
                 allowance,
                 focused=focused,
             )
+            plans[node_id] = (rows, selected, allowance, truncated, all_fit)
+            for index in selected:
+                descriptor = rows[index]
+                chunk_id = str(descriptor["id"])
+                text_limit = int(descriptor["text_length"] or 0)
+                if (
+                    truncated
+                    and len(selected) == 1
+                    and len(_chunk_label(descriptor)) + text_limit > allowance
+                ):
+                    # Preserve the old single-chunk prefix while asking SQL
+                    # to return only the prefix Python will retain (+1 lets
+                    # _reassemble_selected apply the exact old slice).
+                    text_limit = max(0, allowance - len(_chunk_label(descriptor)) + 1)
+                selected_chunk_ids.append(chunk_id)
+                text_limits[chunk_id] = text_limit
+            planned_spent += _selected_output_length(
+                rows,
+                selected,
+                text_limits,
+                allowance,
+                truncated=truncated,
+                all_fit=all_fit,
+            )
+
+        # Only selected chunk bodies cross the database boundary. The ID list
+        # is chunked to stay below PostgreSQL's bind-parameter ceiling.
+        chunk_text: dict[str, str] = {}
+        for offset in range(0, len(selected_chunk_ids), 300):
+            batch = selected_chunk_ids[offset : offset + 300]
+            marks = ",".join("?" * len(batch))
+            limit_case = "CASE id " + " ".join("WHEN ? THEN ?" for _ in batch) + " END"
+            limit_params = tuple(
+                value for chunk_id in batch for value in (chunk_id, text_limits[chunk_id])
+            )
+            for row in self.state.rows(
+                "SELECT id, SUBSTR(text, 1, "
+                f"{limit_case}) AS text FROM chunks WHERE id IN ({marks})",
+                (*limit_params, *batch),
+            ):
+                chunk_text[str(row["id"])] = str(row["text"] or "")
+
+        for node_id in wanted:
+            plan = plans.get(node_id)
+            if plan is None:
+                continue
+            rows, selected, allowance, truncated, all_fit = plan
+            text, included, truncated = _reassemble_selected(
+                rows,
+                selected,
+                chunk_text,
+                allowance,
+                truncated=truncated,
+                all_fit=all_fit,
+            )
             if not text:
                 continue
             spent += len(text)
+            row = meta[node_id]
+            relative_path = str(row["relative_path"]) if row["relative_path"] else None
+            size_bytes = int(row["size_bytes"] or 0)
             starts = [r["start_line"] for r in rows if r["start_line"] is not None]
             ends = [r["end_line"] for r in rows if r["end_line"] is not None]
             out[node_id] = Document(
                 node_id=node_id,
                 relative_path=relative_path,
-                source_id=str(row["source_id"]) if row and row["source_id"] else None,
-                type=str(row["type"]) if row and row["type"] else None,
-                language=language,
+                source_id=str(row["source_id"]) if row["source_id"] else None,
+                type=str(row["type"]) if row["type"] else None,
+                language=languages.get(node_id),
                 size_bytes=size_bytes or None,
-                git_branch=str(row["git_branch"]) if row and row["git_branch"] else None,
+                git_branch=str(row["git_branch"]) if row["git_branch"] else None,
                 chunk_count=len(rows),
                 included_chunks=included,
                 line_span=(int(min(starts)), int(max(ends))) if starts and ends else None,
@@ -930,6 +1480,7 @@ class PheasantRetriever:
                 text=text,
                 truncated=truncated,
             )
+        self._document_cache[cache_key] = dict(out)
         return out
 
     # ---------------------------------------------------------- capabilities

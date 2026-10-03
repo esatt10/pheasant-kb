@@ -244,7 +244,11 @@ def register_ingestion_routes(
                 )
 
             registry = SourceRegistry(config, state)
-            existing = next((s for s in config.sources if s.name == name), None)
+            existing = (
+                None
+                if state.source_removed(name)
+                else next((s for s in config.sources if s.name == name), None)
+            )
             if existing is None:
                 source = source_from_payload(
                     {

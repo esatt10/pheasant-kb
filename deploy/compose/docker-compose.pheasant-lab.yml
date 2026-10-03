@@ -129,7 +129,7 @@ services:
     init: true
     stop_grace_period: 30s
     # The API no longer owns graph residency. Keep capacity for vector/text
-    # result sets and assistant fan-out, without paying one graph per replica.
+    # result sets; answer admission bounds active model/retrieval requests.
     # Repeated 40-request/c8 hybrid stress plateaus around 1.0 GiB after
     # allocator warm-up; 2 GiB leaves one full warm working set of headroom.
     mem_limit: 2048m

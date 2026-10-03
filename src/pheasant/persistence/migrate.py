@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 TABLE_ORDER = (
     "knowledge_bases",
     "sources",
+    # A UI removal's tombstone. Dropping it would bring every source the user
+    # removed back on the new backend whenever the YAML still names it.
+    "removed_sources",
     "artifacts",
     "chunks",
     "symbols",

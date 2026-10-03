@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -62,23 +62,48 @@ class OutputBudgetExhausted(ProviderError):
     """
 
 
+class OutputTruncated(ProviderError):
+    """The provider returned visible text but stopped at its output limit."""
+
+
 @dataclass
 class TokenUsage:
     """Actual provider-reported usage for one workflow node, never estimated."""
 
     calls: int = 0
+    retries: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     input_reports: int = 0
     output_reports: int = 0
+    cached_input_tokens: int = 0
+    cached_input_reports: int = 0
+    reasoning_tokens: int = 0
+    reasoning_reports: int = 0
 
     @property
     def reported_input(self) -> int | None:
+        if not self.calls:
+            return 0
         return self.input_tokens if self.input_reports == self.calls else None
 
     @property
     def reported_output(self) -> int | None:
+        if not self.calls:
+            return 0
         return self.output_tokens if self.output_reports == self.calls else None
+
+    @property
+    def reported_cached_input(self) -> int | None:
+        if not self.calls:
+            return 0
+        return self.cached_input_tokens if self.cached_input_reports == self.calls else None
+
+    @property
+    def reported_reasoning(self) -> int | None:
+        if not self.calls:
+            return 0
+        return self.reasoning_tokens if self.reasoning_reports == self.calls else None
 
 
 _active_usage: ContextVar[TokenUsage | None] = ContextVar("pheasant_model_usage", default=None)
@@ -101,7 +126,20 @@ def note_model_call() -> None:
         usage.calls += 1
 
 
-def _record_usage(input_tokens: object, output_tokens: object) -> None:
+def note_model_retry() -> None:
+    """Count a compatibility or output-budget retry separately from the call."""
+    usage = _active_usage.get()
+    if usage is not None:
+        usage.retries += 1
+
+
+def _record_usage(
+    input_tokens: object,
+    output_tokens: object,
+    *,
+    cached_input_tokens: object = None,
+    reasoning_tokens: object = None,
+) -> None:
     usage = _active_usage.get()
     if usage is None:
         return
@@ -111,6 +149,12 @@ def _record_usage(input_tokens: object, output_tokens: object) -> None:
     if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
         usage.output_tokens += output_tokens
         usage.output_reports += 1
+    if isinstance(cached_input_tokens, int) and not isinstance(cached_input_tokens, bool):
+        usage.cached_input_tokens += cached_input_tokens
+        usage.cached_input_reports += 1
+    if isinstance(reasoning_tokens, int) and not isinstance(reasoning_tokens, bool):
+        usage.reasoning_tokens += reasoning_tokens
+        usage.reasoning_reports += 1
 
 
 @dataclass(frozen=True)
@@ -210,6 +254,82 @@ def _http_json(
         raise ProviderError("provider returned a response that is not JSON") from exc
 
 
+def _http_chat_stream(
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    timeout: float,
+    on_delta: Callable[[str], None],
+) -> dict:
+    """Read Chat Completions SSE chunks, retaining the normal response shape."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json", "accept": "text/event-stream", **headers},
+        method="POST",
+    )
+    pieces: list[str] = []
+    usage: dict = {}
+    finish_reason: str | None = None
+    refusal: str | None = None
+    done = False
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data_text = line[5:].strip()
+                if data_text == "[DONE]":
+                    done = True
+                    break
+                if not data_text:
+                    continue
+                chunk = json.loads(data_text)
+                if not isinstance(chunk, dict):
+                    raise ProviderError("provider returned a malformed stream event")
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                for choice in chunk.get("choices") or []:
+                    if choice.get("index", 0) != 0:
+                        continue
+                    delta = choice.get("delta") or {}
+                    content = delta.get("content")
+                    if isinstance(content, str) and content:
+                        pieces.append(content)
+                        try:
+                            on_delta(content)
+                        except Exception:
+                            # Preview callbacks cannot decide answer success.
+                            pass
+                    if delta.get("refusal"):
+                        refusal = str(delta["refusal"])
+                    if choice.get("finish_reason") is not None:
+                        finish_reason = str(choice["finish_reason"])
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:600]
+        raise ProviderError(f"{exc.code} from provider: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise ProviderError(f"could not reach provider: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise ProviderError(f"provider did not answer within {timeout:g}s") from exc
+    except OSError as exc:
+        raise ProviderError(f"connection to provider failed: {exc}") from exc
+    except ValueError as exc:
+        raise ProviderError("provider returned a malformed stream event") from exc
+    if not done or finish_reason is None:
+        raise ProviderError("provider stream ended before completion")
+    return {
+        "usage": usage,
+        "choices": [
+            {
+                "message": {"content": "".join(pieces), "refusal": refusal},
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+
+
 def complete(
     provider: str,
     *,
@@ -221,6 +341,8 @@ def complete(
     max_output_tokens: int = 4096,
     timeout: float = DEFAULT_TIMEOUT,
     json_mode: bool = False,
+    reasoning_effort: str | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> str:
     """Single-turn completion. Returns the assistant's text.
 
@@ -242,11 +364,24 @@ def complete(
     base = (base_url or spec.default_base_url).rstrip("/")
 
     if provider == "anthropic":
+        if reasoning_effort is not None:
+            raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
         return _anthropic(base, api_key, model, system, prompt, max_output_tokens, timeout)
     if provider == "openai":
         return _openai(
-            base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
+            base,
+            api_key,
+            model,
+            system,
+            prompt,
+            max_output_tokens,
+            timeout,
+            json_mode=json_mode,
+            reasoning_effort=reasoning_effort,
+            on_delta=on_delta,
         )
+    if reasoning_effort is not None:
+        raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
     return _gemini(
         base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
     )
@@ -262,9 +397,14 @@ def _anthropic(
         "messages": [{"role": "user", "content": prompt}],
     }
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    note_model_call()
     data = _http_json(f"{base}/v1/messages", payload, headers, timeout)
     reported = data.get("usage") or {}
-    _record_usage(reported.get("input_tokens"), reported.get("output_tokens"))
+    _record_usage(
+        reported.get("input_tokens"),
+        reported.get("output_tokens"),
+        cached_input_tokens=reported.get("cache_read_input_tokens"),
+    )
     # Safety classifiers can decline with a 200 + stop_reason "refusal" and an
     # empty content array, so check that before indexing into content.
     if data.get("stop_reason") == "refusal":
@@ -275,6 +415,8 @@ def _anthropic(
         if isinstance(block, dict) and block.get("type") == "text"
     ]
     text = "".join(parts).strip()
+    if data.get("stop_reason") == "max_tokens" and text:
+        raise OutputTruncated(f"Anthropic model {model} stopped at its {max_tokens}-token limit")
     if not text:
         if data.get("stop_reason") == "max_tokens":
             raise OutputBudgetExhausted(
@@ -294,6 +436,8 @@ def _openai(
     timeout: float,
     *,
     json_mode: bool = False,
+    reasoning_effort: str | None = None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> str:
     # GPT-6 models reject the legacy cap. Other OpenAI-compatible endpoints
     # keep their existing spelling and the error-driven retry below.
@@ -306,29 +450,55 @@ def _openai(
         ],
         token_field: max_tokens,
     }
+    if reasoning_effort is not None:
+        if model != "gpt-6-luna":
+            raise ProviderError(f"reasoning_effort is not enabled for OpenAI model {model!r}")
+        if reasoning_effort not in {"none", "low"}:
+            raise ProviderError(f"unsupported reasoning_effort {reasoning_effort!r}")
+        payload["reasoning_effort"] = reasoning_effort
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if on_delta is not None:
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
     headers = {"authorization": f"Bearer {key}"}
     url = f"{base}/chat/completions"
     # Each rejection names the one field an endpoint does not accept, and each
     # is adjusted at most once, so this is bounded by the number of fields.
     while True:
         try:
-            data = _http_json(url, payload, headers, timeout)
+            note_model_call()
+            data = (
+                _http_chat_stream(url, payload, headers, timeout, on_delta)
+                if on_delta is not None
+                else _http_json(url, payload, headers, timeout)
+            )
             break
         except ProviderError as exc:
             reason = str(exc)
             if "max_tokens" in payload and "max_tokens" in reason:
                 # Reasoning-era models renamed the output cap and reject the old key.
+                note_model_retry()
                 payload["max_completion_tokens"] = payload.pop("max_tokens")
             elif "response_format" in payload and "response_format" in reason:
                 # JSON mode is a request; an endpoint that does not know it
                 # still gets asked, and the caller parses what comes back.
+                note_model_retry()
                 payload.pop("response_format")
+            elif "stream_options" in payload and "stream_options" in reason:
+                note_model_retry()
+                payload.pop("stream_options")
             else:
                 raise
     reported = data.get("usage") or {}
-    _record_usage(reported.get("prompt_tokens"), reported.get("completion_tokens"))
+    prompt_details = reported.get("prompt_tokens_details") or {}
+    completion_details = reported.get("completion_tokens_details") or {}
+    _record_usage(
+        reported.get("prompt_tokens"),
+        reported.get("completion_tokens"),
+        cached_input_tokens=prompt_details.get("cached_tokens"),
+        reasoning_tokens=completion_details.get("reasoning_tokens"),
+    )
     choices = data.get("choices") or []
     choice = choices[0] if choices else {}
     message = choice.get("message") or {}
@@ -338,14 +508,18 @@ def _openai(
         # Responses API does, rather than one string.
         content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
     text = (content or "").strip()
-    if not text:
-        if message.get("refusal"):
-            raise ProviderError("the model declined to answer this question")
-        if choice.get("finish_reason") == "length":
+    if choice.get("finish_reason") == "length":
+        if not text:
             raise OutputBudgetExhausted(
                 f"OpenAI model {model} spent its {max_tokens}-token output budget "
                 "(reasoning included) before writing any text"
             )
+        raise OutputTruncated(
+            f"OpenAI model {model} stopped at its {max_tokens}-token output limit"
+        )
+    if not text:
+        if message.get("refusal"):
+            raise ProviderError("the model declined to answer this question")
         raise ProviderError("empty response from OpenAI")
     return text
 
@@ -372,19 +546,29 @@ def _gemini(
     headers = {"x-goog-api-key": key}
     url = f"{base}/models/{model}:generateContent"
     try:
+        note_model_call()
         data = _http_json(url, payload, headers, timeout)
     except ProviderError as exc:
         if "responseMimeType" not in generation or "responseMimeType" not in str(exc):
             raise
+        note_model_retry()
         generation.pop("responseMimeType")
+        note_model_call()
         data = _http_json(url, payload, headers, timeout)
     reported = data.get("usageMetadata") or {}
-    _record_usage(reported.get("promptTokenCount"), reported.get("candidatesTokenCount"))
+    _record_usage(
+        reported.get("promptTokenCount"),
+        reported.get("candidatesTokenCount"),
+        cached_input_tokens=reported.get("cachedContentTokenCount"),
+        reasoning_tokens=reported.get("thoughtsTokenCount"),
+    )
     candidates = data.get("candidates") or []
     parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
     # A thinking model returns its thought summary as parts flagged
     # ``thought``; they are not the answer.
     text = "".join(part.get("text", "") for part in parts if not part.get("thought")).strip()
+    if candidates and candidates[0].get("finishReason") == "MAX_TOKENS" and text:
+        raise OutputTruncated(f"Gemini model {model} stopped at its {max_tokens}-token limit")
     if not text:
         if candidates and candidates[0].get("finishReason") == "MAX_TOKENS":
             raise OutputBudgetExhausted(

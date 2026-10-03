@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
@@ -38,7 +39,7 @@ def _config(tmp_path: Path, *, remote: bool = False) -> PheasantConfig:
                 "name": "docs",
                 "type": "markdown_folder",
                 "path": str(source),
-                "include": ["**/*.md"],
+                "include": ["*.md", "**/*.md"],
             }
         ],
     }
@@ -98,6 +99,51 @@ def test_graph_role_exposes_only_authenticated_query_operations(
         json={"operation": "node", "parameters": {"node_id": node_id}},
     ).json()["result"]
     assert node is not None
+
+
+def test_graph_service_expands_multiple_roots_in_one_bounded_operation(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    config = _config(tmp_path)
+    writer = SyncEngine(config)
+    try:
+        graph = writer.graph_builder.graph
+        graph.add_node("perf:a", type="file", label="a")
+        graph.add_node("perf:b", type="file", label="b")
+        graph.add_node("perf:c", type="file", label="c")
+        graph.add_edge("perf:a", "perf:c", type="references")
+        graph.add_edge("perf:b", "perf:c", type="references")
+        writer.graph_store.save("graph-service-test", graph)
+    finally:
+        writer.close()
+
+    config.graph.query_service_token_env = "TEST_GRAPH_TOKEN"
+    monkeypatch.setenv("TEST_GRAPH_TOKEN", "secret")
+    client = TestClient(create_app(config, role="graph"))
+    headers = {"Authorization": "Bearer secret"}
+    roots = ["perf:a", "perf:b", "perf:missing"]
+    singles = [
+        client.post(
+            "/internal/graph/query",
+            headers=headers,
+            json={"operation": "neighbors", "parameters": {"node_id": root, "depth": 1}},
+        ).json()["result"]
+        for root in roots
+    ]
+    many = client.post(
+        "/internal/graph/query",
+        headers=headers,
+        json={"operation": "neighbors_many", "parameters": {"node_ids": roots, "depth": 1}},
+    ).json()["result"]
+    assert many == singles
+    assert (
+        client.post(
+            "/internal/graph/query",
+            headers=headers,
+            json={"operation": "neighbors_many", "parameters": {"node_ids": ["perf:a"] * 17}},
+        ).status_code
+        == 400
+    )
 
 
 def test_remote_api_does_not_load_the_persisted_graph(tmp_path: Path, monkeypatch: Any) -> None:
@@ -162,6 +208,45 @@ def test_remote_graph_keeps_only_bounded_stats_and_nodes() -> None:
     assert [name for name, _ in client.calls].count("stats") == 1
     assert graph.nodes["file:1"]["type"] == "file"
     assert graph.remote_neighbors(node_id="file:1", depth=1)["neighbors"] == []
+
+
+def test_remote_neighbor_batch_uses_one_call_and_supports_older_graph_services() -> None:
+    from pheasant.graph.query_service import GraphQueryError
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.old = False
+            self.misordered = False
+
+        def query(self, operation: str, **parameters: Any) -> Any:
+            self.calls.append(operation)
+            if operation == "neighbors_many":
+                if self.old:
+                    raise GraphQueryError(
+                        "graph service rejected 'neighbors_many': "
+                        "unknown graph operation: neighbors_many"
+                    )
+                if self.misordered:
+                    return [
+                        {"node_id": item, "neighbors": []}
+                        for item in reversed(parameters["node_ids"])
+                    ]
+                return [{"node_id": item, "neighbors": []} for item in parameters["node_ids"]]
+            return {"node_id": parameters["node_id"], "neighbors": []}
+
+    client = Client()
+    graph = RemoteGraph(client)  # type: ignore[arg-type]
+    assert [item["node_id"] for item in graph.remote_neighbors_many(["a", "b"])] == ["a", "b"]
+    assert client.calls == ["neighbors_many"]
+    client.old = True
+    client.calls.clear()
+    assert [item["node_id"] for item in graph.remote_neighbors_many(["a", "b"])] == ["a", "b"]
+    assert client.calls == ["neighbors_many", "neighbors", "neighbors"]
+    client.old = False
+    client.misordered = True
+    with pytest.raises(GraphQueryError, match="invalid neighbors_many response"):
+        graph.remote_neighbors_many(["a", "b"])
 
 
 def test_graph_client_round_robins_cached_service_replicas(monkeypatch: Any) -> None:

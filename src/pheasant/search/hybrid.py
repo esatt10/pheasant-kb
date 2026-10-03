@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from functools import wraps
 from typing import Any
 
 from pheasant.graph.simple import SimpleMultiDiGraph
@@ -33,6 +37,41 @@ VALID_MODES = {"hybrid", "text", "graph", "vector"}
 #: legitimate caller notices, low enough that a hostile one cannot ask the
 #: region to load its whole index into memory.
 MAX_RESULTS_CEILING = 500
+
+# These are process-wide serving limits. Query fan-out stays inside one
+# admitted top-level search, while PostgreSQL lexical ranking has its own
+# narrower limit because the SQL ranking work is CPU-bound in the database.
+_TOP_LEVEL_SEARCHES = threading.BoundedSemaphore(4)
+_POSTGRES_LEXICAL_SEARCHES = threading.BoundedSemaphore(2)
+
+
+def _bounded_top_level_search(fn):
+    @wraps(fn)
+    def wrapped(self, *args, **kwargs):
+        from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+        started = time.perf_counter()
+        remaining = remaining_seconds()
+        acquired = (
+            _TOP_LEVEL_SEARCHES.acquire()
+            if remaining is None
+            else _TOP_LEVEL_SEARCHES.acquire(timeout=remaining)
+        )
+        from pheasant.request_budget import record_active_timing
+
+        record_active_timing("search_admission_wait", time.perf_counter() - started)
+        if not acquired:
+            raise DeadlineExceeded("search admission exceeded the assistant request deadline")
+        try:
+            result = fn(self, *args, **kwargs)
+            from pheasant.request_budget import check_active
+
+            check_active()
+            return result
+        finally:
+            _TOP_LEVEL_SEARCHES.release()
+
+    return wrapped
 
 
 class HybridSearch:
@@ -91,6 +130,7 @@ class HybridSearch:
         resolve = getattr(self.store, "ranking_parameters", None)
         return resolve() if callable(resolve) else DEFAULT_RANKING
 
+    @_bounded_top_level_search
     def search_context(
         self,
         knowledge_base: str,
@@ -220,15 +260,45 @@ class HybridSearch:
         # network call).
         jobs: dict[str, Any] = {}
         if mode in {"hybrid", "text"}:
-            jobs["text"] = lambda: self.store.search(
-                query,
-                source_name=source_name,
-                max_results=fetch_n,
-                section=section,
-                memory_policy=policy if memory_index else None,
-                memory_now=memory_now,
-                steering=steering,
-            )
+
+            def search_text() -> list[dict[str, Any]]:
+                state = getattr(self.store, "state", None)
+                dialect = getattr(state, "dialect", None)
+                admitted = False
+                if dialect is not None and dialect.is_postgres:
+                    from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+                    remaining = remaining_seconds()
+                    wait_started = time.perf_counter()
+                    admitted = (
+                        _POSTGRES_LEXICAL_SEARCHES.acquire()
+                        if remaining is None
+                        else _POSTGRES_LEXICAL_SEARCHES.acquire(timeout=remaining)
+                    )
+                    from pheasant.request_budget import record_active_timing
+
+                    record_active_timing(
+                        "postgres_lexical_admission_wait", time.perf_counter() - wait_started
+                    )
+                    if not admitted:
+                        raise DeadlineExceeded(
+                            "PostgreSQL lexical admission exceeded the assistant request deadline"
+                        )
+                try:
+                    return self.store.search(
+                        query,
+                        source_name=source_name,
+                        max_results=fetch_n,
+                        section=section,
+                        memory_policy=policy if memory_index else None,
+                        memory_now=memory_now,
+                        steering=steering,
+                    )
+                finally:
+                    if admitted:
+                        _POSTGRES_LEXICAL_SEARCHES.release()
+
+            jobs["text"] = search_text
         # Graph search needs the live graph; callers that don't supply one
         # (e.g. CLI/MCP search_context) transparently fall back to text search.
         if mode in {"hybrid", "graph"} and graph is not None:
@@ -272,12 +342,20 @@ class HybridSearch:
             # crashing the whole search (and, upstream, the assistant chat
             # request that depends on it).
             with ThreadPoolExecutor(max_workers=len(jobs) or 1) as pool:
-                futures = {name: pool.submit(job) for name, job in jobs.items()}
+                futures = {name: pool.submit(copy_context().run, job) for name, job in jobs.items()}
                 collected = {}
                 for name, future in futures.items():
                     try:
                         collected[name] = future.result()
-                    except Exception:
+                    except Exception as exc:
+                        from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+                        if isinstance(exc, DeadlineExceeded) or (
+                            remaining_seconds() is not None and (remaining_seconds() or 0) <= 0
+                        ):
+                            raise DeadlineExceeded(
+                                "assistant request deadline exceeded during hybrid retrieval"
+                            ) from exc
                         logger.warning(
                             "hybrid search: %r arm failed, degrading", name, exc_info=True
                         )
@@ -432,6 +510,8 @@ class HybridSearch:
                 "returned": len(results),
             },
         }
+        if failed_arms:
+            payload["arm_failures"] = sorted(failed_arms)
         # Reported only when the region has memory, so a corpus without it
         # returns the exact payload it did before — the same "add the key only
         # when it says something" rule `heading_path` follows.

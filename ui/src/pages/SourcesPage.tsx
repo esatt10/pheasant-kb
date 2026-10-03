@@ -102,7 +102,12 @@ export function SourcesPage() {
           {sources.data?.map((source: SourceRecord) => (
             <Fragment key={source.id}>
             <tr className={source.enabled ? "" : "row--disabled"}>
-              <td>{source.name}</td>
+              <td>
+                {source.name}
+                {source.uploaded_archives?.length ? (
+                  <div className="muted small">ZIP: {source.uploaded_archives.join(", ")}</div>
+                ) : null}
+              </td>
               <td>
                 <span className="pill">{source.type}</span>
               </td>

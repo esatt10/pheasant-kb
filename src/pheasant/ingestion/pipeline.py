@@ -103,7 +103,7 @@ def _match_any(relative: str, patterns: Iterable[str]) -> bool:
     if matcher is None:
         return False
     name = os.path.normcase(relative)
-    return matcher(name) is not None or matcher("/" + name) is not None
+    return matcher(name) is not None or matcher(os.path.normcase("/" + relative)) is not None
 
 
 @functools.lru_cache(maxsize=256)

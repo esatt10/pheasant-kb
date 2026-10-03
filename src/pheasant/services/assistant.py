@@ -20,13 +20,74 @@ reading the workflow module's docstring. It lived in `api/app.py`, and
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from pheasant.services import ServiceContext
-from pheasant.services.errors import AssistantDisabled, EmptyQuestion, InvalidRequest
+from pheasant.services.errors import (
+    AssistantBusy,
+    AssistantDeadline,
+    AssistantDisabled,
+    EmptyQuestion,
+    InvalidRequest,
+)
+
+logger = logging.getLogger(__name__)
+_ADMISSION_LOCK = threading.Lock()
+_ADMISSION: dict[int, threading.BoundedSemaphore] = {}
+
+
+class AnswerPermit:
+    """An idempotent slot held until the answer worker actually exits."""
+
+    def __init__(self, semaphore: threading.BoundedSemaphore | None) -> None:
+        self._semaphore = semaphore
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        if self._semaphore is not None:
+            self._semaphore.release()
+
+
+def acquire(context: ServiceContext) -> AnswerPermit:
+    """Acquire the process-wide answer limit shared by HTTP, SSE, and MCP."""
+    assistant = getattr(context.config, "assistant", None)
+    latency = getattr(assistant, "latency", None)
+    limit = int(getattr(latency, "max_concurrent_answers", 0) or 0)
+    if limit <= 0:
+        return AnswerPermit(None)
+    with _ADMISSION_LOCK:
+        semaphore = _ADMISSION.setdefault(limit, threading.BoundedSemaphore(limit))
+    if not semaphore.acquire(blocking=False):
+        raise AssistantBusy()
+    return AnswerPermit(semaphore)
+
+
+def create_request_budget(context: ServiceContext, request: AnswerRequest):
+    """Start the configured answer deadline before transport dispatch work."""
+    from pheasant.assistant.routing import classify_depth, classify_visual
+    from pheasant.request_budget import RequestBudget
+
+    assistant = getattr(context.config, "assistant", None)
+    latency = getattr(assistant, "latency", None)
+    requested_depth = request.depth or (request.options or {}).get("depth")
+    depth, _, _ = classify_depth(request.question, requested_depth)
+    visual_pin = request.visual or (request.options or {}).get("visual")
+    visual_route, _, _ = classify_visual(request.question, visual_pin)
+    if visual_route != "none":
+        depth = "long"
+    seconds = getattr(latency, f"{depth}_deadline_seconds", None)
+    return RequestBudget(seconds)
 
 
 @dataclass(frozen=True)
@@ -87,7 +148,10 @@ def answer(
     credential: Any = None,
     env: dict[str, str] | None = None,
     on_step: Callable[[Any], None] | None = None,
+    on_draft: Callable[[str], None] | None = None,
     defer_visual: bool = False,
+    permit: AnswerPermit | None = None,
+    request_budget: Any = None,
 ) -> dict[str, Any]:
     """A grounded answer with citations, facts, the route taken and any visual.
 
@@ -98,35 +162,64 @@ def answer(
     first and finish with :func:`render_visual`.
     """
 
+    server_started = time.perf_counter()
+    admission_started = server_started
     admit(context, request)
     from pheasant.assistant.chat import answer_question
     from pheasant.assistant.conversation import normalize_history
 
-    return answer_question(
-        request.question,
-        search=context.searcher,
-        knowledge_base=context.knowledge_base(request.knowledge_base),
-        config=context.config,
-        graph=context.graph,
-        state=context.state,
-        credential=credential,
-        env=env if env is not None else dict(os.environ),
-        mode=request.mode,
-        max_results=request.max_results,
-        source_name=request.source_name,
-        principal=request.principal,
-        principal_groups=request.principal_groups,
-        workflow=request.workflow,
-        options=request.options,
-        on_step=on_step,
-        memory=request.memory,
-        source_types=request.source_types,
-        exclude_source_types=request.exclude_source_types,
-        history=normalize_history(request.history),
-        depth=request.depth,
-        visual=request.visual,
-        defer_visual=defer_visual,
-    )
+    owns_permit = permit is None
+    owned_permit = permit or acquire(context)
+    admission_ms = (time.perf_counter() - admission_started) * 1000
+    from pheasant.request_budget import activate
+
+    budget = request_budget or create_request_budget(context, request)
+    try:
+        from pheasant.search.vector_store import collect_query_embedding_metrics
+
+        budget.check()
+        with activate(budget), collect_query_embedding_metrics() as embedding_metrics:
+            payload = answer_question(
+                request.question,
+                search=context.searcher,
+                knowledge_base=context.knowledge_base(request.knowledge_base),
+                config=context.config,
+                graph=context.graph,
+                state=context.state,
+                credential=credential,
+                env=env if env is not None else dict(os.environ),
+                mode=request.mode,
+                max_results=request.max_results,
+                source_name=request.source_name,
+                principal=request.principal,
+                principal_groups=request.principal_groups,
+                workflow=request.workflow,
+                options=request.options,
+                on_step=on_step,
+                on_draft=on_draft,
+                memory=request.memory,
+                source_types=request.source_types,
+                exclude_source_types=request.exclude_source_types,
+                history=normalize_history(request.history),
+                depth=request.depth,
+                visual=request.visual,
+                defer_visual=defer_visual,
+                request_budget=budget,
+            )
+            payload["query_embedding"] = embedding_metrics.as_dict()
+            payload["admission_ms"] = admission_ms
+            payload["runtime_timings"] = budget.timings()
+            payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000
+            return payload
+    except Exception as exc:
+        from pheasant.request_budget import DeadlineExceeded
+
+        if isinstance(exc, DeadlineExceeded):
+            raise AssistantDeadline() from exc
+        raise
+    finally:
+        if owns_permit:
+            owned_permit.release()
 
 
 #: Passages one visual may be drawn from. A diagram of thirty sources is a
@@ -179,6 +272,7 @@ def visualize(
 
     from pheasant.assistant import answering, chat
     from pheasant.graph.figures import collect_figures, with_full_captions
+    from pheasant.graph.query_service import GraphQueryError
 
     if request.node_ids:
         citations = _named_citations(context, request)
@@ -199,9 +293,12 @@ def visualize(
         citations = chat.build_citations(found.get("results") or [], MAX_VISUAL_PASSAGES)
     node_ids = [str(c["node_id"]) for c in citations if c.get("node_id")]
     facts = chat.collect_facts(context.graph, node_ids, 12)
-    figures = answering.number_figures(
-        with_full_captions(context.state, collect_figures(context.graph, node_ids)), citations
-    )
+    try:
+        found_figures = collect_figures(context.graph, node_ids)
+    except GraphQueryError as exc:
+        logger.warning("graph figures unavailable; continuing without them: %s", exc)
+        found_figures = []
+    figures = answering.number_figures(with_full_captions(context.state, found_figures), citations)
     kind = (request.kind or "").strip().lower() or None
     llm = answering.resolve_llm(context.config, credential, env)
     visual = answering.visual_for(
@@ -338,8 +435,12 @@ RETRIEVAL_FIELD_HELP: dict[str, str] = {
     "expand_depth": "hops to walk when expanding.",
     "expand_per_node": "neighbours taken per expanded node.",
     "grade_evidence": "ask the model to grade its own evidence before answering.",
-    "grader_model": "optional model for evidence sufficiency checks; the assistant model "
-    "still writes the answer.",
+    "grader_model": "optional model for evidence sufficiency checks when separate grading is "
+    "enabled; combined grade-and-answer uses the assistant model for both.",
+    "planner_reasoning_effort": "optional Luna reasoning effort for query planning; unset "
+    "preserves the provider default.",
+    "grader_reasoning_effort": "optional Luna reasoning effort for evidence grading; unset "
+    "preserves the provider default.",
     "verify_citations": "drop [n] markers that do not resolve to a real citation.",
     "max_facts": "graph facts surfaced alongside the answer.",
 }

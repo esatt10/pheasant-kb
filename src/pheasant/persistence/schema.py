@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS sources (
   last_status TEXT,
   FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases(id)
 );
+-- A UI removal must outlive restarts even when the generated YAML still
+-- names the source. Explicit registration clears this small tombstone.
+CREATE TABLE IF NOT EXISTS removed_sources (
+  source_id TEXT PRIMARY KEY,
+  removed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,

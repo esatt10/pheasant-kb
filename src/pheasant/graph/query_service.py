@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 from contextlib import nullcontext
+from functools import wraps
 from ipaddress import ip_address
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -21,6 +22,24 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from pheasant.telemetry.interactions import inject_traceparent
+
+
+def _timed_graph_query(fn):
+    @wraps(fn)
+    def wrapped(self, operation: str, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return fn(self, operation, *args, **kwargs)
+        finally:
+            from pheasant.request_budget import record_active_timing
+
+            record_active_timing(
+                "graph_http",
+                time.perf_counter() - started,
+                operation=operation,
+            )
+
+    return wrapped
 
 
 class GraphQueryError(RuntimeError):
@@ -86,7 +105,15 @@ class GraphQueryClient:
         original_host = host if parsed.port is None else f"{host}:{parsed.port}"
         return target, original_host
 
-    def query(self, operation: str, **parameters: Any) -> Any:
+    @_timed_graph_query
+    def query(
+        self,
+        operation: str,
+        *,
+        timeout_seconds: float | None = None,
+        retries: int | None = None,
+        **parameters: Any,
+    ) -> Any:
         token = os.environ.get(self.token_env or "", "")
         if not token:
             raise GraphQueryError(
@@ -97,13 +124,29 @@ class GraphQueryClient:
             separators=(",", ":"),
         ).encode("utf-8")
         last: Exception | None = None
-        for attempt in range(self.retries + 1):
+        timeout = self.timeout if timeout_seconds is None else max(0.1, float(timeout_seconds))
+        from pheasant.request_budget import DeadlineExceeded, remaining_seconds
+
+        remaining = remaining_seconds()
+        if remaining is not None:
+            if remaining <= 0:
+                raise DeadlineExceeded("assistant request deadline exceeded")
+            timeout = min(timeout, remaining)
+        retry_count = self.retries if retries is None else max(0, int(retries))
+        for attempt in range(retry_count + 1):
+            remaining = remaining_seconds()
+            if remaining is not None:
+                if remaining <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded")
+                timeout = min(timeout, remaining)
             target, host_header = self._target()
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
+            if remaining is not None:
+                headers["X-Pheasant-Remaining-Ms"] = str(max(1, int(remaining * 1000)))
             if host_header:
                 headers["Host"] = host_header
             # Carry the caller's trace across the hop. Without it a trace stops
@@ -113,7 +156,7 @@ class GraphQueryClient:
             inject_traceparent(headers)
             request = Request(target, data=body, method="POST", headers=headers)
             try:
-                with self._opener.open(request, timeout=self.timeout) as response:
+                with self._opener.open(request, timeout=timeout) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 if not isinstance(payload, dict) or "result" not in payload:
                     raise GraphQueryError("graph service returned an invalid response")
@@ -131,9 +174,20 @@ class GraphQueryClient:
                     ) from exc
                 last = exc
             except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+                remaining = remaining_seconds()
+                if remaining is not None and remaining <= 0:
+                    raise DeadlineExceeded("assistant request deadline exceeded") from exc
                 last = exc
-            if attempt < self.retries:
-                time.sleep(0.05 * (attempt + 1))
+            if attempt < retry_count:
+                delay = 0.05 * (attempt + 1)
+                remaining = remaining_seconds()
+                if remaining is not None:
+                    if remaining <= 0 or delay >= remaining:
+                        if remaining > 0:
+                            time.sleep(remaining)
+                        raise DeadlineExceeded("assistant request deadline exceeded")
+                    delay = min(delay, remaining)
+                time.sleep(delay)
         raise GraphQueryError(
             f"graph service at {self.base_url!r} could not answer {operation!r}: {last}"
         ) from last
@@ -219,6 +273,33 @@ class RemoteGraph:
     def remote_neighbors(self, **parameters: Any) -> dict[str, Any]:
         return dict(self.client.query("neighbors", **parameters))
 
+    def remote_neighbors_many(self, node_ids: list[str], depth: int = 1) -> list[dict[str, Any]]:
+        """Expand several answer hits through one graph-service request."""
+        answers: list[dict[str, Any]] = []
+        for offset in range(0, len(node_ids), 16):
+            batch = node_ids[offset : offset + 16]
+            try:
+                result = self.client.query("neighbors_many", node_ids=batch, depth=depth)
+            except GraphQueryError as exc:
+                # During a rolling deployment an older graph service can still
+                # answer the existing single-node operation.
+                if "unknown graph operation: neighbors_many" not in str(exc):
+                    raise
+                result = [self.remote_neighbors(node_id=node_id, depth=depth) for node_id in batch]
+            if not isinstance(result, list) or len(result) != len(batch):
+                raise GraphQueryError("graph service returned an invalid neighbors_many response")
+            for node_id, item in zip(batch, result, strict=True):
+                if (
+                    not isinstance(item, dict)
+                    or item.get("node_id") != node_id
+                    or not isinstance(item.get("neighbors"), list)
+                ):
+                    raise GraphQueryError(
+                        "graph service returned an invalid neighbors_many response"
+                    )
+                answers.append(dict(item))
+        return answers
+
     def remote_slice(self, **parameters: Any) -> dict[str, Any]:
         return dict(self.client.query("slice", **parameters))
 
@@ -243,10 +324,32 @@ class RemoteGraph:
         return dict(self.client.query("taxonomy", source=source, path=path, max_nodes=max_nodes))
 
     def remote_facts(self, node_ids: list[str], limit: int = 12) -> list[dict[str, Any]]:
-        return list(self.client.query("facts", node_ids=node_ids, limit=limit) or [])
+        # Facts decorate an answer but do not ground it. Keep a congested graph
+        # service from holding synthesis for its full query deadline or retry.
+        return list(
+            self.client.query(
+                "facts",
+                timeout_seconds=min(self.client.timeout, 3.0),
+                retries=0,
+                node_ids=node_ids,
+                limit=limit,
+            )
+            or []
+        )
 
     def remote_figures(self, node_ids: list[str], limit: int = 8) -> list[dict[str, Any]]:
-        return list(self.client.query("figures", node_ids=node_ids, limit=limit) or [])
+        # Figures decorate an answer; keep a congested graph from holding the
+        # answer for the full query deadline or retry window.
+        return list(
+            self.client.query(
+                "figures",
+                timeout_seconds=min(self.client.timeout, 3.0),
+                retries=0,
+                node_ids=node_ids,
+                limit=limit,
+            )
+            or []
+        )
 
     def remote_memory_coverage(self, artifact_ids: list[str]) -> dict[str, Any]:
         return dict(self.client.query("memory_coverage", artifact_ids=artifact_ids))

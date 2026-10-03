@@ -429,33 +429,68 @@ def collect_facts(graph: Any, node_ids: list[str], limit: int = 12) -> list[dict
     same question over an unchanged graph yields the same facts in the same
     sequence.
     """
-    if graph is None:
+    if graph is None or limit <= 0 or not node_ids:
         return []
     remote = getattr(graph, "remote_facts", None)
     if callable(remote):
-        return remote(node_ids=node_ids, limit=limit)
+        from pheasant.graph.query_service import GraphQueryError
+
+        try:
+            return remote(node_ids=node_ids, limit=limit)
+        except GraphQueryError as exc:
+            # Facts enrich an answer or visual, but the cited passages remain
+            # usable if the remote graph is busy or unavailable.
+            logger.warning("graph facts unavailable; continuing without them: %s", exc)
+            return []
+
+    # A row-backed graph otherwise performs a node query for every subject
+    # and every candidate object. Load the cited frontier and its non-structural
+    # targets in two batched reads, while retaining the original edge order.
+    out_edges_batch = getattr(graph, "out_edges_batch", None)
+    prefetch_nodes = getattr(graph, "prefetch_nodes", None)
+    batched_edges = None
+    batched_nodes = None
+    if callable(out_edges_batch) and callable(prefetch_nodes):
+        batched_edges = out_edges_batch(node_ids)
+        relevant_targets = [
+            target
+            for node_id in node_ids
+            for _source, target, edge_map in batched_edges.get(node_id, ())
+            if any(
+                str(data.get("type") or "") not in STRUCTURAL_EDGES for data in edge_map.values()
+            )
+        ]
+        batched_nodes = prefetch_nodes(list(dict.fromkeys([*node_ids, *relevant_targets])))
+
+    def attrs_of(node_id: str) -> Any:
+        if batched_nodes is not None:
+            return batched_nodes.get(node_id, {})
+        try:
+            return graph.nodes[node_id]
+        except (KeyError, AttributeError):
+            return {}
 
     def label_of(node_id: str) -> str:
-        try:
-            return str(graph.nodes[node_id].get("label") or node_id)
-        except (KeyError, AttributeError):
-            return node_id
+        return str(attrs_of(node_id).get("label") or node_id)
 
     def type_of(node_id: str) -> str:
-        try:
-            return str(graph.nodes[node_id].get("type") or "")
-        except (KeyError, AttributeError):
-            return ""
+        return str(attrs_of(node_id).get("type") or "")
 
     # Per-node candidate lists, in citation order.
     per_node: list[list[dict]] = []
     seen: set[tuple[str, str, str]] = set()
     for node_id in node_ids:
-        if node_id not in graph:
+        exists = node_id in batched_nodes if batched_nodes is not None else node_id in graph
+        if not exists:
             continue
         subject = label_of(node_id)
         candidates: list[dict] = []
-        for _src, target, edge_map in graph.out_edges(node_id):
+        edges = (
+            batched_edges.get(node_id, ())
+            if batched_edges is not None
+            else graph.out_edges(node_id)
+        )
+        for _src, target, edge_map in edges:
             for data in edge_map.values():
                 edge_type = str(data.get("type") or "")
                 if edge_type in STRUCTURAL_EDGES:

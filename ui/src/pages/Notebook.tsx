@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -47,8 +47,20 @@ export function Notebook() {
     // progress here, so the Sources rail needs to keep polling while one is
     // running rather than only refreshing on the events this page already
     // triggers (asking a question, switching sources).
-    refetchInterval: (query) => (query.state.data?.sources?.some((s) => s.syncing) ? 1500 : false),
+    refetchInterval: (query) => (query.state.data?.sources?.some((s) => s.syncing) ? 1500 : 5000),
   });
+  useEffect(() => {
+    if (!overview.data) return;
+    if (state.sourceFilter && !overview.data.sources.some((s) => s.name === state.sourceFilter)) {
+      dispatch({ type: "filter-source", source: null });
+    }
+    if (
+      state.sourceTypeFilter &&
+      !overview.data.sources.some((s) => s.type === state.sourceTypeFilter)
+    ) {
+      dispatch({ type: "filter-source-type", sourceType: null });
+    }
+  }, [overview.data, state.sourceFilter, state.sourceTypeFilter, dispatch]);
   const status = useQuery({
     queryKey: ["assistant-status", sessionId],
     queryFn: () => api.assistantStatus(sessionId),

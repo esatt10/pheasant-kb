@@ -225,7 +225,34 @@ def test_one_batched_read_regardless_of_how_many_documents(tmp_path) -> None:
     documents = _retriever(store).documents([f"file:demo:d{i}.md" for i in range(6)])
 
     assert len(documents) == 6
-    assert len(seen) == 3, f"expected 3 batched queries, got {len(seen)}"
+    assert len(seen) == 5, "expected batched auth, metadata, descriptors, symbols, and text reads"
+    assert sum("SUBSTR(text" in sql for sql in seen) == 1
+
+
+def test_large_document_hydration_transfers_only_selected_chunk_bodies(tmp_path) -> None:
+    store = _store(tmp_path)
+    node_id = "file:demo:docs/large.md"
+    chunks = [(f"Section {i}", f"Unique body for section {i}. " + ("x" * 80)) for i in range(8)]
+    _add_file(store, node_id, "docs/large.md", chunks, size_bytes=50_000)
+
+    seen: list[tuple[str, tuple]] = []
+    original = store.rows
+    store.rows = lambda sql, params=(): (seen.append((sql, params)), original(sql, params))[1]  # type: ignore[assignment]
+
+    document = _retriever(store).documents(
+        [node_id],
+        anchors={node_id: [f"{node_id}#c6"]},
+        max_chars=1000,
+        large_file_bytes=1000,
+    )[node_id]
+
+    text_reads = [(sql, params) for sql, params in seen if "SUBSTR(text" in sql]
+    assert len(text_reads) == 1
+    sql, params = text_reads[0]
+    body_ids = params[len(params) * 2 // 3 :]
+    assert 0 < len(body_ids) < len(chunks)
+    assert "chunk(s) omitted" in document.text
+    assert document.chunk_count == len(chunks)
 
 
 # ------------------------------------------------------ what counts as "large"
@@ -659,7 +686,8 @@ def test_metadata_describes_files_without_reading_them(tmp_path) -> None:
     assert meta["symbols"] == ["start", "stop"]
     assert meta["chunk_count"] == 2
     assert meta["lines"]
-    assert len(seen) == 3, "metadata should be three indexed queries"
+    assert len(seen) == 4, "metadata includes a memory-policy read and three indexed queries"
+    assert all("SELECT text" not in sql for sql in seen)
     # The point of it being the cheap half: no chunk text is fetched.
     assert not any("text" in sql.split("FROM")[0].lower() for sql in seen)
 
