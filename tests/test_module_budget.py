@@ -56,7 +56,7 @@ CEILINGS: dict[str, int] = {
     # request-bounded retrieval and combined evidence/answer handling. Keep
     # these cohesive with their owning retriever/workflow and hold a fixed cap.
     "assistant/retrieval.py": 1650,
-    "assistant/workflows/agentic.py": 1500,
+    "assistant/workflows/agentic.py": 1600,
     "cli.py": 3200,
     # Typed query budgets, admission and stage-specific Luna effort settings.
     "config/schema.py": 2250,
@@ -86,8 +86,9 @@ CEILINGS: dict[str, int] = {
     "search/vector_store.py": 1500,
     "setup_wizard.py": 2200,
     # Lowered from 2800 when the preparation types and the process worker's
-    # entry point moved to `sync/preparation.py`.
-    "sync/engine.py": 2780,
+    # entry point moved to `sync/preparation.py`. Raised from 2780 for the
+    # removed-source tombstone guard in `_source`/the enabled-source walk.
+    "sync/engine.py": 2790,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

@@ -94,6 +94,9 @@ LAYERS: dict[str, int] = {
     # no transport concerns and imports no higher-level pheasant package.
     "git_auth": 1,
     "jobs": 1,
+    # Stdlib-only request deadlines and stage timings. Persistence, search and
+    # the graph client read the active budget, so it sits with them.
+    "request_budget": 1,
     "sharding": 1,
     # Config *generators*, not request handlers: they emit a YAML file or a
     # client's JSON and serve nothing. Classifying them as transport would put
