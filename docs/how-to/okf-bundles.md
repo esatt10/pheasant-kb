@@ -82,9 +82,17 @@ Google's `acme_retail` sample bundle, indexed as an ordinary
 
 ![OKF-derived edges for acme_retail](../assets/okf/acme-retail-okf-edges.png)
 
-And the same region in pheasant's Graph view, with symbols and directories
-hidden. The bundle is the teal hexagon and the concept types are the amber
-ones:
+In pheasant's Graph view, choose **Columns** from the layout menu to see a
+bundle laid out the same way: bundle, concept types, concepts, listings and
+references, then tags. Provenance is drawn in red and links in blue, with a
+key naming every relationship colour. See
+[Reading the graph](chat-and-ui.md#the-columns-layout). Concentric stays the
+default.
+
+![acme_retail in the Columns layout](../assets/ui/graph-columns-okf.png)
+
+The same region in the Force layout, with symbols and directories hidden.
+The bundle is the teal hexagon and the concept types are the amber ones:
 
 ![acme_retail in the pheasant Graph view](../assets/okf/acme-retail-ui-graph.png)
 

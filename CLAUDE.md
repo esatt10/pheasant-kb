@@ -2093,6 +2093,15 @@ Each of these cost real time. They are listed because the shape recurs.
   workers, through failures and a pymupdf mismatch;
   `tests/test_chunking_scale.py` bounds lines executed per chunk.
 
+- **`classes: undefined` adds and never removes.** react-cytoscapejs patches
+  an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
+  undefined there. So an element that once had a class kept it after the
+  next render said it had none: a depth ring stayed after "Show all", and the
+  first cut of the Columns layout left its bold edges and side labels behind
+  on Concentric. Found by driving the real browser through Columns and back,
+  then counting classes on the live canvas. `toElements` always emits a
+  string now, and `""` clears.
+
 ---
 
 ## 7. Pointers
