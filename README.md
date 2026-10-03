@@ -5,7 +5,7 @@
 <h1 align="center">pheasant</h1>
 
 <p align="center">
-  <em>A knowledge harness for you and your agents—open source, local-first, and entirely yours to run.</em>
+  <em>A knowledge harness for you and your agents: your sources, indexed into one searchable, cited knowledge base.</em>
 </p>
 
 <p align="center">
@@ -20,18 +20,13 @@
 
 ## What it is
 
-pheasant is a **knowledge harness**: the layer between everything you know and
-every agent you work with. Point it at the things you already have—code
-repositories, folders of notes and documents, PDFs and Office files, websites,
-Notion, Slack, Google Drive, Confluence, an IMAP mailbox—and it turns them into
-one searchable, cited, remembering knowledge base that you and your agents share.
-
-It is built on the classic open-source bargain: **you own it.** It runs in a
-container on your machine or your own infrastructure. Your sources stay where
-they are, your index and your agents' memory live in a state directory you can
-read, back up and move, and nothing leaves unless you connect a model. There is
-no account, no hosted service and no lock-in—you decide what it indexes, what
-it remembers, how it ranks, and when it forgets.
+pheasant is a **knowledge harness**: it connects the things you already have to
+the people and agents that need them. Point it at code repositories, folders of
+notes and documents, PDFs and Office files, websites, Notion, Slack, Google
+Drive, Confluence or an IMAP mailbox, and it indexes them into one knowledge
+base you can search, ask questions of and map as a graph. Answers cite the
+passages they came from, and agents can read and write durable memory alongside
+the sources.
 
 ```
 your sources  →  pheasant indexes them  →  three ways to ask
@@ -43,8 +38,9 @@ your sources  →  pheasant indexes them  →  three ways to ask
 | **MCP**, at `/mcp` or over stdio | Claude Code, Cursor, VS Code and any MCP client search your knowledge base as a tool |
 | **The HTTP API** | The same search and answers, for your own applications |
 
-All three run the same index and the same ranking. One container is the whole
-install: no database to stand up, no broker, no API key.
+All three run the same index and the same ranking. It ships as one container
+with no database to stand up, no broker and no API key; nothing leaves the
+machine unless you connect a model.
 
 ## Quick start
 
