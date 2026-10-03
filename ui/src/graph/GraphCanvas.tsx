@@ -2,7 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CytoscapeComponent from "react-cytoscapejs";
 import type { Core } from "cytoscape";
 import type { GraphLink, GraphNode } from "../api/types";
-import { buildStylesheet, type ShapeAlgorithm, toElements } from "./graphStyles";
+import {
+  COLUMN_EDGE_COLORS,
+  type ColumnPlan,
+  planColumns,
+  STRUCTURAL_EDGE_TYPES,
+} from "./columnsLayout";
+import {
+  buildStylesheet,
+  EDGE_COLORS,
+  type ShapeAlgorithm,
+  sizeForNodeType,
+  toElements,
+} from "./graphStyles";
 import { useAppliedTheme } from "../hooks/useTheme";
 
 interface GraphCanvasProps {
@@ -43,15 +55,21 @@ export function GraphCanvas({
   const onRecenterRef = useRef(onRecenter);
   const listenerBoundRef = useRef(false);
   const selectedRef = useRef<string | null>(null);
+  // Only the Columns layout needs a plan; every other layout passes `null`
+  // and gets exactly the elements it always had.
+  const columns = useMemo(
+    () => (layoutName === "columns" ? planColumns(nodes, links, spacing, sizeForNodeType) : null),
+    [layoutName, nodes, links, spacing],
+  );
   const elements = useMemo(
-    () => toElements(nodes, links, shapeAlgorithm, depths),
-    [nodes, links, shapeAlgorithm, depths],
+    () => toElements(nodes, links, shapeAlgorithm, depths, columns),
+    [nodes, links, shapeAlgorithm, depths, columns],
   );
   const theme = useAppliedTheme();
   const stylesheet = useMemo(() => buildStylesheet(theme), [theme]);
   const layout = useMemo(
-    () => layoutOptions(layoutName, spacing, elements.length),
-    [layoutName, spacing, elements.length],
+    () => layoutOptions(layoutName, spacing, elements.length, columns),
+    [layoutName, spacing, elements.length, columns],
   );
   const [layouting, setLayouting] = useState(false);
   const citedKey = citedIds.join("|");
@@ -99,7 +117,7 @@ export function GraphCanvas({
         const focus = cy.collection();
         focusIds.forEach((id) => focus.merge(cy.getElementById(id)));
         const neighborhood = focus.closedNeighborhood();
-        cy.elements().difference(neighborhood).addClass("faded");
+        cy.elements().difference(neighborhood).not(".column-header").addClass("faded");
         neighborhood.addClass("focus");
       }
     });
@@ -137,6 +155,7 @@ export function GraphCanvas({
   return (
     <div className="graph-canvas-shell">
       {layouting ? <div className="graph-busy">Arranging graph…</div> : null}
+      {columns ? <EdgeKey links={links} drawn={columns.columnOf} /> : null}
       <CytoscapeComponent
         elements={elements as never}
         stylesheet={stylesheet}
@@ -168,11 +187,79 @@ export function GraphCanvas({
   );
 }
 
+/**
+ * Which colour is which relationship, for the edge types actually on screen.
+ *
+ * Shown with the Columns layout, whose whole point is that an edge reads as a
+ * sentence between two columns — which needs the reader to know the verb.
+ * Meaningful relationships are listed first, structural ones after.
+ */
+function EdgeKey({
+  links,
+  drawn,
+}: {
+  links: GraphLink[];
+  drawn: Record<string, number>;
+}) {
+  // Only edges the canvas draws: one whose far end is filtered out is not on
+  // screen, and a key naming it would describe a line nobody can find.
+  const present = Array.from(
+    new Set(
+      links
+        .filter((link) => link.source in drawn && link.target in drawn)
+        .map((link) => link.type ?? "related"),
+    ),
+  );
+  present.sort(
+    (a, b) =>
+      Number(STRUCTURAL_EDGE_TYPES.has(a)) - Number(STRUCTURAL_EDGE_TYPES.has(b)) ||
+      a.localeCompare(b),
+  );
+  if (present.length === 0) return null;
+  return (
+    <div className="graph-edge-key" aria-label="Relationship colours">
+      <span className="graph-edge-key__title">Relationships</span>
+      {present.map((type) => (
+        <span
+          key={type}
+          className={`graph-edge-key__item${
+            STRUCTURAL_EDGE_TYPES.has(type) ? " graph-edge-key__item--structural" : ""
+          }`}
+        >
+          <span
+            className="graph-edge-key__line"
+            style={{
+              background: COLUMN_EDGE_COLORS[type] ?? EDGE_COLORS[type] ?? "var(--text-soft)",
+            }}
+          />
+          {type.replace(/_/g, " ")}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function layoutOptions(
   layoutName: string,
   spacing: number,
   elementCount: number,
+  columns: ColumnPlan | null = null,
 ): Record<string, unknown> {
+  if (layoutName === "columns" && columns) {
+    // Positions are computed up front (`columnsLayout.ts`), so this is a
+    // preset: deterministic, instant, and the same picture every time.
+    const positions = {
+      ...columns.positions,
+      ...Object.fromEntries(columns.headers.map((h) => [h.id, { x: h.x, y: h.y }])),
+    };
+    return {
+      name: "preset",
+      positions: (node: { id: () => string }) => positions[node.id()] ?? { x: 0, y: 0 },
+      animate: false,
+      fit: true,
+      padding: Math.round(40 * spacing),
+    };
+  }
   const name =
     layoutName === "auto"
       ? elementCount > FORCE_LAYOUT_ELEMENT_LIMIT

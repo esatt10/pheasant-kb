@@ -138,10 +138,12 @@ structure worth drawing.)
   decoration.
 - **Size** grows with connectivity, so hubs stand out without a second legend.
 - **Layout** is switchable from the canvas controls: Automatic, Force,
-  Concentric or Hierarchy. (A `Kamada-Kawai` option — ELK's stress
-  majorization — used to be here; it broke the canvas in practice and was
-  removed along with the `cytoscape-elk` dependency, which also shrank the
-  UI bundle by about 1.5 MB.)
+  Concentric, Hierarchy or Columns. **Concentric is the default** and stays
+  the overview; the choice lasts for the browser session. (A `Kamada-Kawai`
+  option — ELK's stress majorization — used to be here; it broke the canvas
+  in practice and was removed along with the `cytoscape-elk` dependency,
+  which also shrank the UI bundle by about 1.5 MB.) Columns is described
+  below.
 - **Clicking empty canvas deselects** without resetting your depth, centre or
   answer filter. A selected node also shows **all** of its links, even ones
   whose far end sits outside the current depth horizon — the horizon is a
@@ -150,6 +152,49 @@ structure worth drawing.)
   context strength.
 - Selecting a source in the left rail scopes both retrieval and the graph to
   it.
+
+### The Columns layout
+
+**Columns** puts every node in a column by the role its type plays and reads
+left to right, so you know what a node *is* before you follow an edge:
+
+| Column | Node types |
+|---|---|
+| Sources & bundles | `knowledge_base`, `source_type`, `source`, `repository`, `okf_bundle` |
+| Groups & types | `directory`, `okf_type`, `branch`, `commit` |
+| Documents | `file`, `markdown_note`, `document`, `memory_record`, `image`, `audio` |
+| Parts, listings & references | `heading`, `chunk`, `symbol`, `external_reference`, OKF `index.md`/`log.md` listings, and any type not listed here |
+| Tags & entities | `tag`, `entity`, `concept`, `topic` |
+
+Within a column, nodes are ordered so each sits near what it connects to.
+Concepts gather beside their type, and a document sits near what it is
+derived from. A tall column wraps into sub-columns. The order is computed,
+not simulated, so the same graph always draws the same picture. Edges that
+only say where something sits (`contains`, `indexes`, `has_chunk`,
+`has_heading`) are drawn thin and grey. Edges that carry meaning are drawn
+bold, and the **Relationships** key in the top-right corner names their
+colours. In this layout `derived_from` is red and `links_to` is blue, so
+provenance and links stand out from the `references` edge that usually runs
+beside them. A link between two nodes of one column arcs out to the side,
+wider for a longer hop.
+
+It works on any source. With an [OKF bundle](okf-bundles.md) it shows the
+bundle the way the format is written: bundle, concept types, concepts,
+listings and tags.
+
+![Google's acme_retail OKF bundle in the Columns layout](../assets/ui/graph-columns-okf.png)
+
+On an ordinary Markdown folder (here `docs/how-to/` itself) it is the source,
+then its pages, with the links between pages arcing beside them. Unhide
+`entity` or `external_reference` in the legend to fill the right-hand
+columns.
+
+![This repository's how-to pages in the Columns layout](../assets/ui/graph-columns-docs.png)
+
+Columns suits a horizon, a filtered view or a single bundle. A whole large
+graph makes very tall columns, which is why it is a choice and not the
+default. Narrow it first with the depth control or by hiding types in the
+legend.
 
 ---
 

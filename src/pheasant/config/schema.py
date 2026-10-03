@@ -834,6 +834,12 @@ class GraphSettings(ModelMixin):
     #: without a memory source, so turning it off only matters to a region that
     #: has one and would rather keep memory out of its graph.
     memory_entity_bridging: bool = True
+    #: Detect Open Knowledge Format bundles inside any source and draw their
+    #: relationships -- concept types, tags, links, provenance, attested
+    #: computations, index listings and log history (`graph/okf.py`). A source
+    #: holding no bundle is unaffected either way; turning this off retracts
+    #: the OKF structure on the next sync of each source that had one.
+    okf_bundles: bool = True
     # Synapse Step 34.5a: run graph.enrichment.resolve_cross_source_edges
     # through the vendored WASM accelerator instead of pure Python. Default
     # off — needs the [wasm] extra; falls back to pure Python on any

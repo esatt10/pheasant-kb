@@ -130,13 +130,17 @@ export type SessionAction =
  * broke the canvas in practice and was removed along with the `cytoscape-elk`
  * dependency it was the only user of.
  */
-export type GraphLayout = "auto" | "cose" | "concentric" | "breadthfirst";
+export type GraphLayout = "auto" | "cose" | "concentric" | "breadthfirst" | "columns";
 
 export const GRAPH_LAYOUTS: { value: GraphLayout; label: string }[] = [
   { value: "auto", label: "Automatic" },
   { value: "cose", label: "Force" },
   { value: "concentric", label: "Concentric" },
   { value: "breadthfirst", label: "Hierarchy" },
+  // Opt-in: nodes in columns by role (graph/columnsLayout.ts). Not the
+  // default — a whole large graph makes tall columns; concentric stays the
+  // overview.
+  { value: "columns", label: "Columns" },
 ];
 
 function clampDepth(depth: number): number {

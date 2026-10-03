@@ -1,5 +1,6 @@
 import type { GraphLink, GraphNode } from "../api/types";
 import type { Theme } from "../hooks/useTheme";
+import { COLUMN_EDGE_COLORS, type ColumnPlan, STRUCTURAL_EDGE_TYPES } from "./columnsLayout";
 
 // Cytoscape's exported stylesheet type name varies across @types versions, so we
 // keep the stylesheet array loosely typed and let Cytoscape validate at runtime.
@@ -30,6 +31,12 @@ export const NODE_COLORS: Record<string, string> = {
   entity: "#9a5a58",
   concept: "#7c5d84",
   external_reference: "#7c776b",
+  // Open Knowledge Format: a detected bundle, its concept-type hubs and tags.
+  // The bundle shares the hub family with `source_type` (it groups); types
+  // and tags are warm so a bundle's classification reads apart from content.
+  okf_bundle: "#2f6f7a",
+  okf_type: "#b5832e",
+  tag: "#9c7a3c",
 };
 
 export const EDGE_COLORS: Record<string, string> = {
@@ -45,6 +52,10 @@ export const EDGE_COLORS: Record<string, string> = {
   links_to: "#6b8a9e",
   about: "#8a6f9e",
   supersedes: "#b0654f",
+  tagged_with: "#c2a36b",
+  executed_by: "#4f8a5b",
+  attested_by: "#3e7a4a",
+  computed_by: "#6a9a74",
 };
 
 export const ALL_EDGE_TYPES = Object.keys(EDGE_COLORS);
@@ -87,6 +98,9 @@ export const NODE_TYPE_SHAPES: Record<string, string> = {
   entity: "ellipse",
   concept: "ellipse",
   external_reference: "rectangle",
+  okf_bundle: "hexagon",
+  okf_type: "hexagon",
+  tag: "ellipse",
 };
 
 /** Base radius per type, so the graph has a visual hierarchy at rest. */
@@ -106,6 +120,9 @@ const NODE_SIZES: Record<string, number> = {
   entity: 18,
   concept: 14,
   external_reference: 16,
+  okf_bundle: 40,
+  okf_type: 30,
+  tag: 14,
 };
 
 export function colorForNode(type?: string): string {
@@ -149,6 +166,8 @@ export function sizeForNodeType(type?: string): number {
 export interface CyElement {
   data: Record<string, unknown>;
   classes?: string;
+  selectable?: boolean;
+  grabbable?: boolean;
 }
 
 /** Rings beyond this share the outermost styling. */
@@ -160,6 +179,7 @@ export function toElements(
   links: GraphLink[],
   shapeAlgorithm: ShapeAlgorithm = "node_type",
   depths?: Record<string, number>,
+  columns?: ColumnPlan | null,
 ): CyElement[] {
   const seen = new Set<string>();
   const elements: CyElement[] = [];
@@ -176,7 +196,9 @@ export function toElements(
     elements.push({
       data: {
         id: node.id,
-        label: shorten(node.label ?? node.id),
+        // Columns gives every label its own row, so it can afford the longer
+        // path a document is usually named by.
+        label: shorten(node.label ?? node.id, columns ? 44 : 26),
         ntype: node.type ?? "unknown",
         shape: shapeForNode(node.type, connections, shapeAlgorithm),
         // Well-connected nodes grow a little so hubs stand out without a
@@ -186,7 +208,18 @@ export function toElements(
       // Distance from the center reads as depth on the canvas: the center is
       // solid, each ring out a little quieter, so "how far is this from what I
       // asked about" is answerable at a glance.
-      classes: hop === undefined ? undefined : `ring-${Math.min(hop, MAX_STYLED_RING)}`,
+      //
+      // Always a string, never `undefined`: react-cytoscapejs patches a kept
+      // element with `ele.json({ classes })`, and Cytoscape ignores an
+      // undefined there -- so a class could be added but never taken away
+      // (a ring kept after "Show all", Columns styling kept after switching
+      // layout). An empty string clears.
+      classes: [
+        hop === undefined ? "" : `ring-${Math.min(hop, MAX_STYLED_RING)}`,
+        columns ? "col-node" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
     });
   }
   for (const link of links) {
@@ -194,10 +227,56 @@ export function toElements(
     const etype = link.type ?? "related";
     const id = `${link.source}__${etype}__${link.key ?? 0}__${link.target}`;
     elements.push({
-      data: { id, source: link.source, target: link.target, etype, label: etype },
+      data: {
+        id,
+        source: link.source,
+        target: link.target,
+        etype,
+        label: etype,
+        ...(columns ? { arc: columnArc(columns, link.source, link.target) } : {}),
+      },
+      classes: columns ? columnEdgeClasses(columns, link.source, link.target, etype) : "",
+    });
+  }
+  // Column titles are canvas nodes so they pan and zoom with the graph, but
+  // they are not part of it: unselectable, ungrabbable, and invisible to taps
+  // (`events: no` in the stylesheet).
+  for (const header of columns?.headers ?? []) {
+    elements.push({
+      data: { id: header.id, label: header.label, ntype: "__column_header" },
+      classes: "column-header",
+      selectable: false,
+      grabbable: false,
     });
   }
   return elements;
+}
+
+/**
+ * In the Columns layout, an edge that only says where something sits is
+ * drawn quiet and one that carries meaning is drawn bold, and an edge between
+ * two nodes of one column arcs out to the side instead of running through
+ * every node between them.
+ */
+/**
+ * How far a same-column edge bows out, in px: wider for a longer hop, so the
+ * arcs of one column nest instead of piling onto the same curve.
+ */
+function columnArc(columns: ColumnPlan, source: string, target: string): number {
+  const a = columns.positions[source];
+  const b = columns.positions[target];
+  if (!a || !b) return 0;
+  return Math.round(Math.min(40 + Math.abs(b.y - a.y) * 0.22, 260));
+}
+
+function columnEdgeClasses(
+  columns: ColumnPlan,
+  source: string,
+  target: string,
+  etype: string,
+): string {
+  const weight = STRUCTURAL_EDGE_TYPES.has(etype) ? "col-structural" : "col-semantic";
+  return columns.columnOf[source] === columns.columnOf[target] ? `${weight} col-same` : weight;
 }
 
 function shapeForNode(type: string | undefined, degree: number, algorithm: ShapeAlgorithm): string {
@@ -216,9 +295,9 @@ function sizeForNode(type: string | undefined, degree: number, algorithm: ShapeA
   return Math.min(base + Math.min(degree, 12), base * 1.8);
 }
 
-function shorten(label: string): string {
-  if (label.length <= 26) return label;
-  return `…${label.slice(label.length - 25)}`;
+function shorten(label: string, limit = 26): string {
+  if (label.length <= limit) return label;
+  return `…${label.slice(label.length - (limit - 1))}`;
 }
 
 export function buildStylesheet(theme: Theme = "light"): CyStylesheet[] {
@@ -326,5 +405,58 @@ export function buildStylesheet(theme: Theme = "light"): CyStylesheet[] {
       style: { "border-width": 2, "border-color": canvas.accent, "z-index": 10 },
     },
     { selector: "edge.focus", style: { opacity: 0.9, width: 1.6 } },
+    // Columns layout. Only elements that layout builds carry these classes,
+    // so every other layout looks exactly as it did.
+    {
+      // Labels beside the node rather than under it, so a column of rows
+      // stays legible at the pitch `planColumns` spaces them by.
+      selector: "node.col-node",
+      style: {
+        "text-valign": "center",
+        "text-halign": "right",
+        "text-margin-x": 7,
+        "text-margin-y": 0,
+        "text-max-width": "260px",
+        "font-size": 11,
+        // A chip behind the text, because in this layout edges fan out of a
+        // column straight through the labels beside it.
+        "text-background-color": canvas.labelBackground,
+        "text-background-opacity": 0.85,
+        "text-background-padding": "2px",
+        "text-background-shape": "roundrectangle",
+      },
+    },
+    { selector: "edge.col-structural", style: { width: 0.8, opacity: 0.45 } },
+    { selector: "edge.col-semantic", style: { width: 2.2, opacity: 0.85, "arrow-scale": 0.8 } },
+    ...Object.entries(COLUMN_EDGE_COLORS).map(([type, color]) => ({
+      selector: `edge.col-semantic[etype = "${type}"]`,
+      style: { "line-color": color, "target-arrow-color": color },
+    })),
+    {
+      selector: "edge.col-same",
+      style: {
+        "curve-style": "unbundled-bezier",
+        "control-point-distances": "data(arc)",
+        "control-point-weights": 0.5,
+      },
+    },
+    {
+      selector: "node.column-header",
+      style: {
+        shape: "round-rectangle",
+        width: 1,
+        height: 1,
+        "background-opacity": 0,
+        "border-width": 0,
+        events: "no",
+        label: "data(label)",
+        color: canvas.label,
+        "font-size": 15,
+        "font-weight": 700,
+        "text-valign": "center",
+        "text-max-width": "260px",
+        opacity: 1,
+      },
+    },
   ];
 }

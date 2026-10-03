@@ -24,6 +24,7 @@ from pheasant.ingestion.content_types import (
     artifact_type,
 )
 from pheasant.ingestion.extractor import EXTRACT_SIDECAR_SUFFIX, HTML_EXTENSIONS
+from pheasant.ingestion.okf import parse_okf
 from pheasant.ingestion.packing import pack
 from pheasant.ingestion.taxonomy import (
     SectionHeading,
@@ -68,6 +69,12 @@ class ParsedArtifact:
     #: ``sections`` or ``auto`` (`ingestion/chunk_plan.py`); ``None`` for
     #: ``fixed``, so a fixed source's artifacts are byte-identical to before.
     chunk_plan: dict[str, Any] | None = None
+    #: What this file says as an Open Knowledge Format document -- a concept,
+    #: an ``index.md`` listing or a ``log.md`` -- or ``None`` when it carries
+    #: no OKF structure (`ingestion/okf.py`). Per file only: whether its
+    #: directory is a *bundle* is decided once the whole source is indexed
+    #: (`graph/okf.py`), because no single file can say so.
+    okf: dict[str, Any] | None = None
 
 
 def utc_now() -> str:
@@ -292,6 +299,22 @@ def _chunks_and_headings(
     return chunks, headings, recorded
 
 
+def okf_for_source(source: SourceConfig, relative_path: str, text: str) -> dict[str, Any] | None:
+    """The file's OKF reading, for every source type that can hold a bundle.
+
+    Memory sources are excluded: a record's frontmatter is pheasant's own
+    schema, stripped before indexing and projected into ``memory_records``,
+    and reading it as an OKF concept would describe the same file twice.
+    Only ``.md`` is considered, which is the only suffix OKF defines.
+    """
+
+    if getattr(source.type, "value", source.type) == "memory":
+        return None
+    if not relative_path.lower().endswith(".md"):
+        return None
+    return parse_okf(relative_path, text.replace("\x00", ""))
+
+
 def _strip_memory_frontmatter(source: SourceConfig, text: str) -> tuple[str, int]:
     """Drop an agent-memory record's frontmatter before it is indexed.
 
@@ -502,6 +525,7 @@ def parse_file(
     else:
         text = read_text(path, extractor)
     chunks, headings, chunk_plan = _chunks_and_headings(source, text, relative)
+    okf = okf_for_source(source, relative, text)
     stat = path.stat()
     artifact_id = f"file:{source.name}:{relative}:branch={branch or 'none'}"
     return ParsedArtifact(
@@ -522,6 +546,7 @@ def parse_file(
         chunks=chunks,
         headings=headings,
         chunk_plan=chunk_plan,
+        okf=okf,
     )
 
 
@@ -591,6 +616,7 @@ def parse_connector_payload(
     else:
         text = read_text_bytes(payload.content, item.relative_path, extractor)
     chunks, headings, chunk_plan = _chunks_and_headings(source, text, item.relative_path)
+    okf = okf_for_source(source, item.relative_path, text)
     artifact_id = f"file:{source.name}:{item.relative_path}:branch={branch or 'none'}"
     return ParsedArtifact(
         id=artifact_id,
@@ -607,6 +633,7 @@ def parse_connector_payload(
         chunks=chunks,
         headings=headings,
         chunk_plan=chunk_plan,
+        okf=okf,
     )
 
 
