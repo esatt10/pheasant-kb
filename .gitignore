@@ -52,7 +52,6 @@ coverage.xml
 .pytest_cache/
 cover/
 .pytest_artifacts/
-benchmarks/
 
 # Translations
 *.mo

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "scifact",
+  "title": "SciFact — scientific claim verification",
+  "why": [
+    "The known-positives come from expert annotations rather than from this",
+    "repository. SciFact pairs a claim with the document whose sentences a",
+    "domain expert marked as supporting or contradicting it, which is exactly",
+    "the judgement pheasant's evaluation plane calls typed proof. A demo",
+    "corpus whose positives were written by the seeding script measures the",
+    "seeding script.",
+    "It is also the canonical small retrieval benchmark: SciFact is one of the",
+    "BEIR tasks, and is the dataset sentence-transformers, Vespa, Qdrant,",
+    "Weaviate, Haystack and LlamaIndex all report on."
+  ],
+  "source": {
+    "url": "https://scifact.s3-us-west-2.amazonaws.com/release/latest/data.tar.gz",
+    "homepage": "https://github.com/allenai/scifact",
+    "paper": "Wadden et al., 'Fact or Fiction: Verifying Scientific Claims', EMNLP 2020"
+  },
+  "license": {
+    "claims": "CC BY 4.0",
+    "abstracts": "from S2ORC; redistributed by the SciFact release",
+    "note": "Fetched at benchmark time and never vendored into this repository."
+  },
+  "sample": {
+    "claims": 60,
+    "decoy_documents": 340,
+    "seed": 20260901,
+    "why": [
+      "A subset, and deliberately a *deterministic* one: the full 5,183",
+      "abstracts index in minutes, which is too slow for a screenshot run and",
+      "far past what a demo needs to make ranking matter.",
+      "The rule is stated so it cannot be cherry-picked to flatter a result:",
+      "take the first N dev claims that carry expert evidence, include every",
+      "document they cite, then fill the rest of the corpus with a seeded",
+      "sample of uncited abstracts. The decoys are what make rank matter —",
+      "a corpus where every query's answer is the only plausible document",
+      "measures nothing."
+    ]
+  },
+  "pdf_share": 0.25,
+  "pdf_why": [
+    "A quarter of the abstracts are written as real PDFs rather than",
+    "Markdown, so the demo exercises the PDF extraction path on the same",
+    "corpus the retrieval numbers come from. A mixed collection is also what",
+    "a real region looks like."
+  ]
+}

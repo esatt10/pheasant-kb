@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "sample_files_per_repository": 200,
+  "max_file_bytes": 524288,
+  "repositories": [
+    {
+      "name": "spark",
+      "url": "https://github.com/apache/spark.git",
+      "ref": "b18e46d4fbdab45bb123efd1de1dbd1a619f1f34",
+      "sparse_paths": ["python/pyspark"],
+      "query": "SparkSession DataFrame SQL execution"
+    },
+    {
+      "name": "mlflow",
+      "url": "https://github.com/mlflow/mlflow.git",
+      "ref": "10ca0a8d6b93383f89a8d24f848830a0f830842b",
+      "sparse_paths": ["mlflow"],
+      "query": "MLflow experiment tracking model registry"
+    },
+    {
+      "name": "vscode",
+      "url": "https://github.com/microsoft/vscode.git",
+      "ref": "a3c9dc6db053698c3459977384b73f4ca3248cbd",
+      "sparse_paths": ["src/vs"],
+      "query": "VS Code extension host editor command"
+    },
+    {
+      "name": "langgraph",
+      "url": "https://github.com/langchain-ai/langgraph.git",
+      "ref": "bdb8a9c7a4aa1390af225f6a5d292e5088659bd5",
+      "sparse_paths": ["libs/langgraph"],
+      "query": "LangGraph state graph checkpoint persistence"
+    },
+    {
+      "name": "deepagents",
+      "url": "https://github.com/langchain-ai/deepagents.git",
+      "ref": "4a4cb10dd8604fb67b34ba20e49c1756e68ae3d5",
+      "sparse_paths": ["libs/deepagents"],
+      "query": "Deep Agents subagent filesystem middleware"
+    }
+  ],
+  "budgets": {
+    "max_full_seconds": 300.0,
+    "min_full_files_per_second": 3.0,
+    "max_incremental_seconds": 90.0,
+    "max_incremental_to_full_ratio": 0.5,
+    "max_search_p95_seconds": 15.0,
+    "max_peak_rss_mb": 2048.0
+  }
+}
