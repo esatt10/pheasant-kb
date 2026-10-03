@@ -126,6 +126,12 @@ search:
     # pin an exact size across a Synapse fleet.
     dimensions: null
     batch_size: 64
+    timeout_seconds: 30.0        # network timeout per embedding request
+    # Query-time vector search gets a tighter budget than bulk indexing.
+    # null inherits the indexing value; a request deadline shortens it further.
+    query_timeout_seconds: null
+    query_max_retries: null      # 0 fails the vector arm immediately
+    query_rate_limit_max_wait_seconds: null
   vector_store:
     provider: lancedb            # "lancedb" (pip install 'pheasant-kb[vector]') | "numpy"
     path: /state/vectors         # vectors live under <path>/<kb_id>/
@@ -591,7 +597,15 @@ assistant:
   session_key_ttl_minutes: 720
   max_context_chunks: 8
   max_output_tokens: 4096
-  request_timeout_seconds: 90.0
+  request_timeout_seconds: 90.0   # ceiling per provider call; a deadline shortens it
+  # reasoning_effort: low           # none | low; unset keeps the model's default
+  # Optional end-to-end answer deadlines and process-wide answer admission.
+  # Over the limit, a request gets 429 + Retry-After and code ASSISTANT_BUSY.
+  # latency:
+  #   short_deadline_seconds: null
+  #   medium_deadline_seconds: null
+  #   long_deadline_seconds: null
+  #   max_concurrent_answers: 0     # 0 disables admission
   max_facts: 12
   # Which agent workflow answers a question.
   #   auto     — "agentic" when a model is connected AND the [agent] extra is
@@ -610,6 +624,8 @@ assistant:
   #  agentic:
   #    max_rounds: 3
   #    retrieval_modes: [hybrid, vector]
+  #    staged_retrieval: false   # one hybrid search first, plan only if thin
+  #    combine_grade_and_answer: false  # grade and write short answers in one call
   #    expand_graph: true
   #    max_context_passages: 12
   #    grader_model: gpt-6-luna  # optional with OpenAI; assistant.model writes answers

@@ -5,7 +5,7 @@
 <h1 align="center">pheasant</h1>
 
 <p align="center">
-  <em>Context, memory and knowledge for you and your agents—in one container you run yourself.</em>
+  <em>A knowledge harness for you and your agents—open source, local-first, and entirely yours to run.</em>
 </p>
 
 <p align="center">
@@ -18,12 +18,20 @@
 
 ---
 
-## What it does
+## What it is
 
-Point pheasant at things you already have—code repositories, folders of notes,
-PDFs and Office documents, an Obsidian vault, a website, Notion, Slack, Google
-Drive, Confluence, an IMAP mailbox—and it turns them into one searchable
-knowledge base that both you and your agents can use.
+pheasant is a **knowledge harness**: the layer between everything you know and
+every agent you work with. Point it at the things you already have—code
+repositories, folders of notes and documents, PDFs and Office files, websites,
+Notion, Slack, Google Drive, Confluence, an IMAP mailbox—and it turns them into
+one searchable, cited, remembering knowledge base that you and your agents share.
+
+It is built on the classic open-source bargain: **you own it.** It runs in a
+container on your machine or your own infrastructure. Your sources stay where
+they are, your index and your agents' memory live in a state directory you can
+read, back up and move, and nothing leaves unless you connect a model. There is
+no account, no hosted service and no lock-in—you decide what it indexes, what
+it remembers, how it ranks, and when it forgets.
 
 ```
 your sources  →  pheasant indexes them  →  three ways to ask
@@ -35,9 +43,8 @@ your sources  →  pheasant indexes them  →  three ways to ask
 | **MCP**, at `/mcp` or over stdio | Claude Code, Cursor, VS Code and any MCP client search your knowledge base as a tool |
 | **The HTTP API** | The same search and answers, for your own applications |
 
-All three run the same index and the same ranking. It is one container on your
-own machine: no database to stand up, no broker, no API key, and nothing leaves
-the machine unless you choose to connect a model.
+All three run the same index and the same ranking. One container is the whole
+install: no database to stand up, no broker, no API key.
 
 ## Quick start
 
@@ -63,7 +70,7 @@ the same thing without Docker.
   <img src="docs/assets/ui/sources.png" alt="The Sources page: three sources listed with their type, path and health, each with sync, edit and promote actions" width="900">
 </p>
 
-A source is a path, a URL or a glob; pheasant infers the rest. Sync is
+A source is a path, a URL, a glob or a ZIP; pheasant infers the rest. Sync is
 **incremental by default**—re-syncing a corpus nothing has touched does no
 work, because unchanged content is skipped by checksum before it is even read.
 
@@ -75,7 +82,9 @@ work, because unchanged content is skipped by checksum before it is even read.
 
 Every answer cites where each passage came from. With no model connected,
 pheasant answers extractively from the index; connect an API key and the same
-retrieval gets synthesized into prose instead.
+retrieval gets synthesized into prose instead. The answer's trace shows what
+each search stage did and how long it took, and while a short answer is being
+checked its draft streams in, marked as a draft until the citations verify.
 
 Behind it are three retrieval arms—full-text, vector and graph—merged by
 reciprocal rank fusion, so a query matches on wording, on meaning and on how
@@ -257,10 +266,10 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 
 | | |
 |---|---|
-| **Ingest** | Git repositories, folders, single files, Obsidian vaults, web pages, S3 and APIs. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
+| **Ingest** | Git repositories, folders, single files, web pages, S3 and APIs. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
 | **Connectors** | Notion, Google Drive, Slack, Confluence and IMAP ship first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
-| **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. |
+| **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. |
 | **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
 | **Measurement** | Effectiveness evaluation and per-stage retrieval tuning, both off by default and read-only when on. |
 | **Readiness** | A machine-readable capability contract and executable go/no-go gates for using this region as an experiment's substrate: ingestion receipts, sealed snapshots, per-result lineage, isolation proofs and structured refusal codes. |

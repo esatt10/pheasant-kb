@@ -1,10 +1,15 @@
 # pheasant
 
-pheasant is a **Docker-first, local-first MCP context server**. It turns your
-sources — git repositories, folders, single files, PDFs and Office documents,
-Obsidian vaults, images and audio, web collections, SaaS connectors (Notion,
-Google Drive, Slack, Confluence, IMAP) and API/S3 — into a queryable
-**knowledge graph** with hybrid self-search, for both agents and humans.
+pheasant is an open-source, **Docker-first, local-first knowledge harness** for
+you and your agents. It turns your sources — git repositories, folders, single
+files, PDFs and Office documents, images and audio, web collections, SaaS
+connectors (Notion, Google Drive, Slack, Confluence, IMAP) and API/S3 — into a
+queryable **knowledge graph** with hybrid self-search, served over MCP, HTTP and
+a web UI.
+
+You own it: it runs where you run it, your sources stay where they are, your
+index and your agents' memory live in a state directory you control, and nothing
+leaves the machine unless you connect a model.
 
 !!! tip "Part of the Synapse Suite"
     pheasant is the **region** component of **Synapse**, a federated
