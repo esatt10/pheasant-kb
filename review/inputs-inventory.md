@@ -142,3 +142,26 @@ Each has an offline stub. All are optional.
 - **Outside this list:** the planes that consume content rather than ingest it
   (evaluation, tuning, readiness, observation, assistant, Synapse contract).
   Tell me if you want the same keep/cut list for those.
+
+---
+
+## Decisions (recorded from review)
+
+**Keep**
+- Source types: `repository`, `markdown_folder`, `document_folder`, `single_file`, `memory`, `web_collection`, `api`
+- Plugins: `gdrive` (untested, so verify before release), third-party plugin mechanism, WASM sandboxed connector runtime
+- Formats: all of section 3, including images, audio, ZIP, legacy `.doc`, EPUB/RTF and the sandboxed PDF extractor (open question: the "Something else" box in the text/code/web question was ticked with no detail, so a missing format may be wanted)
+- Sidecars and conventions: `.extract.txt`, `.caption.txt`, `.transcript.txt`, OKF, structural taxonomy
+- Entry points: YAML + `pheasant sync`, `pheasant up`, `pheasant setup`, `pheasant host` and `pheasant mount`, HTTP source routes, UI drop zone, MCP source/sync tools, receipt-tracked submission, memory write routes
+- Triggers: startup/watcher/git commit, scheduler and per-source intervals, durable queue + worker fleet
+- Network-capable steps: embeddings, captioner, transcriber
+
+**Cut**
+- Source types: `obsidian_vault`, `s3`
+- Plugins: `notion`, `slack`, `confluence`, `imap`
+
+**Defer**
+- Memory formation from the observation plane (`memory.formation`)
+
+**Open design item**
+- The WASM runtime today runs only the per-item transform inside the guest. Listing and reading stay on the host, and the only shipped guest is a reference `.wat`. A decoupled "check before it lands" gate would need the guest to cover reads.
