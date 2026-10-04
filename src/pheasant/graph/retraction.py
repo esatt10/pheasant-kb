@@ -156,3 +156,58 @@ def retract_stale_enrichment(
     if owned:
         graph.remove_nodes_from(owned)
     return shared
+
+
+#: Node types an artifact owns outright: their ids carry its source and path,
+#: so no other artifact can share one.
+_OWNED_BY_ARTIFACT = frozenset({"chunk", "heading"})
+
+
+def remove_vanished_artifacts(
+    graph: Any, source_name: str, vanished: list[tuple[str, str, str | None]]
+) -> set[str]:
+    """Remove artifacts whose files are gone, with everything only they held.
+
+    ``vanished`` is ``(artifact_id, relative_path, git_branch)``. Removed:
+    each artifact node, the chunks, headings and symbols it owns, and every
+    directory the removal leaves empty, deepest first. Shared nodes it pointed
+    at (import stubs, call targets, entities) are returned as detached, for
+    the cross-source pass to remove if nothing else points at them; the
+    artifact's own edges go with its node.
+
+    Walks each artifact's out-edges and its directory chain, never the graph:
+    owned nodes are reachable from the artifact (`has_chunk`, `has_heading`,
+    `mentions`), which is how `drop_stale_chunks` already finds chunks.
+    """
+
+    remove: set[str] = set()
+    shared: set[str] = set()
+    directories: set[str] = set()
+    nodes = graph.node_map()
+    for artifact_id, relative_path, branch in vanished:
+        if artifact_id not in graph:
+            continue
+        remove.add(artifact_id)
+        for _, target, _edges in graph.out_edges(artifact_id):
+            attrs = nodes.get(target) or {}
+            kind = attrs.get("type")
+            if kind in _OWNED_BY_ARTIFACT or (
+                kind == "symbol" and attrs.get("artifact_id") == artifact_id
+            ):
+                remove.add(target)
+            elif kind in SHARED_ENRICHMENT_NODE_TYPES:
+                shared.add(target)
+        parts = [part for part in relative_path.replace("\\", "/").split("/")[:-1] if part]
+        for depth in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            directories.add(f"directory:{source_name}:{prefix}:branch={branch or 'none'}")
+    # Deepest first, so a parent is judged after its emptied children are.
+    for directory in sorted(directories, key=lambda d: d.count("/"), reverse=True):
+        if directory not in graph:
+            continue
+        children = {target for _, target, _ in graph.out_edges(directory)}
+        if children <= remove:
+            remove.add(directory)
+    if remove:
+        graph.remove_nodes_from(remove)
+    return shared - remove

@@ -188,7 +188,7 @@ pheasant sync --config pheasant.yaml --all --mode full
 
 | Mode | Behavior |
 |---|---|
-| `incremental` | Uses connector checkpoints + content hashes to skip unchanged artifacts. The default. |
+| `incremental` | Uses connector checkpoints + content hashes to skip unchanged artifacts, and removes files (and URLs, Drive files, ZIP members) the source no longer has: their rows, chunks, vectors and graph nodes. An edit retracts the imports, calls and symbols it took out. A source that suddenly lists *nothing* removes nothing (a vanished mount looks the same); run `full` if it really is empty. The default. |
 | `full` | Rebuilds artifact, chunk, graph, manifest, and checkpoint state for a source. |
 | `validate_only` | Checks connector health and readability without writing index artifacts or manifests. |
 | `repair` | Rebuilds missing or invalid state from manifests and database rows. (Also available as `pheasant repair`.) |

@@ -61,6 +61,12 @@ The four product pillars apply to plugins exactly as to built-ins:
 4. **State discipline** — checkpoints persist only through the provided
    `StateStore` (`set_checkpoint`/`get_checkpoint`); never write your own
    files into `/state`.
+5. **Say whether your listing is complete.** Set `complete_listing = True`
+   only if `list_items()` returns *everything* the source holds on every
+   call. An incremental sync then removes whatever it indexed before and no
+   longer sees. Leave it `False` (the default) if you list only what changed,
+   such as new messages or a feed's latest page: pheasant then never treats
+   an item's absence as a deletion, and a `full` sync is how removals land.
 
 ## The conformance bar
 

@@ -13,7 +13,12 @@ from pheasant.graph.enrichment import (
 )
 from pheasant.graph.media_links import MEDIA_NODE_TYPES, resolve_image_edges
 from pheasant.graph.okf import artifact_attrs as okf_artifact_attrs
-from pheasant.graph.retraction import drop_embeds, drop_stale_chunks, retract_stale_enrichment
+from pheasant.graph.retraction import (
+    drop_embeds,
+    drop_stale_chunks,
+    remove_vanished_artifacts,
+    retract_stale_enrichment,
+)
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact, utc_now
@@ -728,6 +733,13 @@ class GraphBuilder:
             orphans = [node_id for node_id, source_type in hubs if source_type not in active_types]
         self.graph.remove_nodes_from(orphans)
         return len(orphans)
+
+    def remove_vanished_artifacts(
+        self, source_name: str, vanished: list[tuple[str, str, str | None]]
+    ) -> None:
+        """Remove files a complete listing no longer contains (`graph.retraction`)."""
+
+        self._detached |= remove_vanished_artifacts(self.graph, source_name, vanished)
 
     def remove_artifact_nodes(self, artifact_ids: list[str]) -> None:
         """Remove specific artifacts' nodes (and anything derived from them)

@@ -89,7 +89,8 @@ pheasant-kb/
 │   │                            GateSet that cannot be constructed empty
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
-│   ├── sync/                  ← engine, connectors, web_connector (listed
+│   ├── sync/                  ← engine, connectors, vanished (deleted files
+│   │                            leave on any sync), web_connector (listed
 │   │                            URLs, per-page revalidation), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
@@ -405,6 +406,12 @@ owned by `enrichment_pass: "okf"`. It walks the source rather than the graph
 and retracts per edge, so a `references` edge sharing a pair survives.
 Staleness is not stored because it is a function of the clock.
 `docs/how-to/okf-bundles.md`.
+
+**Deletions are synced, not just additions.** An incremental sync removes
+what a complete listing no longer contains (`sync/vanished.py`, opt-in per
+connector through `complete_listing`), and re-indexing an edited file retracts
+the imports, calls and symbols its new text dropped (`graph/retraction.py`).
+After either, incremental equals a full sync of what is there now.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. One ships first-party: Google
@@ -1909,9 +1916,20 @@ Each of these cost real time. They are listed because the shape recurs.
   strongest one there is: after an edit, incremental equals a fresh full sync
   of the edited tree (`tests/test_sync_idempotency.py`), and three mutants
   (no retraction, orphans kept, linked shared nodes dropped) each fail it.
-  Found while writing it: a file **deleted** from a folder source is never
-  removed by an incremental sync at all (its artifact, chunks and graph nodes
-  stay searchable until a `full`), which is a different and larger change.
+- **An incremental sync did nothing about deletions. Fixed.** Found while
+  writing the edit fix above: a file deleted from a folder source kept its
+  artifact row, its chunks (every text search still returned it), its vectors
+  and its graph nodes until somebody ran `full`. The listing already said what
+  exists, so `sync/vanished.py` removes what the manifest holds and a
+  *complete* listing lacks, once per sync and in batches, because the
+  full-text delete is the UNINDEXED-column scan above. Two refusals carry the
+  weight. `complete_listing` is opt-in per connector (every in-tree one sets
+  it), because a plugin listing only what changed would otherwise read as
+  having deleted everything else. And an *empty* listing over a non-empty
+  index removes nothing: a vanished mount and an emptied tree look identical,
+  and guessing wrong costs the whole index. Emptied directories and shared
+  nodes nothing points at any more go too, so incremental after a deletion
+  equals a full sync of what remains, in state rows and graph alike.
 - **A stand-in that implements *part* of a mapping fails only on the backend
   nobody tests, in production.** `SqlGraph.node_map()` returns a `_LazyNodeMap`
   — a per-scan cache built for `_scan_edges`, which calls `get()` and nothing

@@ -81,6 +81,7 @@ from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers 
 )
 from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
+from pheasant.sync.vanished import prune_vanished
 
 logger = logging.getLogger(__name__)
 
@@ -2208,12 +2209,14 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
+            if removed := prune_vanished(self, source.name, connector, items, artifacts):
+                details_extra["removed_artifacts"] = removed
             pruned_vectors = self._finalize_index_state(
                 source=source,
                 connector=connector,
                 mode=mode,
                 manifest=manifest,
-                indexed=indexed,
+                indexed=indexed + removed,  # a removal is a change to link and save
                 embedded_chunks=embedded_chunks,
                 changed_ids=changed_ids,
                 total_items=total_items,
@@ -2236,7 +2239,7 @@ class SyncEngine:
             # Additive history beside graph.latest.json, throttled by the
             # configured interval and bounded by max_state_size_gb. Fail-soft so
             # a snapshot/retention hiccup never fails the sync.
-            if indexed or mode == "full":
+            if indexed or removed or mode == "full":
                 report(
                     "snapshotting",
                     total_items,

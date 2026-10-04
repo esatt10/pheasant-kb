@@ -60,6 +60,7 @@ def _slug(text: str) -> str:
 
 class GDriveConnector(SourceConnector):
     connector_type = "gdrive"
+    complete_listing = True  # pages through every non-trashed file
 
     def _token(self) -> str:
         import os

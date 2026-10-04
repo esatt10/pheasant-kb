@@ -71,6 +71,12 @@ class ConnectorHealth:
 class SourceConnector(ABC):
     connector_type = "base"
     experimental = False
+    #: ``list_items`` returns *everything* the source currently holds, so an
+    #: item indexed before and absent now was deleted, and an incremental sync
+    #: removes it. Off by default: a plugin that lists only what changed
+    #: (a mailbox's new messages, a feed's latest page) would otherwise read as
+    #: having deleted everything else. A connector opts in by saying so.
+    complete_listing = False
 
     def __init__(self, source: SourceConfig, state: StateStore):
         self.source = source
@@ -189,6 +195,7 @@ class SourceConnector(ABC):
 
 class FilesystemConnector(SourceConnector):
     connector_type = "filesystem"
+    complete_listing = True  # a walk of the whole tree, ZIP members included
 
     def list_items(self) -> list[ConnectorItem]:
         root = self.source.path
@@ -340,6 +347,7 @@ class FilesystemConnector(SourceConnector):
 class APIConnector(SourceConnector):
     connector_type = "api"
     experimental = True
+    complete_listing = True  # one request for the whole item list
 
     def __init__(self, source: SourceConfig, state: StateStore):
         super().__init__(source, state)
