@@ -31,6 +31,10 @@ SAMPLES = {
     "Dockerfile": "FROM python:3.12\n",
     "Makefile": "all:\n\techo hi\n",
     ".gitignore": "*.pyc\n",
+    "data.csv": "id,name\n1,ada\n",
+    "data.tsv": "id\tname\n1\tada\n",
+    "server.log": "2026-10-04 INFO started\n",
+    "header.hrl": "-define(X, 1).\n",
 }
 
 
@@ -76,3 +80,25 @@ def test_unknown_extension_is_still_refused(tmp_path):
     (tmp_path / "blob.bin").write_bytes(b"\x00\x01")
     assert not is_text_file("blob.bin")
     assert parse_file(_source(tmp_path, include=["**/*"]), tmp_path / "blob.bin") is None
+
+
+def test_a_notebook_indexes_its_cells_not_its_json(tmp_path):
+    import json
+
+    notebook = {
+        "metadata": {"kernelspec": {"language": "python"}},
+        "cells": [
+            {"cell_type": "markdown", "source": "# Churn model"},
+            {
+                "cell_type": "code",
+                "source": ["model = fit(train)\n"],
+                "outputs": [{"output_type": "stream", "text": ["noise " * 200]}],
+            },
+        ],
+    }
+    (tmp_path / "churn.ipynb").write_text(json.dumps(notebook))
+    assert "**/*.ipynb" in DEFAULT_INCLUDES
+    artifact = parse_file(_source(tmp_path), tmp_path / "churn.ipynb")
+    text = "\n".join(chunk.text for chunk in artifact.chunks)
+    assert "# Churn model" in text and "model = fit(train)" in text
+    assert "noise" not in text and '"cell_type"' not in text

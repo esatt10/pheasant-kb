@@ -29,10 +29,36 @@ TEXT_EXTENSIONS = {
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".cs", ".fs", ".vb",
     ".swift", ".m", ".mm", ".dart", ".zig", ".nim", ".sol",
     # Source: functional and BEAM
-    ".hs", ".ml", ".mli", ".clj", ".cljs", ".ex", ".exs", ".erl", ".elm",
+    ".hs", ".ml", ".mli", ".clj", ".cljs", ".ex", ".exs", ".erl", ".hrl", ".elm",
     # Shell and build
     ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".cmake",
     ".mk", ".patch", ".diff",
+    # Data, notebooks and logs (a notebook is read as its cells, see
+    # ``ingestion.notebook``)
+    ".csv", ".tsv", ".ipynb", ".log",
+}  # fmt: skip
+
+#: Source suffix -> the language the graph's code analysis reads it as
+#: (``graph.code_analysis``). Python is analysed with ``ast``; the rest by
+#: deterministic, comment- and string-aware patterns. A suffix absent here is
+#: still indexed as text, it just contributes no symbols, imports or calls.
+CODE_LANGUAGES: dict[str, str] = {
+    ".py": "python", ".pyi": "python",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+    ".cjs": "javascript", ".vue": "javascript", ".svelte": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript",
+    ".cts": "typescript",
+    ".go": "go", ".rs": "rust",
+    ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala",
+    ".groovy": "groovy", ".gradle": "groovy",
+    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
+    ".hpp": "cpp", ".hh": "cpp", ".m": "objc", ".mm": "objc",
+    ".cs": "csharp", ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
+    ".php": "php", ".swift": "swift", ".dart": "dart", ".zig": "zig",
+    ".hs": "haskell", ".ex": "elixir", ".exs": "elixir", ".erl": "erlang",
+    ".hrl": "erlang",
+    ".clj": "clojure", ".cljs": "clojure", ".lua": "lua",
+    ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".proto": "protobuf",
 }  # fmt: skip
 
 #: Files recognised by their whole name because they carry no (useful)

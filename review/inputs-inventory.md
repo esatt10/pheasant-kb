@@ -172,3 +172,4 @@ Each has an offline stub. All are optional.
 - **Cut:** the `notion`, `slack`, `confluence` and `imap` plugins, the `s3` built-in and the `obsidian_vault` built-in. Old configs and `/state` rows keep loading through `config/retired.py`: `obsidian_vault` loads as `markdown_folder`, and the removed types are refused at sync with the reason.
 - **Deferred, no code change:** memory formation was already off by default (`memory.formation`).
 - **Not developed:** the WASM "check before it lands" gate.
+- **Follow-up:** `.csv`, `.tsv`, `.ipynb` (read as cells, outputs dropped) and `.log` are added and read by default. Import, call and symbol analysis now covers 22 languages beyond Python, and each one has tests (`tests/test_code_analysis.py`).

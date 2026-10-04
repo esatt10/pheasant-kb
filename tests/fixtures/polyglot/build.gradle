@@ -1,0 +1,5 @@
+plugins { id 'java' }
+dependencies { implementation 'x:y:1' }
+def configure(project) {
+    project.apply(plugin: 'idea')
+}

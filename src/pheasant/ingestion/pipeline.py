@@ -24,6 +24,7 @@ from pheasant.ingestion.content_types import (
     is_text_file,
 )
 from pheasant.ingestion.extractor import EXTRACT_SIDECAR_SUFFIX, HTML_EXTENSIONS
+from pheasant.ingestion.notebook import notebook_text
 from pheasant.ingestion.okf import parse_okf
 from pheasant.ingestion.packing import pack
 from pheasant.ingestion.taxonomy import (
@@ -194,7 +195,8 @@ def read_text(path: Path, extractor: DocumentExtractor | None = None) -> str:
         if extractor is None:
             return ""
         return extract_to_text(extractor, path.read_bytes(), path.name, _extract_sidecar(path))
-    return path.read_text(encoding="utf-8", errors="ignore")
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return notebook_text(text) if suffix == ".ipynb" else text
 
 
 def read_text_bytes(
@@ -206,7 +208,8 @@ def read_text_bytes(
         if extractor is None:
             return ""
         return extract_to_text(extractor, content, relative_path, None)
-    return content.decode("utf-8", errors="ignore")
+    text = content.decode("utf-8", errors="ignore")
+    return notebook_text(text) if suffix == ".ipynb" else text
 
 
 def _extract_sidecar(path: Path) -> bytes | None:

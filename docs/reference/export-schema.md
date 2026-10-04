@@ -326,6 +326,8 @@ export are:
 file:{source}:{relpath}:branch={branch}
 chunk:{source}:{relpath}:sha256={text_hash}
 symbol:{kb}:{source}:{relpath}:{name}-{line}
+symbol:{kb}:{source}:call:{name}              (a Python call target)
+symbol:{kb}:{source}:call:{language}:{name}   (any other language's)
 entity:{kb}:{source}:{slug}
 directory:{source}:{relpath}:branch={branch}
 ```

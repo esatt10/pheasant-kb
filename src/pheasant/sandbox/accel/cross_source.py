@@ -13,7 +13,11 @@ from __future__ import annotations
 import struct
 from typing import Any
 
-from pheasant.graph.enrichment import ARTIFACT_NODE_TYPES, EnrichmentEdge
+from pheasant.graph.enrichment import (
+    ARTIFACT_NODE_TYPES,
+    EnrichmentEdge,
+    resolve_cross_source_edges,
+)
 from pheasant.sandbox.accel.loader import new_instance
 
 
@@ -90,17 +94,41 @@ def _serialize_input(
     return bytes(buf)
 
 
+#: The reference types the compiled guest resolves. Every other type (the
+#: non-Python code imports, see ``graph.code_imports``) is resolved by the
+#: pure-Python function and merged, so turning acceleration on can never drop
+#: an edge the default path draws. Porting a type to Rust means adding it here.
+WASM_REFERENCE_TYPES = frozenset({"python_import", "document_link", "url"})
+
+
 def resolve_cross_source_edges_wasm(
     nodes: list[tuple[str, dict[str, Any]]],
     edges: list[tuple[str, str, str, str | None]],
 ) -> list[EnrichmentEdge]:
     """WASM-accelerated equivalent of ``resolve_cross_source_edges``.
 
+    Edges of a type the guest was not built for go to the Python resolver.
+    One artifact is one language, so the two halves never produce the same
+    ``(source, target, type)`` and merging them is a sort, not a dedup.
+
     Raises whatever ``pheasant.sandbox.wasm_runtime``/``wasmtime`` raises on
     failure (unavailable extra, trap, etc.) — callers decide whether to
     fall back to the pure-Python implementation; this function does not
     swallow errors itself; see ``graph/builder.py``'s call site.
     """
+    native = [edge for edge in edges if edge[3] in WASM_REFERENCE_TYPES]
+    others = [edge for edge in edges if edge[3] not in WASM_REFERENCE_TYPES]
+    results = _resolve_in_guest(nodes, native) if native else []
+    if others:
+        results.extend(resolve_cross_source_edges(nodes, others))
+        results.sort(key=lambda e: (e.source, e.target, e.type))
+    return results
+
+
+def _resolve_in_guest(
+    nodes: list[tuple[str, dict[str, Any]]],
+    edges: list[tuple[str, str, str, str | None]],
+) -> list[EnrichmentEdge]:
     store, instance = new_instance()
     exports = instance.exports(store)
     payload = _serialize_input(nodes, edges)

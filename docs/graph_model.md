@@ -73,7 +73,40 @@ Nodes and search results should record source ID, knowledge base ID, relative pa
 
 pheasant runs deterministic enrichment during sync:
 
-- Code pass: extracts Python imports, classes, functions, constants, and call targets.
+- Code pass: extracts imports, classes, functions, constants and call targets.
+  Python is read with the standard library's `ast`; 22 further languages are
+  read by deterministic patterns over text with comments and strings masked
+  out (`graph/code_analysis.py`), with no grammar dependency and no model.
+  Each symbol carries its `language`. Call targets are keyed by name per
+  source; a non-Python call target's ID also carries its language
+  (`symbol:{kb}:{source}:call:{language}:{name}`), so a Go `Open` and a Rust
+  `open` stay apart. Python's call-target ID is unchanged.
+
+  | Language | Imports recorded as | Resolves to a file |
+  |---|---|---|
+  | JavaScript / TypeScript (incl. `.vue`, `.svelte`) | `js_import` | Relative specifiers, with implied suffixes, `index.*` and TypeScript's `./x.js` → `x.ts`. Packages do not. |
+  | Go | `go_import` | Every non-test `.go` file in the package directory, matched on at least two trailing path segments (one is the standard library). |
+  | Rust | `rust_mod`, `rust_use` | `mod x;` by the 2018 module rules; `use crate::…`. Not `std`, external crates, `self::`/`super::`. |
+  | Java / Kotlin / Scala / Groovy | `jvm_import` | By package path, preferring the importer's own language. Not wildcards. |
+  | C / C++ / Objective-C | `c_include`, `c_system_include` | Quoted includes, relative to the file then by suffix. Not `<…>`. |
+  | C# | `csharp_using` | Never: a namespace names no file. |
+  | Ruby | `ruby_require`, `ruby_require_relative` | Both. |
+  | PHP | `php_include`, `php_use` | Includes; `use` by PSR-4 path (vendor prefix optional). |
+  | Swift | `swift_import` | Never: modules name no file. |
+  | Dart | `dart_import` | Relative and `package:` imports. Not `dart:`. |
+  | Zig | `zig_import` | `@import("x.zig")`. Not `std`. |
+  | Haskell | `haskell_import` | By module path. Calls are not extracted: application needs no parentheses. |
+  | Elixir | `elixir_module` | `alias`/`import`/`use`/`require` by snake-cased path. |
+  | Erlang | `erlang_include`, `erlang_module` | Both. |
+  | Clojure | `clojure_ns` | `:require` namespaces (`-` → `_`). |
+  | Lua | `lua_require` | `a.b` → `a/b.lua` or `a/b/init.lua`. |
+  | Shell | `shell_source` | `source`/`.` of a relative path. Calls are not extracted. |
+  | Protocol Buffers | `proto_import` | By path. |
+
+  Pattern reading errs towards a missing edge over an invented one: a call
+  through a variable, a macro or dynamic dispatch is not seen. Deleting an
+  import and syncing incrementally leaves its resolved edge until the next
+  full sync, as it does for Python imports and document links.
 - Markdown/document pass: extracts headings, links, wiki links, URLs, citations and named mentions.
 - Internal reference resolution: a post-sync pass that turns a file's imports
   and document links into edges pointing at **the file they resolve to**,

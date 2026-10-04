@@ -102,11 +102,15 @@ pheasant-kb/
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
-│   │                            extractor (7 doc formats), okf (OKF
+│   │                            extractor (7 doc formats), notebook
+│   │                            (.ipynb as its cells), okf (OKF
 │   │                            frontmatter, per file), captioner,
 │   │                            transcriber, office, msdoc, media (image
 │   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
+│   │                            code_analysis + code_scan + code_imports
+│   │                            (symbols/imports/calls for 22 non-Python
+│   │                            languages, and import -> file resolution),
 │   │                            sql (the serving read surface), builder,
 │   │                            enrichment, capacity, traversal,
 │   │                            media_links (documents -> images they show),
@@ -154,7 +158,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 154 pytest modules, offline by design
+└── tests/                     ← 155 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -347,6 +351,20 @@ cross-source references.
 with no host imports). `DOCUMENT_EXTENSIONS` and `EXTRACTED_EXTENSIONS` are
 asserted set-equal — that drift is exactly how a format gets accepted and then
 silently indexed as nothing.
+
+**Code in 23 languages becomes graph structure.** Python is read with `ast`;
+every other language in `content_types.CODE_LANGUAGES` by deterministic
+patterns over text whose comments and strings are masked first
+(`graph/code_scan.py`), so a commented-out import draws no edge. Imports
+resolve to files per language (`graph/code_imports.py`): relative specifiers
+against the importer, qualified names by path suffix, and packages, the
+standard library and namespaces to nothing. That last case is the important
+one, because an edge to a guessed file is indistinguishable from a real one.
+The WASM resolver knows only Python imports and links, so
+`accel/cross_source.py` hands every other reference type to the Python
+resolver rather than dropping it. Non-Python call targets carry their
+language in the ID; Python's is unchanged. `tests/test_code_analysis.py`
+pins one file per language, including a ghost hidden in a comment or string.
 
 **Images and audio** are captioned/transcribed into indexable text that flows
 through the normal path. Both default to a deterministic offline stub, and an
@@ -2093,6 +2111,21 @@ Each of these cost real time. They are listed because the shape recurs.
   `tests/test_pdf_split.py` holds the text identical over real gRPC and HTTP
   workers, through failures and a pymupdf mismatch;
   `tests/test_chunking_scale.py` bounds lines executed per chunk.
+
+- **A pattern that can cross a line is quadratic on a file that never closes
+  it.** The first cut of `graph/code_analysis.py` read 23 languages correctly
+  and took 7-10 seconds on 100 KB of hostile input (`int a b c d` repeated, an
+  arrow function with no body), against 30 ms for ordinary code: an unbounded
+  `[\w\s]*?` before a name, `[^;{}]*` for parameters, and a forward scan from
+  every definition to a `{` that never came. Every cross-line repeat is
+  bounded now, block ends come from one stack pass over the file
+  (`code_scan.pairs`), and masking jumps between tokens with one compiled
+  pattern instead of stepping per character (156 -> 44 ms per 100 KB). The
+  test is a *ratio* (4x the input must cost under 10x the time), so the
+  runner's speed cancels; the first mutant tried against it, a C-level regex
+  scan to end of file, passed because memchr is fast, so the check was proven
+  against the two mutants that are the real hazards. Generated files and
+  minified bundles are what a codebase source indexes by default now.
 
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an

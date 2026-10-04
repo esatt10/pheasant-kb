@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from pheasant.config.schema import SourceConfig
+from pheasant.graph.code_analysis import analyze as analyze_code
+from pheasant.graph.code_imports import CODE_REFERENCE_TYPES, resolve_code_import
 from pheasant.graph.media_links import image_links
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact
@@ -148,7 +150,7 @@ class CodeEnrichmentPass:
         artifact: ParsedArtifact,
     ) -> ArtifactEnrichment:
         if Path(artifact.relative_path).suffix.lower() != ".py":
-            return ArtifactEnrichment()
+            return _other_language(kb_id, source, artifact)
         text = artifact_text(artifact)
         enrichment = _base_concepts(kb_id, source, artifact, text)
         try:
@@ -210,6 +212,48 @@ class CodeEnrichmentPass:
                 if call_name:
                     _add_call(enrichment, kb_id, source, artifact, call_name, node.lineno)
         return enrichment
+
+
+def _other_language(
+    kb_id: str, source: SourceConfig, artifact: ParsedArtifact
+) -> ArtifactEnrichment:
+    """The same three outputs as the ``ast`` path, for every other language
+    :mod:`pheasant.graph.code_analysis` reads."""
+
+    text = artifact_text(artifact)
+    analysis = analyze_code(artifact.relative_path, text)
+    if analysis is None:
+        return ArtifactEnrichment()
+    language = analysis.language
+    enrichment = _base_concepts(kb_id, source, artifact, text)
+    for item in analysis.imports:
+        _add_external_reference(
+            enrichment,
+            kb_id,
+            source,
+            artifact,
+            item.spec,
+            "imports",
+            item.reference_type,
+            {"language": language},
+        )
+    for symbol in analysis.symbols:
+        _add_symbol(
+            enrichment,
+            kb_id,
+            source,
+            artifact,
+            symbol.name,
+            symbol.kind,
+            symbol.start_line,
+            symbol.end_line,
+            language,
+        )
+        if symbol.kind == "class":
+            _add_entity(enrichment, kb_id, source, artifact, symbol.name)
+    for call in analysis.calls:
+        _add_call(enrichment, kb_id, source, artifact, call.name, call.line, language)
+    return enrichment
 
 
 class MarkdownDocumentEnrichmentPass:
@@ -369,6 +413,7 @@ def resolve_cross_source_edges(
     """
 
     by_path: dict[str, list[_ArtifactRef]] = {}
+    importer_path: dict[str, str] = {}
     for node_id, attrs in nodes:
         if attrs.get("type") not in ARTIFACT_NODE_TYPES:
             continue
@@ -377,6 +422,7 @@ def resolve_cross_source_edges(
         if not rel or not src:
             continue
         by_path.setdefault(_norm_rel(rel), []).append(_ArtifactRef(node_id, src, rel))
+        importer_path[node_id] = rel
 
     ext_nodes = {
         node_id: attrs for node_id, attrs in nodes if attrs.get("type") == "external_reference"
@@ -391,7 +437,9 @@ def resolve_cross_source_edges(
         reference = ext.get("reference")
         if not reference or not source_id:
             continue
-        targets = _resolve_reference(reference, reference_type, by_path)
+        targets = _resolve_reference(
+            reference, reference_type, by_path, importer_path.get(artifact_id)
+        )
         for target in targets:
             if target.node_id == artifact_id:
                 continue
@@ -441,11 +489,20 @@ def _resolve_reference(
     reference: str,
     reference_type: str | None,
     by_path: dict[str, list[_ArtifactRef]],
+    importer: str | None = None,
 ) -> list[_ArtifactRef]:
     if reference_type == "python_import":
         return _resolve_python_import(reference, by_path)
     if reference_type in {"document_link", "url"}:
         return _resolve_document_link(reference, by_path)
+    if reference_type in CODE_REFERENCE_TYPES:
+        return resolve_code_import(
+            reference,
+            reference_type,
+            importer,
+            by_path,
+            lambda candidate: _match_suffix(candidate, by_path),
+        )
     return []
 
 
@@ -535,6 +592,7 @@ def _add_symbol(
     symbol_type: str,
     start_line: int,
     end_line: int,
+    language: str = "python",
 ) -> None:
     symbol_id = _node_id(
         "symbol",
@@ -547,7 +605,7 @@ def _add_symbol(
         "source_id": source.name,
         "artifact_id": artifact.id,
         "relative_path": artifact.relative_path,
-        "language": "python",
+        "language": language,
         "symbol_type": symbol_type,
         "name": name,
         "qualified_name": name,
@@ -568,7 +626,7 @@ def _add_symbol(
             "id": symbol_id,
             "artifact_id": artifact.id,
             "source_id": source.name,
-            "language": "python",
+            "language": language,
             "symbol_type": symbol_type,
             "name": name,
             "qualified_name": name,
@@ -589,13 +647,17 @@ def _add_call(
     artifact: ParsedArtifact,
     name: str,
     line: int,
+    language: str = "python",
 ) -> None:
-    symbol_id = _node_id("symbol", kb_id, source.name, "call", name)
+    # Python's id is unchanged; other languages are kept apart, so a Go
+    # `Open` and a Rust `open` called from one region are two targets.
+    parts = ("call", name) if language == "python" else ("call", language, name)
+    symbol_id = _node_id("symbol", kb_id, source.name, *parts)
     attrs = {
         "source_id": source.name,
         "symbol_type": "call_target",
         "name": name,
-        "language": "python",
+        "language": language,
         "line": line,
         "enrichment_pass": "code",
     }

@@ -1024,3 +1024,48 @@ def test_a_full_resync_does_not_leave_a_dropped_edge_in_the_rows(tmp_path: Path)
         assert link(reopened.serving_graph()) == []
     finally:
         reopened.close()
+
+
+def test_a_polyglot_repository_resyncs_to_the_same_graph(tmp_path: Path) -> None:
+    """Code analysis for the non-Python languages is part of every sync now, so
+    it owes the spine the same promise Python's does: an unchanged corpus
+    re-syncs for free and leaves the generation alone, and a full rebuild draws
+    exactly the same nodes and edges."""
+
+    import shutil
+
+    workspace = tmp_path / "ws"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "polyglot", workspace)
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "polyglot-idempotency",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [{"name": "poly", "type": "document_folder", "path": str(workspace)}],
+        }
+    )
+    engine = SyncEngine(config)
+
+    def shape() -> tuple[set[str], set[tuple[str, str, str]]]:
+        graph = engine.graph_builder.graph
+        link = graph.to_node_link()
+        return (
+            {node["id"] for node in link["nodes"]},
+            {(edge["source"], edge["target"], edge.get("type")) for edge in link["links"]},
+        )
+
+    try:
+        assert engine.sync_source("poly", "full").indexed_artifacts > 40
+        first = shape()
+        generation = engine.loaded_graph_generation
+        assert engine.sync_source("poly", "incremental").indexed_artifacts == 0
+        assert shape() == first
+        assert engine.loaded_graph_generation == generation
+        engine.sync_source("poly", "full")
+        assert shape() == first
+    finally:
+        engine.close()

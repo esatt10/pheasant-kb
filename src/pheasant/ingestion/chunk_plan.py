@@ -46,6 +46,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pheasant.ingestion.content_types import CODE_LANGUAGES
 from pheasant.ingestion.taxonomy import (
     MAX_HEADINGS_PER_DOCUMENT,
     _classify,
@@ -69,6 +70,12 @@ CODE_SUFFIXES = frozenset(
         ".kt", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".swift",
         ".scala", ".sql", ".lua", ".r", ".m", ".pl", ".ps1",
     }
+    # Every language the graph analyses. None of these suffixes was readable
+    # from a filesystem source before it was added (a connector could deliver
+    # one as text/*), so no unchanged file in a folder or repository is cut
+    # differently and PLANNER_VERSION does not move.
+    | set(CODE_LANGUAGES)
+    | {".scss", ".sass", ".less", ".bat", ".cmd", ".fish", ".jl", ".nim", ".sol"}
 )  # fmt: skip
 CONFIG_SUFFIXES = frozenset({".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".cfg"})
 MARKDOWN_SUFFIXES = frozenset({".md", ".mdx", ".markdown"})
