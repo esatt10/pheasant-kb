@@ -104,9 +104,15 @@ pheasant runs deterministic enrichment during sync:
   | Protocol Buffers | `proto_import` | By path. |
 
   Pattern reading errs towards a missing edge over an invented one: a call
-  through a variable, a macro or dynamic dispatch is not seen. Deleting an
-  import and syncing incrementally leaves its resolved edge until the next
-  full sync, as it does for Python imports and document links.
+  through a variable, a macro or dynamic dispatch is not seen.
+
+  An edit is retracted, not just added to: when a file is re-indexed, the
+  imports (with their resolved file edges), calls and symbols its new text no
+  longer implies are removed, in every language including Python, and shared
+  import stubs, call targets and entities nothing points at any more go with
+  them (`graph/retraction.py`). After an edit, an incremental sync leaves the
+  same graph a full sync of the edited tree draws. Document `references` are
+  not retracted yet.
 - Markdown/document pass: extracts headings, links, wiki links, URLs, citations and named mentions.
 - Internal reference resolution: a post-sync pass that turns a file's imports
   and document links into edges pointing at **the file they resolve to**,

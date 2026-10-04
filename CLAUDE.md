@@ -108,6 +108,9 @@ pheasant-kb/
 │   │                            transcriber, office, msdoc, media (image
 │   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
+│   │                            retraction (what re-indexing a file takes
+│   │                            back: stale chunks, embeds, imports, calls,
+│   │                            symbols),
 │   │                            code_analysis + code_scan + code_imports
 │   │                            (symbols/imports/calls for 22 non-Python
 │   │                            languages, and import -> file resolution),
@@ -1883,7 +1886,7 @@ Each of these cost real time. They are listed because the shape recurs.
   retracted the old ones on the incremental path (a full sync cleared the
   source first, which hid it): one file edited three times ended with four
   chunk nodes and four `has_chunk` edges, rising by one per edit.
-  `GraphBuilder._drop_stale_chunks` runs in `add_artifact` and removes the
+  `retraction.drop_stale_chunks` runs in `add_artifact` and removes the
   artifact's `has_chunk` targets that are not in the current chunk set,
   walking only the artifact's own out-edges (O(artifact), not O(graph)).
   Safe because a chunk id carries source and path, so none is shared.
@@ -1892,6 +1895,23 @@ Each of these cost real time. They are listed because the shape recurs.
   unchanged re-sync leaves the generation id alone. Scoped to `chunk`:
   `references` and headings have the same upsert-only shape and were left
   for their own evidence, as with `embeds`.
+- **The same leak, for everything the code pass draws. Fixed.** An edit kept
+  the import it removed (stub *and* resolved file -> file edge), the call it
+  deleted, and the function it renamed beside its replacement, in Python and
+  every other language, because enrichment was upserted and nothing retracted
+  it. `graph/retraction.py` now retracts exactly what the new text stopped
+  implying: by edge *type*, never by pair (a memory record's `about` beside a
+  `mentions` survives), keeping a resolved import while the file still makes
+  it, and leaving an unchanged edge untouched so its pair is not re-keyed.
+  Owned symbols go with their file; shared stubs, call targets and entities
+  are only *detached*, and the cross-source pass, which already walks every
+  edge, removes the ones nothing else points at. The property tested is the
+  strongest one there is: after an edit, incremental equals a fresh full sync
+  of the edited tree (`tests/test_sync_idempotency.py`), and three mutants
+  (no retraction, orphans kept, linked shared nodes dropped) each fail it.
+  Found while writing it: a file **deleted** from a folder source is never
+  removed by an incremental sync at all (its artifact, chunks and graph nodes
+  stay searchable until a `full`), which is a different and larger change.
 - **A stand-in that implements *part* of a mapping fails only on the backend
   nobody tests, in production.** `SqlGraph.node_map()` returns a `_LazyNodeMap`
   — a per-scan cache built for `_scan_edges`, which calls `get()` and nothing

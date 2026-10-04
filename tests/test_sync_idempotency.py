@@ -1069,3 +1069,121 @@ def test_a_polyglot_repository_resyncs_to_the_same_graph(tmp_path: Path) -> None
         assert shape() == first
     finally:
         engine.close()
+
+
+def _edit_corpus(root: Path, *, edited: bool) -> None:
+    """A small polyglot tree, before or after one edit per file.
+
+    The edit removes an import, deletes a call, and renames a function, in
+    Python, TypeScript and Go. `lib.ts` keeps importing `./store` and calling
+    `shared` throughout, so the stub and call target those share survive.
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "store.py").write_text("x = 1\n")
+    (root / "util.py").write_text("y = 1\n")
+    (root / "store.ts").write_text("export const a = 1;\n")
+    (root / "util.ts").write_text("export const b = 1;\n")
+    (root / "lib.ts").write_text('import { a } from "./store";\nfunction keep() { shared(); }\n')
+    (root / "internal" / "db").mkdir(parents=True, exist_ok=True)
+    (root / "internal" / "db" / "db.go").write_text("package db\n\nfunc Open() {}\n")
+    if not edited:
+        (root / "main.py").write_text("import store\nimport util\n\ndef run():\n    gone()\n")
+        (root / "app.ts").write_text(
+            'import { a } from "./store";\nimport { b } from "./util";\n'
+            "function run() { gone(); shared(); }\n"
+        )
+        (root / "cmd.go").write_text(
+            'package main\n\nimport "acme.io/app/internal/db"\n\nfunc run() { db.Open() }\n'
+        )
+    else:
+        (root / "main.py").write_text("import store\n\n\ndef start():\n    other()\n")
+        (root / "app.ts").write_text(
+            'import { a } from "./store";\n\n\nfunction start() { other(); shared(); }\n'
+        )
+        (root / "cmd.go").write_text("package main\n\nfunc start() { other() }\n")
+
+
+def _graph_engine(tmp_path: Path, name: str, workspace: Path) -> SyncEngine:
+    return SyncEngine(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "edit-retraction",
+                    "state_path": str(tmp_path / name / "state"),
+                    "workspace_root": str(workspace),
+                    "exports_path": str(tmp_path / name / "exports"),
+                },
+                "storage": {"graph_snapshots": False},
+                "sources": [{"name": "code", "type": "document_folder", "path": str(workspace)}],
+            }
+        )
+    )
+
+
+def _graph_shape(engine: SyncEngine) -> tuple[set[str], set[tuple[str, str, str]]]:
+    link = engine.graph_builder.graph.to_node_link()
+    return (
+        {node["id"] for node in link["nodes"]},
+        {(edge["source"], edge["target"], edge.get("type")) for edge in link["links"]},
+    )
+
+
+def test_an_edit_leaves_exactly_the_graph_a_full_sync_of_the_new_text_draws(
+    tmp_path: Path,
+) -> None:
+    """Enrichment used to be upserted and never retracted, so an incremental
+    sync after an edit kept the removed import (and its resolved file edge),
+    the deleted call, and the renamed function beside its replacement — in
+    every language. The property is the strongest one available: after the
+    edit, incremental must equal a fresh full sync of the edited tree."""
+
+    workspace = tmp_path / "ws"
+    _edit_corpus(workspace, edited=False)
+    engine = _graph_engine(tmp_path, "incremental", workspace)
+    try:
+        engine.sync_source("code", "full")
+        _edit_corpus(workspace, edited=True)
+        assert engine.sync_source("code", "incremental").indexed_artifacts == 3
+        incremental = _graph_shape(engine)
+    finally:
+        engine.close()
+
+    reference = _graph_engine(tmp_path, "full", workspace)
+    try:
+        reference.sync_source("code", "full")
+        assert incremental == _graph_shape(reference)
+    finally:
+        reference.close()
+
+    nodes, edges = incremental
+    labels = " ".join(nodes)
+    assert "util" not in {edge[1].rsplit(":", 1)[-1] for edge in edges if edge[2] == "imports"}
+    assert ":run-" not in labels and "gone" not in labels  # renamed symbol, deleted call
+    assert any("shared" in node for node in nodes)  # lib.ts still calls it
+
+
+def test_an_edit_keeps_what_another_file_still_points_at(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    _edit_corpus(workspace, edited=False)
+    engine = _graph_engine(tmp_path, "one", workspace)
+    try:
+        engine.sync_source("code", "full")
+        # app.ts stops importing ./store and calling shared(); lib.ts still does.
+        (workspace / "app.ts").write_text("function start() { other(); }\n")
+        engine.sync_source("code", "incremental")
+        graph = engine.graph_builder.graph
+        attrs = dict(graph.iter_nodes())
+        stub = next(
+            node_id
+            for node_id, a in attrs.items()
+            if a.get("type") == "external_reference" and a.get("reference") == "./store"
+        )
+        callers = {source for (source, target), _ in graph.iter_edges() if target == stub}
+        assert {attrs[c].get("relative_path") for c in callers} == {"lib.ts"}
+        assert any(
+            a.get("symbol_type") == "call_target" and a.get("name") == "shared"
+            for a in attrs.values()
+        )
+    finally:
+        engine.close()

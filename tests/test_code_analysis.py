@@ -648,3 +648,68 @@ def test_analysis_cost_grows_linearly_on_hostile_input(name: str) -> None:
 
     small, large = cost(1_000), cost(4_000)
     assert large < 10 * max(small, 1e-4), (name, small, large)
+
+
+# --------------------------------------------------------------------------
+# Retraction: what an edit takes back (graph/retraction.py)
+# --------------------------------------------------------------------------
+
+
+def _enrichment(*edges: tuple[str, str, str], nodes=()):
+    from pheasant.graph.enrichment import ArtifactEnrichment, EnrichmentEdge, EnrichmentNode
+
+    return ArtifactEnrichment(
+        nodes=[EnrichmentNode(node_id, kind, node_id, attrs) for node_id, kind, attrs in nodes],
+        edges=[EnrichmentEdge(source, target, kind) for source, target, kind in edges],
+    )
+
+
+def _graph():
+    from pheasant.graph.simple import SimpleMultiDiGraph
+
+    graph = SimpleMultiDiGraph()
+    graph.add_node("file:a", type="file")
+    graph.add_node("file:b", type="file")
+    graph.add_node("ext:b", type="external_reference", reference="./b", reference_type="js_import")
+    graph.add_node("sym:a:run-1", type="symbol", artifact_id="file:a", name="run")
+    graph.add_node("entity:x", type="entity")
+    graph.add_edge("file:a", "ext:b", type="imports", reference_type="js_import")
+    graph.add_edge("file:a", "file:b", type="imports", reference="./b", reference_type="js_import")
+    graph.add_edge("file:a", "sym:a:run-1", type="mentions")
+    graph.add_edge("file:a", "entity:x", type="mentions")
+    graph.add_edge("file:a", "entity:x", type="about")  # a memory record's, say
+    return graph
+
+
+def test_retraction_leaves_an_unchanged_file_untouched() -> None:
+    from pheasant.graph.retraction import retract_stale_enrichment
+
+    graph = _graph()
+    before = graph.to_node_link()
+    same = _enrichment(
+        ("file:a", "ext:b", "imports"),
+        ("file:a", "sym:a:run-1", "mentions"),
+        ("file:a", "entity:x", "mentions"),
+        nodes=[
+            ("ext:b", "external_reference", {"reference": "./b", "reference_type": "js_import"})
+        ],
+    )
+    assert retract_stale_enrichment(graph, "file:a", same) == set()
+    assert graph.to_node_link() == before  # nothing removed, nothing re-keyed
+
+
+def test_retraction_removes_by_type_and_detaches_shared_nodes() -> None:
+    from pheasant.graph.retraction import retract_stale_enrichment
+
+    graph = _graph()
+    detached = retract_stale_enrichment(graph, "file:a", _enrichment())
+    remaining = {
+        (source, target, data["type"])
+        for (source, target), edge_map in graph.iter_edges()
+        for data in edge_map.values()
+    }
+    # The import, its resolved file edge and both mentions went; `about` stayed.
+    assert remaining == {("file:a", "entity:x", "about")}
+    assert "sym:a:run-1" not in graph  # owned by file:a, so removed outright
+    assert detached == {"ext:b", "entity:x"}  # shared: the cross-source pass decides
+    assert "ext:b" in graph and "entity:x" in graph

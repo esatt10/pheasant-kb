@@ -13,6 +13,7 @@ from pheasant.graph.enrichment import (
 )
 from pheasant.graph.media_links import MEDIA_NODE_TYPES, resolve_image_edges
 from pheasant.graph.okf import artifact_attrs as okf_artifact_attrs
+from pheasant.graph.retraction import drop_embeds, drop_stale_chunks, retract_stale_enrichment
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact, utc_now
@@ -39,6 +40,12 @@ class GraphBuilder:
         self.config = config
         self.graph = SimpleMultiDiGraph()
         self.kb_id = config.knowledge_base_id
+        #: Shared enrichment nodes (import stubs, call targets, entities) an
+        #: edited artifact stopped pointing at. Whether anything else still
+        #: does is a question about *incoming* edges, which only a whole-edge
+        #: walk can answer, so it is asked once, in the cross-source pass that
+        #: already makes that walk (see `graph.retraction`).
+        self._detached: set[str] = set()
         self.upsert_node(self.kb_id, "knowledge_base", self.kb_id, {})
         self.enrichment_passes = [
             CodeEnrichmentPass(),
@@ -255,64 +262,12 @@ class GraphBuilder:
                 },
             )
             self.upsert_edge(artifact.id, chunk_id, "has_chunk", {"source_id": source.name})
-        self._drop_stale_chunks(artifact.id, current_chunks)
+        drop_stale_chunks(self.graph, artifact.id, current_chunks)
         self.add_headings(source, artifact)
-        self._drop_embeds(artifact.id)
+        drop_embeds(self.graph, artifact.id)
+        self._detached |= retract_stale_enrichment(self.graph, artifact.id, enrichment)
         self.apply_enrichment(enrichment)
         return enrichment
-
-    def _drop_stale_chunks(self, artifact_id: str, current: set[str]) -> int:
-        """Remove chunk nodes an earlier index of this artifact left behind.
-
-        Chunk ids embed the chunk's sha256, so an edit mints new nodes and the
-        old ones — still reachable by a `has_chunk` edge from the artifact —
-        were never retracted on the incremental path (a full sync cleared the
-        source first, which hid it). Walks only the artifact's own out-edges,
-        so the cost is the artifact's, not the graph's. A chunk id is unique
-        to one artifact (source and path are in it), so nothing shared is
-        removed; `remove_nodes_from` takes the incident edges with it.
-        """
-
-        if artifact_id not in self.graph:
-            return 0
-        stale = [
-            target
-            for _, target, edge_map in self.graph.out_edges(artifact_id)
-            if target not in current
-            and edge_map
-            and all(data.get("type") == "has_chunk" for data in edge_map.values())
-        ]
-        if stale:
-            self.graph.remove_nodes_from(stale)
-        return len(stale)
-
-    def _drop_embeds(self, artifact_id: str) -> None:
-        """Forget which images a document showed before this index of it.
-
-        Enrichment is upserted, so on an incremental re-index an edge the new
-        text no longer implies would otherwise survive — the pre-existing
-        behaviour for `references`, and a visible one for `embeds`: an answer
-        would keep showing a figure the document stopped containing. The
-        document's `embeds` edges are therefore re-derived from its current
-        text every time it is indexed; the ones it still has come straight
-        back from `apply_enrichment` and the global resolution pass.
-
-        Only pairs whose every edge is `embeds` are dropped, so a parallel edge
-        of another type between the same two nodes is never collateral. Scoped
-        to `embeds` deliberately: doing the same for `references` changes what
-        an incremental sync means for every corpus and needs its own evidence
-        (CLAUDE.md §6, the chunk-node leak).
-        """
-
-        if artifact_id not in self.graph:
-            return
-        pairs = [
-            (source, target)
-            for source, target, edge_map in self.graph.out_edges(artifact_id)
-            if edge_map and all(data.get("type") == "embeds" for data in edge_map.values())
-        ]
-        if pairs:
-            self.graph.remove_edges_from(pairs)
 
     def add_memory_edges(self, state: Any, max_targets: int | None = None) -> dict[str, Any]:
         """Wire memory records into the graph (Step 33.7). Returns a report.
@@ -661,6 +616,10 @@ class GraphBuilder:
         # first act was to throw three quarters of it away. Chunks are 55% of
         # a real graph and symbols 20%; neither is looked at here.
         nodes: list[tuple[str, dict[str, Any]]] = []
+        # Shared nodes an edit detached (`graph.retraction`); the edge
+        # walk below says which of them anything still points at.
+        detached, self._detached = self._detached, set()
+        still_linked: set[str] = set()
         with self.graph.reading():
             for node_id, attrs in self.graph.iter_nodes():
                 node_type = attrs.get("type")
@@ -670,6 +629,8 @@ class GraphBuilder:
                     media.append((node_id, dict(attrs)))
             node_map = self.graph.node_map()
             for (source, target), edge_map in self.graph.iter_edges():
+                if detached and target in detached:
+                    still_linked.add(target)
                 target_attrs = node_map.get(target)
                 if not target_attrs or target_attrs.get("type") != "external_reference":
                     continue
@@ -685,6 +646,10 @@ class GraphBuilder:
                 for source, target in image_edges:
                     ext_nodes[target] = dict(node_map.get(target) or {})
                     referrers[source] = dict(node_map.get(source) or {})
+        orphans = detached - still_linked
+        if orphans:
+            self.graph.remove_nodes_from(orphans)
+            nodes = [(node_id, attrs) for node_id, attrs in nodes if node_id not in orphans]
         resolved = self._resolve_cross_source_edges(nodes, ref_edges)
         if image_edges and media:
             resolved += resolve_image_edges(referrers, media, ext_nodes, image_edges)
