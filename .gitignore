@@ -16,6 +16,10 @@ eggs/
 .eggs/
 lib/
 lib64/
+# The Python packaging rule above must not swallow test fixtures: Ruby, Elixir
+# and Dart keep their sources in lib/, and an ignored fixture passes locally and
+# fails only in CI.
+!tests/fixtures/**/lib/
 parts/
 sdist/
 var/

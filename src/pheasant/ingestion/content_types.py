@@ -155,6 +155,20 @@ def artifact_type(path: Path, source_type: str | None = None) -> str:
 OPT_IN_TEXT_EXTENSIONS = frozenset({".html", ".xml", ".patch", ".diff"})
 
 
+#: Suffixes whose upper-case spelling is a convention somewhere: R scripts are
+#: `.R` as often as `.r`, and classic C++ uses `.C`/`.H` on case-sensitive
+#: filesystems. ``is_text_file`` lower-cases, but globs are case-sensitive, so
+#: an include that names only `**/*.r` silently skips every `.R` script.
+UPPERCASE_SPELLINGS: dict[str, str] = {".r": ".R", ".c": ".C", ".h": ".H"}
+
+
+def suffix_globs(suffix: str) -> tuple[str, ...]:
+    """The include globs that admit every conventional spelling of ``suffix``."""
+
+    spellings = dict.fromkeys((suffix, UPPERCASE_SPELLINGS.get(suffix, suffix)))
+    return tuple(f"**/*{spelling}" for spelling in spellings)
+
+
 def default_include_globs() -> tuple[str, ...]:
     """The ``include`` a source gets when it names none.
 
@@ -165,7 +179,11 @@ def default_include_globs() -> tuple[str, ...]:
     """
 
     return (
-        *(f"**/*{suffix}" for suffix in sorted(TEXT_EXTENSIONS - OPT_IN_TEXT_EXTENSIONS)),
+        *(
+            glob
+            for suffix in sorted(TEXT_EXTENSIONS - OPT_IN_TEXT_EXTENSIONS)
+            for glob in suffix_globs(suffix)
+        ),
         *(
             f"**/{spelling}"
             for name in sorted(TEXT_FILENAMES)

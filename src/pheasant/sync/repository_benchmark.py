@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.config.schema import DEFAULT_EXCLUDES, PheasantConfig
-from pheasant.ingestion.content_types import TEXT_EXTENSIONS
+from pheasant.ingestion.content_types import TEXT_EXTENSIONS, suffix_globs
+from pheasant.ingestion.pipeline import _match_any
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.sqlite_store import SearchStore
 from pheasant.sync.engine import SyncEngine
@@ -30,6 +31,14 @@ from pheasant.sync.engine import SyncEngine
 REQUIRED_REPOSITORIES = {"spark", "mlflow", "vscode", "langgraph", "deepagents"}
 RETRIEVAL_MODES = ("vector", "graph", "hybrid")
 SOURCE_EXTENSIONS = set(TEXT_EXTENSIONS)
+#: What each benchmark source includes, and so the only files worth sampling:
+#: a sample the source's own include cannot reach is a file the benchmark
+#: expects and the sync never sees. (`.R` was exactly that, the day `.r`
+#: joined the text formats: sampled by a lower-cased suffix, skipped by a
+#: case-sensitive glob.)
+SOURCE_INCLUDE = [
+    glob for extension in sorted(SOURCE_EXTENSIONS) for glob in suffix_globs(extension)
+]
 SKIP_PARTS = {
     ".git",
     ".mypy_cache",
@@ -72,7 +81,7 @@ def _candidate_files(repository: Path, max_file_bytes: int) -> list[Path]:
             for pattern in DEFAULT_EXCLUDES
         ):
             continue
-        if path.suffix.lower() not in SOURCE_EXTENSIONS:
+        if not _match_any(relative_key, SOURCE_INCLUDE):
             continue
         try:
             if path.stat().st_size > max_file_bytes:
@@ -140,7 +149,7 @@ def _config(root: Path, workspace: Path, manifest: dict[str, Any]) -> PheasantCo
                 "name": name,
                 "type": "repository",
                 "path": str(workspace / name),
-                "include": [f"**/*{extension}" for extension in sorted(SOURCE_EXTENSIONS)],
+                "include": SOURCE_INCLUDE,
                 "sync": {
                     "on_startup": False,
                     "on_file_change": False,

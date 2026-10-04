@@ -35,6 +35,10 @@ SAMPLES = {
     "data.tsv": "id\tname\n1\tada\n",
     "server.log": "2026-10-04 INFO started\n",
     "header.hrl": "-define(X, 1).\n",
+    # Globs are case-sensitive and R scripts are `.R` as often as `.r`: the
+    # mlflow sample in CI's five-repository benchmark caught the gap.
+    "analysis.R": "fit <- lm(y ~ x)\n",
+    "legacy.C": "int main() { return 0; }\n",
 }
 
 
@@ -46,9 +50,10 @@ def test_default_includes_cover_every_default_on_text_format():
     on_by_default = {
         pattern.removeprefix("**/*") for pattern in DEFAULT_INCLUDES if pattern.startswith("**/*")
     }
-    assert on_by_default <= TEXT_EXTENSIONS
+    assert {suffix.lower() for suffix in on_by_default} <= TEXT_EXTENSIONS
     # Only the markup/machine-output formats are opt-in.
     assert TEXT_EXTENSIONS - on_by_default == {".html", ".xml", ".patch", ".diff"}
+    assert {".R", ".C", ".H"} <= on_by_default
     named = {p.removeprefix("**/") for p in DEFAULT_INCLUDES if not p.startswith("**/*")}
     assert {n.lower() for n in named} == set(TEXT_FILENAMES)
 
