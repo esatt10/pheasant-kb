@@ -16,6 +16,7 @@ from pheasant.config.exclusions import (
 from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
+from pheasant.ingestion.content_types import default_include_globs
 
 
 class SourceType(StrEnum):
@@ -48,18 +49,11 @@ class PluginSourceType(str):
 # Source types whose ``path`` is a real local directory/file (as opposed to
 # the URL/connector-backed web/api/s3 types). A relative ``path`` on one of
 # these is anchored to ``pheasant.workspace_root`` at config-load time.
-#: A source's ``include`` when none is given: code, Markdown and config. A
-#: web collection does not apply it to its URLs (see
-#: ``WebCollectionConnector``), because a listed URL was already chosen.
-DEFAULT_INCLUDES: tuple[str, ...] = (
-    "**/*.py",
-    "**/*.md",
-    "**/*.txt",
-    "**/*.yaml",
-    "**/*.yml",
-    "**/*.toml",
-    "**/*.json",
-)
+#: A source's ``include`` when none is given: every code, prose and
+#: configuration text format (``content_types.default_include_globs``). A web
+#: collection does not apply it to its URLs (see ``WebCollectionConnector``),
+#: because a listed URL was already chosen.
+DEFAULT_INCLUDES: tuple[str, ...] = default_include_globs()
 
 #: What a source whose connector never opens ``path`` carries in that field.
 #: The schema requires a path on every source; a web collection, an API or a

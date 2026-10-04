@@ -20,8 +20,8 @@ from pheasant.ingestion.content_types import (
     AUDIO_EXTENSIONS,
     DOCUMENT_EXTENSIONS,
     IMAGE_EXTENSIONS,
-    TEXT_EXTENSIONS,
     artifact_type,
+    is_text_file,
 )
 from pheasant.ingestion.extractor import EXTRACT_SIDECAR_SUFFIX, HTML_EXTENSIONS
 from pheasant.ingestion.okf import parse_okf
@@ -501,7 +501,9 @@ def parse_file(
     extractor: DocumentExtractor | None = None,
 ) -> ParsedArtifact | None:
     suffix = path.suffix.lower()
-    if suffix not in TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS:
+    if not (
+        is_text_file(path) or suffix in DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
+    ):
         return None
     root = source.path if source.path.is_dir() else source.path.parent
     relative = path.relative_to(root).as_posix()
@@ -564,7 +566,8 @@ def parse_connector_payload(
     is_image = suffix in IMAGE_EXTENSIONS
     is_audio = suffix in AUDIO_EXTENSIONS
     if (
-        suffix not in TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS
+        not is_text_file(item.relative_path)
+        and suffix not in DOCUMENT_EXTENSIONS
         and not is_image
         and not is_audio
         and not _is_text_like(mime_type)

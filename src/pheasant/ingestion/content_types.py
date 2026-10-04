@@ -13,24 +13,49 @@ def source_includes_zip(source: object) -> bool:
 
 
 TEXT_EXTENSIONS = {
-    ".py",
-    ".md",
-    ".txt",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".json",
-    ".html",
-    ".xml",
-    ".css",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".mdx",
-    ".rst",
-    ".sh",
-}
+    # Prose and markup
+    ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc", ".org", ".tex",
+    ".html", ".xml",
+    # Data and configuration
+    ".json", ".jsonc", ".json5", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".conf", ".properties", ".tf", ".tfvars", ".hcl",
+    ".proto", ".graphql", ".gql", ".sql", ".prisma",
+    # Source: scripting and web
+    ".py", ".pyi", ".pyx", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".mts", ".cts", ".vue", ".svelte", ".css", ".scss", ".sass", ".less",
+    ".rb", ".rake", ".gemspec", ".php", ".lua", ".pl", ".pm", ".r", ".jl",
+    # Source: compiled and JVM
+    ".go", ".rs", ".java", ".kt", ".kts", ".scala", ".groovy", ".gradle",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".cs", ".fs", ".vb",
+    ".swift", ".m", ".mm", ".dart", ".zig", ".nim", ".sol",
+    # Source: functional and BEAM
+    ".hs", ".ml", ".mli", ".clj", ".cljs", ".ex", ".exs", ".erl", ".elm",
+    # Shell and build
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".cmake",
+    ".mk", ".patch", ".diff",
+}  # fmt: skip
+
+#: Files recognised by their whole name because they carry no (useful)
+#: extension. Compared lower-cased.
+TEXT_FILENAMES = frozenset(
+    {
+        "dockerfile", "containerfile", "makefile", "gnumakefile", "rakefile",
+        "gemfile", "podfile", "procfile", "jenkinsfile", "vagrantfile",
+        "justfile", "brewfile", "caddyfile", "codeowners", "license",
+        "licence", "notice", "authors", "contributing", "changelog",
+        ".gitignore", ".gitattributes", ".dockerignore", ".editorconfig",
+        ".prettierrc", ".eslintrc", ".babelrc", ".nvmrc", ".tool-versions",
+    }
+)  # fmt: skip
+
+
+def is_text_file(path: Path | str) -> bool:
+    """Whether a path names a text file this pipeline decodes directly."""
+
+    candidate = Path(path)
+    return candidate.suffix.lower() in TEXT_EXTENSIONS or candidate.name.lower() in TEXT_FILENAMES
+
+
 # Formats whose text has to be *extracted* rather than decoded — see
 # pheasant.ingestion.extractor (PDF/DOCX/HTML),
 # pheasant.ingestion.office (PPTX/XLSX/EPUB/RTF) and
@@ -96,3 +121,28 @@ def artifact_type(path: Path, source_type: str | None = None) -> str:
     if path.suffix.lower() in AUDIO_EXTENSIONS:
         return "audio"
     return "file"
+
+
+#: Text formats a source reads only when asked, because their bytes are mostly
+#: markup or machine output rather than prose or code: a page's tags, a patch's
+#: hunks. They stay supported (``include`` them to index them).
+OPT_IN_TEXT_EXTENSIONS = frozenset({".html", ".xml", ".patch", ".diff"})
+
+
+def default_include_globs() -> tuple[str, ...]:
+    """The ``include`` a source gets when it names none.
+
+    Derived from the lists above so a format cannot be parseable yet never
+    reached by default. Globs are case-sensitive and ``TEXT_FILENAMES`` is
+    lower-cased, so each name is emitted as its usual spellings: Dockerfile,
+    LICENSE, license.
+    """
+
+    return (
+        *(f"**/*{suffix}" for suffix in sorted(TEXT_EXTENSIONS - OPT_IN_TEXT_EXTENSIONS)),
+        *(
+            f"**/{spelling}"
+            for name in sorted(TEXT_FILENAMES)
+            for spelling in dict.fromkeys((name, name.capitalize(), name.upper()))
+        ),
+    )

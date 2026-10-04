@@ -11,6 +11,7 @@ from pheasant.ingestion.content_types import (
     DOCUMENT_EXTENSIONS,
     IMAGE_EXTENSIONS,
     TEXT_EXTENSIONS,
+    is_text_file,
 )
 
 SUPPORTED_MEMBER_EXTENSIONS = (
@@ -42,7 +43,7 @@ def safe_member_name(info: zipfile.ZipInfo) -> str | None:
         return None
     if info.file_size < 0:
         return None
-    if Path(name).suffix.lower() not in SUPPORTED_MEMBER_EXTENSIONS:
+    if Path(name).suffix.lower() not in SUPPORTED_MEMBER_EXTENSIONS and not is_text_file(name):
         return None
     return name
 

@@ -63,6 +63,20 @@ NOISE_EXCLUDES = [
     "**/.mypy_cache/**",
     "**/.pytest_cache/**",
     "**/.ruff_cache/**",
+    # Generated or machine-written text that the broader default includes
+    # would otherwise pick up: bundles, source maps, resolved dependency pins.
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.map",
+    "**/package-lock.json",
+    "**/pnpm-lock.yaml",
+    "**/yarn.lock",
+    "**/poetry.lock",
+    "**/uv.lock",
+    "**/Cargo.lock",
+    "**/Gemfile.lock",
+    "**/composer.lock",
+    "**/go.sum",
 ]
 
 DEFAULT_EXCLUDES = [*NOISE_EXCLUDES, *SECRET_EXCLUDES]

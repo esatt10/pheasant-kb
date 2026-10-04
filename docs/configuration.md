@@ -1524,7 +1524,7 @@ Each source item supports:
 | `path` | absolute path | none | Filesystem path for source root (or file). |
 | `description` | string/null | null | Human-readable context for operators. |
 | `enabled` | bool | `true` | Disable without deleting config. |
-| `include` | list[glob] | code/text defaults | Inclusion patterns. |
+| `include` | list[glob] | all code, prose and config text formats (see `content_types.py`); `.html`, `.xml`, `.patch`, `.diff` are opt-in | Inclusion patterns. |
 | `exclude` | list[glob] | secure defaults | Exclusion patterns. |
 | `repo.*` | object | see below | Repository-specific behavior. |
 | `chunking.*` | object | see below | Chunking strategy/size overlap. |
