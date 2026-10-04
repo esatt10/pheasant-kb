@@ -328,13 +328,25 @@ def test_the_walk_tools_take_the_exclusions_http_has(region: dict[str, Any]) -> 
     assert not any(link.get("type") == "has_chunk" for link in sliced["links"])
 
 
-def test_the_mcp_server_publishes_expansion_and_the_slice_tool() -> None:
+def test_the_mcp_server_publishes_expansion_and_the_slice_tool(tmp_path: Path) -> None:
     import asyncio
 
     pytest.importorskip("mcp")
     from pheasant.mcp_server.server import create_mcp_server
 
-    config = PheasantConfig.model_validate({"pheasant": {"name": "schema"}, "sources": []})
+    # Paths under tmp_path: the default state_path is /state, which only a
+    # root test runner can create.
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "schema",
+                "state_path": str(tmp_path / "state"),
+                "exports_path": str(tmp_path / "exports"),
+                "workspace_root": str(tmp_path),
+            },
+            "sources": [],
+        }
+    )
     server = create_mcp_server(config)
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
     prompts = {prompt.name for prompt in asyncio.run(server.list_prompts())}
