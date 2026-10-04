@@ -191,7 +191,7 @@ def plan_chunks(source: Any, relative_path: str, text: str) -> ChunkPlan:
         return _sized(source, "config", "paragraphs", 1500, 3000, 0, reason="blank-line blocks")
     if source_type == "slack":
         return _sized(source, "messages", "messages", 1500, 3000, 0, reason="whole messages")
-    if suffix in MARKDOWN_SUFFIXES or source_type in {"markdown_folder", "obsidian_vault"}:
+    if suffix in MARKDOWN_SUFFIXES or source_type == "markdown_folder":
         allowed = _allowed(source, ("markdown",))
         return _sized(
             source,

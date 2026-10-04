@@ -93,11 +93,7 @@ tests:
 
 | Type | Source | Incremental mechanism | ACL capture (Phase 32) |
 |---|---|---|---|
-| `notion` | Notion workspace pages | per-page `last_edited_time` cursor | `created_by` / `last_edited_by` |
 | `gdrive` | Google Drive docs + text files | per-file `modifiedTime`/`md5Checksum` | owners + `shared` flag |
-| `slack` | Channel transcripts | per-channel `latest_ts` cursor | `is_private` / `is_shared` |
-| `confluence` | Space pages (storage XHTML → text) | per-page version number | space key + creator |
-| `imap` | A mailbox (immutable messages) | UID high-watermark (lists only new) | From / To / Cc |
 | `staticdir` | Example plugin (`tests/fixtures/pheasant-connector-example/`) | mtime watermark | — |
 
 For your own package, copy the example package's shape — it now includes

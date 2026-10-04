@@ -45,7 +45,7 @@ chunks. That is the whole contract, and everything else follows from it:
 * it **never writes** SQLite, the graph, manifests or vectors — the coordinator
   commits, in discovery order, so stable IDs and graph bytes stay deterministic;
 * it **never receives connector credentials**. Only parsing inputs cross the
-  boundary, so a compromised worker cannot reach your Notion or Drive;
+  boundary, so a compromised worker cannot reach your Drive or other connectors;
 * it holds no state between requests, so workers are interchangeable and
   disposable.
 

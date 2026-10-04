@@ -930,13 +930,12 @@ sources:
       interval_seconds: 900   # read by web_collection sources only (see below)
 
   - name: existing-obsidian-vault
-    type: obsidian_vault
+    type: markdown_folder       # an Obsidian vault is a Markdown folder
     path: /workspace/my-vault
     description: Optional existing Obsidian vault to index as a source
     enabled: false
     include:
       - "**/*.md"
-      - "**/*.canvas"
     exclude:
       - "**/.obsidian/**"
       - "**/.trash/**"

@@ -34,7 +34,7 @@ def apply_retrieval_criteria(
     """
     excluded = {str(name) for name in (exclude_sources or [])}
     wanted_types = {str(name) for name in (node_types or [])}
-    # Source *type* (repository, notion, slack, ...) is a different axis from
+    # Source *type* (repository, gdrive, web_collection, ...) is a different axis from
     # node type (chunk, symbol, entity) and from source *name*. Scoping by name
     # needs you to know every source in the region; scoping by type is the
     # question an agent actually has — "only what came out of our wikis".

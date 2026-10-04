@@ -113,7 +113,7 @@ ways forward: paste a path or URL, drop files in, or copy a one-line command.
   removable by deleting the source. Supported files inside ZIP folders are
   indexed separately. No path to type, no directory to mount.
 - **Paste a path.** pheasant detects what it is (folder, Obsidian vault, git
-  checkout or clone URL, web page, S3 bucket, connector).
+  checkout or clone URL, web page, connector).
 - **Change your mind.** Settings has purpose-built panels for the
   knowledge base, the answering workflow, retrieval tuning and embeddings, on
   top of the full form/YAML editor.

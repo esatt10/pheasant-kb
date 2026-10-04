@@ -32,22 +32,21 @@ Three routes reach the same place, so pick whichever fits:
 | Type | Indexes |
 |---|---|
 | `repository` | A git repository (branch/commit-aware, dependency graph) |
-| `markdown_folder` | A folder of Markdown notes |
-| `obsidian_vault` | An existing Obsidian vault (`.md` + `.canvas`) |
+| `markdown_folder` | A folder of Markdown notes, an Obsidian vault included (wiki links and `![[embeds]]` resolve) |
 | `document_folder` | Mixed supported text, documents, images, audio and ZIPs |
 | `single_file` | One file, including a ZIP of mixed supported files |
 | `web_collection` | A set of web URLs |
 | `memory` | Agent-memory records (see [Agent memory](agent-memory.md)) |
-| `notion` | A Notion workspace, via an integration token (below) |
 | `gdrive` | Google Drive docs + text files (`connector.api_key_env`, default `GDRIVE_TOKEN`) |
-| `slack` | Slack channel transcripts (`SLACK_TOKEN`; ids rendered as-is) |
-| `confluence` | Confluence pages (`CONFLUENCE_TOKEN` + `connector.api_endpoint` site URL) |
-| `imap` | An email mailbox (`IMAP_CREDENTIALS` as `user:password`; `path` = mailbox) |
 | `api` | Experimental — an HTTP API source |
-| `s3` | Experimental — an S3-style object store |
 
 Third-party connector plugins add further types by name — see the
 [Connector SDK](../reference/connector-sdk.md).
+
+**Retired types.** `obsidian_vault` loads as `markdown_folder` (with a one-time
+warning), so an existing config or registered source keeps working. `s3`,
+`notion`, `slack`, `confluence` and `imap` were removed: a source of one of
+those types still loads, and its sync is refused with what to do instead.
 
 Filesystem-backed sources can also index ZIP archives with nested folders of
 supported files. Use `pheasant up path/to/archive.zip`, upload a ZIP, or add
@@ -63,32 +62,6 @@ clears its indexed content and, for a UI-owned upload folder, its uploaded
 files. The removal remains in effect across restarts until the source is
 explicitly registered again; an old source entry in generated YAML does not
 silently revive it.
-
-## Notion
-
-Create an internal integration at `notion.so/my-integrations`, share the
-pages with it, and export the token in the environment — it never lands in
-config:
-
-```yaml
-sources:
-  - name: team-notion
-    type: notion
-    path: /unused            # required by the schema; Notion ignores it.
-                             # Registering through the API or the UI form
-                             # fills this in for you — service-backed types
-                             # have `path_role: unused` in /sources/types.
-    include: []
-    connector:
-      api_key_env: NOTION_TOKEN   # default; name of the env var
-```
-
-Pages are listed through Notion's search API and rendered to deterministic
-Markdown (headings, lists, to-dos, quotes, code, nested blocks). Sync is
-incremental: unchanged pages (by `last_edited_time`) are skipped before
-any block is fetched, so a large workspace re-syncs in seconds. Page
-`created_by` / `last_edited_by` ids are captured for the upcoming
-permission-aware retrieval work.
 
 ## Web pages
 

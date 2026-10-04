@@ -14,7 +14,7 @@ indexed.
 ```yaml
 sources:
   - name: finance-knowledge
-    type: document_folder      # or markdown_folder, repository, obsidian_vault, …
+    type: document_folder      # or markdown_folder, repository, …
     path: /data/finance-okf
 ```
 

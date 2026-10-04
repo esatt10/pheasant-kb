@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 FILESYSTEM_SOURCE_TYPES = frozenset(
-    {"repository", "markdown_folder", "obsidian_vault", "document_folder", "single_file"}
+    {"repository", "markdown_folder", "document_folder", "single_file"}
 )
 
 

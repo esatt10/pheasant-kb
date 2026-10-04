@@ -118,11 +118,7 @@ dev = [
 ]
 
 [project.entry-points."pheasant.connectors"]
-notion = "pheasant.connectors.notion:NotionConnector"
 gdrive = "pheasant.connectors.gdrive:GDriveConnector"
-slack = "pheasant.connectors.slack:SlackConnector"
-confluence = "pheasant.connectors.confluence:ConfluenceConnector"
-imap = "pheasant.connectors.imap:ImapConnector"
 
 [project.scripts]
 pheasant = "pheasant.cli:app"

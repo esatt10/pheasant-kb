@@ -16,17 +16,16 @@ from pheasant.config.exclusions import (
 from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
+from pheasant.config.retired import resolve_source_type
 from pheasant.ingestion.content_types import default_include_globs
 
 
 class SourceType(StrEnum):
     repository = "repository"
     markdown_folder = "markdown_folder"
-    obsidian_vault = "obsidian_vault"
     document_folder = "document_folder"
     web_collection = "web_collection"
     single_file = "single_file"
-    s3 = "s3"
     api = "api"
     memory = "memory"
 
@@ -47,7 +46,7 @@ class PluginSourceType(str):
 
 
 # Source types whose ``path`` is a real local directory/file (as opposed to
-# the URL/connector-backed web/api/s3 types). A relative ``path`` on one of
+# the URL/connector-backed web/api types). A relative ``path`` on one of
 # these is anchored to ``pheasant.workspace_root`` at config-load time.
 #: A source's ``include`` when none is given: every code, prose and
 #: configuration text format (``content_types.default_include_globs``). A web
@@ -66,7 +65,6 @@ FILESYSTEM_SOURCE_TYPES = frozenset(
     {
         SourceType.repository,
         SourceType.markdown_folder,
-        SourceType.obsidian_vault,
         SourceType.document_folder,
         SourceType.single_file,
         SourceType.memory,
@@ -1401,8 +1399,6 @@ class SourceConnectorSettings(ModelMixin):
     api_endpoint: str | None = None
     api_items_field: str = "items"
     api_content_field: str = "content"
-    s3_bucket: str | None = None
-    s3_prefix: str = ""
     # Synapse Step 34.1+: "native" (default, in-process trusted Python) or
     # "sandboxed" (fuel/memory-capped WASM guest via pheasant.sandbox).
     # Opt-in per source; unset is byte-identical to pre-34.1.
@@ -2126,7 +2122,7 @@ class PheasantConfig(ModelMixin):
         for raw in data.get("sources", []) or []:
             raw = dict(raw)
             try:
-                raw["type"] = SourceType(raw.get("type", "single_file"))
+                raw["type"] = SourceType(resolve_source_type(raw.get("type", "single_file")))
             except ValueError:
                 raw["type"] = PluginSourceType(str(raw.get("type")))
             if raw.get("path") in (None, ""):

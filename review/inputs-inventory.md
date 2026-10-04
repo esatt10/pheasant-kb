@@ -165,3 +165,10 @@ Each has an offline stub. All are optional.
 
 **Open design item**
 - The WASM runtime today runs only the per-item transform inside the guest. Listing and reading stay on the host, and the only shipped guest is a reference `.wat`. A decoupled "check before it lands" gate would need the guest to cover reads.
+
+## Implemented
+
+- **File types:** every common software-project text format is read by default (see `content_types.TEXT_EXTENSIONS` and `TEXT_FILENAMES`). `.html`, `.xml`, `.patch` and `.diff` are opt-in. Minified bundles, source maps and lockfiles are excluded as noise.
+- **Cut:** the `notion`, `slack`, `confluence` and `imap` plugins, the `s3` built-in and the `obsidian_vault` built-in. Old configs and `/state` rows keep loading through `config/retired.py`: `obsidian_vault` loads as `markdown_folder`, and the removed types are refused at sync with the reason.
+- **Deferred, no code change:** memory formation was already off by default (`memory.formation`).
+- **Not developed:** the WASM "check before it lands" gate.

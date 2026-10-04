@@ -45,13 +45,13 @@ from pheasant.git_auth import (
 GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht")
 
 # Explicit override prefixes, so an unusual target is still a one-liner:
-# `pheasant up notion:workspace` or `pheasant up web:https://…`.
+# `pheasant up gdrive:folder` or `pheasant up web:https://…`.
 TYPE_PREFIXES = {
     "repo": SourceType.repository,
     "repository": SourceType.repository,
     "git": SourceType.repository,
-    "vault": SourceType.obsidian_vault,
-    "obsidian": SourceType.obsidian_vault,
+    "vault": SourceType.markdown_folder,
+    "obsidian": SourceType.markdown_folder,
     "folder": SourceType.document_folder,
     "docs": SourceType.document_folder,
     "markdown": SourceType.markdown_folder,
@@ -59,7 +59,6 @@ TYPE_PREFIXES = {
     "file": SourceType.single_file,
     "web": SourceType.web_collection,
     "api": SourceType.api,
-    "s3": SourceType.s3,
     "memory": SourceType.memory,
 }
 
@@ -201,7 +200,7 @@ def detect_local_type(path: Path) -> SourceType:
     if path.is_file():
         return SourceType.single_file
     if (path / ".obsidian").is_dir():
-        return SourceType.obsidian_vault
+        return SourceType.markdown_folder
     if (path / ".git").is_dir():
         return SourceType.repository
     if _is_mostly_markdown(path):
@@ -319,24 +318,11 @@ def _web_target(url: str, workspace: Path, *, name: str | None) -> ResolvedTarge
     )
 
 
-def _s3_target(url: str, workspace: Path, *, name: str | None) -> ResolvedTarget:
-    parsed = urlparse(url)
-    label = name or slugify(parsed.netloc or "s3")
-    return ResolvedTarget(
-        name=label,
-        type=SourceType.s3.value,
-        path=str((workspace / "s3" / label).resolve()),
-        description=f"S3 bucket {url}",
-        urls=[url],
-        local=False,
-    )
-
-
 def _plugin_target(kind: str, value: str, workspace: Path, *, name: str | None) -> ResolvedTarget:
-    """A connector-plugin source (notion, slack, gdrive, …) by name.
+    """A connector-plugin source (gdrive, or any installed plugin) by name.
 
     Step 31.1 resolves unknown type strings through the entry-point
-    registry at dispatch time, so `up notion:my-workspace` needs no
+    registry at dispatch time, so `up gdrive:my-folder` needs no
     special-casing here beyond carrying the type through.
     """
     label = name or slugify(value or kind)
@@ -392,15 +378,17 @@ def resolve_target(
         forced = TYPE_PREFIXES[prefix.lower()]
         spec = remainder or spec
     elif separator and prefix.lower() not in TYPE_PREFIXES and "//" not in remainder:
-        # `notion:workspace`-style plugin target; a bare Windows drive
+        # `gdrive:folder`-style plugin target; a bare Windows drive
         # letter (`C:\…`) is one character and never a plugin name.
         if len(prefix) > 1 and re.fullmatch(r"[a-z][a-z0-9_-]*", prefix.lower()):
             local_candidate = Path(spec).expanduser()
             if not local_candidate.exists():
                 return _plugin_target(prefix.lower(), remainder, workspace, name=name)
 
-    if spec.startswith("s3://") or forced is SourceType.s3:
-        return _s3_target(spec, workspace, name=name)
+    if spec.startswith("s3://"):
+        raise TargetError(
+            "S3 sources were removed; sync the bucket to a local folder and add that folder"
+        )
     if forced is SourceType.repository and "://" in spec or is_git_url(spec):
         return _git_target(spec, clone_root, name=name)
     parsed = urlparse(spec)

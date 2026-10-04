@@ -10,8 +10,8 @@ docs and code disagree, **the code is authoritative**.
 ## 1. What this project is
 
 **pheasant** is a Docker-first, local-first **MCP context server** that turns
-configured sources (git repositories, folders, single files, Obsidian vaults,
-web collections, SaaS connectors, API/S3) into a queryable **knowledge graph**
+configured sources (git repositories, folders, single files, web
+collections, the Google Drive connector, APIs) into a queryable **knowledge graph**
 with hybrid self-search, for agents and humans.
 
 Design pillars — these are product guarantees, not preferences:
@@ -98,8 +98,7 @@ pheasant-kb/
 │   │                            file worker hands the writer), worker_pool,
 │   │                            worker_transport, grpc, pdf_split (one
 │   │                            long PDF's pages read by the fleet)
-│   ├── connectors/            ← first-party SDK plugins: notion, gdrive,
-│   │                            slack, confluence, imap
+│   ├── connectors/            ← first-party SDK plugins: gdrive
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
@@ -387,8 +386,10 @@ Staleness is not stored because it is a function of the clock.
 `docs/how-to/okf-bundles.md`.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
-third-party plugin needs no dispatch code here. Five ship first-party: Notion,
-Google Drive, Slack, Confluence, IMAP. `pheasant.testing.ConnectorConformance`
+third-party plugin needs no dispatch code here. One ships first-party: Google
+Drive (Notion, Slack, Confluence and IMAP were removed for the initial product,
+as were the `s3` and `obsidian_vault` built-ins; `config/retired.py` keeps old
+configs loading). `pheasant.testing.ConnectorConformance`
 is the public quality bar.
 
 ### Where the graph lives

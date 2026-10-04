@@ -109,7 +109,7 @@ One row per configured source. Primary key `id`.
 | `id` | VARCHAR | Source name; the value every `source_id` column carries. |
 | `knowledge_base_id` | VARCHAR | The `kb_id`, matching `export.json`. |
 | `name` | VARCHAR | Same as `id` today. |
-| `type` | VARCHAR | `repository`, `markdown_folder`, `obsidian_vault`, `document_folder`, `web_collection`, `single_file`, `s3`, `api`, `memory`, or a connector-plugin type. |
+| `type` | VARCHAR | `repository`, `markdown_folder`, `document_folder`, `web_collection`, `single_file`, `api`, `memory`, or a connector-plugin type. Rows written before those types were retired may still read `obsidian_vault` or `s3`. |
 | `path` | VARCHAR | Where the source was read from. |
 | `enabled` | BIGINT | 0/1, not a boolean — SQLite has no boolean type. |
 | `config_json` | VARCHAR | The source's full resolved config, as JSON text. |

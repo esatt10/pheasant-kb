@@ -266,8 +266,8 @@ schema and the HTTP API can express is reachable from it.
 - **Sources → Advanced…** exposes the full source schema: include/exclude
   globs, folder depth, chunking, repository branch policy, sync triggers,
   URLs, and connector settings. The type picker is populated from
-  `GET /sources/types`, so installed connector plugins (Notion, Slack,
-  Confluence, Google Drive, IMAP, or your own) appear alongside the built-in
+  `GET /sources/types`, so installed connector plugins (Google Drive, or
+  your own) appear alongside the built-in
   types. Service-backed types skip the directory browser — there is no folder
   to pick — and take their credentials as an `api_key_env` naming an
   environment variable, never the secret itself.

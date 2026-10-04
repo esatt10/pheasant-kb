@@ -700,7 +700,7 @@ an existing knowledge base, so it is an explicit opt-in rather than a surprise
 on upgrade.
 
 **When to choose `sandboxed`.** PDF is a classic hostile-input parser target,
-and PDFs arriving from connectors (Google Drive, Slack, Confluence, IMAP) are
+and PDFs arriving from connectors (Google Drive, or a plugin) are
 not authored by you. In-process, that parse runs with the sync worker's ambient
 authority — every configured connector's API token in the environment, a
 writable `/state`, network egress. `sandboxed` runs the tokenizer under a fuel
@@ -1520,7 +1520,7 @@ Each source item supports:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `name` | string | none | Unique source id/name. |
-| `type` | enum \| plugin name | `single_file` | One of `repository`, `markdown_folder`, `obsidian_vault`, `document_folder`, `web_collection`, `single_file`, `s3`, `api` — or any installed connector plugin (`notion`, `gdrive`, `slack`, `confluence`, `imap`, or your own). `GET /sources/types` lists what this deployment accepts. |
+| `type` | enum \| plugin name | `single_file` | One of `repository`, `markdown_folder`, `document_folder`, `web_collection`, `single_file`, `api`, `memory` — or any installed connector plugin (`gdrive`, or your own). Retired: `obsidian_vault` loads as `markdown_folder`; `s3`, `notion`, `slack`, `confluence` and `imap` load but their sync is refused. `GET /sources/types` lists what this deployment accepts. |
 | `path` | absolute path | none | Filesystem path for source root (or file). |
 | `description` | string/null | null | Human-readable context for operators. |
 | `enabled` | bool | `true` | Disable without deleting config. |
@@ -1658,14 +1658,12 @@ Experimental non-filesystem connectors are disabled until explicitly enabled per
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `allow_experimental` | bool | `false` | Required for `web_collection`, `api`, and `s3` connector execution. A web collection registered through the UI, `POST /sources`, `pheasant up <url>` or MCP `register_source` is given `true` automatically — registering it is the request to fetch it; in YAML you set it yourself. |
+| `allow_experimental` | bool | `false` | Required for `web_collection` and `api` connector execution. A web collection registered through the UI, `POST /sources`, `pheasant up <url>` or MCP `register_source` is given `true` automatically — registering it is the request to fetch it; in YAML you set it yourself. |
 | `request_timeout_seconds` | integer | `10` | HTTP/API request timeout. |
 | `headers` | map[string,string] | `{}` | Optional HTTP headers for web/API requests. |
 | `api_endpoint` | string/null | `null` | JSON item listing endpoint for `api` sources. |
 | `api_items_field` | string | `items` | JSON field containing API item records. |
 | `api_content_field` | string | `content` | JSON field containing inline item content. |
-| `s3_bucket` | string/null | `null` | Bucket name for `s3` sources. |
-| `s3_prefix` | string | empty | Object prefix for `s3` sources. |
 | `max_refresh_seconds` | integer | `259200` | `web_collection`: the longest a page goes unchecked (3 days). See `sources[].sync.interval_seconds`. |
 
 Example `web_collection` source:
@@ -1777,10 +1775,10 @@ that projection.)
 ```yaml
 sources:
   - name: existing-obsidian-vault
-    type: obsidian_vault
+    type: markdown_folder        # a vault is a Markdown folder
     path: /workspace/obsidian-vault
     enabled: true
-    include: ["**/*.md", "**/*.canvas"]
+    include: ["**/*.md"]
     exclude: ["**/.obsidian/**", "**/.trash/**"]
 ```
 

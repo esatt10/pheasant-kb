@@ -58,27 +58,8 @@ def normalize_acl(connector_type: str, raw: dict[str, Any] | None) -> dict[str, 
             # about who may read it, so fall through to the region default
             # rather than inventing an owner.
             return None
-    elif connector_type == "notion":
-        for key in ("created_by", "last_edited_by"):
-            if raw.get(key):
-                allow.append(f"user:{raw[key]}")
     elif connector_type == "gdrive":
         allow.extend(f"user:{owner}" for owner in raw.get("owners") or [])
-    elif connector_type == "slack":
-        public = not raw.get("is_private", False)
-    elif connector_type == "confluence":
-        if raw.get("space"):
-            allow.append(f"group:space:{raw['space']}")
-        if raw.get("created_by"):
-            allow.append(f"user:{raw['created_by']}")
-    elif connector_type == "imap":
-        for key in ("from", "to", "cc"):
-            for address in str(raw.get(key) or "").split(","):
-                address = address.strip()
-                if "@" in address:
-                    # Bare the address out of "Name <addr>" forms.
-                    address = address.split("<")[-1].rstrip(">").strip()
-                    allow.append(f"user:{address}")
     else:
         # Unknown connector: trust explicitly-shaped canonical docs only.
         allow = [str(p) for p in raw.get("allow") or []]

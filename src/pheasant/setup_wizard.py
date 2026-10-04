@@ -220,7 +220,7 @@ def build_sections() -> list[Section]:
             blurb=(
                 "What to index. Point this at anything readable: a folder, a git "
                 "checkout or clone URL, an Obsidian vault, a single file, a list of "
-                "web pages, or a connector (notion, slack, gdrive, confluence, imap). "
+                "web pages, or a connector (gdrive, or an installed plugin). "
                 "Paste one target per prompt; blank when you are done. You can add "
                 "more later from the UI or with `pheasant up <target>`."
             ),
@@ -1638,7 +1638,7 @@ class Wizard:
 
         p = self.prompter
         while True:
-            raw = p.ask("  Target (path, git URL, https:// page, s3://, notion:…)", "done")
+            raw = p.ask("  Target (path, git URL, https:// page, gdrive:…)", "done")
             if not raw or raw.lower() == "done":
                 break
             try:
@@ -1868,7 +1868,7 @@ class GuidedWizard(Wizard):
                 p.say("    ! choose list, add, remove, or done")
             return
         while True:
-            raw = p.ask("  Target (path, git URL, https:// page, s3://, notion:…)", "done")
+            raw = p.ask("  Target (path, git URL, https:// page, gdrive:…)", "done")
             if not raw or raw.lower() == "done":
                 break
             self._add_source(resolve_target, TargetError, raw)

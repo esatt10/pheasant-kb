@@ -112,7 +112,7 @@ pheasant sync --source handbooks --mode full
 ### Sandboxed extraction for untrusted PDFs
 
 PDF is a classic hostile-input parser target, and PDFs arriving through
-connectors (Google Drive, Slack, Confluence, IMAP attachments) are not authored
+connectors (Google Drive, or a plugin) are not authored
 by you. Parsed in-process, that work runs with the sync worker's ambient
 authority: every configured connector's API token in the environment, a
 writable `/state`, and network egress.

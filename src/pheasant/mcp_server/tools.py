@@ -813,7 +813,7 @@ class PheasantTools(ReadinessTools, AssistantTools):
         (CLAUDE.md §4 rule 8: additive only).
 
         ``source_types``/``exclude_source_types`` scope by the *kind* of
-        source — ``repository``, ``notion``, ``slack``, ``markdown_folder`` and
+        source — ``repository``, ``gdrive``, ``web_collection``, ``markdown_folder`` and
         so on — rather than by name. Scoping by name means knowing every source
         in the region first; scoping by type is the question an agent usually
         has ("only what came from our wikis"). Every hit reports its own under
