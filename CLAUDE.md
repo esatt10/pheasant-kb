@@ -226,6 +226,8 @@ docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --s
 
 For deployment/configuration work, load
 `.agents/skills/pheasant-deploy/SKILL.md` before changing files or containers.
+Agents *querying* a region (raw hybrid search + graph traversal, judged by
+their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
 
 ---
 
@@ -625,6 +627,22 @@ nowhere else. It governs the ACL, section, memory *and* criteria filters; each
 surface used to carry its own `× 4` for the last of those, so the tunable
 parameter half-governed the stage the glossary attributed it to.
 `tests/test_ranking_parameters.py` fails if a second multiplier appears.
+
+**Raw retrieval carries its graph** (`expand`, off by default). `search_context`
+/ `POST /search` are retrieval with no model in the path; `ask_knowledge_base`
+is the opinionated answerer on top. A harness doing its own evaluation wants
+the first plus structure, so `expand` walks each hit's `node_id` with the one
+`graph.traversal.neighbors` walk (`traversal.expand`, once per distinct seed,
+≤25 seeds, ≤3 hops, ≤50 neighbours) and attaches a compact `graph` block.
+It runs after truncation and lineage, so hits and `query_id` are unchanged;
+a batch expands its merged results once. Under ACL enforcement
+`services.graph.neighbor_filter` applies the hits' artifact rule to
+neighbours (chunk nodes carry text) and drops anything reached *through* a
+withheld node, since `via` would name it. `include_graph_neighbors` was
+accepted and never read; it stays inert (turning it on would change every
+caller passing its `True` default) and `expand` is the switch. The standalone
+walk tools (`get_graph_neighbors`, `get_graph_slice`, `/graph/*`) still apply
+no ACL — the canvas depends on directory nodes a node-level rule would hide.
 
 Concept extraction was **retired**: it was 87% of nodes and 98.6% of edges and
 failed every test set for it. `graph.enrichment._add_concept` is a no-op whose

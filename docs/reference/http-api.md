@@ -101,7 +101,7 @@ actually behind. See [Monitor indexing](../how-to/monitor-indexing.md).
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/search` | Search (`mode`: `text` / `graph` / `vector` / `hybrid`). Also takes `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`, `section` and `memory`. Every hit reports `provenance.source_type` — the kind of source it came from. The response carries `graph_generation`: which graph answered, so a diagnosis can tell "not indexed" from "this replica has not picked up the index that has it". |
+| POST | `/search` | Search (`mode`: `text` / `graph` / `vector` / `hybrid`). Also takes `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`, `section` and `memory`. Every hit reports `provenance.source_type` — the kind of source it came from. `expand` (`true`, a depth 1–3, or `{depth, max_neighbors, edge_types, exclude_edge_types}`) attaches each hit's graph neighbourhood under `graph`, without changing which hits come back; see [raw retrieval with graph expansion](../mcp_tools.md#raw-retrieval-with-graph-expansion). The response carries `graph_generation`: which graph answered, so a diagnosis can tell "not indexed" from "this replica has not picked up the index that has it". |
 | POST | `/search/batch` | Bulk context retrieval: `queries` (up to 25, at most 1,000 hits in total) under every criterion `/search` takes. Each query is answered exactly as `/search` would answer it. `results` is the merged context, deduplicated and ordered by rank across queries, each hit carrying a `batch` block (`best_rank`, `matched_queries`); `searches` holds the per-query payloads unless `per_query: false`. A `snapshot_id` pin is verified once. Malformed batches are refused with `422` / `INVALID_REQUEST` and a message saying how to split the call. The MCP tool is `search_context_batch`. |
 | POST | `/relevant-files` | Rank relevant files for a task/query. |
 | GET | `/files/summary` | Summarize a file node. |
@@ -292,7 +292,7 @@ See [Vector self-search](../how-to/vector-search.md).
 |---|---|---|
 | GET | `/graph` | Full graph. Filter with `types` / `exclude_types` / `source` before the node limit applies. |
 | GET | `/graph/slice` | Subgraph around a node. |
-| GET | `/graph/neighbors` | Neighbors of a node (two hops by default; depth + edge filters). |
+| GET | `/graph/neighbors` | Neighbors of a node (two hops by default). `depth`, `max_nodes`, and comma-separated `edge_types`, `exclude_edge_types` and `exclude_types` (node types), the last two pruning the walk itself. |
 | GET | `/graph/export/node-link-json` | Export graph as node-link JSON. |
 | GET | `/graph/export/cytoscape-json` | Export graph as Cytoscape JSON. |
 | GET | `/graph/diagnostics` | Structural health: node/edge type histograms, hubs by degree, orphan count, density. Walks the whole graph — do not poll it. |

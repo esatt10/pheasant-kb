@@ -629,6 +629,12 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # `answer`.
     public.discard("acquire")
     public.discard("create_request_budget")
+    # `search`'s graph expansion: `parse_expansion` is its refusal and
+    # `neighbor_filter` its ACL predicate, both called inside the operation and
+    # neither exposed as one. Expansion itself is driven through both surfaces
+    # in tests/test_search_expansion.py, refusal text included.
+    public.discard("parse_expansion")
+    public.discard("neighbor_filter")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (
