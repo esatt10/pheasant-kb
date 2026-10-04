@@ -404,3 +404,100 @@ def slice_(
         "depths": depths,
         "truncated": len(all_neighbors) > neighbour_limit,
     }
+
+
+#: Node attributes an expanded neighbour carries. The walk hands back every
+#: attribute a node holds, which for a search payload is mostly noise; these
+#: are what a reader needs to decide whether to follow a neighbour up, and
+#: `explain_node` has the rest.
+EXPANSION_FIELDS = ("type", "label", "source_id", "relative_path", "artifact_id")
+
+#: Characters of a neighbour's own summary kept in an expansion. Chunk nodes
+#: carry the first 180 characters of their text; this is a ceiling, not a pad.
+EXPANSION_SUMMARY_CHARS = 240
+
+
+def expand(
+    graph: SimpleMultiDiGraph,
+    seeds: Sequence[str],
+    *,
+    depth: int = 1,
+    edge_types: list[str] | None = None,
+    exclude_edge_types: set[str] | None = None,
+    max_neighbors: int = 8,
+    fetch: int | None = None,
+    admit: Any = None,
+) -> dict[str, dict[str, Any]]:
+    """The graph neighbourhood of each seed, compact and bounded.
+
+    One :func:`neighbors` walk per *distinct* seed — two hits from one file
+    share a seed and are walked once — so this is the same hierarchy-first,
+    budget-bounded walk every other graph read takes, and it works unchanged
+    against a remote graph.
+
+    ``fetch`` is how many neighbours each walk collects before ``admit`` runs,
+    when it is larger than ``max_neighbors``: a post-filter needs the walk to
+    over-collect or a filtered neighbourhood comes back short. ``admit`` takes
+    the walk's neighbour list and returns the subset a caller may see; a
+    neighbour reached *through* one it removed is removed too, because its
+    ``via`` would name the hidden node.
+
+    Each neighbour reports ``via``, the node it was reached from, rather than
+    the whole path: depth and parent are enough to rebuild the tree, and they
+    keep a depth-3 expansion from repeating the seed's id on every line.
+    """
+
+    budget = max(int(max_neighbors), int(fetch or 0))
+    expanded: dict[str, dict[str, Any]] = {}
+    for seed in seeds:
+        if seed in expanded:
+            continue
+        walk = neighbors(
+            graph,
+            seed,
+            depth,
+            edge_types,
+            max_nodes=budget + 1,
+            exclude_edge_types=exclude_edge_types,
+        )
+        found = list(walk.get("neighbors") or [])
+        collected = len(found)
+        if callable(admit) and found:
+            allowed = admit(found)
+            hidden = {str(item["node_id"]) for item in found} - {
+                str(item["node_id"]) for item in allowed
+            }
+            found = [
+                item
+                for item in allowed
+                if not hidden.intersection(str(step) for step in (item.get("path") or [])[1:-1])
+            ]
+        kept = found[: int(max_neighbors)]
+        expanded[seed] = {
+            "neighbors": [_compact_neighbor(item) for item in kept],
+            # More was there than came back. Judged on the walk's own count
+            # (it asked for one past the budget) as well as on what survived
+            # the filter, so a neighbourhood cut by the budget never reads as
+            # complete.
+            "truncated": collected > budget or len(found) > len(kept),
+        }
+    return expanded
+
+
+def _compact_neighbor(item: dict[str, Any]) -> dict[str, Any]:
+    node = item.get("node") or {}
+    path = item.get("path") or []
+    compact: dict[str, Any] = {
+        "node_id": item["node_id"],
+        "depth": item.get("depth"),
+        "edge_types": item.get("edge_types") or [],
+        "via": path[-2] if len(path) >= 2 else None,
+    }
+    for field in EXPANSION_FIELDS:
+        value = node.get(field)
+        if value not in (None, ""):
+            compact[field] = value
+    summary = node.get("summary")
+    if summary:
+        compact["summary"] = str(summary)[:EXPANSION_SUMMARY_CHARS]
+    return compact

@@ -8,6 +8,7 @@ from typing import Any
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
 from pheasant.mcp_server.assistant_tools import register_assistant_tools
+from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.version import __version__
@@ -353,8 +354,31 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
         as_of: str | None = None,
+        expand: dict | int | bool | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
+
+        This is raw retrieval: the text, vector and graph arms fused by
+        reciprocal rank fusion, with no model, no planner and no answer. Use it
+        when you want to judge the evidence yourself; ask_knowledge_base is the
+        region's own answering workflow on top of the same retrieval.
+
+        expand walks the knowledge graph out from each hit and attaches the
+        neighbourhood under the hit's "graph" key: what the file imports or
+        references, the symbols it defines, its headings, the memory record
+        that superseded it. Pass true for one hop and 8 neighbours, a depth
+        (1-3), or an object such as {"depth": 2, "max_neighbors": 12,
+        "edge_types": ["imports", "calls"]} or {"exclude_edge_types": []}.
+        Each neighbour names its node_id, type, label, the edge_types it was
+        reached by and the node it was reached via, so you can follow it with
+        get_graph_neighbors, get_graph_slice, explain_node or get_file_summary.
+        By default has_chunk and indexes edges are skipped (a file's own
+        passages, and the source-to-every-file shortcut). At most 25 distinct
+        hits are expanded; the response's "expansion" block says how many.
+        Every hit's node_id, and every passage's chunk_id, is a graph node id.
+
+        include_chunks and include_graph_neighbors are accepted for
+        compatibility and do nothing; use expand.
 
         principal/principal_groups scope results to what that caller may see
         when security.acl_enforced is on (Step 32.2); ignored otherwise.
@@ -418,6 +442,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
             as_of=as_of,
+            expand=expand,
         )
 
     @mcp.tool()
@@ -441,6 +466,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
         as_of: str | None = None,
+        expand: dict | int | bool | None = None,
     ) -> dict:
         """Search for many queries in one call and return one merged context.
 
@@ -456,6 +482,10 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         block lists the query indexes that found it. searches holds each
         query's own result set unless per_query is false; counts.overlap is
         how many hits a query shared with an earlier one.
+
+        expand means what it means on search_context and is applied once, to
+        the merged results; the per-query result sets under searches are not
+        expanded.
         """
 
         return tools.search_context_batch(
@@ -476,6 +506,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
             as_of=as_of,
+            expand=expand,
         )
 
     @mcp.tool()
@@ -558,43 +589,6 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             principal=principal,
             principal_groups=principal_groups,
         )
-
-    @mcp.tool()
-    @anticipated
-    def get_graph_neighbors(
-        knowledge_base: str,
-        node_id: str,
-        depth: int = 2,
-        edge_types: list[str] | None = None,
-    ) -> dict:
-        """Return graph neighbors around a node."""
-
-        return tools.get_graph_neighbors(knowledge_base, node_id, depth, edge_types)
-
-    @mcp.tool()
-    @anticipated
-    def get_file_summary(
-        knowledge_base: str,
-        path: str,
-        source_name: str | None = None,
-    ) -> dict:
-        """Return summary and provenance for one indexed file."""
-
-        return tools.get_file_summary(knowledge_base, path, source_name)
-
-    @mcp.tool()
-    @anticipated
-    def get_repo_map(knowledge_base: str, source_name: str, depth: int = 3) -> dict:
-        """Return a compact repository map for one source."""
-
-        return tools.get_repo_map(knowledge_base, source_name, depth)
-
-    @mcp.tool()
-    @anticipated
-    def explain_node(knowledge_base: str, node_id: str) -> dict:
-        """Explain what an indexed graph node represents."""
-
-        return tools.explain_node(knowledge_base, node_id)
 
     @mcp.tool()
     @anticipated
@@ -926,6 +920,8 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "beyond retrieved evidence, and call get_graph_neighbors for related material."
             f"{suffix}"
         )
+
+    register_graph_tools(mcp, tools, anticipated)
 
     return mcp
 

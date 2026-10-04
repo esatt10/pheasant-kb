@@ -41,6 +41,121 @@ from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 from pheasant.telemetry import metrics
 
+#: Bounds on a search's graph expansion. Every hit's neighbourhood is a walk,
+#: so these are what keep one search from becoming a whole-graph read: at most
+#: ``MAX_EXPANSION_SEEDS`` distinct hits are expanded, each to at most
+#: ``MAX_EXPANSION_NEIGHBORS`` nodes no more than ``MAX_EXPANSION_DEPTH`` hops
+#: away. A caller wanting more walks from a hit with `get_graph_neighbors`.
+MAX_EXPANSION_DEPTH = 3
+MAX_EXPANSION_NEIGHBORS = 50
+MAX_EXPANSION_SEEDS = 25
+
+#: Edges an expansion skips unless the caller names its own. ``has_chunk``
+#: leads from a file to its own passages — the hit already is one — and comes
+#: first in a file's out-edges, so left in it spends the whole budget
+#: restating the document. ``indexes`` is the source -> every-artifact
+#: shortcut the canvas leaves out for the same reason.
+DEFAULT_EXPANSION_EXCLUDES = ("has_chunk", "indexes")
+
+
+@dataclass(frozen=True)
+class GraphExpansion:
+    """Walk the graph out from each hit and return the neighbourhood with it.
+
+    This is the half of retrieval an agent cannot do from passages alone:
+    *what is this connected to* — the file a symbol is defined in, the module
+    an import resolves to, the record that superseded this one. It runs no
+    model and makes no judgement about which neighbours matter, so a harness
+    doing its own evaluation gets the structure and keeps the decision.
+    """
+
+    depth: int = 1
+    max_neighbors: int = 8
+    edge_types: tuple[str, ...] | None = None
+    exclude_edge_types: tuple[str, ...] = DEFAULT_EXPANSION_EXCLUDES
+
+    def block(self) -> dict[str, Any]:
+        return {
+            "depth": self.depth,
+            "max_neighbors": self.max_neighbors,
+            "edge_types": list(self.edge_types) if self.edge_types else None,
+            "exclude_edge_types": list(self.exclude_edge_types),
+        }
+
+
+_EXPANSION_KEYS = ("depth", "max_neighbors", "edge_types", "exclude_edge_types")
+
+
+def parse_expansion(value: Any) -> GraphExpansion | None:
+    """``expand`` as either surface received it, or a refusal saying how to fix it.
+
+    ``None``, ``False`` and ``0`` mean no expansion; ``True`` means the
+    defaults; an integer is a depth; an object sets any of ``depth``,
+    ``max_neighbors``, ``edge_types`` and ``exclude_edge_types``. Naming
+    ``edge_types`` walks only those, so the default exclusions are dropped
+    with it; naming ``exclude_edge_types`` replaces them (``[]`` for none).
+    """
+
+    if value is None or value is False:
+        return None
+    if isinstance(value, GraphExpansion):
+        return value
+    if value is True:
+        return GraphExpansion()
+    if isinstance(value, int):
+        if value == 0:
+            return None
+        return GraphExpansion(depth=_expansion_depth(value))
+    if not isinstance(value, dict):
+        raise InvalidRequest(
+            f"expand must be true, a depth (1-3), or an object with {', '.join(_EXPANSION_KEYS)}"
+        )
+    unknown = sorted(set(value) - set(_EXPANSION_KEYS))
+    if unknown:
+        raise InvalidRequest(
+            f"expand does not take {', '.join(unknown)}; it takes {', '.join(_EXPANSION_KEYS)}"
+        )
+    edge_types = _edge_type_list(value.get("edge_types"), "edge_types")
+    if "exclude_edge_types" in value:
+        excludes = _edge_type_list(value.get("exclude_edge_types"), "exclude_edge_types") or ()
+    else:
+        excludes = () if edge_types else DEFAULT_EXPANSION_EXCLUDES
+    max_neighbors = value.get("max_neighbors", GraphExpansion.max_neighbors)
+    if (
+        isinstance(max_neighbors, bool)
+        or not isinstance(max_neighbors, int)
+        or not 1 <= max_neighbors <= MAX_EXPANSION_NEIGHBORS
+    ):
+        raise InvalidRequest(
+            f"expand.max_neighbors must be an integer from 1 to {MAX_EXPANSION_NEIGHBORS}"
+        )
+    return GraphExpansion(
+        depth=_expansion_depth(value.get("depth", GraphExpansion.depth)),
+        max_neighbors=max_neighbors,
+        edge_types=edge_types,
+        exclude_edge_types=excludes,
+    )
+
+
+def _expansion_depth(depth: Any) -> int:
+    if (
+        isinstance(depth, bool)
+        or not isinstance(depth, int)
+        or not 1 <= depth <= MAX_EXPANSION_DEPTH
+    ):
+        raise InvalidRequest(f"expand depth must be an integer from 1 to {MAX_EXPANSION_DEPTH}")
+    return depth
+
+
+def _edge_type_list(value: Any, name: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise InvalidRequest(f"expand.{name} must be a list of edge type names")
+    if not all(isinstance(item, str) and item for item in value):
+        raise InvalidRequest(f"expand.{name} must be a list of edge type names")
+    return tuple(value)
+
 
 @dataclass(frozen=True)
 class SearchRequest:
@@ -82,6 +197,10 @@ class SearchRequest:
     #: The caller's correlation id, echoed into the lineage so a result can be
     #: joined to the ledger row and the span that produced it.
     trace_id: str | None = None
+    #: Walk the graph out from each hit and attach the neighbourhood. Anything
+    #: `parse_expansion` accepts; off by default, so a caller that does not ask
+    #: receives the payload it always did.
+    expand: Any = None
 
     @property
     def filtering(self) -> bool:
@@ -132,6 +251,8 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     """
 
     kb_id = context.knowledge_base(request.knowledge_base)
+    # A malformed expansion is refused before anything is retrieved.
+    request = replace(request, expand=parse_expansion(request.expand))
     # Before the arms run, not after. A pinned search whose corpus has moved
     # must not spend the retrieval and then discard it: the caller is going to
     # attribute whatever comes back to the snapshot it named, so the only safe
@@ -210,7 +331,71 @@ def _search(
         payload=payload,
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
     )
+    if request.expand is not None:
+        payload["results"], payload["expansion"] = _expand(
+            context, request, payload.get("results") or []
+        )
     return payload
+
+
+def _expand(
+    context: ServiceContext, request: SearchRequest, results: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Attach each hit's graph neighbourhood under ``graph``.
+
+    After truncation, so only hits the caller receives are walked, and after
+    the lineage, so expanding a search cannot change its query id: the
+    retrieval is the same retrieval, with structure added to what it found.
+
+    The seed is the hit's ``node_id`` — the artifact for a passage, the node
+    itself for a graph hit — because a passage's own chunk node leads only
+    back to its file. Under ACL enforcement neighbours pass the same artifact
+    check the hits did, over-collected by the one over-fetch parameter so a
+    filtered neighbourhood still fills its budget.
+    """
+
+    from pheasant.graph.traversal import expand
+    from pheasant.services.graph import neighbor_filter
+
+    expansion = request.expand
+    seeds: list[str] = []
+    for item in results:
+        seed = str(item.get("node_id") or "")
+        if seed and seed not in seeds:
+            seeds.append(seed)
+    walked = seeds[:MAX_EXPANSION_SEEDS]
+    admit = neighbor_filter(context, request.principal, request.principal_groups)
+    fetch = None
+    if admit is not None:
+        ranking = context.searcher.ranking_parameters()
+        fetch = ranking.overfetch(expansion.max_neighbors, filtering=True)
+    neighbourhoods = expand(
+        context.graph,
+        walked,
+        depth=expansion.depth,
+        edge_types=list(expansion.edge_types) if expansion.edge_types else None,
+        exclude_edge_types=set(expansion.exclude_edge_types) or None,
+        max_neighbors=expansion.max_neighbors,
+        fetch=fetch,
+        admit=admit,
+    )
+    expanded = []
+    for item in results:
+        seed = str(item.get("node_id") or "")
+        neighbourhood = neighbourhoods.get(seed)
+        if neighbourhood is None:
+            expanded.append(item)
+            continue
+        expanded.append({**item, "graph": {"seed": seed, **neighbourhood}})
+    block = {
+        **expansion.block(),
+        "seeds": len(walked),
+        # Distinct hits past the seed ceiling carry no `graph` block; walk
+        # from them with get_graph_neighbors.
+        "seeds_skipped": len(seeds) - len(walked),
+        "nodes": sum(len(n["neighbors"]) for n in neighbourhoods.values()),
+    }
+    return expanded, block
 
 
 def relevant_files(context: ServiceContext, request: FilesRequest) -> dict[str, Any]:
@@ -302,6 +487,11 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
 
     queries = _batch_queries(request.queries, request.criteria.max_results)
     kb_id = context.knowledge_base(request.criteria.knowledge_base)
+    # Expanded once over the merged context, not once per query: the queries
+    # of a batch overlap, and a walk per query would repeat the same
+    # neighbourhoods up to 25 times over.
+    expansion = parse_expansion(request.criteria.expand)
+    criteria = replace(request.criteria, expand=None)
     snapshot = _require_snapshot(context, request.criteria.snapshot_id)
 
     started = time.perf_counter()
@@ -310,12 +500,13 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
     searches: list[dict[str, Any]] = []
     for query in queries:
         if query not in answered:
-            answered[query] = _search(
-                context, replace(request.criteria, query=query), kb_id, snapshot
-            )
+            answered[query] = _search(context, replace(criteria, query=query), kb_id, snapshot)
         searches.append(answered[query])
 
     merged = _merge_batch(searches)
+    expansion_block = None
+    if expansion is not None:
+        merged, expansion_block = _expand(context, replace(criteria, expand=expansion), merged)
     hits = sum(len(payload.get("results") or []) for payload in searches)
     payload: dict[str, Any] = {
         "knowledge_base": kb_id,
@@ -335,6 +526,8 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
     }
     if request.criteria.filtering:
         payload["criteria"] = request.criteria.criteria_block()
+    if expansion_block is not None:
+        payload["expansion"] = expansion_block
     if request.per_query:
         payload["searches"] = [{"query": query, **searches[i]} for i, query in enumerate(queries)]
     return payload

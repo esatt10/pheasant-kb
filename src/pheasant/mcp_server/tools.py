@@ -801,6 +801,7 @@ class PheasantTools(ReadinessTools, AssistantTools):
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
         as_of: str | None = None,
+        expand: Any = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -847,6 +848,15 @@ class PheasantTools(ReadinessTools, AssistantTools):
         as well as inside ``memory`` so it reaches the lineage block even in a
         region that holds no memory — which is exactly where a caller most
         needs to be told that ``as_of`` did nothing.
+
+        ``expand`` walks the graph out from each hit and attaches the
+        neighbourhood under the hit's ``graph`` key — see
+        `services.retrieval.parse_expansion` for what it accepts.
+
+        ``include_chunks`` and ``include_graph_neighbors`` are accepted and
+        ignored, as they always have been: nothing ever read either, and
+        removing a parameter breaks callers that pass it (rule 8). ``expand``
+        is what the second one claimed to be.
         """
         self._require_knowledge_base(knowledge_base)
         # Transport adapter. The operation is `services.retrieval.search`:
@@ -873,6 +883,7 @@ class PheasantTools(ReadinessTools, AssistantTools):
                 exclude_source_types=exclude_source_types,
                 snapshot_id=snapshot_id,
                 as_of=as_of,
+                expand=expand,
             ),
         )
 
@@ -1814,6 +1825,8 @@ class PheasantTools(ReadinessTools, AssistantTools):
         depth: int = 2,
         edge_types: list[str] | None = None,
         max_nodes: int | None = None,
+        exclude_edge_types: list[str] | None = None,
+        exclude_node_types: list[str] | None = None,
     ) -> dict:
         """Neighbouring nodes, breadth-first.
 
@@ -1825,11 +1838,21 @@ class PheasantTools(ReadinessTools, AssistantTools):
         `api.app` on the import path of the tool layer.
 
         ``max_nodes`` is new here and defaults to unbounded, which is what this
-        tool did before (rule 8: additive).
+        tool did before (rule 8: additive). The two exclusions prune the walk
+        itself, as they do on ``GET /graph/neighbors``, so a hub's ``indexes``
+        fan-out does not spend a bounded walk's budget.
         """
 
         self._require_knowledge_base(knowledge_base)
-        return graph_service.neighbors(self.graph, node_id, depth, edge_types, max_nodes=max_nodes)
+        return graph_service.neighbors(
+            self.graph,
+            node_id,
+            depth,
+            edge_types,
+            max_nodes=max_nodes,
+            exclude_edge_types=set(exclude_edge_types) if exclude_edge_types else None,
+            exclude_node_types=set(exclude_node_types) if exclude_node_types else None,
+        )
 
     def get_file_summary(
         self,
@@ -1916,6 +1939,8 @@ class PheasantTools(ReadinessTools, AssistantTools):
         depth: int = 1,
         edge_types: list[str] | None = None,
         limit: int = 100,
+        exclude_edge_types: list[str] | None = None,
+        exclude_node_types: list[str] | None = None,
     ) -> dict:
         """A bounded sub-graph around a node.
 
@@ -1927,7 +1952,15 @@ class PheasantTools(ReadinessTools, AssistantTools):
         """
 
         self._require_knowledge_base(knowledge_base)
-        return graph_service.slice_(self.graph, node_id, depth, edge_types, limit)
+        return graph_service.slice_(
+            self.graph,
+            node_id,
+            depth,
+            edge_types,
+            limit,
+            exclude_edge_types=set(exclude_edge_types) if exclude_edge_types else None,
+            exclude_node_types=set(exclude_node_types) if exclude_node_types else None,
+        )
 
     def _require_knowledge_base(self, knowledge_base: str | None) -> None:
         """Refuse a knowledge base this region does not hold.

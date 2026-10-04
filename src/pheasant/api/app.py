@@ -4068,6 +4068,8 @@ def create_app(
         depth: int = 2,
         edge_types: str | None = None,
         exclude_edge_types: str | None = None,
+        exclude_types: str | None = None,
+        max_nodes: int | None = None,
     ) -> dict:
         types = [t for t in edge_types.split(",") if t] if edge_types else None
         return graph_neighbors(
@@ -4075,7 +4077,9 @@ def create_app(
             node_id,
             depth,
             types,
+            max_nodes=max_nodes,
             exclude_edge_types=_edge_type_set(exclude_edge_types),
+            exclude_node_types=_edge_type_set(exclude_types),
         )
 
     @app.get("/graph/slice")

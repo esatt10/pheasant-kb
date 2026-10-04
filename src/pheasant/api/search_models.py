@@ -9,6 +9,8 @@ once rather than once per route.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 from pheasant.services import retrieval as retrieval_service
@@ -58,6 +60,14 @@ class SearchCriteria(BaseModel):
     # The caller's correlation id, echoed so a result joins to the ledger row
     # and the span that produced it.
     trace_id: str | None = None
+    # Walk the graph out from each hit and attach the neighbourhood under the
+    # hit's `graph` key: true for the defaults, a depth (1-3), or an object
+    # with depth / max_neighbors / edge_types / exclude_edge_types. Off by
+    # default. `services.retrieval.parse_expansion` validates it for both
+    # surfaces, so a malformed value is refused with one text. `Any` rather
+    # than `bool | int | dict`: pydantic's lax bool reads "yes" as true, which
+    # answered over HTTP a value MCP refused.
+    expand: Any = None
 
     def service_request(self, query: str) -> retrieval_service.SearchRequest:
         return retrieval_service.SearchRequest(
@@ -78,6 +88,7 @@ class SearchCriteria(BaseModel):
             snapshot_id=self.snapshot_id,
             as_of=self.as_of,
             trace_id=self.trace_id,
+            expand=self.expand,
         )
 
 

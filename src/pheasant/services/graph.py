@@ -30,6 +30,7 @@ from pheasant.services.errors import NotPermitted
 __all__ = [
     "explain_node",
     "file_summary",
+    "neighbor_filter",
     "neighbors",
     "repo_map",
     "require_readable",
@@ -83,13 +84,9 @@ def require_readable(
     security = context.config.security
     if not security.acl_enforced:
         return
-    from pheasant.security.acl import expand_principal, is_allowed
+    from pheasant.security.acl import is_allowed
 
-    identities = expand_principal(principal, principal_groups, security.groups)
-    if identities is not None and principal:
-        from pheasant.security.idp import fresh_idp_groups
-
-        identities |= fresh_idp_groups(context.state, principal, security.idp)
+    identities = _identities(context, principal, principal_groups)
     default_public = security.default_visibility != "private"
     acls = context.state.artifact_acls([artifact_id]) if artifact_id else {}
     if artifact_id not in acls:
@@ -98,6 +95,71 @@ def require_readable(
         raise NotPermitted
     if not is_allowed(acls[artifact_id], identities, default_public=default_public):
         raise NotPermitted
+
+
+def _identities(
+    context: ServiceContext, principal: str | None, principal_groups: list[str] | None
+) -> Any:
+    """Who ``principal`` is, for an ACL check: their groups plus fresh IdP ones.
+
+    The same expansion the search path performs, so a node is visible here
+    exactly when the artifact it came from would be visible as a hit.
+    """
+
+    from pheasant.security.acl import expand_principal
+
+    security = context.config.security
+    identities = expand_principal(principal, principal_groups, security.groups)
+    if identities is not None and principal:
+        from pheasant.security.idp import fresh_idp_groups
+
+        identities |= fresh_idp_groups(context.state, principal, security.idp)
+    return identities
+
+
+def neighbor_filter(
+    context: ServiceContext,
+    principal: str | None,
+    principal_groups: list[str] | None = None,
+) -> Any:
+    """A filter over walk neighbours for ``principal``, or None if ACLs are off.
+
+    A graph walk returns node attributes, and a chunk node carries the opening
+    of its text, so expanding a hit the caller may read must not surface a
+    neighbour they may not. A node is judged by the artifact it *is*, or else
+    the artifact it names as ``artifact_id`` (chunks, symbols, entities); a
+    node that resolves to neither (a directory, a source, a shared stub) is
+    withheld, which is the conservative rule the search path already applies
+    to graph hits with no artifact row.
+
+    ``None`` when ``security.acl_enforced`` is off, so a region that never
+    turned enforcement on pays nothing for it.
+    """
+
+    security = context.config.security
+    if not security.acl_enforced:
+        return None
+    from pheasant.security.acl import is_allowed
+
+    identities = _identities(context, principal, principal_groups)
+    default_public = security.default_visibility != "private"
+
+    def owner(item: dict[str, Any]) -> str:
+        node = item.get("node") or {}
+        return str(node.get("artifact_id") or item["node_id"])
+
+    def admit(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        candidates = {str(item["node_id"]) for item in found} | {owner(item) for item in found}
+        acls = context.state.artifact_acls(sorted(candidates))
+        kept = []
+        for item in found:
+            node_id = str(item["node_id"])
+            key = node_id if node_id in acls else owner(item)
+            if key in acls and is_allowed(acls[key], identities, default_public=default_public):
+                kept.append(item)
+        return kept
+
+    return admit
 
 
 def file_summary(

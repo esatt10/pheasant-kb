@@ -74,15 +74,16 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `list_memory_candidates` | Memory this region has **proposed** from how it is used, awaiting a decision. These are not memories: nothing listed is retrievable, and nothing becomes retrievable until it is promoted. Each carries the evidence behind it — which rule, how many observations, across how many sessions. |
 | `promote_memory_candidate` | Admit one proposal, making it an ordinary record through the same write path `memory_write` uses. |
 | `reject_memory_candidate` | Decline one proposal, permanently. The rule that proposed it will not suggest it again. |
-| `search_context` | Search graph/search state in `text` (SQLite full-text over chunk content and paths), `graph` (node/relationship labels, types and attribute values), `vector` (embedding similarity; requires `search.embeddings.enabled`, otherwise contributes nothing), or `hybrid` (merged and re-ranked) mode. Also accepts **retrieval criteria** an agent can set per call instead of relying on how the region was configured: `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`. `source_types` scopes by the *kind* of source (`repository`, `gdrive`, `web_collection`, …) rather than by name, which is what you want when you do not already know every source in the region; every hit reports its own as `provenance.source_type`, and `describe_retrieval` lists the types present. All optional and additive — an existing caller is unaffected. `snapshot_id` pins the search to a sealed snapshot: the region answers from that state or refuses with `SNAPSHOT_DRIFTED`, naming the sections that moved. `as_of` is the instant memory validity is evaluated at, echoed into the lineage even where the region holds no memory — which is where a caller most needs to be told it did nothing. |
-| `search_context_batch` | Bulk context retrieval: up to 25 `queries` in one call, at most 1,000 hits in total (`queries × max_results`). Every other argument means exactly what it means on `search_context` and applies to every query, and each query is answered exactly as it would be alone. `results` is the merged context — each passage once, ordered **by rank across queries** (every query's best hit, then every query's second), so truncating it keeps coverage of every query; each hit's `batch` block names the query indexes that found it and its best rank. `searches` holds each query's own payload unless `per_query` is false. A `snapshot_id` pin is verified once for the whole batch. `counts.overlap` is how many hits a query shared with an earlier one — high overlap means the queries are paraphrases rather than facets. |
+| `search_context` | Search graph/search state in `text` (SQLite full-text over chunk content and paths), `graph` (node/relationship labels, types and attribute values), `vector` (embedding similarity; requires `search.embeddings.enabled`, otherwise contributes nothing), or `hybrid` (merged and re-ranked) mode. Also accepts **retrieval criteria** an agent can set per call instead of relying on how the region was configured: `source_name`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`. `source_types` scopes by the *kind* of source (`repository`, `gdrive`, `web_collection`, …) rather than by name, which is what you want when you do not already know every source in the region; every hit reports its own as `provenance.source_type`, and `describe_retrieval` lists the types present. All optional and additive — an existing caller is unaffected. `snapshot_id` pins the search to a sealed snapshot: the region answers from that state or refuses with `SNAPSHOT_DRIFTED`, naming the sections that moved. `as_of` is the instant memory validity is evaluated at, echoed into the lineage even where the region holds no memory — which is where a caller most needs to be told it did nothing. `expand` attaches each hit's **graph neighbourhood** under `hit.graph` — see [raw retrieval with graph expansion](#raw-retrieval-with-graph-expansion). `include_chunks` and `include_graph_neighbors` are accepted for compatibility and do nothing. |
+| `search_context_batch` | Bulk context retrieval: up to 25 `queries` in one call, at most 1,000 hits in total (`queries × max_results`). Every other argument means exactly what it means on `search_context` and applies to every query, and each query is answered exactly as it would be alone. `results` is the merged context — each passage once, ordered **by rank across queries** (every query's best hit, then every query's second), so truncating it keeps coverage of every query; each hit's `batch` block names the query indexes that found it and its best rank. `searches` holds each query's own payload unless `per_query` is false. A `snapshot_id` pin is verified once for the whole batch. `counts.overlap` is how many hits a query shared with an earlier one — high overlap means the queries are paraphrases rather than facets. `expand` is applied once, to the merged `results`; the per-query `searches` are not expanded. |
 | `describe_retrieval` | Report how this knowledge base retrieves and what an agent may override per call: default mode and result count, which modes actually work here (`vector` is only offered when a vector index exists), the sources present, the `assistant.retrieval` settings, and one line of help per knob. Call this before guessing at parameters for an unfamiliar region. |
 | `preview_retrieval` | Run retrieval criteria and report how they differ from the standing configuration — both result sets plus the delta (added / dropped / kept). Lets an agent test a setting against real content before anyone writes it into `pheasant.yaml`. Read-only: nothing is persisted. |
 | `get_relevant_files` | Return files likely needed for a coding task. |
 | `ask_knowledge_base` | A synthesized, cited answer from the configured workflow (extractive with no model). Takes `history` (the conversation so far, `[{question, answer}]`, oldest first — the region keeps no chat state), `depth` (`short` / `medium` / `long`, or unset to read it off the question) and `visual` (`diagram` / `image` / `none`), plus the retrieval criteria and `memory` `search_context` takes. The answer carries `route`, numbered `figures` for `[fig:n]` markers, and `visual`. See [answer length, conversations, visuals and figures](how-to/conversations-and-visuals.md). |
 | `create_visual` | A visual grounded in the knowledge base, in whatever shape the request needs, or the images it holds. `request` says what to draw and from what viewpoint; `node_ids` (up to 12 chunk or file ids) draws from exactly those passages — "visualize this passage", or redraw the same evidence as another shape — and without them the region searches for the request. `kind`: `flow`, `sequence`, `hierarchy`, `mindmap`, `concept`, `cycle`, `timeline`, `swimlane`, `layers`, `groups`, `table`, `quadrant`, `chart`, `canvas`, the UML `class`, `activity`, `state` (state machine) and `usecase`, or `image` (everyday names such as "org chart", "2x2" or "class diagram" work too). Every node, edge, lane and cell lists the passages (`cites`) that support it; an unsupported element is `inferred`, a chart value no cited passage states is unverified, and a mostly-inferred visual is declined with a reason. `visual.mermaid` is the Mermaid export where Mermaid has the shape (`visual.markdown` for a table); `visual.redraw` carries the `node_ids` to redraw it. With no model connected the visual is the graph's own edges. |
 | `get_image` | An indexed image as MCP **image content** plus its caption and path, so a vision-capable agent can look at what a document shows. `node_id` comes from an answer's `figures`, an `image` search hit, or `create_visual`. Raster formats only. Also readable as the resource `pheasant://knowledge-bases/{kb_id}/media/{node_id}`. |
-| `get_graph_neighbors` | Traverse graph neighbors with true depth-aware BFS and optional edge-type filters (two hops by default). |
+| `get_graph_neighbors` | Traverse graph neighbors with true depth-aware BFS along outgoing edges (two hops by default), structural `contains` edges first. `edge_types` keeps only those edges; `exclude_edge_types` and `exclude_node_types` prune the walk itself, as on `GET /graph/neighbors`; `max_nodes` bounds it (set it when starting from a `directory` or `source` hub). Any search hit's `node_id` or `chunk_id`, or an expanded neighbour's `node_id`, is a valid start. |
+| `get_graph_slice` | The induced sub-graph around a node: `nodes`, every link between any two of them, each node's hop distance (`depths`) and `truncated` when `limit` was reached. The same operation as `GET /graph/slice` and the `graph-slices` resource, now callable with bounds and exclusions. |
 | `get_file_summary` | Return a compact summary and provenance for a file. |
 | `get_repo_map` | Return repository structure, important modules, and dependencies. |
 | `explain_node` | Explain a graph node and why it matters. |
@@ -108,6 +109,40 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `seal_snapshot` | Seal the current state as a run's reference snapshot. Idempotent over an unchanged region, because the id is a digest of the state. Pin a search to the returned `snapshot_id` and this region answers from that state **or refuses** — it does not hold older corpus versions, so the guarantee is that two runs naming one snapshot cannot silently have seen different corpora. |
 | `get_snapshot` | A snapshot's manifest, and whether the region still stands where it says. Drift names the manifest *sections* that moved: `corpus` means somebody indexed, `retrieval` means a tuning bundle was applied, `memory` means a record was written. |
 | `list_snapshots` | Every snapshot this region holds, saying which are sealed. |
+
+### Raw retrieval with graph expansion
+
+`search_context` is retrieval with no model in the path — three arms fused by
+reciprocal rank fusion, nothing planned, graded or written. `ask_knowledge_base`
+is the region's own answering workflow on top of the same retrieval. A harness
+that runs its own evaluation, reranking or synthesis wants the first, and
+`expand` gives it the structure around each hit as well, so it can follow
+imports, calls, references, headings and memory supersession without the
+region deciding which neighbours matter.
+
+| `expand` | Meaning |
+|---|---|
+| omitted / `false` / `0` | No expansion; the payload is unchanged (default) |
+| `true` | 1 hop, up to 8 neighbours per hit |
+| `1`–`3` | That many hops |
+| `{"depth", "max_neighbors", "edge_types", "exclude_edge_types"}` | Any of them; `max_neighbors` 1–50 |
+
+Each hit gains `graph: {seed, neighbors, truncated}`; each neighbour carries
+`node_id`, `type`, `label`, `relative_path`/`source_id`/`artifact_id` where it
+has them, a short `summary`, its `depth`, the `edge_types` it was reached by
+and `via`, the node it was reached from. The response's `expansion` block
+reports the settings in force and how many distinct hits were walked (at most
+25; `seeds_skipped` counts the rest). `has_chunk` and `indexes` are skipped by
+default — a file's own passages and the source-to-every-file shortcut; naming
+`edge_types` drops those defaults and naming `exclude_edge_types` replaces them.
+
+Expansion never changes retrieval — the same hits, in the same order, under
+the same `lineage.query_id`. Under `security.acl_enforced` neighbours pass the
+same artifact check the hits do, anything reached *through* a withheld node is
+withheld too, and a node that belongs to no artifact is withheld. `POST /search`
+and `POST /search/batch` take the same `expand`, with the same refusal text.
+The [`pheasant-retrieval` skill](https://github.com/esatt10/pheasant-kb/blob/main/.agents/skills/pheasant-retrieval/SKILL.md)
+and the `use_pheasant_for_raw_retrieval` prompt package the whole workflow.
 
 ### Agent memory in retrieval
 
@@ -212,3 +247,7 @@ pheasant://evaluation/taxonomy
 ### `use_pheasant_for_document_research`
 
 Use `search_context` first, prefer chunks with explicit provenance, avoid claims beyond retrieved evidence, and call `get_graph_neighbors` for related material.
+
+### `use_pheasant_for_raw_retrieval`
+
+For a harness that judges evidence itself: `describe_retrieval` once, then `search_context` (hybrid) with `expand=true` or `search_context_batch` for several facets — never `ask_knowledge_base`. Judge each hit from its text, provenance and graph block; follow neighbours with `get_graph_neighbors` or `get_graph_slice`; read whole files with `get_file_summary`; pin repeated runs with `snapshot_id`.

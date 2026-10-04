@@ -33,3 +33,7 @@ Ordinary code changes (bug fixes, features, tests) follow the rules in
 
 For local deployment, configuration, scaling, MCP attachment, or deployment
 troubleshooting, use `.agents/skills/pheasant-deploy/SKILL.md`.
+
+For *querying* a region — raw hybrid search and graph traversal judged by
+your own harness rather than the region's answering workflow — use
+`.agents/skills/pheasant-retrieval/SKILL.md`.

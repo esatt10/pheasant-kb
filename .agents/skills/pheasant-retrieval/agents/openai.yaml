@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pheasant Retrieval"
+  short_description: "Hybrid search and graph traversal against a Pheasant region, judged by your own harness"
+  default_prompt: "Use $pheasant-retrieval to search a Pheasant knowledge base and walk the graph around the results, without the region's answering workflow."
