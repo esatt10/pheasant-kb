@@ -111,7 +111,7 @@ Extraction providers (`auto`, `native`, `builtin`, `sandboxed`):
 | [ ] | Sync on startup | `sync.on_startup` | **Core** |
 | [ ] | File watcher, debounced (`sync/watcher.py`) | `sync.on_file_change` | Keep |
 | [ ] | Git commit trigger | `sync.on_git_commit`, `repo.commit_trigger` | Keep |
-| [ ] | Scheduler beat (default 900s) | `scheduler.interval_seconds` | Keep |
+| [ ] | Scheduler beat (default 900s) | `sync.scheduler.interval_seconds` | Keep |
 | [ ] | Per-source interval / web backoff | `sources[].sync.interval_seconds`, `connector.max_refresh_seconds` | Goes with `web_collection` |
 | [ ] | Durable index queue (`local`/`nats`) + worker fleet | `sync.queue.*`, `serve --role indexer/worker` | Defer (scale) |
 
