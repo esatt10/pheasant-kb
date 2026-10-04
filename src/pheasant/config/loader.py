@@ -25,8 +25,8 @@ class ConfigError(ValueError):
 REMOVED_SETTINGS: dict[str, str] = {
     "obsidian": (
         "the Obsidian vault projection was removed; the UI's graph workspace "
-        "(/graph) replaces it. Indexing an Obsidian vault as a *source* "
-        "(type: obsidian_vault) is unaffected."
+        "(/graph) replaces it. Index a vault as a *source* with "
+        "type: markdown_folder."
     ),
     "graph.concept_min_documents": (
         "concept extraction was retired — it was 87% of graph nodes and 98.6% "

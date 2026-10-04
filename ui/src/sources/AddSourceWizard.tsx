@@ -302,7 +302,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                     className="text-input"
                     value={apiKeyEnv}
                     onChange={(event) => setApiKeyEnv(event.target.value)}
-                    placeholder="e.g. NOTION_TOKEN — the variable name, not the token"
+                    placeholder="e.g. GDRIVE_TOKEN — the variable name, not the token"
                   />
                 </label>
               )}

@@ -62,9 +62,11 @@ def test_catalog_lists_builtins_with_their_path_role(client: TestClient) -> None
     by_id = {entry["id"]: entry for entry in body["types"]}
     assert by_id["document_folder"]["path_role"] == "required"
     assert by_id["document_folder"]["builtin"] is True
-    # Web/S3/API carry a path only because the schema demands one.
+    # Web/API carry a path only because the schema demands one.
     assert by_id["web_collection"]["path_role"] == "unused"
-    assert by_id["s3"]["path_role"] == "unused"
+    assert by_id["api"]["path_role"] == "unused"
+    # Retired types are not offered.
+    assert "s3" not in by_id and "obsidian_vault" not in by_id
     # Agent-memory sources are owned by the memory store, never hand-made.
     assert "memory" not in by_id
     assert body["placeholder_path"]

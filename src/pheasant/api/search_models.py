@@ -37,7 +37,7 @@ class SearchCriteria(BaseModel):
     exclude_sources: list[str] | None = None
     node_types: list[str] | None = None
     min_score: float | None = None
-    # Scope by the *kind* of source (repository, notion, slack, ...) rather
+    # Scope by the *kind* of source (repository, gdrive, web_collection, ...) rather
     # than by name. A caller that does not already know every source in the
     # region can still say "only our wikis" or "nothing from git". Each hit
     # reports its own under `provenance.source_type`.

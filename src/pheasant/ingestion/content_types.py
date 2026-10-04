@@ -13,24 +13,75 @@ def source_includes_zip(source: object) -> bool:
 
 
 TEXT_EXTENSIONS = {
-    ".py",
-    ".md",
-    ".txt",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".json",
-    ".html",
-    ".xml",
-    ".css",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".mdx",
-    ".rst",
-    ".sh",
-}
+    # Prose and markup
+    ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc", ".org", ".tex",
+    ".html", ".xml",
+    # Data and configuration
+    ".json", ".jsonc", ".json5", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".conf", ".properties", ".tf", ".tfvars", ".hcl",
+    ".proto", ".graphql", ".gql", ".sql", ".prisma",
+    # Source: scripting and web
+    ".py", ".pyi", ".pyx", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".mts", ".cts", ".vue", ".svelte", ".css", ".scss", ".sass", ".less",
+    ".rb", ".rake", ".gemspec", ".php", ".lua", ".pl", ".pm", ".r", ".jl",
+    # Source: compiled and JVM
+    ".go", ".rs", ".java", ".kt", ".kts", ".scala", ".groovy", ".gradle",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".cs", ".fs", ".vb",
+    ".swift", ".m", ".mm", ".dart", ".zig", ".nim", ".sol",
+    # Source: functional and BEAM
+    ".hs", ".ml", ".mli", ".clj", ".cljs", ".ex", ".exs", ".erl", ".hrl", ".elm",
+    # Shell and build
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".cmake",
+    ".mk", ".patch", ".diff",
+    # Data, notebooks and logs (a notebook is read as its cells, see
+    # ``ingestion.notebook``)
+    ".csv", ".tsv", ".ipynb", ".log",
+}  # fmt: skip
+
+#: Source suffix -> the language the graph's code analysis reads it as
+#: (``graph.code_analysis``). Python is analysed with ``ast``; the rest by
+#: deterministic, comment- and string-aware patterns. A suffix absent here is
+#: still indexed as text, it just contributes no symbols, imports or calls.
+CODE_LANGUAGES: dict[str, str] = {
+    ".py": "python", ".pyi": "python",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+    ".cjs": "javascript", ".vue": "javascript", ".svelte": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript",
+    ".cts": "typescript",
+    ".go": "go", ".rs": "rust",
+    ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".scala": "scala",
+    ".groovy": "groovy", ".gradle": "groovy",
+    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
+    ".hpp": "cpp", ".hh": "cpp", ".m": "objc", ".mm": "objc",
+    ".cs": "csharp", ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
+    ".php": "php", ".swift": "swift", ".dart": "dart", ".zig": "zig",
+    ".hs": "haskell", ".ex": "elixir", ".exs": "elixir", ".erl": "erlang",
+    ".hrl": "erlang",
+    ".clj": "clojure", ".cljs": "clojure", ".lua": "lua",
+    ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".proto": "protobuf",
+}  # fmt: skip
+
+#: Files recognised by their whole name because they carry no (useful)
+#: extension. Compared lower-cased.
+TEXT_FILENAMES = frozenset(
+    {
+        "dockerfile", "containerfile", "makefile", "gnumakefile", "rakefile",
+        "gemfile", "podfile", "procfile", "jenkinsfile", "vagrantfile",
+        "justfile", "brewfile", "caddyfile", "codeowners", "license",
+        "licence", "notice", "authors", "contributing", "changelog",
+        ".gitignore", ".gitattributes", ".dockerignore", ".editorconfig",
+        ".prettierrc", ".eslintrc", ".babelrc", ".nvmrc", ".tool-versions",
+    }
+)  # fmt: skip
+
+
+def is_text_file(path: Path | str) -> bool:
+    """Whether a path names a text file this pipeline decodes directly."""
+
+    candidate = Path(path)
+    return candidate.suffix.lower() in TEXT_EXTENSIONS or candidate.name.lower() in TEXT_FILENAMES
+
+
 # Formats whose text has to be *extracted* rather than decoded — see
 # pheasant.ingestion.extractor (PDF/DOCX/HTML),
 # pheasant.ingestion.office (PPTX/XLSX/EPUB/RTF) and
@@ -96,3 +147,46 @@ def artifact_type(path: Path, source_type: str | None = None) -> str:
     if path.suffix.lower() in AUDIO_EXTENSIONS:
         return "audio"
     return "file"
+
+
+#: Text formats a source reads only when asked, because their bytes are mostly
+#: markup or machine output rather than prose or code: a page's tags, a patch's
+#: hunks. They stay supported (``include`` them to index them).
+OPT_IN_TEXT_EXTENSIONS = frozenset({".html", ".xml", ".patch", ".diff"})
+
+
+#: Suffixes whose upper-case spelling is a convention somewhere: R scripts are
+#: `.R` as often as `.r`, and classic C++ uses `.C`/`.H` on case-sensitive
+#: filesystems. ``is_text_file`` lower-cases, but globs are case-sensitive, so
+#: an include that names only `**/*.r` silently skips every `.R` script.
+UPPERCASE_SPELLINGS: dict[str, str] = {".r": ".R", ".c": ".C", ".h": ".H"}
+
+
+def suffix_globs(suffix: str) -> tuple[str, ...]:
+    """The include globs that admit every conventional spelling of ``suffix``."""
+
+    spellings = dict.fromkeys((suffix, UPPERCASE_SPELLINGS.get(suffix, suffix)))
+    return tuple(f"**/*{spelling}" for spelling in spellings)
+
+
+def default_include_globs() -> tuple[str, ...]:
+    """The ``include`` a source gets when it names none.
+
+    Derived from the lists above so a format cannot be parseable yet never
+    reached by default. Globs are case-sensitive and ``TEXT_FILENAMES`` is
+    lower-cased, so each name is emitted as its usual spellings: Dockerfile,
+    LICENSE, license.
+    """
+
+    return (
+        *(
+            glob
+            for suffix in sorted(TEXT_EXTENSIONS - OPT_IN_TEXT_EXTENSIONS)
+            for glob in suffix_globs(suffix)
+        ),
+        *(
+            f"**/{spelling}"
+            for name in sorted(TEXT_FILENAMES)
+            for spelling in dict.fromkeys((name, name.capitalize(), name.upper()))
+        ),
+    )

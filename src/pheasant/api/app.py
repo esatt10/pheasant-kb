@@ -95,15 +95,10 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
         "required",
     ),
     (
-        "obsidian_vault",
-        "Obsidian vault",
-        "Notes plus wikilinks, tags and frontmatter as graph structure.",
-        "required",
-    ),
-    (
         "markdown_folder",
         "Folder of Markdown",
-        "Markdown only — the lighter version of a document folder.",
+        "Markdown notes, an Obsidian vault included: wikilinks, embeds and "
+        "frontmatter as graph structure.",
         "required",
     ),
     ("single_file", "Single file", "One file, indexed on its own.", "required"),
@@ -114,7 +109,6 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
         "unused",
     ),
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
-    ("s3", "S3 bucket", "An S3-compatible bucket prefix (experimental).", "unused"),
 )
 
 

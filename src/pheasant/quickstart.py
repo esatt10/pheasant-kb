@@ -45,7 +45,7 @@ def _scrub(obj: Any) -> Any:
 def detect_source_type(path: Path) -> SourceType:
     """Classify a local directory for the generated source entry."""
     if (path / ".obsidian").is_dir():
-        return SourceType.obsidian_vault
+        return SourceType.markdown_folder
     if (path / ".git").is_dir():
         return SourceType.repository
     return SourceType.document_folder

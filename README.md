@@ -22,8 +22,8 @@
 
 pheasant is a **knowledge harness**: it connects the things you already have to
 the people and agents that need them. Point it at code repositories, folders of
-notes and documents, PDFs and Office files, websites, Notion, Slack, Google
-Drive, Confluence or an IMAP mailbox, and it indexes them into one knowledge
+notes and documents, PDFs and Office files, websites, APIs or Google Drive,
+and it indexes them into one knowledge
 base you can search, ask questions of and map as a graph. Answers cite the
 passages they came from, and agents can read and write durable memory alongside
 the sources.
@@ -262,8 +262,8 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 
 | | |
 |---|---|
-| **Ingest** | Git repositories, folders, single files, web pages, S3 and APIs. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
-| **Connectors** | Notion, Google Drive, Slack, Confluence and IMAP ship first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
+| **Ingest** | Git repositories, folders, single files, web pages and APIs. Every text format a codebase carries is read by default — source in ~40 languages, config, IaC, build files, Dockerfiles, notebooks, CSVs and logs — and 23 languages become graph structure: symbols, calls, and imports resolved to the files they name. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
+| **Connectors** | Google Drive ships first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
 | **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. |
 | **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |

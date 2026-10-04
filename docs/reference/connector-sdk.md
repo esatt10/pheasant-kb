@@ -61,6 +61,12 @@ The four product pillars apply to plugins exactly as to built-ins:
 4. **State discipline** — checkpoints persist only through the provided
    `StateStore` (`set_checkpoint`/`get_checkpoint`); never write your own
    files into `/state`.
+5. **Say whether your listing is complete.** Set `complete_listing = True`
+   only if `list_items()` returns *everything* the source holds on every
+   call. An incremental sync then removes whatever it indexed before and no
+   longer sees. Leave it `False` (the default) if you list only what changed,
+   such as new messages or a feed's latest page: pheasant then never treats
+   an item's absence as a deletion, and a `full` sync is how removals land.
 
 ## The conformance bar
 
@@ -93,11 +99,7 @@ tests:
 
 | Type | Source | Incremental mechanism | ACL capture (Phase 32) |
 |---|---|---|---|
-| `notion` | Notion workspace pages | per-page `last_edited_time` cursor | `created_by` / `last_edited_by` |
 | `gdrive` | Google Drive docs + text files | per-file `modifiedTime`/`md5Checksum` | owners + `shared` flag |
-| `slack` | Channel transcripts | per-channel `latest_ts` cursor | `is_private` / `is_shared` |
-| `confluence` | Space pages (storage XHTML → text) | per-page version number | space key + creator |
-| `imap` | A mailbox (immutable messages) | UID high-watermark (lists only new) | From / To / Cc |
 | `staticdir` | Example plugin (`tests/fixtures/pheasant-connector-example/`) | mtime watermark | — |
 
 For your own package, copy the example package's shape — it now includes

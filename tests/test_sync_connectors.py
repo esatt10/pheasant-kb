@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import threading
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -111,32 +109,6 @@ def counting_server() -> Iterator[Callable[..., ThreadingHTTPServer]]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-class _FakeS3Client:
-    """Offline boto3 stand-in recording list_objects_v2/get_object calls."""
-
-    def __init__(self, objects: dict[str, dict[str, Any]]):
-        self.objects = objects
-        self.list_calls = 0
-        self.get_calls: list[str] = []
-
-    def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
-        self.list_calls += 1
-        contents = [
-            {
-                "Key": key,
-                "Size": len(obj["content"]),
-                "ETag": '"' + hashlib.sha256(obj["content"]).hexdigest()[:16] + '"',
-                "LastModified": obj["last_modified"],
-            }
-            for key, obj in sorted(self.objects.items())
-        ]
-        return {"Contents": contents, "IsTruncated": False}
-
-    def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803 (boto3 API)
-        self.get_calls.append(Key)
-        return {"Body": io.BytesIO(self.objects[Key]["content"]), "ContentType": "text/markdown"}
 
 
 def _base_url(server: ThreadingHTTPServer) -> str:
@@ -374,66 +346,6 @@ def test_api_connector_second_sync_fetches_zero_items(
     assert third.indexed_artifacts == 1
     assert by_path["/doc-1.txt"] == 2
     assert by_path["/doc-2.txt"] == 1
-
-
-def test_s3_second_sync_lists_but_reads_zero_objects(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = _FakeS3Client(
-        {
-            "a.md": {
-                "content": b"# A\n\nS3 object one body.\n",
-                "last_modified": datetime(2026, 6, 1, tzinfo=UTC),
-            },
-            "b.md": {
-                "content": b"# B\n\nS3 object two body.\n",
-                "last_modified": datetime(2026, 6, 2, tzinfo=UTC),
-            },
-        }
-    )
-    monkeypatch.setattr("pheasant.sync.connectors._boto3_client", lambda: client)
-    config = _config(
-        tmp_path,
-        SourceConfig(
-            name="s3-docs",
-            type=SourceType.s3,
-            path=tmp_path,
-            include=["**/*.md"],
-            sync=SourceSyncSettings(on_startup=False),
-            connector=SourceConnectorSettings(allow_experimental=True, s3_bucket="kb-bucket"),
-        ),
-    )
-    engine = SyncEngine(config)
-
-    first = engine.sync_source("s3-docs", "full")
-    assert first.indexed_artifacts == 2
-    assert len(client.get_calls) == 2
-
-    second = engine.sync_source("s3-docs", "incremental")
-
-    assert second.indexed_artifacts == 0
-    assert second.skipped_artifacts == 2
-    assert client.list_calls == 2, "second sync must still list the bucket"
-    assert len(client.get_calls) == 2, "second sync must not call get_object"
-    event = _latest_event(engine, "s3-docs")
-    assert event["details"]["fetched"] == 0
-    assert event["details"]["skipped"] == 2
-
-    client.objects["a.md"] = {
-        "content": b"# A\n\nS3 object one changed.\n",
-        "last_modified": datetime(2026, 6, 9, tzinfo=UTC),
-    }
-    client.objects["c.md"] = {
-        "content": b"# C\n\nS3 object three is new.\n",
-        "last_modified": datetime(2026, 6, 9, 1, tzinfo=UTC),
-    }
-    third = engine.sync_source("s3-docs", "incremental")
-
-    assert third.indexed_artifacts == 2
-    assert third.skipped_artifacts == 1
-    assert set(client.get_calls[2:]) == {"a.md", "c.md"}, "only new/changed keys are read"
-    assert len(client.get_calls) == 4
 
 
 def test_validate_only_does_not_write_index_state(tmp_path: Path, workspace_copy: Path) -> None:

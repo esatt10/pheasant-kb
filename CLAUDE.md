@@ -10,8 +10,8 @@ docs and code disagree, **the code is authoritative**.
 ## 1. What this project is
 
 **pheasant** is a Docker-first, local-first **MCP context server** that turns
-configured sources (git repositories, folders, single files, Obsidian vaults,
-web collections, SaaS connectors, API/S3) into a queryable **knowledge graph**
+configured sources (git repositories, folders, single files, web
+collections, the Google Drive connector, APIs) into a queryable **knowledge graph**
 with hybrid self-search, for agents and humans.
 
 Design pillars — these are product guarantees, not preferences:
@@ -89,7 +89,8 @@ pheasant-kb/
 │   │                            GateSet that cannot be constructed empty
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
-│   ├── sync/                  ← engine, connectors, web_connector (listed
+│   ├── sync/                  ← engine, connectors, vanished (deleted files
+│   │                            leave on any sync), web_connector (listed
 │   │                            URLs, per-page revalidation), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
@@ -98,16 +99,22 @@ pheasant-kb/
 │   │                            file worker hands the writer), worker_pool,
 │   │                            worker_transport, grpc, pdf_split (one
 │   │                            long PDF's pages read by the fleet)
-│   ├── connectors/            ← first-party SDK plugins: notion, gdrive,
-│   │                            slack, confluence, imap
+│   ├── connectors/            ← first-party SDK plugins: gdrive
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
-│   │                            extractor (7 doc formats), okf (OKF
+│   │                            extractor (7 doc formats), notebook
+│   │                            (.ipynb as its cells), okf (OKF
 │   │                            frontmatter, per file), captioner,
 │   │                            transcriber, office, msdoc, media (image
 │   │                            bytes, content-addressed under /state)
 │   ├── graph/                 ← model, simple (the indexer's working set),
+│   │                            retraction (what re-indexing a file takes
+│   │                            back: stale chunks, embeds, imports, calls,
+│   │                            symbols),
+│   │                            code_analysis + code_scan + code_imports
+│   │                            (symbols/imports/calls for 22 non-Python
+│   │                            languages, and import -> file resolution),
 │   │                            sql (the serving read surface), builder,
 │   │                            enrichment, capacity, traversal,
 │   │                            media_links (documents -> images they show),
@@ -155,7 +162,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 153 pytest modules, offline by design
+└── tests/                     ← 155 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -349,6 +356,20 @@ with no host imports). `DOCUMENT_EXTENSIONS` and `EXTRACTED_EXTENSIONS` are
 asserted set-equal — that drift is exactly how a format gets accepted and then
 silently indexed as nothing.
 
+**Code in 23 languages becomes graph structure.** Python is read with `ast`;
+every other language in `content_types.CODE_LANGUAGES` by deterministic
+patterns over text whose comments and strings are masked first
+(`graph/code_scan.py`), so a commented-out import draws no edge. Imports
+resolve to files per language (`graph/code_imports.py`): relative specifiers
+against the importer, qualified names by path suffix, and packages, the
+standard library and namespaces to nothing. That last case is the important
+one, because an edge to a guessed file is indistinguishable from a real one.
+The WASM resolver knows only Python imports and links, so
+`accel/cross_source.py` hands every other reference type to the Python
+resolver rather than dropping it. Non-Python call targets carry their
+language in the ID; Python's is unchanged. `tests/test_code_analysis.py`
+pins one file per language, including a ghost hidden in a comment or string.
+
 **Images and audio** are captioned/transcribed into indexable text that flows
 through the normal path. Both default to a deterministic offline stub, and an
 authored `<file>.caption.txt` / `.transcript.txt` sidecar always wins.
@@ -386,9 +407,17 @@ and retracts per edge, so a `references` edge sharing a pair survives.
 Staleness is not stored because it is a function of the clock.
 `docs/how-to/okf-bundles.md`.
 
+**Deletions are synced, not just additions.** An incremental sync removes
+what a complete listing no longer contains (`sync/vanished.py`, opt-in per
+connector through `complete_listing`), and re-indexing an edited file retracts
+the imports, calls and symbols its new text dropped (`graph/retraction.py`).
+After either, incremental equals a full sync of what is there now.
+
 **Connectors** resolve by `sources[].type` through entry points, so a
-third-party plugin needs no dispatch code here. Five ship first-party: Notion,
-Google Drive, Slack, Confluence, IMAP. `pheasant.testing.ConnectorConformance`
+third-party plugin needs no dispatch code here. One ships first-party: Google
+Drive (Notion, Slack, Confluence and IMAP were removed for the initial product,
+as were the `s3` and `obsidian_vault` built-ins; `config/retired.py` keeps old
+configs loading). `pheasant.testing.ConnectorConformance`
 is the public quality bar.
 
 ### Where the graph lives
@@ -1864,7 +1893,7 @@ Each of these cost real time. They are listed because the shape recurs.
   retracted the old ones on the incremental path (a full sync cleared the
   source first, which hid it): one file edited three times ended with four
   chunk nodes and four `has_chunk` edges, rising by one per edit.
-  `GraphBuilder._drop_stale_chunks` runs in `add_artifact` and removes the
+  `retraction.drop_stale_chunks` runs in `add_artifact` and removes the
   artifact's `has_chunk` targets that are not in the current chunk set,
   walking only the artifact's own out-edges (O(artifact), not O(graph)).
   Safe because a chunk id carries source and path, so none is shared.
@@ -1873,6 +1902,34 @@ Each of these cost real time. They are listed because the shape recurs.
   unchanged re-sync leaves the generation id alone. Scoped to `chunk`:
   `references` and headings have the same upsert-only shape and were left
   for their own evidence, as with `embeds`.
+- **The same leak, for everything the code pass draws. Fixed.** An edit kept
+  the import it removed (stub *and* resolved file -> file edge), the call it
+  deleted, and the function it renamed beside its replacement, in Python and
+  every other language, because enrichment was upserted and nothing retracted
+  it. `graph/retraction.py` now retracts exactly what the new text stopped
+  implying: by edge *type*, never by pair (a memory record's `about` beside a
+  `mentions` survives), keeping a resolved import while the file still makes
+  it, and leaving an unchanged edge untouched so its pair is not re-keyed.
+  Owned symbols go with their file; shared stubs, call targets and entities
+  are only *detached*, and the cross-source pass, which already walks every
+  edge, removes the ones nothing else points at. The property tested is the
+  strongest one there is: after an edit, incremental equals a fresh full sync
+  of the edited tree (`tests/test_sync_idempotency.py`), and three mutants
+  (no retraction, orphans kept, linked shared nodes dropped) each fail it.
+- **An incremental sync did nothing about deletions. Fixed.** Found while
+  writing the edit fix above: a file deleted from a folder source kept its
+  artifact row, its chunks (every text search still returned it), its vectors
+  and its graph nodes until somebody ran `full`. The listing already said what
+  exists, so `sync/vanished.py` removes what the manifest holds and a
+  *complete* listing lacks, once per sync and in batches, because the
+  full-text delete is the UNINDEXED-column scan above. Two refusals carry the
+  weight. `complete_listing` is opt-in per connector (every in-tree one sets
+  it), because a plugin listing only what changed would otherwise read as
+  having deleted everything else. And an *empty* listing over a non-empty
+  index removes nothing: a vanished mount and an emptied tree look identical,
+  and guessing wrong costs the whole index. Emptied directories and shared
+  nodes nothing points at any more go too, so incremental after a deletion
+  equals a full sync of what remains, in state rows and graph alike.
 - **A stand-in that implements *part* of a mapping fails only on the backend
   nobody tests, in production.** `SqlGraph.node_map()` returns a `_LazyNodeMap`
   — a per-scan cache built for `_scan_edges`, which calls `get()` and nothing
@@ -2092,6 +2149,21 @@ Each of these cost real time. They are listed because the shape recurs.
   `tests/test_pdf_split.py` holds the text identical over real gRPC and HTTP
   workers, through failures and a pymupdf mismatch;
   `tests/test_chunking_scale.py` bounds lines executed per chunk.
+
+- **A pattern that can cross a line is quadratic on a file that never closes
+  it.** The first cut of `graph/code_analysis.py` read 23 languages correctly
+  and took 7-10 seconds on 100 KB of hostile input (`int a b c d` repeated, an
+  arrow function with no body), against 30 ms for ordinary code: an unbounded
+  `[\w\s]*?` before a name, `[^;{}]*` for parameters, and a forward scan from
+  every definition to a `{` that never came. Every cross-line repeat is
+  bounded now, block ends come from one stack pass over the file
+  (`code_scan.pairs`), and masking jumps between tokens with one compiled
+  pattern instead of stepping per character (156 -> 44 ms per 100 KB). The
+  test is a *ratio* (4x the input must cost under 10x the time), so the
+  runner's speed cancels; the first mutant tried against it, a C-level regex
+  scan to end of file, passed because memchr is fast, so the check was proven
+  against the two mutants that are the real hazards. Generated files and
+  minified bundles are what a codebase source indexes by default now.
 
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an

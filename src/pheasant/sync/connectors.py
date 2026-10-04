@@ -6,7 +6,7 @@ import logging
 import mimetypes
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -71,6 +71,12 @@ class ConnectorHealth:
 class SourceConnector(ABC):
     connector_type = "base"
     experimental = False
+    #: ``list_items`` returns *everything* the source currently holds, so an
+    #: item indexed before and absent now was deleted, and an incremental sync
+    #: removes it. Off by default: a plugin that lists only what changed
+    #: (a mailbox's new messages, a feed's latest page) would otherwise read as
+    #: having deleted everything else. A connector opts in by saying so.
+    complete_listing = False
 
     def __init__(self, source: SourceConfig, state: StateStore):
         self.source = source
@@ -189,6 +195,7 @@ class SourceConnector(ABC):
 
 class FilesystemConnector(SourceConnector):
     connector_type = "filesystem"
+    complete_listing = True  # a walk of the whole tree, ZIP members included
 
     def list_items(self) -> list[ConnectorItem]:
         root = self.source.path
@@ -340,6 +347,7 @@ class FilesystemConnector(SourceConnector):
 class APIConnector(SourceConnector):
     connector_type = "api"
     experimental = True
+    complete_listing = True  # one request for the whole item list
 
     def __init__(self, source: SourceConfig, state: StateStore):
         super().__init__(source, state)
@@ -466,116 +474,6 @@ class APIConnector(SourceConnector):
         )
 
 
-class S3Connector(SourceConnector):
-    connector_type = "s3"
-    experimental = True
-
-    def __init__(self, source: SourceConfig, state: StateStore):
-        super().__init__(source, state)
-        self._read_hashes: dict[str, str] = {}
-
-    def begin_sync(self, mode: str = "incremental") -> None:
-        super().begin_sync(mode)
-        self._read_hashes = {}
-
-    def list_items(self) -> list[ConnectorItem]:
-        self._require_experimental_enabled()
-        client = _boto3_client()
-        bucket = self.source.connector.s3_bucket
-        prefix = self.source.connector.s3_prefix or ""
-        if not bucket:
-            raise ConnectorUnavailable(
-                f"s3 connector for source {self.source.name} requires connector.s3_bucket"
-            )
-        items: list[ConnectorItem] = []
-        continuation: str | None = None
-        while True:
-            kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
-            if continuation:
-                kwargs["ContinuationToken"] = continuation
-            response = client.list_objects_v2(**kwargs)
-            for obj in response.get("Contents", []):
-                key = obj["Key"]
-                if key.endswith("/"):
-                    continue
-                relative = key[len(prefix) :].lstrip("/") if key.startswith(prefix) else key
-                if _match_any(relative, self.source.exclude):
-                    continue
-                if self.source.include and not _match_any(relative, self.source.include):
-                    continue
-                last_modified = obj.get("LastModified")
-                item = ConnectorItem(
-                    identity=f"s3:{bucket}:{key}",
-                    relative_path=relative,
-                    uri=f"s3://{bucket}/{key}",
-                    mime_type=mimetypes.guess_type(key)[0],
-                    size_bytes=obj.get("Size"),
-                    sha256=None,
-                    mtime=last_modified.isoformat().replace("+00:00", "Z")
-                    if last_modified
-                    else None,
-                    etag=(obj.get("ETag") or "").strip('"') or None,
-                    metadata={"bucket": bucket, "key": key},
-                )
-                cached_sha256 = self._cached_object_sha256(item)
-                if cached_sha256:
-                    item = replace(item, sha256=cached_sha256)
-                items.append(item)
-            if not response.get("IsTruncated"):
-                break
-            continuation = response.get("NextContinuationToken")
-        return items
-
-    def _cached_object_sha256(self, item: ConnectorItem) -> str | None:
-        """Objects at-or-before the checkpoint high-watermark (LastModified)
-        with unchanged ETag/size reuse the cached content hash, letting the
-        engine skip them without ``get_object`` (Synapse 21.3)."""
-        watermark = (self._previous_watermark or {}).get("max_mtime")
-        if not watermark or not item.mtime or item.mtime > watermark:
-            return None
-        cached = ((self._previous_cursor or {}).get("objects") or {}).get(item.identity)
-        if not isinstance(cached, dict):
-            return None
-        if cached.get("etag") != item.etag or cached.get("size_bytes") != item.size_bytes:
-            return None
-        return cached.get("sha256")
-
-    def checkpoint_from_items(
-        self,
-        items: list[ConnectorItem],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        cursor, high_watermark = super().checkpoint_from_items(items)
-        objects: dict[str, dict[str, Any]] = {}
-        for item in items:
-            sha256 = item.sha256 or self._read_hashes.get(item.identity)
-            if sha256:
-                objects[item.identity] = {
-                    "etag": item.etag,
-                    "size_bytes": item.size_bytes,
-                    "mtime": item.mtime,
-                    "sha256": sha256,
-                }
-        cursor["objects"] = objects
-        return cursor, high_watermark
-
-    def read_item(self, item: ConnectorItem) -> ConnectorPayload:
-        self._require_experimental_enabled()
-        client = _boto3_client()
-        response = client.get_object(Bucket=item.metadata["bucket"], Key=item.metadata["key"])
-        content = response["Body"].read()
-        digest = hashlib.sha256(content).hexdigest()
-        self._read_hashes[item.identity] = digest
-        return ConnectorPayload(
-            item=item,
-            content=content,
-            mime_type=response.get("ContentType") or item.mime_type,
-            size_bytes=len(content),
-            sha256=digest,
-            mtime=item.mtime,
-            metadata=item.metadata,
-        )
-
-
 def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConnector:
     if source.connector.runtime == "sandboxed":
         # Synapse Step 34.1+: opt-in per source, checked before the
@@ -587,7 +485,6 @@ def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConne
     if source.type.value in {
         "repository",
         "markdown_folder",
-        "obsidian_vault",
         "document_folder",
         "single_file",
         "memory",
@@ -599,13 +496,18 @@ def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConne
         return WebCollectionConnector(source, state)
     if source.type.value == "api":
         return APIConnector(source, state)
-    if source.type.value == "s3":
-        return S3Connector(source, state)
     from pheasant.sync.connector_registry import get_connector_class, list_connector_types
 
     plugin_class = get_connector_class(source.type.value)
     if plugin_class is not None:
         return plugin_class(source, state)
+    from pheasant.config.retired import REMOVED_SOURCE_TYPES
+
+    if source.type.value in REMOVED_SOURCE_TYPES:
+        raise ConnectorUnavailable(
+            f"Source {source.name!r} uses removed type {source.type.value!r}: "
+            f"{REMOVED_SOURCE_TYPES[source.type.value]}"
+        )
     installed = ", ".join(list_connector_types()) or "none"
     raise ConnectorUnavailable(
         f"No connector registered for source type: {source.type.value} "
@@ -722,11 +624,3 @@ def _ensure_text_suffix(relative: str) -> str:
     if Path(relative).suffix:
         return relative
     return f"{relative}.txt"
-
-
-def _boto3_client() -> Any:
-    try:
-        import boto3
-    except ModuleNotFoundError as exc:
-        raise ConnectorUnavailable("S3 connector requires boto3 to be installed") from exc
-    return boto3.client("s3")

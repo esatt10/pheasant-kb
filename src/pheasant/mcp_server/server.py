@@ -371,7 +371,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         nested under it. Only meaningful for sources with taxonomy enabled.
 
         source_types/exclude_source_types scope by the kind of source —
-        repository, notion, slack, markdown_folder — rather than by name, which
+        repository, gdrive, web_collection, markdown_folder — rather than by name, which
         is usually what you want when you do not already know every source in
         the region. Every hit reports its own under provenance.source_type.
 

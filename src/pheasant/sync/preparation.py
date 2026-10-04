@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pheasant.config.schema import SourceConfig
-from pheasant.ingestion.content_types import TEXT_EXTENSIONS
+from pheasant.ingestion.content_types import is_text_file
 from pheasant.ingestion.media import MAX_MEDIA_BYTES
 from pheasant.ingestion.pipeline import ParsedArtifact, parse_connector_payload, sha256_bytes
 from pheasant.sync.connectors import ConnectorItem, ConnectorPayload
@@ -55,15 +55,9 @@ def _media_bytes(parsed: ParsedArtifact | None, content: bytes) -> bytes | None:
     return content
 
 
-_PROCESS_SAFE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
-
-
 def _process_safe_text_path(path: str) -> bool:
     candidate = Path(path)
-    return (
-        candidate.suffix.lower() in _PROCESS_SAFE_TEXT_EXTENSIONS
-        or candidate.name.lower() == "dockerfile"
-    )
+    return candidate.suffix.lower() not in {".html"} and is_text_file(candidate)
 
 
 def _process_cpu_capacity() -> int:

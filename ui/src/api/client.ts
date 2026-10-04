@@ -382,7 +382,7 @@ export const api = {
       mode?: string;
       max_results?: number;
       source_name?: string | null;
-      /** Scope the answer to these kinds of source (repository, notion, …). */
+      /** Scope the answer to these kinds of source (repository, gdrive, …). */
       source_types?: string[] | null;
       exclude_source_types?: string[] | null;
       workflow?: string | null;

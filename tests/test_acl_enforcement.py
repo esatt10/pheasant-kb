@@ -158,18 +158,13 @@ def test_http_search_forwards_principal(tmp_path: Path) -> None:
 
 
 def test_acl_normalization_rules() -> None:
-    assert normalize_acl("notion", {"created_by": "u1", "last_edited_by": "u2"}) == {
-        "allow": ["user:u1", "user:u2"],
+    # A type with no rule of its own (a third-party plugin, or a connector
+    # that was removed) is trusted only for an explicitly canonical doc.
+    assert normalize_acl("notion", {"created_by": "u1"}) is None
+    assert normalize_acl("myplugin", {"allow": ["user:u1"], "public": False}) == {
+        "allow": ["user:u1"],
         "public": False,
     }
-    assert normalize_acl("slack", {"is_private": False}) == {"allow": [], "public": True}
-    assert normalize_acl("slack", {"is_private": True}) is None
-    assert normalize_acl("confluence", {"space": "OPS", "created_by": "a1"}) == {
-        "allow": ["group:space:OPS", "user:a1"],
-        "public": False,
-    }
-    imap = normalize_acl("imap", {"from": "CFO <cfo@x.com>", "to": "a@x.com, b@x.com", "cc": ""})
-    assert imap == {"allow": ["user:a@x.com", "user:b@x.com", "user:cfo@x.com"], "public": False}
     assert normalize_acl("gdrive", {"owners": ["o@x.com"], "shared": True})["allow"] == [
         "user:o@x.com"
     ]

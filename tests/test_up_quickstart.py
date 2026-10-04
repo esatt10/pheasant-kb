@@ -51,7 +51,7 @@ def test_detect_source_type(tmp_path: Path) -> None:
     (repo / ".git").mkdir(parents=True)
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert detect_source_type(vault) is SourceType.obsidian_vault
+    assert detect_source_type(vault) is SourceType.markdown_folder
     assert detect_source_type(repo) is SourceType.repository
     assert detect_source_type(plain) is SourceType.document_folder
 
@@ -111,7 +111,7 @@ def test_up_never_rewrites_a_user_edited_config(
     assert config_path.read_text(encoding="utf-8").startswith(marker)
 
 
-def test_up_detects_obsidian_vault_end_to_end(
+def test_up_indexes_an_obsidian_vault_as_markdown_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     vault = tmp_path / "Second Brain"
@@ -123,7 +123,7 @@ def test_up_detects_obsidian_vault_end_to_end(
     assert rc == 0
     cfg = load_config(tmp_path / "pheasant.yaml")
     assert cfg.pheasant.name == "second-brain"
-    assert cfg.sources[0].type is SourceType.obsidian_vault
+    assert cfg.sources[0].type is SourceType.markdown_folder
     assert cfg.server.port == 9999
     indexed, _ = _sync_counts(capsys.readouterr().out)
     assert indexed > 0

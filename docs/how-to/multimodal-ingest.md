@@ -113,7 +113,7 @@ ordinary references.
 The indexer also stores each image's bytes, content-addressed, under
 `<state_path>/media/` (at most 8 MB per image; larger images are still indexed
 and captioned, just not shown). That is what lets a serving replica with no
-source mount — or a Notion or Drive image with no path at all — still show the
+source mount — or a Drive image with no path at all — still show the
 picture. `GET /media?node_id=…` and the MCP `get_image` tool serve them under
 the same read check as every content operation; SVG is never ingested or
 served, because it can carry script. An image indexed before the store existed

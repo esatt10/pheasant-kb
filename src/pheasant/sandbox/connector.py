@@ -52,6 +52,7 @@ OUT_CAP = 65536
 
 class SandboxedConnector(SourceConnector):
     connector_type = "sandboxed_staticdir"
+    complete_listing = True  # a walk of the scoped root
 
     def __init__(self, source: Any, state: Any) -> None:
         super().__init__(source, state)

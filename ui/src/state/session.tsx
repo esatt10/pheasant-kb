@@ -27,7 +27,7 @@ export interface SessionState {
   /** Restrict retrieval + graph to one source, or null for everything. */
   sourceFilter: string | null;
   /**
-   * Restrict retrieval to one *kind* of source (repository, notion, slack…),
+   * Restrict retrieval to one *kind* of source (repository, gdrive, web_collection…),
    * or null for every kind. Independent of `sourceFilter`: picking a type
    * narrows which sources are in play without committing to one of them,
    * which is the useful control once a knowledge base has more sources than

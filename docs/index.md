@@ -2,8 +2,8 @@
 
 pheasant is a **Docker-first, local-first knowledge harness** for you and your
 agents. It turns your sources — git repositories, folders, single
-files, PDFs and Office documents, images and audio, web collections, SaaS
-connectors (Notion, Google Drive, Slack, Confluence, IMAP) and API/S3 — into a
+files, PDFs and Office documents, images and audio, web collections, a
+Google Drive connector and APIs — into a
 queryable **knowledge graph** with hybrid self-search, served over MCP, HTTP and
 a web UI.
 

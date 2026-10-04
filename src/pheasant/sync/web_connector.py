@@ -75,6 +75,9 @@ DEFAULT_WEB_REFRESH_SECONDS = 3600
 class WebCollectionConnector(SourceConnector):
     connector_type = "web_collection"
     experimental = True
+    #: Every configured URL is listed, due or not (freshness is decided at read
+    #: time), so a URL taken out of ``urls`` is a page the source dropped.
+    complete_listing = True
 
     def __init__(self, source: SourceConfig, state: StateStore):
         super().__init__(source, state)

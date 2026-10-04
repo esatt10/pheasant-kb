@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from pheasant.config.loader import load_config
-from pheasant.config.schema import PheasantConfig
+from pheasant.config.schema import DEFAULT_INCLUDES, PheasantConfig
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
@@ -1024,3 +1024,372 @@ def test_a_full_resync_does_not_leave_a_dropped_edge_in_the_rows(tmp_path: Path)
         assert link(reopened.serving_graph()) == []
     finally:
         reopened.close()
+
+
+def test_a_polyglot_repository_resyncs_to_the_same_graph(tmp_path: Path) -> None:
+    """Code analysis for the non-Python languages is part of every sync now, so
+    it owes the spine the same promise Python's does: an unchanged corpus
+    re-syncs for free and leaves the generation alone, and a full rebuild draws
+    exactly the same nodes and edges."""
+
+    import shutil
+
+    workspace = tmp_path / "ws"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "polyglot", workspace)
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "polyglot-idempotency",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "storage": {"graph_snapshots": False},
+            "sources": [{"name": "poly", "type": "document_folder", "path": str(workspace)}],
+        }
+    )
+    engine = SyncEngine(config)
+
+    def shape() -> tuple[set[str], set[tuple[str, str, str]]]:
+        graph = engine.graph_builder.graph
+        link = graph.to_node_link()
+        return (
+            {node["id"] for node in link["nodes"]},
+            {(edge["source"], edge["target"], edge.get("type")) for edge in link["links"]},
+        )
+
+    try:
+        assert engine.sync_source("poly", "full").indexed_artifacts > 40
+        first = shape()
+        generation = engine.loaded_graph_generation
+        assert engine.sync_source("poly", "incremental").indexed_artifacts == 0
+        assert shape() == first
+        assert engine.loaded_graph_generation == generation
+        engine.sync_source("poly", "full")
+        assert shape() == first
+    finally:
+        engine.close()
+
+
+def _edit_corpus(root: Path, *, edited: bool) -> None:
+    """A small polyglot tree, before or after one edit per file.
+
+    The edit removes an import, deletes a call, and renames a function, in
+    Python, TypeScript and Go. `lib.ts` keeps importing `./store` and calling
+    `shared` throughout, so the stub and call target those share survive.
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "store.py").write_text("x = 1\n")
+    (root / "util.py").write_text("y = 1\n")
+    (root / "store.ts").write_text("export const a = 1;\n")
+    (root / "util.ts").write_text("export const b = 1;\n")
+    (root / "lib.ts").write_text('import { a } from "./store";\nfunction keep() { shared(); }\n')
+    (root / "internal" / "db").mkdir(parents=True, exist_ok=True)
+    (root / "internal" / "db" / "db.go").write_text("package db\n\nfunc Open() {}\n")
+    if not edited:
+        (root / "main.py").write_text("import store\nimport util\n\ndef run():\n    gone()\n")
+        (root / "app.ts").write_text(
+            'import { a } from "./store";\nimport { b } from "./util";\n'
+            "function run() { gone(); shared(); }\n"
+        )
+        (root / "cmd.go").write_text(
+            'package main\n\nimport "acme.io/app/internal/db"\n\nfunc run() { db.Open() }\n'
+        )
+    else:
+        (root / "main.py").write_text("import store\n\n\ndef start():\n    other()\n")
+        (root / "app.ts").write_text(
+            'import { a } from "./store";\n\n\nfunction start() { other(); shared(); }\n'
+        )
+        (root / "cmd.go").write_text("package main\n\nfunc start() { other() }\n")
+
+
+def _graph_engine(tmp_path: Path, name: str, workspace: Path) -> SyncEngine:
+    return SyncEngine(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "edit-retraction",
+                    "state_path": str(tmp_path / name / "state"),
+                    "workspace_root": str(workspace),
+                    "exports_path": str(tmp_path / name / "exports"),
+                },
+                "storage": {"graph_snapshots": False},
+                "sources": [{"name": "code", "type": "document_folder", "path": str(workspace)}],
+            }
+        )
+    )
+
+
+def _graph_shape(engine: SyncEngine) -> tuple[set[str], set[tuple[str, str, str]]]:
+    link = engine.graph_builder.graph.to_node_link()
+    return (
+        {node["id"] for node in link["nodes"]},
+        {(edge["source"], edge["target"], edge.get("type")) for edge in link["links"]},
+    )
+
+
+def test_an_edit_leaves_exactly_the_graph_a_full_sync_of_the_new_text_draws(
+    tmp_path: Path,
+) -> None:
+    """Enrichment used to be upserted and never retracted, so an incremental
+    sync after an edit kept the removed import (and its resolved file edge),
+    the deleted call, and the renamed function beside its replacement — in
+    every language. The property is the strongest one available: after the
+    edit, incremental must equal a fresh full sync of the edited tree."""
+
+    workspace = tmp_path / "ws"
+    _edit_corpus(workspace, edited=False)
+    engine = _graph_engine(tmp_path, "incremental", workspace)
+    try:
+        engine.sync_source("code", "full")
+        _edit_corpus(workspace, edited=True)
+        assert engine.sync_source("code", "incremental").indexed_artifacts == 3
+        incremental = _graph_shape(engine)
+    finally:
+        engine.close()
+
+    reference = _graph_engine(tmp_path, "full", workspace)
+    try:
+        reference.sync_source("code", "full")
+        assert incremental == _graph_shape(reference)
+    finally:
+        reference.close()
+
+    nodes, edges = incremental
+    labels = " ".join(nodes)
+    assert "util" not in {edge[1].rsplit(":", 1)[-1] for edge in edges if edge[2] == "imports"}
+    assert ":run-" not in labels and "gone" not in labels  # renamed symbol, deleted call
+    assert any("shared" in node for node in nodes)  # lib.ts still calls it
+
+
+def test_an_edit_keeps_what_another_file_still_points_at(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    _edit_corpus(workspace, edited=False)
+    engine = _graph_engine(tmp_path, "one", workspace)
+    try:
+        engine.sync_source("code", "full")
+        # app.ts stops importing ./store and calling shared(); lib.ts still does.
+        (workspace / "app.ts").write_text("function start() { other(); }\n")
+        engine.sync_source("code", "incremental")
+        graph = engine.graph_builder.graph
+        attrs = dict(graph.iter_nodes())
+        stub = next(
+            node_id
+            for node_id, a in attrs.items()
+            if a.get("type") == "external_reference" and a.get("reference") == "./store"
+        )
+        callers = {source for (source, target), _ in graph.iter_edges() if target == stub}
+        assert {attrs[c].get("relative_path") for c in callers} == {"lib.ts"}
+        assert any(
+            a.get("symbol_type") == "call_target" and a.get("name") == "shared"
+            for a in attrs.values()
+        )
+    finally:
+        engine.close()
+
+
+def _state_shape(engine: SyncEngine) -> dict[str, list]:
+    def column(sql: str) -> list:
+        return sorted(str(row[0]) for row in engine.state.rows(sql))
+
+    return {
+        "artifacts": column("SELECT relative_path FROM artifacts"),
+        "chunks": column("SELECT id FROM chunks"),
+        "fts": column("SELECT artifact_id FROM chunks_fts"),
+        "symbols": column("SELECT id FROM symbols"),
+        "terms": column("SELECT node_id FROM artifact_terms"),
+    }
+
+
+def _text_hits(engine: SyncEngine, query: str) -> list[str]:
+    search = HybridSearch(SearchStore(engine.state), vector=None)
+    hits = search.search_context(
+        engine.config.knowledge_base_id, query, mode="text", max_results=10
+    )["results"]
+    return sorted({hit.get("relative_path") for hit in hits})
+
+
+def _deletion_corpus(root: Path) -> None:
+    """Files to delete alongside files that stay. `pkg/` empties entirely,
+    `gone.ts` shares the `./store` stub and the `shared` call target with
+    `keep.ts`, and the archive loses one member."""
+
+    (root / "pkg").mkdir(parents=True, exist_ok=True)
+    (root / "store.ts").write_text("export const a = 1;\n")
+    (root / "keep.ts").write_text('import { a } from "./store";\nfunction keep() { shared(); }\n')
+    (root / "gone.ts").write_text(
+        'import { a } from "./store";\nfunction only() { shared(); onlyHere(); }\n'
+    )
+    (root / "pkg" / "lib.py").write_text("import store\n\ndef helper():\n    pass\n")
+    (root / "notes.md").write_text("# Notes\n\nThe zebra crossing is on Elm street.\n")
+    with zipfile.ZipFile(root / "bundle.zip", "w") as archive:
+        archive.writestr("a.md", "# A\n\nalpha member\n")
+        archive.writestr("b.md", "# B\n\nbravo member\n")
+
+
+def _delete_from(root: Path) -> None:
+    (root / "gone.ts").unlink()
+    (root / "notes.md").unlink()
+    (root / "pkg" / "lib.py").unlink()
+    (root / "pkg").rmdir()
+    with zipfile.ZipFile(root / "bundle.zip", "w") as archive:
+        archive.writestr("a.md", "# A\n\nalpha member\n")
+
+
+def _deletion_engine(tmp_path: Path, name: str, workspace: Path) -> SyncEngine:
+    return SyncEngine(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "deletion",
+                    "state_path": str(tmp_path / name / "state"),
+                    "workspace_root": str(workspace),
+                    "exports_path": str(tmp_path / name / "exports"),
+                },
+                "storage": {"graph_snapshots": False},
+                "sources": [
+                    {
+                        "name": "docs",
+                        "type": "document_folder",
+                        "path": str(workspace),
+                        "include": [*DEFAULT_INCLUDES, "**/*.zip"],
+                    }
+                ],
+            }
+        )
+    )
+
+
+def test_a_deleted_file_leaves_exactly_what_a_full_sync_of_the_remaining_tree_holds(
+    tmp_path: Path,
+) -> None:
+    """An incremental sync used to do nothing about deletions: the file kept
+    its artifact row, its chunks (so every text search still returned it), its
+    vectors and its graph nodes until a full sync. Now an incremental sync
+    after deleting files must hold exactly what a full sync of the remaining
+    tree holds, in the state rows and the graph alike."""
+
+    workspace = tmp_path / "ws"
+    _deletion_corpus(workspace)
+    engine = _deletion_engine(tmp_path, "incremental", workspace)
+    try:
+        engine.sync_source("docs", "full")
+        _delete_from(workspace)
+        result = engine.sync_source("docs", "incremental")
+        assert result.details.get("removed_artifacts") == 4  # 3 files + 1 member
+        incremental = (_state_shape(engine), _graph_shape(engine))
+        assert _text_hits(engine, "zebra") == []
+        # A second pass has nothing left to remove, and moves nothing.
+        generation = engine.loaded_graph_generation
+        again = engine.sync_source("docs", "incremental")
+        assert "removed_artifacts" not in again.details
+        assert engine.loaded_graph_generation == generation
+    finally:
+        engine.close()
+
+    reference = _deletion_engine(tmp_path, "full", workspace)
+    try:
+        reference.sync_source("docs", "full")
+        assert incremental == (_state_shape(reference), _graph_shape(reference))
+    finally:
+        reference.close()
+
+    nodes, _ = incremental[1]
+    assert not any(":pkg" in node for node in nodes)  # the emptied directory
+    assert not any("onlyhere" in node for node in nodes)  # its call target
+    assert any("call:typescript:shared" in node for node in nodes)  # keep.ts still calls it
+
+
+def test_a_file_deleted_and_restored_is_indexed_again(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    _deletion_corpus(workspace)
+    engine = _deletion_engine(tmp_path, "restore", workspace)
+    try:
+        engine.sync_source("docs", "full")
+        body = (workspace / "notes.md").read_text()
+        (workspace / "notes.md").unlink()
+        engine.sync_source("docs", "incremental")
+        (workspace / "notes.md").write_text(body)
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 1
+        assert _text_hits(engine, "zebra") == ["notes.md"]
+    finally:
+        engine.close()
+
+
+def test_a_deleted_file_loses_its_vectors(tmp_path: Path) -> None:
+    engine = make_vector_engine(tmp_path)
+    try:
+        engine.sync_source("notes", "full")
+        before = engine.vectors.store.count()
+        (tmp_path / "vector-workspace" / "notes" / "kitchen.md").unlink()
+        engine.sync_source("notes", "incremental")
+        live = {str(row["id"]) for row in engine.state.rows("SELECT id FROM chunks")}
+        assert engine.vectors.store.count() == len(live) < before
+    finally:
+        engine.close()
+
+
+def test_an_empty_listing_removes_nothing(tmp_path: Path) -> None:
+    """A source that suddenly lists nothing is far more often a mount that
+    went away than a tree somebody emptied; the whole index is the price of
+    guessing wrong. A full sync is the explicit way to say it is empty."""
+
+    workspace = tmp_path / "ws"
+    _deletion_corpus(workspace)
+    engine = _deletion_engine(tmp_path, "empty", workspace)
+    try:
+        engine.sync_source("docs", "full")
+        before = _state_shape(engine)
+        for path in sorted(workspace.rglob("*"), reverse=True):
+            path.rmdir() if path.is_dir() else path.unlink()
+        result = engine.sync_source("docs", "incremental")
+        assert "removed_artifacts" not in result.details
+        assert _state_shape(engine) == before
+    finally:
+        engine.close()
+
+
+def test_a_connector_that_lists_only_changes_never_prunes(tmp_path: Path) -> None:
+    """`complete_listing` is opt-in: a plugin listing only what changed since
+    its last sync would otherwise read as having deleted everything else."""
+
+    from pheasant.sync import connector_registry
+    from pheasant.sync.connectors import ConnectorItem, ConnectorPayload, SourceConnector
+
+    pages = {"one.md": b"# One\n\nfirst page\n", "two.md": b"# Two\n\nsecond page\n"}
+    listed: list[str] = list(pages)
+
+    class ChangesOnly(SourceConnector):
+        connector_type = "changes_only"
+
+        def list_items(self):
+            return [ConnectorItem(f"c:{p}", p, f"c://{p}", "text/markdown") for p in listed]
+
+        def read_item(self, item):
+            return ConnectorPayload(item=item, content=pages[item.relative_path])
+
+    connector_registry.register_connector_class("changes_only", ChangesOnly)
+    engine = SyncEngine(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "changes-only",
+                    "state_path": str(tmp_path / "state"),
+                    "workspace_root": str(tmp_path),
+                    "exports_path": str(tmp_path / "exports"),
+                },
+                "sources": [{"name": "feed", "type": "changes_only", "include": []}],
+            }
+        )
+    )
+    try:
+        engine.sync_source("feed", "full")
+        listed[:] = ["two.md"]  # "what changed" this time
+        result = engine.sync_source("feed", "incremental")
+        assert "removed_artifacts" not in result.details
+        rows = engine.state.rows("SELECT relative_path FROM artifacts ORDER BY relative_path")
+        assert [row["relative_path"] for row in rows] == ["one.md", "two.md"]
+    finally:
+        engine.close()
+        connector_registry.reset_connector_registry()

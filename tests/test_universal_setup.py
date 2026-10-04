@@ -343,7 +343,8 @@ def test_local_shapes_are_classified(tmp_path: Path, roots) -> None:
     def kind(path: Path) -> str:
         return resolve_target(str(path), clone_root=clone_root, workspace=workspace).type
 
-    assert kind(vault) == "obsidian_vault"
+    # A vault is Markdown; obsidian_vault was retired into markdown_folder.
+    assert kind(vault) == "markdown_folder"
     assert kind(repo) == "repository"
     assert kind(notes) == "markdown_folder"
     assert kind(mixed) == "document_folder"
@@ -646,14 +647,13 @@ def test_github_subtree_rejects_encoded_path_traversal(roots) -> None:
     assert web.urls == ["https://docs.example.com/guide"]
     assert web.local is False
 
-    bucket = resolve_target("s3://my-bucket/prefix", clone_root=clone_root, workspace=workspace)
-    assert bucket.type == "s3"
-    assert bucket.local is False
+    with pytest.raises(TargetError, match="S3 sources were removed"):
+        resolve_target("s3://my-bucket/prefix", clone_root=clone_root, workspace=workspace)
 
     # Step 31.1 plugin types pass through by name and resolve at dispatch.
-    notion = resolve_target("notion:my-workspace", clone_root=clone_root, workspace=workspace)
-    assert notion.type == "notion"
-    assert notion.local is False
+    drive = resolve_target("gdrive:my-folder", clone_root=clone_root, workspace=workspace)
+    assert drive.type == "gdrive"
+    assert drive.local is False
 
 
 def test_explicit_type_prefix_overrides_detection(tmp_path: Path, roots) -> None:

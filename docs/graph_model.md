@@ -8,7 +8,7 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 |---|---|
 | `knowledge_base` | Root graph node for one pheasant instance/config domain. |
 | `source` | Configured source root. |
-| `source_type` | A hub grouping every source of one kind — `repository`, `notion`, `slack`, `document_folder`. The type was always an *attribute* of each source node, which meant it could be read but never navigated: nothing connected two Confluence spaces to each other. The hub makes that a structure you can see and walk. Hung off the knowledge base **alongside** sources (`kb contains source_type contains source`), never between them, so a source stays one hop from the root and nothing already visible at the default depth is pushed past the horizon. Attributes: `source_type`. |
+| `source_type` | A hub grouping every source of one kind — `repository`, `gdrive`, `web_collection`, `document_folder`. The type was always an *attribute* of each source node, which meant it could be read but never navigated: nothing connected two Confluence spaces to each other. The hub makes that a structure you can see and walk. Hung off the knowledge base **alongside** sources (`kb contains source_type contains source`), never between them, so a source stays one hop from the root and nothing already visible at the default depth is pushed past the horizon. Attributes: `source_type`. |
 | `repository`, `branch`, `commit` | Git-aware repository context. |
 | `directory`, `file`, `document`, `markdown_note` | Indexed filesystem artifacts. |
 | `memory_record` | One agent-memory record (Step 33.7). Still an ordinary Markdown artifact indexed by the ordinary pipeline — the type exists because the graph previously could not say which of its notes an agent had *remembered*. Attributes: `scope`, `subject`, `asserted_at`, `kind`. Its stable ID is unchanged (`file:{source}:{relpath}:branch=none`); only the type attribute is new, so a graph written before 2026-08-11 types these `markdown_note` until its next sync. |
@@ -73,7 +73,46 @@ Nodes and search results should record source ID, knowledge base ID, relative pa
 
 pheasant runs deterministic enrichment during sync:
 
-- Code pass: extracts Python imports, classes, functions, constants, and call targets.
+- Code pass: extracts imports, classes, functions, constants and call targets.
+  Python is read with the standard library's `ast`; 22 further languages are
+  read by deterministic patterns over text with comments and strings masked
+  out (`graph/code_analysis.py`), with no grammar dependency and no model.
+  Each symbol carries its `language`. Call targets are keyed by name per
+  source; a non-Python call target's ID also carries its language
+  (`symbol:{kb}:{source}:call:{language}:{name}`), so a Go `Open` and a Rust
+  `open` stay apart. Python's call-target ID is unchanged.
+
+  | Language | Imports recorded as | Resolves to a file |
+  |---|---|---|
+  | JavaScript / TypeScript (incl. `.vue`, `.svelte`) | `js_import` | Relative specifiers, with implied suffixes, `index.*` and TypeScript's `./x.js` → `x.ts`. Packages do not. |
+  | Go | `go_import` | Every non-test `.go` file in the package directory, matched on at least two trailing path segments (one is the standard library). |
+  | Rust | `rust_mod`, `rust_use` | `mod x;` by the 2018 module rules; `use crate::…`. Not `std`, external crates, `self::`/`super::`. |
+  | Java / Kotlin / Scala / Groovy | `jvm_import` | By package path, preferring the importer's own language. Not wildcards. |
+  | C / C++ / Objective-C | `c_include`, `c_system_include` | Quoted includes, relative to the file then by suffix. Not `<…>`. |
+  | C# | `csharp_using` | Never: a namespace names no file. |
+  | Ruby | `ruby_require`, `ruby_require_relative` | Both. |
+  | PHP | `php_include`, `php_use` | Includes; `use` by PSR-4 path (vendor prefix optional). |
+  | Swift | `swift_import` | Never: modules name no file. |
+  | Dart | `dart_import` | Relative and `package:` imports. Not `dart:`. |
+  | Zig | `zig_import` | `@import("x.zig")`. Not `std`. |
+  | Haskell | `haskell_import` | By module path. Calls are not extracted: application needs no parentheses. |
+  | Elixir | `elixir_module` | `alias`/`import`/`use`/`require` by snake-cased path. |
+  | Erlang | `erlang_include`, `erlang_module` | Both. |
+  | Clojure | `clojure_ns` | `:require` namespaces (`-` → `_`). |
+  | Lua | `lua_require` | `a.b` → `a/b.lua` or `a/b/init.lua`. |
+  | Shell | `shell_source` | `source`/`.` of a relative path. Calls are not extracted. |
+  | Protocol Buffers | `proto_import` | By path. |
+
+  Pattern reading errs towards a missing edge over an invented one: a call
+  through a variable, a macro or dynamic dispatch is not seen.
+
+  An edit is retracted, not just added to: when a file is re-indexed, the
+  imports (with their resolved file edges), calls and symbols its new text no
+  longer implies are removed, in every language including Python, and shared
+  import stubs, call targets and entities nothing points at any more go with
+  them (`graph/retraction.py`). After an edit, an incremental sync leaves the
+  same graph a full sync of the edited tree draws. Document `references` are
+  not retracted yet.
 - Markdown/document pass: extracts headings, links, wiki links, URLs, citations and named mentions.
 - Internal reference resolution: a post-sync pass that turns a file's imports
   and document links into edges pointing at **the file they resolve to**,

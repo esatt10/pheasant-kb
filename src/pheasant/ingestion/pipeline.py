@@ -20,10 +20,11 @@ from pheasant.ingestion.content_types import (
     AUDIO_EXTENSIONS,
     DOCUMENT_EXTENSIONS,
     IMAGE_EXTENSIONS,
-    TEXT_EXTENSIONS,
     artifact_type,
+    is_text_file,
 )
 from pheasant.ingestion.extractor import EXTRACT_SIDECAR_SUFFIX, HTML_EXTENSIONS
+from pheasant.ingestion.notebook import notebook_text
 from pheasant.ingestion.okf import parse_okf
 from pheasant.ingestion.packing import pack
 from pheasant.ingestion.taxonomy import (
@@ -194,7 +195,8 @@ def read_text(path: Path, extractor: DocumentExtractor | None = None) -> str:
         if extractor is None:
             return ""
         return extract_to_text(extractor, path.read_bytes(), path.name, _extract_sidecar(path))
-    return path.read_text(encoding="utf-8", errors="ignore")
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return notebook_text(text) if suffix == ".ipynb" else text
 
 
 def read_text_bytes(
@@ -206,7 +208,8 @@ def read_text_bytes(
         if extractor is None:
             return ""
         return extract_to_text(extractor, content, relative_path, None)
-    return content.decode("utf-8", errors="ignore")
+    text = content.decode("utf-8", errors="ignore")
+    return notebook_text(text) if suffix == ".ipynb" else text
 
 
 def _extract_sidecar(path: Path) -> bytes | None:
@@ -501,7 +504,9 @@ def parse_file(
     extractor: DocumentExtractor | None = None,
 ) -> ParsedArtifact | None:
     suffix = path.suffix.lower()
-    if suffix not in TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS:
+    if not (
+        is_text_file(path) or suffix in DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
+    ):
         return None
     root = source.path if source.path.is_dir() else source.path.parent
     relative = path.relative_to(root).as_posix()
@@ -564,7 +569,8 @@ def parse_connector_payload(
     is_image = suffix in IMAGE_EXTENSIONS
     is_audio = suffix in AUDIO_EXTENSIONS
     if (
-        suffix not in TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS
+        not is_text_file(item.relative_path)
+        and suffix not in DOCUMENT_EXTENSIONS
         and not is_image
         and not is_audio
         and not _is_text_like(mime_type)

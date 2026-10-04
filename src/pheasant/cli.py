@@ -1595,7 +1595,7 @@ def main(argv: list[str] | None = None) -> int:
         default=["."],
         help=(
             "one or more targets: a folder, file, glob (~/clients/*), git URL, "
-            "web URL, s3:// bucket, or connector (notion:workspace)"
+            "web URL, or connector (gdrive:folder)"
         ),
     )
     up_p.add_argument("--config", "-c", default="pheasant.yaml")

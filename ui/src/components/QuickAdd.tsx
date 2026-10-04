@@ -68,7 +68,7 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
               className="text-input"
               autoFocus
               spellCheck={false}
-              placeholder="/workspace/notes  ·  https://github.com/owner/repo  ·  notion:workspace"
+              placeholder="/workspace/notes  ·  https://github.com/owner/repo  ·  gdrive:folder"
               value={target}
               onChange={(event) => setTarget(event.target.value)}
               onKeyDown={(event) => {

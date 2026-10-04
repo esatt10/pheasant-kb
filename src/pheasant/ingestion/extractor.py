@@ -440,9 +440,9 @@ def extract_docx_text_builtin(content: bytes) -> str:
 def extract_html_text(content: bytes) -> str:
     """Strip markup so HTML/XML indexes its prose, not its tags.
 
-    ``bs4`` is already a core dependency (the Confluence connector uses it),
-    but a regex strip stands in when it is missing, so a partial install
-    degrades to something useful rather than indexing raw markup.
+    ``bs4`` is a core dependency, but a regex strip stands in when it is
+    missing, so a partial install degrades to something useful rather than
+    indexing raw markup.
     """
     raw = content.decode("utf-8", errors="ignore")
     try:

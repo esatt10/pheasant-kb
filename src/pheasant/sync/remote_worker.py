@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from pheasant.config.schema import ExtractorSettings, PheasantConfig, SourceConfig
 from pheasant.ingestion.chunk_plan import PLANNER_VERSION
 from pheasant.ingestion.chunking import TextChunk
-from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, TEXT_EXTENSIONS
+from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS, is_text_file
 from pheasant.ingestion.extractor import build_extractor
 from pheasant.ingestion.pipeline import ParsedArtifact, parse_connector_payload
 from pheasant.ingestion.taxonomy import Ordinal, SectionHeading
@@ -26,15 +26,12 @@ class RemoteWorkerError(RuntimeError):
     """A remote preparation worker could not complete an immutable task."""
 
 
-REMOTE_TEXT_EXTENSIONS = TEXT_EXTENSIONS - {".html"}
 REMOTE_DOCUMENT_EXTENSIONS = frozenset(DOCUMENT_EXTENSIONS)
 
 
 def _remote_text_path(path: str) -> bool:
     candidate = Path(path)
-    return (
-        candidate.suffix.lower() in REMOTE_TEXT_EXTENSIONS or candidate.name.lower() == "dockerfile"
-    )
+    return candidate.suffix.lower() not in {".html"} and is_text_file(candidate)
 
 
 def _remote_preparation_path(path: str, *, html_text: bool = False) -> bool:

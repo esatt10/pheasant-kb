@@ -118,7 +118,7 @@ class Passage:
     # is what lets a citation say *which section* answered rather than only
     # which file.
     heading_path: str | None = None
-    # The *kind* of source this evidence came from (repository, notion, …),
+    # The *kind* of source this evidence came from (repository, gdrive, …),
     # carried for the same reason as heading_path: a citation that can only
     # name a file cannot say whether the claim came out of the codebase or out
     # of a Slack thread, and that is usually what decides how much to trust it.

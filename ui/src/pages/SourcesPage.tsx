@@ -215,7 +215,7 @@ export function SourcesPage() {
         <strong>+ Add source</strong> takes a path, URL or glob and infers the rest.{" "}
         <strong>Advanced…</strong> exposes every field the YAML schema has — include and
         exclude globs, chunking, branch policy, sync triggers, and connector settings for
-        Notion, Slack, Confluence, Google Drive, IMAP or any installed plugin.
+        Google Drive or any installed plugin.
       </p>
 
       {quickAdd ? (
