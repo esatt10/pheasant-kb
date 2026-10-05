@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from pheasant.config.schema import SourceConfig, SourceType
 from pheasant.registry.source_registry import SourceRegistry
+from pheasant.services import index_queue as index_queue_service
 from pheasant.services import ingestion as ingestion_service
 from pheasant.services import snapshots as snapshot_service
 
@@ -178,6 +179,16 @@ def register_readiness_routes(app: FastAPI, *, config: Any, services: Any, engin
             idempotency_key=idempotency_key,
             submission_id=submission_id,
         )
+
+    @app.get("/queue")
+    def index_queue(knowledge_base: str | None = None, limit: int = 50) -> dict:
+        """Outstanding index tasks, each with its pre-claim state.
+
+        What a ``status: queued`` sync is doing between being published and
+        being claimed by an indexer, which no other route can see.
+        """
+
+        return index_queue_service.queue_status(services, knowledge_base, limit=limit)
 
     @app.post("/ingest/acknowledge")
     def ingest_acknowledge(

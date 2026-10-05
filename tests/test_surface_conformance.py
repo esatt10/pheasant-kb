@@ -585,6 +585,9 @@ CONFORMED = {
     "answer": ("POST /assistant/chat", "ask_knowledge_base"),
     "visualize": ("POST /assistant/visual", "create_visual"),
     "get_media": ("GET /media", "get_image"),
+    # Driven through both surfaces in tests/test_index_queue_status.py, refusal
+    # text included: its fixture needs a queue-enabled region this one is not.
+    "queue_status": ("GET /queue", "get_index_queue"),
 }
 
 
@@ -597,11 +600,18 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
 
     from pheasant.services import assistant as assistant_service
     from pheasant.services import graph as graph_service
+    from pheasant.services import index_queue as index_queue_service
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
 
     public: set[str] = set()
-    for module in (retrieval_service, graph_service, assistant_service, media_service):
+    for module in (
+        retrieval_service,
+        graph_service,
+        assistant_service,
+        media_service,
+        index_queue_service,
+    ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
                 continue

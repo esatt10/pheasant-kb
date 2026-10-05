@@ -89,6 +89,14 @@ still valid here, resolved through the same state-registry fallback
 | GET | `/jobs/stream` | Server-sent events, one per job update, primed with current state on connect. |
 | DELETE | `/jobs` | Dismiss every finished job notification; never cancels running work. |
 | DELETE | `/jobs/{job_id}` | Dismiss one finished job notification; returns `409` while it is running. |
+| GET | `/queue` | Outstanding **index-queue tasks** (pre-claim backlog), oldest first. Each has a `state` — `awaiting_claim`, `retry_scheduled`, `claimed`, `claim_lapsed` or `dead` — plus `waiting_seconds`, `position` and `claimed_by`. `enabled: false` when the queue is off; `listing: "unavailable"` when the backend can count but not list (NATS). |
+
+A job is work **this process** is doing. A sync requested from a replica that
+does not index (`role: api`, or MCP on a fleet) is *published* instead — the
+response says `status: "queued"` with `queued_tasks` — and is not a job until an
+indexer claims it. `/queue` is where that interval is visible; the web UI's
+jobs tray and Sources page read it, and say "awaiting an indexer" rather than
+showing nothing.
 
 Every source row (`/sources`, `/overview`) also carries `syncing`, `sync_error`,
 `job` — the live job behind the boolean — and `progress`, **this source's own

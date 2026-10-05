@@ -4025,3 +4025,174 @@ select.text-input {
 .composer__depth { font-size: 12px; padding: 2px 4px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg-raised); color: var(--text); }
 .composer__context { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ----------------------------------------------------- region & index queue */
+
+/* The pre-claim interval and the replica's own readiness, said in one strip
+   under the top bar. Full-bleed rather than a page `.banner`, because it is a
+   fact about the region and not about whichever page is open. */
+.region-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.region-banner b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.region-banner .btn {
+  margin-left: auto;
+  flex: none;
+}
+
+.region-banner--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-bottom-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.region-banner--error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-bottom-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.region-banner--info {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.region-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.region-banner__dot--live {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+  animation: region-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes region-pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, currentColor 8%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .region-banner__dot--live {
+    animation: none;
+  }
+}
+
+.pill--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.pill--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.queue-glyph {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.queue-list__title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding-top: 6px;
+}
+
+.queue-task {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.queue-task .job__head {
+  gap: 8px;
+}
+
+.queue-task__state {
+  flex: none;
+}
+
+.queue-task__state--awaiting_claim,
+.queue-task__state--retry_scheduled,
+.queue-task__state--claim_lapsed {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.queue-task__state--claimed {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+}
+
+.queue-task__state--dead {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+/* Hatched, not animated: nothing is being processed, and a moving bar would
+   say that something is. */
+.queue-task__bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--warn) 70%, transparent) 0 4px,
+    color-mix(in srgb, var(--warn) 22%, transparent) 4px 8px
+  );
+}
+
+.source-queue-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.sync-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sync-notice .btn {
+  margin-left: auto;
+}
+
+.queue-task .job__detail {
+  white-space: normal;
+  overflow: visible;
+}

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { JobRecord, SourceProgress } from "../api/types";
+import type { JobRecord, QueueTask, SourceProgress } from "../api/types";
+import { OPEN_JOBS_EVENT, QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegion";
 import { ProgressBar, formatDuration, formatRate, progressCaption } from "./SyncProgress";
 
 /**
@@ -40,13 +41,28 @@ export function JobsTray() {
     staleTime: 500,
   });
 
+  // Work published to the index queue is not a job until an indexer claims
+  // it, and on a role-split region the indexer is another process: without
+  // this the tray stayed hidden for exactly the interval somebody was
+  // waiting through. A claimed task is already a job somewhere, but not
+  // necessarily one *this* process can see, so it is listed too.
+  const queue = useIndexQueue();
+  const queued = outstanding(queue.data);
+  const preClaim = queued.filter((task) => task.state === "awaiting_claim");
+
+  useEffect(() => {
+    const open = () => setExpanded(true);
+    window.addEventListener(OPEN_JOBS_EVENT, open);
+    return () => window.removeEventListener(OPEN_JOBS_EVENT, open);
+  }, []);
+
   const records = jobs.data?.jobs ?? [];
   const active = records.filter((job) => job.active);
   const recent = records.filter((job) => !job.active).slice(0, 5);
   const failed = recent.filter((job) => job.status === "failed");
   const stalled = active.some((job) => job.stalled);
 
-  if (active.length === 0 && failed.length === 0 && !expanded) {
+  if (active.length === 0 && failed.length === 0 && queued.length === 0 && !expanded) {
     return null;
   }
 
@@ -62,14 +78,27 @@ export function JobsTray() {
         aria-expanded={expanded}
         title={expanded ? "Hide background work" : "Show background work"}
       >
-        {active.length > 0 ? <span className="spinner" /> : null}
+        {active.length > 0 || (preClaim.length === 0 && queued.some((task) => task.state === "claimed")) ? (
+          <span className="spinner" />
+        ) : preClaim.length > 0 ? (
+          <span className="queue-glyph" aria-hidden>
+            ⧗
+          </span>
+        ) : null}
         <span className="jobs-tray__summary">
           {active.length > 0
             ? `${summarize(active[0])}${active.length > 1 ? ` +${active.length - 1}` : ""}`
-            : failed.length > 0
-              ? `${failed.length} job${failed.length === 1 ? "" : "s"} failed`
-              : "Background work"}
+            : preClaim.length > 0
+              ? `${preClaim.length === 1 ? `Sync ${preClaim[0].source}` : `${preClaim.length} syncs`} queued · awaiting an indexer`
+              : queued.length > 0
+                ? `Sync ${queued[0].source} · ${QUEUE_STATE_LABEL[queued[0].state]}${queued[0].claimed_by ? ` (${queued[0].claimed_by})` : ""}${queued.length > 1 ? ` +${queued.length - 1}` : ""}`
+                : failed.length > 0
+                  ? `${failed.length} job${failed.length === 1 ? "" : "s"} failed`
+                  : "Background work"}
         </span>
+        {active.length > 0 && preClaim.length > 0 ? (
+          <span className="pill pill--warn">+{preClaim.length} queued</span>
+        ) : null}
         <span className="jobs-tray__chevron" aria-hidden>
           {expanded ? "▾" : "▴"}
         </span>
@@ -84,7 +113,17 @@ export function JobsTray() {
               </button>
             </div>
           ) : null}
-          {records.length === 0 ? (
+          {queued.length > 0 ? (
+            <div className="queue-list">
+              <div className="queue-list__title muted small">
+                Index queue · {queue.data?.backend ?? "local"}
+              </div>
+              {queued.map((task) => (
+                <QueueRow key={task.task_id} task={task} />
+              ))}
+            </div>
+          ) : null}
+          {records.length === 0 && queued.length === 0 ? (
             <p className="muted small" style={{ margin: 0 }}>
               Nothing running. Syncs, uploads and re-indexes show up here with
               live progress.
@@ -162,6 +201,45 @@ function JobRow({ job, onClear }: { job: JobRecord; onClear: () => void }) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * One published sync. The pre-claim row draws a hatched bar rather than a
+ * spinner on purpose: nothing is being processed, and a spinner would claim
+ * that something is.
+ */
+function QueueRow({ task }: { task: QueueTask }) {
+  const waited = task.waiting_seconds != null ? formatDuration(task.waiting_seconds) : "—";
+  const caption =
+    task.state === "awaiting_claim"
+      ? `No indexer has claimed it yet${task.position ? ` · position ${task.position}` : ""}. It is stored in the queue and survives restarts.`
+      : task.state === "claimed"
+        ? `Claimed by ${task.claimed_by ?? "an indexer"}; progress appears where that indexer reports it.`
+        : task.state === "claim_lapsed"
+          ? "Its indexer stopped heartbeating. The task will be redelivered to another one."
+          : task.state === "retry_scheduled"
+            ? `Attempt ${task.attempts} of ${task.max_attempts} failed; retrying${task.last_error ? ` · ${task.last_error}` : ""}.`
+            : `Out of attempts${task.last_error ? ` · ${task.last_error}` : ""}. Fix the cause, then pheasant queue requeue-dead.`;
+  return (
+    <div className={`queue-task queue-task--${task.state}`}>
+      <div className="job__head">
+        <span className={`pill queue-task__state queue-task__state--${task.state}`}>
+          {QUEUE_STATE_LABEL[task.state]}
+        </span>
+        <span className="job__label">
+          Sync {task.source}
+          {task.mode !== "incremental" ? ` (${task.mode})` : ""}
+        </span>
+        <span className="job__status mono" title={task.task_id}>
+          {waited}
+        </span>
+      </div>
+      {task.state === "awaiting_claim" || task.state === "claim_lapsed" ? (
+        <div className="queue-task__bar" />
+      ) : null}
+      <div className="job__detail muted small">{caption}</div>
     </div>
   );
 }

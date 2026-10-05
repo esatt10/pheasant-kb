@@ -1,8 +1,9 @@
 import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
-import type { SourceRecord } from "../api/types";
-import { SourceSyncProgress } from "../components/SyncProgress";
+import { ApiError, api } from "../api/client";
+import type { QueueTask, SourceRecord } from "../api/types";
+import { SourceSyncProgress, formatDuration } from "../components/SyncProgress";
+import { QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegion";
 import { AddSourceWizard } from "../sources/AddSourceWizard";
 import { TaxonomyOutline } from "../sources/TaxonomyOutline";
 import { QuickAdd } from "../components/QuickAdd";
@@ -47,9 +48,50 @@ export function SourcesPage() {
     queryClient.invalidateQueries({ queryKey: ["overview"] });
   };
 
+  const queue = useIndexQueue();
+  const queuedBySource = new Map<string, QueueTask>();
+  for (const task of outstanding(queue.data)) {
+    if (!queuedBySource.has(task.source)) queuedBySource.set(task.source, task);
+  }
+  const [notice, setNotice] = useState<SyncNotice | null>(null);
+
+  // `wait: false` answers one of three words, and only `syncing` means this
+  // process started work. The other two used to be dropped, so a sync that
+  // was queued for an indexer, or folded into one already running, looked
+  // like a button that did nothing.
   const sync = useMutation({
     mutationFn: ({ name, mode }: { name: string; mode: string }) => api.syncSource(name, mode),
-    onSuccess: invalidate,
+    onSuccess: (data, { name }) => {
+      const status = (data as { status?: string }).status;
+      const tasks = (data as { queued_tasks?: string[] }).queued_tasks ?? [];
+      if (status === "queued") {
+        setNotice({
+          kind: "warn",
+          text: `${name}: queued for an indexer${tasks[0] ? ` (task ${tasks[0]})` : ""}. This replica publishes syncs rather than running them; the source shows as indexing once an indexer claims it.`,
+          awaiting: tasks,
+        });
+      } else if (status === "already_syncing") {
+        setNotice({
+          kind: "info",
+          text: `${name} is already syncing — another job holds it, so no second sync was started. Changes since it began are picked up by the next one.`,
+        });
+      } else {
+        setNotice(null);
+      }
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["index-queue"] });
+    },
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.code === "REGION_BUSY") {
+        setNotice({
+          kind: "warn",
+          text: `${variables.name}: the region is busy (${error.message}). Nothing was started; it is safe to retry.`,
+          retry: variables,
+        });
+      } else {
+        setNotice({ kind: "error", text: `${variables.name}: ${(error as Error).message}` });
+      }
+    },
   });
   const disable = useMutation({
     mutationFn: (name: string) => api.disableSource(name),
@@ -83,6 +125,19 @@ export function SourcesPage() {
           <span className="spinner" /> Loading sources…
         </p>
       )}
+      {notice && !superseded(notice, queue.data?.tasks) ? (
+        <div className={`banner banner--${notice.kind} sync-notice`} role="status">
+          <span>{notice.text}</span>
+          {notice.retry ? (
+            <button className="btn btn--small" onClick={() => sync.mutate(notice.retry!)}>
+              Retry
+            </button>
+          ) : null}
+          <button className="btn btn--small btn--ghost" onClick={() => setNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       {sources.isError && (
         <div className="banner banner--error">{(sources.error as Error).message}</div>
       )}
@@ -122,6 +177,8 @@ export function SourcesPage() {
                     <span className="spinner" />{" "}
                     {source.progress?.stalled ? "no progress" : (source.progress?.phase ?? "syncing…")}
                   </span>
+                ) : queuedBySource.has(source.name) ? (
+                  <QueueState task={queuedBySource.get(source.name)!} />
                 ) : source.sync_error ? (
                   <span className="error" title={source.sync_error}>
                     sync failed
@@ -305,6 +362,44 @@ function SyncControl({
       >
         {disabled ? "syncing…" : "sync"}
       </button>
+    </span>
+  );
+}
+
+interface SyncNotice {
+  kind: "info" | "warn" | "error";
+  text: string;
+  retry?: { name: string; mode: string };
+  /** Task ids this notice is about; it stands down once none still awaits a claim. */
+  awaiting?: string[];
+}
+
+/**
+ * A "queued for an indexer" notice is true until an indexer claims the task,
+ * and then it is the stale half of the story: the row's badge already says
+ * "indexer claimed". Hiding it then, rather than leaving it for a dismiss, is
+ * what keeps the page from contradicting itself.
+ */
+function superseded(notice: SyncNotice, tasks: QueueTask[] | undefined): boolean {
+  if (!notice.awaiting?.length || !tasks) return false;
+  return !tasks.some(
+    (task) => notice.awaiting!.includes(task.task_id) && task.state === "awaiting_claim",
+  );
+}
+
+/** A source whose sync was published and is not (yet) a job in this process. */
+function QueueState({ task }: { task: QueueTask }) {
+  const tone = task.state === "claimed" ? "pill--accent" : task.state === "dead" ? "pill--danger" : "pill--warn";
+  return (
+    <span className="source-queue-state" title={`${task.task_id}${task.last_error ? ` · ${task.last_error}` : ""}`}>
+      <span className={`pill ${tone}`}>
+        {task.state === "awaiting_claim" ? "⧗ queued · " : ""}
+        {QUEUE_STATE_LABEL[task.state]}
+        {task.state === "claimed" && task.claimed_by ? ` · ${task.claimed_by}` : ""}
+      </span>
+      {task.waiting_seconds != null && task.state !== "dead" ? (
+        <span className="mono">{formatDuration(task.waiting_seconds)}</span>
+      ) : null}
     </span>
   );
 }

@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { JobsTray } from "./components/JobsTray";
+import { RegionBanner } from "./components/RegionBanner";
 import { Notebook } from "./pages/Notebook";
 import { GraphPage } from "./pages/GraphPage";
 import { MemoryPage } from "./pages/MemoryPage";
@@ -24,6 +25,7 @@ export function App() {
     <SessionProvider>
       <div className="app">
         <TopBar />
+        <RegionBanner />
         <main className="app__main">
           <Routes>
             <Route path="/" element={<Notebook />} />

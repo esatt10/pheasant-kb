@@ -141,7 +141,10 @@ pheasant-kb/
 │   │                            code and a retryable flag), retrieval,
 │   │                            graph, assistant, ingestion (submission and
 │   │                            receipts), snapshots (seal and the drift
-│   │                            refusal), media (image bytes by node)
+│   │                            refusal), media (image bytes by node),
+│   │                            index_queue (the pre-claim interval: what
+│   │                            a published sync is doing before an
+│   │                            indexer claims it)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -162,7 +165,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 156 pytest modules, offline by design
+└── tests/                     ← 157 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1120,6 +1123,17 @@ store in a fleet is Postgres, which a serving replica can already write. Only
 the filesystem was ever the problem. Two refusals, split by what a caller
 should do: `LANDING_ZONE_UNWRITABLE` (not retryable — an operator must change a
 mount) and `LANDING_SERVICE_UNAVAILABLE` (retryable — the writer was down).
+
+**A published sync is visible before it is claimed.** A sync requested where
+nothing indexes answers `status: queued` and becomes a row in `index_tasks`,
+not a job — and for as long as no indexer claimed it, every surface used to
+show nothing at all, so a person saw a button that did nothing and an agent's
+ingest barrier saw `still_accepted` hold for no stated reason.
+`services/index_queue.py` names the interval (`GET /queue`, MCP
+`get_index_queue`): each task is `awaiting_claim`, `retry_scheduled`,
+`claimed`, `claim_lapsed` or `dead`, from its row and the clock. A backend that
+can count but not list (NATS) says `listing: "unavailable"`, never an empty
+list. The web UI's banner, jobs tray and Sources badge read it.
 
 **The graph handoff is announced, and the poll is the backstop.** Each commit
 publishes a content-addressed `generation_id` in the publication record and,
