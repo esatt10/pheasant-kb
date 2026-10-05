@@ -5,7 +5,7 @@ can also make yourself:
 
 | Axis | Values | Decided by |
 |---|---|---|
-| **intent** | `knowledge` · `procedural` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)) |
+| **intent** | `knowledge` · `procedural` · `inventory` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)) |
 | **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned |
 | **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned |
 
@@ -73,6 +73,56 @@ At most the last 6 turns are used and 50 are accepted. A question with no
 history is answered byte-for-byte as before. The UI sends history
 automatically; **New topic** under the chat box starts a fresh context
 without clearing the thread, and **New conversation** clears both.
+
+## Questions about the knowledge base itself
+
+"List all documents", "which sources are there", "how many PDFs are in
+notes", "what file types are indexed", "recent documents" and "sync status"
+are questions about the knowledge base, not about what it says. A search
+cannot answer them. It returns the passages that best match the words, and a
+model writing from those would invent a catalogue. So the assistant reads such
+a question and answers it from the index directly, with the same operation an
+agent calls as `describe_knowledge_base` / `list_documents` (HTTP
+`GET /knowledge-base/overview` / `GET /documents`). It does no search, makes no
+model call and skips the history rewrite, so the answer is as fast and as
+repeatable as the tool call.
+
+Two ways in:
+
+- **Automatically.** Deterministic rules, read before the history rewrite.
+  They are deliberately narrow: a question must be *about the index* as a
+  whole. "What is this knowledge base about?" and "which files mention
+  rotation?" are about the content and are still searched. So is "list the
+  files in the auth module", because "auth module" names no source. A follow-up
+  the model rewrites ("and only the markdown ones?") is read again after the
+  rewrite.
+- **`@pheasant`**, anywhere in the message. Always answered from the index,
+  whatever the rules think, and never sent to a search. `@pheasant` on its own
+  lists what it can answer:
+
+  ```text
+  @pheasant list sources
+  @pheasant list documents
+  @pheasant pdfs in notes
+  @pheasant list files matching deploy
+  @pheasant how many documents
+  @pheasant file types
+  @pheasant recent documents
+  @pheasant sync status
+  ```
+
+Every such answer ends by naming the tool it came from and the `@pheasant`
+keyword, so the reader always knows how it was produced. A question that reads
+close to one but was searched (for example "list the documents about
+rotation") carries an `inventory_hint` that the UI shows under the answer. The
+answer text itself is unchanged. The payload has `route.intent: "inventory"`,
+`workflow: "inventory"` and an `inventory` block holding the tool's own result,
+so an agent reads structured data rather than parsing a table.
+
+Listings leave out memory records (list those with `memory_list`) and internal
+sources. Under `security.acl_enforced`, lists and counts include only what the
+caller may read. If the automatic reading is ever wrong for your corpus, set
+`assistant.inventory.mode: keyword` (only `@pheasant` routes) or `off`.
 
 ## Visuals
 

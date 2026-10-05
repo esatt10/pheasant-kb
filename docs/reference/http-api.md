@@ -41,6 +41,8 @@ See [Attach to a Synapse fleet](../how-to/attach-to-synapse.md).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/knowledge-bases` | List knowledge bases. |
+| GET | `/knowledge-base/overview` | What the knowledge base holds, without searching: every source with its document count, totals and file types (`principal` scopes it under ACL enforcement). Same operation as MCP `describe_knowledge_base`. |
+| GET | `/documents` | The indexed documents, listed: `source_name`, `extension` (repeatable), `path_contains`, `order` (`path` \| `recent`), `limit` (≤ 500), `offset`, `principal`. Returns `total` and `pagination.has_more`. Same operation as MCP `list_documents`. |
 | GET | `/overview` | One call for a UI cold start: knowledge base, sources, node counts, whether anything is indexed. Each source in `sources[]` carries live `syncing`/`sync_error` (see Sync below). |
 | GET | `/sources` | List configured + runtime sources. Each entry carries `syncing: bool` (a background sync — `wait: false` — is running now) and `sync_error: string \| null` (error from the most recent *background* sync, independent of `last_status`), plus `job` — the running job behind `syncing`, with its phase and counter (see Jobs below). |
 | GET | `/sources/types` | Registerable source types — built-ins plus installed connector plugins — each with a `path_role` of `required` or `unused`. |

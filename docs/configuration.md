@@ -1439,6 +1439,24 @@ insufficient replies remain incomplete and may trigger at most two bounded
 follow-up searches. Pheasant-lab enables this option for measurement; it is not
 a global default.
 
+### `assistant.inventory` — questions about the knowledge base itself
+
+"List all sources", "how many PDFs are in notes" and "sync status" are
+questions about the knowledge base, not about its content, so a search cannot
+answer them. The assistant answers them from the index directly, using the
+same operation behind the `describe_knowledge_base` / `list_documents` tools
+and `GET /knowledge-base/overview` / `GET /documents`. There is no search, no
+model call and no history rewrite. A question that names `@pheasant` always
+routes there. See
+[questions about the knowledge base](how-to/conversations-and-visuals.md#questions-about-the-knowledge-base-itself).
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `auto` \| `keyword` \| `off` | `auto` | `auto` reads the question with deterministic rules and honours `@pheasant`. `keyword` honours only `@pheasant`, for a region where the automatic reading is ever wrong. `off` answers everything by retrieval. |
+| `max_items` | integer | `50` | Rows a listing shows in the answer (at most 500). The tools page past it with `offset`. |
+
+Query-time only, so a change applies to the next question.
+
 ### `assistant.latency` â€” request budgets and answer admission
 
 Deadlines are optional and begin before history rewriting. They limit blocking

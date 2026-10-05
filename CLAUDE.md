@@ -144,7 +144,8 @@ pheasant-kb/
 │   │                            refusal), media (image bytes by node),
 │   │                            index_queue (the pre-claim interval: what
 │   │                            a published sync is doing before an
-│   │                            indexer claims it)
+│   │                            indexer claims it), inventory (what the
+│   │                            knowledge base holds: overview, documents)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -152,7 +153,9 @@ pheasant-kb/
 │   │                            assistant_routes, readiness_routes, …)
 │   ├── assistant/             ← grounded answering + workflows: answering
 │   │                            (around every workflow), routing (depth,
-│   │                            visual, shape), conversation, longform,
+│   │                            visual, shape), inventory (questions about
+│   │                            the knowledge base itself, + @pheasant),
+│   │                            conversation, longform,
 │   │                            visuals, visual_specs (the shape grammar),
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
@@ -165,7 +168,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 157 pytest modules, offline by design
+└── tests/                     ← 158 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -938,6 +941,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   and overruled by the planner's existing JSON only when unpinned. "Show me
   the X diagram" is `image` (a picture the corpus holds) and "draw a diagram
   of X" is `diagram`; the verb and the article are the difference.
+- **A question about the knowledge base itself is not searched.** "List all
+  sources", "how many PDFs", "sync status": `assistant.inventory` reads it
+  (narrow, whole-question rules, or `@pheasant` anywhere, which always routes)
+  *before* the history rewrite, and `assistant.inventory_answer` answers from
+  `services.inventory`, the operation behind `describe_knowledge_base` /
+  `list_documents` and `GET /knowledge-base/overview` / `GET /documents`. No
+  search, no model call, `route.intent: "inventory"`, the tool's result in
+  `inventory`. A qualifier the rules cannot resolve ("files in the auth
+  module") falls through to retrieval, a near miss gets `inventory_hint`, and a
+  failed lookup is answered by the workflow. `assistant.inventory.mode:
+  keyword|off` narrows it. `tests/test_assistant_inventory.py` holds a
+  labelled set with both sides, the UI's own starter prompts included.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

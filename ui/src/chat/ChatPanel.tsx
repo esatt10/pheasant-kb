@@ -37,6 +37,7 @@ const STEP_LABELS: Record<string, string> = {
   verify: "Verifying citations…",
   context: "Reading the question in context…",
   classify: "Reading the question…",
+  inventory: "Listing from the index…",
   outline: "Outlining a long answer…",
   sections: "Writing the sections…",
   visual: "Drawing the visual…",
@@ -53,6 +54,8 @@ const SUGGESTIONS = [
   "What is this knowledge base about?",
   "Summarize the main themes across my sources.",
   "What decisions are recorded here, and why?",
+  // Questions about the knowledge base itself are answered from the index.
+  "@pheasant what's in this knowledge base?",
 ];
 
 export function ChatPanel({
@@ -256,7 +259,7 @@ export function ChatPanel({
                 ? `Ask about ${sourceFilter}…`
                 : sourceTypeFilter
                   ? `Ask about your ${sourceTypeFilter} sources…`
-                  : "Ask anything about your sources…"
+                  : "Ask anything about your sources — or @pheasant to list what is indexed…"
             }
             onChange={(event) => {
               dispatch({ type: "set-draft", text: event.target.value });
@@ -468,6 +471,7 @@ function AnswerTurn({
           onVisualize={(citation) => draw.mutate([citation])}
         />
       ) : null}
+      {answer.inventory_hint ? <p className="msg__hint">{answer.inventory_hint}</p> : null}
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
       <div className="msg__meta">
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
@@ -476,7 +480,11 @@ function AnswerTurn({
             {answer.route.depth}
           </span>
         ) : null}
-        {answer.mode === "llm" ? (
+        {answer.mode === "inventory" ? (
+          <span title="Answered from the index directly, without searching">
+            from the index{answer.inventory ? ` · ${answer.inventory.tool}` : ""}
+          </span>
+        ) : answer.mode === "llm" ? (
           <span>
             {answer.provider}
             {answer.model ? ` · ${answer.model}` : ""}
@@ -484,8 +492,12 @@ function AnswerTurn({
         ) : (
           <span>extracted passages</span>
         )}
-        <span>·</span>
-        <span>{answer.citations.length} sources</span>
+        {answer.mode === "inventory" ? null : (
+          <>
+            <span>·</span>
+            <span>{answer.citations.length} sources</span>
+          </>
+        )}
         {answer.facts.length > 0 ? (
           <>
             <span>·</span>

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
+from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.assistant.credentials import SessionKeyStore
@@ -2016,6 +2017,7 @@ def create_app(
     # these operations, so this plane starts on the right side of that line
     # rather than adding to the pile.
     register_readiness_routes(app, config=config, services=services, engine=engine)
+    register_inventory_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
