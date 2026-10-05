@@ -233,6 +233,13 @@ def register_assistant_tools(
         this for a synthesized, cited answer; use search_context when you
         want the raw passages to reason over yourself.
 
+        A question about the knowledge base itself ("list all sources", "how
+        many PDFs are in notes", "sync status") is answered directly from the
+        index rather than by searching: route.intent is "inventory" and
+        "inventory" holds the describe_knowledge_base / list_documents
+        result. Start the question with @pheasant to ask one explicitly
+        ("@pheasant list documents in notes").
+
         history is the conversation so far, oldest first, as
         [{"question": ..., "answer": ...}]. Pass it for follow-ups ("what
         about the second one?"): the region keeps no conversation state, so

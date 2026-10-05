@@ -282,7 +282,7 @@ def answer_question(
     the route asked for is built — unless ``defer_visual``, which the
     streaming route uses to send the answer first and the picture after.
     """
-    from pheasant.assistant import conversation, routing
+    from pheasant.assistant import conversation, inventory, inventory_answer, routing
     from pheasant.assistant.retrieval import PheasantRetriever
     from pheasant.assistant.workflows import (
         WorkflowRequest,
@@ -359,17 +359,37 @@ def answer_question(
     )
 
     turns = conversation.normalize_history(history)
+    # A question about the knowledge base itself ("list the sources") is read
+    # off the user's own words *before* the rewrite, so it costs no model call;
+    # a follow-up the model rewrote is read again below.
+    inventory_settings = getattr(settings, "inventory", None)
+    inventory_mode = str(getattr(inventory_settings, "mode", "auto") or "auto")
+    asked = inventory.route(question, mode=inventory_mode, state=state, visual=visual_route)
     rewrite_started = time.perf_counter()
     from pheasant.assistant.providers import collect_token_usage
 
     with collect_token_usage() as rewrite_usage:
-        search_question, how = conversation.standalone_question(question, turns, llm)
+        if asked is None:
+            search_question, how = conversation.standalone_question(question, turns, llm)
+        else:
+            search_question, how = question, None
     rewrite_seconds = time.perf_counter() - rewrite_started
+    if asked is None and how and turns and search_question != f"{turns[-1].question} {question}":
+        # The model resolved a follow-up ("and which of those are PDFs?") into
+        # a standalone question, which may be one about the index.
+        asked = inventory.route(
+            search_question, mode=inventory_mode, state=state, visual=visual_route
+        )
     context_steps = []
     context_steps.append(
         WorkflowStep(
             name="history_rewrite",
-            detail=how or "no conversational rewrite needed",
+            detail=how
+            or (
+                "skipped: a question about the knowledge base itself"
+                if asked is not None
+                else "no conversational rewrite needed"
+            ),
             duration_seconds=rewrite_seconds,
             input_tokens=rewrite_usage.reported_input,
             output_tokens=rewrite_usage.reported_output,
@@ -404,9 +424,39 @@ def answer_question(
         search_question=search_question if how else None,
     )
 
+    result = None
+    inventory_data = None
+    if asked is not None:
+        result, inventory_data = inventory_answer.answer(
+            asked,
+            search_question,
+            config=config,
+            state=state,
+            search=search,
+            graph=graph,
+            principal=principal,
+            principal_groups=principal_groups,
+            max_items=int(getattr(inventory_settings, "max_items", 50) or 50),
+            report=lambda step: _report(on_step, step),
+        )
+        if result is not None:
+            visual_route, visual_why, visual_by, shape, shape_why = (
+                "none",
+                "a question about the knowledge base itself",
+                "rule",
+                None,
+                "",
+            )
+        else:
+            failed = WorkflowStep(
+                name="inventory", detail="index lookup failed; answered by searching instead"
+            )
+            context_steps.append(failed)
+            _report(on_step, failed)
     try:
         budget.check()
-        result = build_workflow(name).run(request, retriever, llm)
+        if result is None:
+            result = build_workflow(name).run(request, retriever, llm)
     except Exception as exc:
         from pheasant.request_budget import DeadlineExceeded
 
@@ -532,6 +582,11 @@ def answer_question(
     }
     if search_question and how:
         payload["search_question"] = search_question
+    if inventory_data is not None:
+        payload["inventory"] = inventory_data
+    elif inventory_mode != "off" and inventory.looks_close(question):
+        # Not routed, but close: say how to ask it, without touching the answer.
+        payload["inventory_hint"] = inventory.HINT
     if visual_route != "none":
         if defer_visual:
             payload["visual"] = {"type": visual_route, "status": "pending"}
@@ -553,6 +608,15 @@ def answer_question(
                 knowledge_base=knowledge_base,
             )
     return payload
+
+
+def _report(on_step: Any, step: Any) -> None:
+    if on_step is None:
+        return
+    try:
+        on_step(step)
+    except Exception:  # pragma: no cover - progress is never load-bearing
+        logger.debug("progress callback failed", exc_info=True)
 
 
 def attach_visual(

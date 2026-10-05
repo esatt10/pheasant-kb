@@ -565,6 +565,60 @@ def test_the_refusal_is_a_value_error_so_the_sdk_boundary_still_reads_it(
 
 
 # ---------------------------------------------------------------------------
+# Inventory: what the knowledge base holds
+# ---------------------------------------------------------------------------
+
+
+def test_the_overview_answers_identically_on_both_surfaces(region: dict[str, Any]) -> None:
+    over_http = _http(region, "get", "/knowledge-base/overview")
+    over_mcp = region["tools"].describe_knowledge_base(region["kb"])
+
+    assert over_http == over_mcp
+    assert over_mcp["totals"]["documents"] == len(CORPUS)
+    assert [s["name"] for s in over_mcp["sources"]] == ["docs"]
+
+
+@pytest.mark.parametrize(
+    ("params", "kwargs"),
+    [
+        ({}, {}),
+        ({"path_contains": "GUIDE/"}, {"path_contains": "GUIDE/"}),
+        (
+            {"extension": ["MD"], "limit": 2, "offset": 1},
+            {"extensions": ["MD"], "limit": 2, "offset": 1},
+        ),
+        ({"order": "recent", "source_name": "docs"}, {"order": "recent", "source_name": "docs"}),
+    ],
+)
+def test_documents_list_identically_on_both_surfaces(
+    region: dict[str, Any], params: dict[str, Any], kwargs: dict[str, Any]
+) -> None:
+    over_http = _http(region, "get", "/documents", params=params)
+    over_mcp = region["tools"].list_documents(region["kb"], **kwargs)
+
+    assert over_http == over_mcp
+
+
+@pytest.mark.parametrize(
+    ("params", "kwargs", "status"),
+    [
+        ({"source_name": "nowhere"}, {"source_name": "nowhere"}, 404),
+        ({"order": "random"}, {"order": "random"}, 422),
+        ({"extension": ["p*f"]}, {"extensions": ["p*f"]}, 422),
+    ],
+)
+def test_documents_refuse_with_one_text(
+    region: dict[str, Any], params: dict[str, Any], kwargs: dict[str, Any], status: int
+) -> None:
+    response = region["client"].get("/documents", params=params)
+    with pytest.raises(ServiceError) as refused:
+        region["tools"].list_documents(region["kb"], **kwargs)
+
+    assert response.status_code == status
+    assert response.json()["detail"] == str(refused.value)
+
+
+# ---------------------------------------------------------------------------
 # The matrix stays complete
 # ---------------------------------------------------------------------------
 
@@ -588,6 +642,8 @@ CONFORMED = {
     # Driven through both surfaces in tests/test_index_queue_status.py, refusal
     # text included: its fixture needs a queue-enabled region this one is not.
     "queue_status": ("GET /queue", "get_index_queue"),
+    "overview": ("GET /knowledge-base/overview", "describe_knowledge_base"),
+    "documents": ("GET /documents", "list_documents"),
 }
 
 
@@ -601,6 +657,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import assistant as assistant_service
     from pheasant.services import graph as graph_service
     from pheasant.services import index_queue as index_queue_service
+    from pheasant.services import inventory as inventory_service
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
 
@@ -611,6 +668,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         assistant_service,
         media_service,
         index_queue_service,
+        inventory_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
@@ -645,6 +703,10 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # in tests/test_search_expansion.py, refusal text included.
     public.discard("parse_expansion")
     public.discard("neighbor_filter")
+    # `documents`' argument parsing and a path helper, called inside the
+    # operations and by the assistant that renders their result.
+    public.discard("normalize_extensions")
+    public.discard("extension_of")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

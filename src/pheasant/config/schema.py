@@ -949,6 +949,20 @@ class RetrievalSettings(ModelMixin):
 
 
 @dataclass
+class AssistantInventorySettings(ModelMixin):
+    """Questions like "list the sources", answered from the index, not a search.
+    ``mode``: ``auto`` (rules and ``@pheasant``), ``keyword`` (``@pheasant`` only)
+    or ``off``. ``max_items`` caps a listing."""
+
+    mode: str = "auto"
+    max_items: int = 50
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"auto", "keyword", "off"}:
+            raise ValueError("assistant.inventory.mode must be 'auto', 'keyword' or 'off'")
+
+
+@dataclass
 class AssistantSettings(ModelMixin):
     """Grounded chat over the knowledge graph (query-time only).
 
@@ -980,6 +994,8 @@ class AssistantSettings(ModelMixin):
     reasoning_effort: str | None = None
     #: Optional end-to-end request budgets and concurrent-answer admission.
     latency: AssistantLatencySettings = field(default_factory=lambda: AssistantLatencySettings())
+    #: Questions about the knowledge base itself, answered from the index.
+    inventory: AssistantInventorySettings = field(default_factory=AssistantInventorySettings)
     max_facts: int = 12
     # Which question-answering workflow runs. "auto" picks the LangGraph
     # agent when the [agent] extra is installed AND a model is reachable,

@@ -490,7 +490,9 @@ export interface EmbeddingsStatus {
 export interface ChatAnswer {
   question: string;
   answer: string;
-  mode: "llm" | "extractive";
+  /** `inventory`: a question about the knowledge base itself, answered from
+   * the index (`describe_knowledge_base` / `list_documents`), not a search. */
+  mode: "llm" | "extractive" | "inventory";
   provider: string | null;
   model: string | null;
   credential_source: "session" | "environment" | null;
@@ -512,6 +514,17 @@ export interface ChatAnswer {
   visual?: AnswerVisual | null;
   /** What was searched when the question was a follow-up. */
   search_question?: string;
+  /** The tool result behind an `inventory` answer. */
+  inventory?: {
+    action: string;
+    trigger: "rule" | "keyword";
+    tool: string;
+    filters: Record<string, unknown>;
+    result: Record<string, unknown>;
+  };
+  /** Set when a question read close to one about the knowledge base itself
+   * but was searched instead: how to ask it explicitly with `@pheasant`. */
+  inventory_hint?: string;
 }
 
 /** One earlier exchange sent back so a follow-up can be understood. */
