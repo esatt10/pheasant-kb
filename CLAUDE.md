@@ -1005,8 +1005,11 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `hostContext.availableDisplayModes`; expanded, the shapes whose nodes are free
   to move (twelve of eighteen — not sequence, timeline, 2×2, chart, table,
   groups) can be dragged and their edges follow. The layout is view state only:
-  never sent to the host, never persisted. `tests/test_mcp_app_expand.py` drives
-  it in a real browser against the real validator.
+  never sent to the host, never persisted. Every drawn view also zooms (+, −,
+  Ctrl + wheel inline, any wheel expanded), pans (drag the background) and
+  fits, by moving the SVG `viewBox` — the same view state, and the same rule.
+  `tests/test_mcp_app_expand.py` drives it in a real browser against the real
+  validator.
 
 ### Retrieval telemetry
 
@@ -1339,6 +1342,14 @@ Each of these cost real time. They are listed because the shape recurs.
   script had grown a documented workaround for it. Fixed at the 404 handler,
   which runs after routing has already failed and therefore cannot shadow an
   API route, the `/mcp` mount, or a real asset.
+  That fix was half of it: a 404 handler only sees paths *no* route matched,
+  and six tabs share their path with a GET API route (`/graph`, `/memory`,
+  `/evaluation`, `/tuning`, `/sources`, `/config`), so reloading any of them
+  still showed that route's JSON. A middleware now serves the app for exactly
+  those paths when the request is a document navigation (`Sec-Fetch-Mode:
+  navigate`, or `text/html` first in `Accept` for a client that sends no
+  fetch metadata); `fetch()` and `curl` get the API unchanged, and
+  `UI_ROUTES` is held to `App.tsx`'s router by a test that parses it.
 - **A resumed batch that *skips* is not a resumed batch.** Reusing stored
   trials by `continue`-ing past them left the decision with an empty comparison
   set, so a batch that had in fact evaluated everything reported

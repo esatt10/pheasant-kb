@@ -491,8 +491,15 @@ select.text-input {
 .notebook {
   display: grid;
   /* Panes are separated by drag handles, so the track list alternates
-     pane / resizer / pane / resizer / pane. */
+     pane / resizer / pane / resizer / pane.
+
+     Every child is placed by *name*. Auto-placement put each child in the
+     next free track, so a collapsed pane (whose resizer is not rendered) or a
+     breakpoint that hid the rail shifted every later pane one track left:
+     the chat landed in an 8px column and the graph in the chat's. A named
+     area cannot be taken by a sibling. */
   grid-template-columns: var(--rail, 280px) 8px minmax(0, 1fr) 8px var(--panel, 400px);
+  grid-template-areas: "rail rgrip main pgrip panel";
   height: 100%;
   gap: 6px;
   padding: 12px;
@@ -1246,6 +1253,42 @@ select.text-input {
   inset: 0;
 }
 
+.graph-zoom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.graph-zoom__btn {
+  width: 30px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.graph-zoom__btn--wide {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.graph-zoom__btn:hover {
+  background: var(--bg-hover);
+}
+
 .graph-overlay {
   position: absolute;
   left: 10px;
@@ -1501,8 +1544,22 @@ select.text-input {
 
 /* --------------------------------------------------- collapsible rail */
 
+.notebook > .pane--rail { grid-area: rail; }
+.notebook > .resizer--rail { grid-area: rgrip; }
+.notebook > .pane--main { grid-area: main; }
+.notebook > .resizer--panel { grid-area: pgrip; }
+.notebook > .pane--panel { grid-area: panel; }
+
 .notebook--rail-collapsed {
-  grid-template-columns: 44px 8px minmax(0, 1fr) 8px var(--panel, 400px);
+  grid-template-columns: 44px 0 minmax(0, 1fr) 8px var(--panel, 400px);
+}
+
+.notebook--panel-collapsed {
+  grid-template-columns: var(--rail, 280px) 8px minmax(0, 1fr) 0 44px;
+}
+
+.notebook--rail-collapsed.notebook--panel-collapsed {
+  grid-template-columns: 44px 0 minmax(0, 1fr) 0 44px;
 }
 
 .rail-collapsed__body {
@@ -2057,21 +2114,34 @@ select.text-input {
 /* ------------------------------------------------------------ responsive */
 
 @media (max-width: 1180px) {
-  .notebook {
-    grid-template-columns: minmax(0, 1fr) var(--panel, 380px);
+  .notebook,
+  .notebook--rail-collapsed {
+    grid-template-columns: minmax(0, 1fr) 8px var(--panel, 380px);
+    grid-template-areas: "main pgrip panel";
   }
-  .notebook .pane--rail {
+  .notebook--panel-collapsed,
+  .notebook--rail-collapsed.notebook--panel-collapsed {
+    grid-template-columns: minmax(0, 1fr) 0 44px;
+    grid-template-areas: "main pgrip panel";
+  }
+  .notebook .pane--rail,
+  .notebook .resizer--rail {
     display: none;
   }
 }
 
 @media (max-width: 860px) {
   .notebook,
+  .notebook--rail-collapsed,
+  .notebook--panel-collapsed,
+  .notebook--rail-collapsed.notebook--panel-collapsed,
   .notebook--no-rail,
   .notebook--no-panel {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main";
   }
-  .notebook .pane--panel {
+  .notebook .pane--panel,
+  .notebook .resizer--panel {
     display: none;
   }
   .topbar__kb {
@@ -2508,6 +2578,14 @@ select.text-input {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+.graph-page--side-collapsed {
+  grid-template-columns: 1fr 44px;
+}
+
+.graph-page__tabs {
+  align-items: center;
 }
 
 .graph-page__side {

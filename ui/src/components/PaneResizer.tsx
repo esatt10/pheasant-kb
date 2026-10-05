@@ -70,7 +70,10 @@ export function PaneResizer({
 
   return (
     <div
-      className="resizer"
+      // The variable names the grid area this handle occupies (`--rail` ->
+      // `resizer--rail`), so the layout places it by name rather than by its
+      // position among whichever siblings happen to be rendered.
+      className={`resizer resizer${variable}`}
       role="separator"
       aria-orientation="vertical"
       aria-label={label}

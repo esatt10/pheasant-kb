@@ -302,7 +302,7 @@ def test_the_button_exists_only_where_the_host_offers_fullscreen(browser: Any) -
     page, frame = _open(browser, "flow", modes=("inline",))
     try:
         frame.locator("svg g.node").first.wait_for()
-        assert frame.locator("button.tool").count() == 0
+        assert frame.locator("button.tool", has_text="Expand").count() == 0
         assert _log(page, "ui/request-display-mode") == []
     finally:
         page.close()
@@ -385,5 +385,86 @@ def test_a_new_result_leaves_the_mode_rather_than_stranding_the_host(browser: An
         # than stranding the host in fullscreen on nothing.
         frame.locator("body:not(.fs)").wait_for()
         _host_in(page, "inline")
+    finally:
+        page.close()
+
+
+# --------------------------------------------------------------------------
+# Zoom, pan and fit: the viewBox is the camera, inline and expanded
+# --------------------------------------------------------------------------
+
+
+def _view(frame: Any) -> list[float]:
+    raw = frame.locator(".diagram svg").first.get_attribute("viewBox")
+    # The browser serializes a viewBox through float32; compare what it means.
+    return [round(float(part), 2) for part in raw.split()]
+
+
+def test_zoom_in_and_out_then_fit_restores_the_framing(browser: Any) -> None:
+    """Available on every diagram whether or not the host can expand it."""
+
+    page, frame = _open(browser, "flow", modes=("inline",))
+    try:
+        home = _view(frame)
+        frame.locator("button.tool[aria-label^='Zoom in']").click()
+        zoomed = _view(frame)
+        assert zoomed[2] < home[2] and zoomed[3] < home[3], "zooming in narrows the view"
+        frame.locator("button.tool[aria-label='Zoom out']").click()
+        frame.locator("button.tool[aria-label='Zoom out']").click()
+        assert _view(frame)[2] > zoomed[2]
+        frame.locator("button.tool", has_text="Fit").click()
+        assert _view(frame) == home, "fit returns to the drawn framing exactly"
+        assert page.errors == []
+    finally:
+        page.close()
+
+
+def test_dragging_the_background_pans_and_asks_nothing(browser: Any) -> None:
+    page, frame = _open(browser, "flow")
+    try:
+        frame.locator("button.tool[aria-label^='Zoom in']").click()
+        before = _view(frame)
+        box = frame.locator(".diagram svg").first.bounding_box()
+        # A corner of the canvas: background, not a node.
+        x, y = box["x"] + 6, box["y"] + 6
+        page.mouse.move(x, y)
+        page.mouse.down()
+        page.mouse.move(x + 40, y + 25, steps=8)
+        page.mouse.up()
+        after = _view(frame)
+        assert after[0] < before[0] and after[1] < before[1], "the view follows the drag"
+        assert after[2:] == before[2:], "panning does not zoom"
+        assert len(_messages(page, 0)) == 0, "a pan is not a question about a node"
+    finally:
+        page.close()
+
+
+def test_ctrl_wheel_zooms_inline_and_a_plain_wheel_does_not(browser: Any) -> None:
+    """Inline, a plain wheel must still scroll the conversation past the diagram."""
+
+    page, frame = _open(browser, "flow")
+    try:
+        home = _view(frame)
+        box = frame.locator(".diagram svg").first.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.wheel(0, -200)
+        assert _view(frame) == home
+        page.keyboard.down("Control")
+        page.mouse.wheel(0, -200)
+        page.keyboard.up("Control")
+        assert _view(frame)[2] < home[2]
+    finally:
+        page.close()
+
+
+def test_expanded_zoom_and_fit_return_to_the_stage(browser: Any) -> None:
+    page, frame = _open(browser, "flow")
+    try:
+        _expand(page, frame)
+        stage = _view(frame)
+        frame.locator("button.tool[aria-label^='Zoom in']").click()
+        assert _view(frame)[2] < stage[2]
+        frame.locator("button.tool", has_text="Fit").click()
+        assert _view(frame) == stage
     finally:
         page.close()
