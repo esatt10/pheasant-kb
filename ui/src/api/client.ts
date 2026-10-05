@@ -28,6 +28,8 @@ import type {
   SyncResult,
   TaxonomyResponse,
   WorkflowCatalog,
+  IndexQueueStatus,
+  ReadyStatus,
 } from "./types";
 import type {
   ConfigSection,
@@ -144,10 +146,16 @@ const GRAPH_LINK_LIMIT = numericEnv(import.meta.env.VITE_PHEASANT_GRAPH_LINK_LIM
  */
 export class ApiError extends Error {
   readonly status: number;
+  /** The service layer's stable refusal code (`REGION_BUSY`, …), when it sent one. */
+  readonly code: string | null;
+  /** Whether retrying the same call can succeed — `REGION_BUSY` yes, `SNAPSHOT_DRIFTED` no. */
+  readonly retryable: boolean;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null, retryable = false) {
     super(message);
     this.status = status;
+    this.code = code;
+    this.retryable = retryable;
   }
 }
 
@@ -180,12 +188,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) signalApiAuthRequired();
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
+    let code: string | null = null;
+    let retryable = false;
     try {
-      detail = errorDetail(await response.json(), detail);
+      const body = await response.json();
+      detail = errorDetail(body, detail);
+      if (body && typeof body === "object") {
+        const fields = body as { code?: unknown; retryable?: unknown };
+        code = typeof fields.code === "string" ? fields.code : null;
+        retryable = fields.retryable === true;
+      }
     } catch {
       /* response had no JSON body */
     }
-    throw new ApiError(detail, response.status);
+    throw new ApiError(detail, response.status, code, retryable);
   }
   return (await response.json()) as T;
 }
@@ -211,6 +227,21 @@ export interface GraphQueryOptions {
 
 export const api = {
   health: () => request<{ status: string }>("/health"),
+  /**
+   * `/ready` answers 503 *with a body that says why* (draining, standby, an
+   * unreachable store), and that body is the whole point of asking — so this
+   * reads it whatever the status, rather than throwing it away as an error.
+   */
+  ready: async (): Promise<ReadyStatus> => {
+    const response = await fetch(`${API_BASE}/ready`, { headers: requestHeaders() });
+    try {
+      return (await response.json()) as ReadyStatus;
+    } catch {
+      return { status: "not_ready", reason: `${response.status} ${response.statusText}` };
+    }
+  },
+  /** Index-queue tasks: what a `queued` sync is doing before an indexer claims it. */
+  indexQueue: () => request<IndexQueueStatus>("/queue"),
   overview: () => request<Overview>("/overview"),
 
   // Graph

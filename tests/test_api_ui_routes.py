@@ -930,3 +930,57 @@ def test_a_real_api_route_still_wins_over_the_fallback(
     response = client.get("/tuning/parameters", headers={"accept": "text/html"})
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
+
+
+def test_refreshing_a_tab_that_is_also_an_api_route_loads_the_ui(
+    tmp_path, loaded_config, monkeypatch
+) -> None:
+    """/sources, /graph and /config are UI tabs *and* GET API routes.
+
+    The 404 fallback never reaches them, because routing succeeds - so a
+    browser refreshing the Sources tab was answered by the API and showed
+    JSON. A document navigation gets the shell; everything else is unchanged.
+    """
+
+    app = _app_with_ui(tmp_path, loaded_config, monkeypatch)
+    client = TestClient(app)
+    navigate = {"sec-fetch-mode": "navigate", "accept": "text/html,application/xhtml+xml,*/*"}
+    routes = ("/sources", "/graph", "/config", "/memory", "/evaluation", "/tuning", "/sources/")
+    for route in routes:
+        response = client.get(route, headers=navigate)
+        assert response.status_code == 200, route
+        assert "text/html" in response.headers["content-type"], route
+    # No Sec-Fetch headers (an older browser): HTML asked for first still loads it.
+    legacy = client.get("/sources", headers={"accept": "text/html,application/xhtml+xml"})
+    assert "text/html" in legacy.headers["content-type"]
+
+
+def test_the_ui_and_api_clients_still_get_data_from_those_paths(
+    tmp_path, loaded_config, monkeypatch
+) -> None:
+    app = _app_with_ui(tmp_path, loaded_config, monkeypatch)
+    client = TestClient(app)
+    # The UI's own fetch: Sec-Fetch-Mode cors, Accept */*.
+    fetched = client.get("/sources", headers={"sec-fetch-mode": "cors", "accept": "*/*"})
+    assert "application/json" in fetched.headers["content-type"]
+    # curl, an agent, a script.
+    for headers in ({}, {"accept": "application/json"}, {"accept": "*/*"}):
+        response = client.get("/sources", headers=headers)
+        assert "application/json" in response.headers["content-type"], headers
+    # Only exact UI routes: a sub-resource is data even when navigated to.
+    nested = client.get("/tuning/parameters", headers={"sec-fetch-mode": "navigate"})
+    assert "application/json" in nested.headers["content-type"]
+
+
+def test_the_server_knows_every_route_the_ui_router_declares() -> None:
+    """A tab added to App.tsx and not to UI_ROUTES refreshes into JSON again."""
+
+    import re
+
+    from pheasant.api.app import UI_ROUTES
+
+    app_tsx = (Path(__file__).resolve().parents[1] / "ui" / "src" / "App.tsx").read_text(
+        encoding="utf-8"
+    )
+    declared = set(re.findall(r'<Route path="(/[^"]*)"', app_tsx)) - {"/"}
+    assert declared == set(UI_ROUTES)

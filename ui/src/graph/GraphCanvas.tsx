@@ -152,8 +152,62 @@ export function GraphCanvas({
     selectedRef.current = selectedId;
   }, [selectedId, elements.length]);
 
+  // A pane that was collapsed, or resized by its handle, changes the canvas's
+  // size without a window resize, and Cytoscape only measures on the latter:
+  // until told, it keeps drawing into the old box and clicks land beside the
+  // nodes they aim at. A canvas that first rendered at zero size (a hidden
+  // tab, a collapsed pane) is also fitted once it has a real size.
+  const shellRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell || typeof ResizeObserver === "undefined") return;
+    let hadSize = shell.clientWidth > 0 && shell.clientHeight > 0;
+    const observer = new ResizeObserver(() => {
+      const cy = cyRef.current;
+      if (!cy) return;
+      cy.resize();
+      const hasSize = shell.clientWidth > 0 && shell.clientHeight > 0;
+      if (hasSize && !hadSize) cy.fit(undefined, 30);
+      hadSize = hasSize;
+    });
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, []);
+
+  const zoomBy = (factor: number) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const level = Math.min(cy.maxZoom(), Math.max(cy.minZoom(), cy.zoom() * factor));
+    cy.animate(
+      { zoom: { level, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } } },
+      { duration: 160, easing: "ease-out" },
+    );
+  };
+  const fitView = () => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const visible = cy.elements(":visible");
+    cy.animate(
+      { fit: { eles: visible.nonempty() ? visible : cy.elements(), padding: 30 } },
+      { duration: 220, easing: "ease-out" },
+    );
+  };
+
   return (
-    <div className="graph-canvas-shell">
+    <div className="graph-canvas-shell" ref={shellRef}>
+      {/* Wheel and drag zoom and pan as before; these are the same moves for
+          a trackpad that has no wheel, a keyboard, and anyone who got lost. */}
+      <div className="graph-zoom" role="group" aria-label="Zoom and pan">
+        <button className="graph-zoom__btn" onClick={() => zoomBy(1.3)} title="Zoom in" aria-label="Zoom in">
+          +
+        </button>
+        <button className="graph-zoom__btn" onClick={() => zoomBy(1 / 1.3)} title="Zoom out" aria-label="Zoom out">
+          −
+        </button>
+        <button className="graph-zoom__btn graph-zoom__btn--wide" onClick={fitView} title="Fit the whole graph in view" aria-label="Fit to view">
+          Fit
+        </button>
+      </div>
       {layouting ? <div className="graph-busy">Arranging graph…</div> : null}
       {columns ? <EdgeKey links={links} drawn={columns.columnOf} /> : null}
       <CytoscapeComponent
@@ -161,7 +215,9 @@ export function GraphCanvas({
         stylesheet={stylesheet}
         layout={layout as never}
         style={{ width: "100%", height: "100%" }}
-        minZoom={0.08}
+        // Low enough that "Fit" can show a few thousand nodes whole; the
+        // first view still fits at whatever scale the layout needs.
+        minZoom={0.02}
         maxZoom={3}
         cy={(cy: Core) => {
           cyRef.current = cy;

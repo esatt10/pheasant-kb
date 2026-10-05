@@ -141,7 +141,10 @@ pheasant-kb/
 │   │                            code and a retryable flag), retrieval,
 │   │                            graph, assistant, ingestion (submission and
 │   │                            receipts), snapshots (seal and the drift
-│   │                            refusal), media (image bytes by node)
+│   │                            refusal), media (image bytes by node),
+│   │                            index_queue (the pre-claim interval: what
+│   │                            a published sync is doing before an
+│   │                            indexer claims it)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -162,7 +165,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 156 pytest modules, offline by design
+└── tests/                     ← 157 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1002,8 +1005,11 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `hostContext.availableDisplayModes`; expanded, the shapes whose nodes are free
   to move (twelve of eighteen — not sequence, timeline, 2×2, chart, table,
   groups) can be dragged and their edges follow. The layout is view state only:
-  never sent to the host, never persisted. `tests/test_mcp_app_expand.py` drives
-  it in a real browser against the real validator.
+  never sent to the host, never persisted. Every drawn view also zooms (+, −,
+  Ctrl + wheel inline, any wheel expanded), pans (drag the background) and
+  fits, by moving the SVG `viewBox` — the same view state, and the same rule.
+  `tests/test_mcp_app_expand.py` drives it in a real browser against the real
+  validator.
 
 ### Retrieval telemetry
 
@@ -1120,6 +1126,17 @@ store in a fleet is Postgres, which a serving replica can already write. Only
 the filesystem was ever the problem. Two refusals, split by what a caller
 should do: `LANDING_ZONE_UNWRITABLE` (not retryable — an operator must change a
 mount) and `LANDING_SERVICE_UNAVAILABLE` (retryable — the writer was down).
+
+**A published sync is visible before it is claimed.** A sync requested where
+nothing indexes answers `status: queued` and becomes a row in `index_tasks`,
+not a job — and for as long as no indexer claimed it, every surface used to
+show nothing at all, so a person saw a button that did nothing and an agent's
+ingest barrier saw `still_accepted` hold for no stated reason.
+`services/index_queue.py` names the interval (`GET /queue`, MCP
+`get_index_queue`): each task is `awaiting_claim`, `retry_scheduled`,
+`claimed`, `claim_lapsed` or `dead`, from its row and the clock. A backend that
+can count but not list (NATS) says `listing: "unavailable"`, never an empty
+list. The web UI's banner, jobs tray and Sources badge read it.
 
 **The graph handoff is announced, and the poll is the backstop.** Each commit
 publishes a content-addressed `generation_id` in the publication record and,
@@ -1325,6 +1342,14 @@ Each of these cost real time. They are listed because the shape recurs.
   script had grown a documented workaround for it. Fixed at the 404 handler,
   which runs after routing has already failed and therefore cannot shadow an
   API route, the `/mcp` mount, or a real asset.
+  That fix was half of it: a 404 handler only sees paths *no* route matched,
+  and six tabs share their path with a GET API route (`/graph`, `/memory`,
+  `/evaluation`, `/tuning`, `/sources`, `/config`), so reloading any of them
+  still showed that route's JSON. A middleware now serves the app for exactly
+  those paths when the request is a document navigation (`Sec-Fetch-Mode:
+  navigate`, or `text/html` first in `Accept` for a client that sends no
+  fetch metadata); `fetch()` and `curl` get the API unchanged, and
+  `UI_ROUTES` is held to `App.tsx`'s router by a test that parses it.
 - **A resumed batch that *skips* is not a resumed batch.** Reusing stored
   trials by `continue`-ing past them left the decision with an empty comparison
   set, so a batch that had in fact evaluated everything reported

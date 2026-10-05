@@ -118,6 +118,7 @@ same thing.
 | Submit documents with a receipt | — | `POST /ingest/submit` | — | `submit_documents` |
 | Receipt status | — | `GET /ingest/status` | — | `get_ingest_status` |
 | Cross the index barrier | — | `POST /ingest/acknowledge` | — | `acknowledge_ingest` |
+| Index queue (pre-claim) | `pheasant queue status` | `GET /queue` | Jobs tray, Sources | `get_index_queue` |
 | Reconcile submissions | — | `GET /ingest/reconcile` | — | `reconcile_ingest` |
 | Seal a snapshot | — | `POST /snapshots/seal` | — | `seal_snapshot` |
 | Resolve a snapshot | — | `GET /snapshots/{id}` | — | `get_snapshot` |

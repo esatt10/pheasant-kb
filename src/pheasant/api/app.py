@@ -1437,6 +1437,10 @@ def create_app(
             if request.method != "GET" or not getattr(request.app.state, "ui_dist", None):
                 return False
             path = request.url.path
+            if path.rstrip("/") in UI_ROUTES and is_document_navigation(request):
+                # The shell, not the data: `_ui_navigation` answers these with
+                # index.html before any API handler runs.
+                return True
             return path in {"/", "/index.html", "/pheasant.png"} or path.startswith("/assets/")
 
         @app.middleware("http")
@@ -5321,6 +5325,32 @@ def _mcp_asgi_app(config: PheasantConfig):
         return None
 
 
+#: The bundled UI's client-side routes (`ui/src/App.tsx`). Three of them are
+#: also GET API routes (`/sources`, `/graph`, `/config`), so the 404 fallback
+#: below never reaches them: a browser refreshing the Sources tab was answered
+#: by the API and shown JSON. `tests/test_api_ui_routes.py` reads App.tsx and
+#: fails when this set and the router disagree.
+UI_ROUTES = frozenset({"/graph", "/memory", "/evaluation", "/tuning", "/sources", "/config"})
+
+
+def is_document_navigation(request: Request) -> bool:
+    """A browser loading a page, as opposed to anything calling the API.
+
+    `Sec-Fetch-Mode: navigate` is what every current browser sends for a
+    top-level load and never for `fetch`, so it decides when present. Without
+    it (an older browser, a proxy that strips it) a navigation is recognised
+    by asking for HTML *first*: browsers lead their navigation `Accept` with
+    `text/html`, while `fetch` sends `*/*` and API clients `application/json`.
+    The UI's own requests therefore still get JSON from these same paths.
+    """
+
+    mode = request.headers.get("sec-fetch-mode")
+    if mode is not None:
+        return mode == "navigate"
+    accept = request.headers.get("accept", "")
+    return accept.split(",", 1)[0].strip().lower() == "text/html"
+
+
 def _mount_ui(app: FastAPI, config: PheasantConfig) -> None:
     """Optionally serve a prebuilt UI bundle (Option B in the design doc).
 
@@ -5345,6 +5375,21 @@ def _mount_ui(app: FastAPI, config: PheasantConfig) -> None:
     app.state.ui_dist = str(target)
 
     index = target / "index.html"
+
+    @app.middleware("http")
+    async def _ui_navigation(request: Request, call_next: Any) -> Response:
+        """Refreshing a UI tab whose path is also an API route loads the UI.
+
+        Only a top-level document load of an exact UI route is answered here;
+        a `fetch` from the UI, `curl`, an agent, a POST and every other path
+        go to routing untouched, so no API answer changes for any client that
+        asked for data.
+        """
+
+        path = request.url.path.rstrip("/") or "/"
+        if request.method == "GET" and path in UI_ROUTES and is_document_navigation(request):
+            return FileResponse(index)
+        return await call_next(request)
 
     @app.exception_handler(404)
     async def _spa_fallback(request: Request, exc: Any) -> Response:

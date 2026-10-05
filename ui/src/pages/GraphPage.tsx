@@ -33,6 +33,24 @@ import { DEFAULT_DEPTH, useSession } from "../state/session";
 export function GraphPage() {
   const { state, dispatch } = useSession();
   const [tab, setTab] = useState<"overview" | "path">("overview");
+  // The side panel folds to a spine so the canvas can take the whole width;
+  // remembered for the tab, like the Notebook's panes.
+  const [sideCollapsed, setSideCollapsed] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem("pheasant.graph.sideCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSide = () =>
+    setSideCollapsed((value) => {
+      try {
+        sessionStorage.setItem("pheasant.graph.sideCollapsed", value ? "0" : "1");
+      } catch {
+        /* storage unavailable */
+      }
+      return !value;
+    });
   const [pathFrom, setPathFrom] = useState("");
   const [pathTo, setPathTo] = useState("");
   const [pathQuery, setPathQuery] = useState<{ from: string; to: string } | null>(null);
@@ -74,7 +92,7 @@ export function GraphPage() {
   const centerLabel = centerId ? (nodeById.get(centerId)?.label ?? centerId) : null;
 
   return (
-    <div className="graph-page">
+    <div className={`graph-page${sideCollapsed ? " graph-page--side-collapsed" : ""}`}>
       <section className="graph-page__canvas">
         <div className="graph-overlay">
           <HorizonControls
@@ -130,8 +148,23 @@ export function GraphPage() {
         />
       </section>
 
+      {sideCollapsed ? (
+        <aside className="graph-page__side">
+          <div className="rail-collapsed__body">
+            <button
+              className="btn btn--small btn--icon"
+              onClick={toggleSide}
+              title="Show diagnostics and path"
+              aria-label="Show graph side panel"
+            >
+              ‹
+            </button>
+            <span className="rail-collapsed__label">Diagnostics · Path</span>
+          </div>
+        </aside>
+      ) : (
       <aside className="graph-page__side">
-        <div className="tabs">
+        <div className="tabs graph-page__tabs">
           <button
             className={tab === "overview" ? "tab active" : "tab"}
             onClick={() => setTab("overview")}
@@ -140,6 +173,14 @@ export function GraphPage() {
           </button>
           <button className={tab === "path" ? "tab active" : "tab"} onClick={() => setTab("path")}>
             Path
+          </button>
+          <button
+            className="btn btn--small btn--icon"
+            onClick={toggleSide}
+            title="Collapse the side panel to give the graph the whole width"
+            aria-label="Collapse graph side panel"
+          >
+            ›
           </button>
         </div>
 
@@ -298,6 +339,7 @@ export function GraphPage() {
           </div>
         ) : null}
       </aside>
+      )}
     </div>
   );
 }

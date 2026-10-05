@@ -291,6 +291,19 @@ new question starts from the drawn layout again. And while expanded, clicking a
 node does **not** send "tell me more about …" — that message would land in a
 conversation the frame is covering; it resumes on collapse.
 
+### Zoom, pan and fit
+
+Every drawn visual has **+**, **−** and **Fit** beside its other tools. Inline,
+**Ctrl + scroll** (⌘ + scroll on a Mac) zooms around the pointer — a plain
+scroll keeps scrolling the conversation — and dragging the background pans.
+Expanded, any scroll zooms and a touch drag pans too. **Fit** frames the whole
+diagram again, including anything you dragged outside it. Like a rearranged
+layout, the zoom is a view: nothing about it is saved or sent anywhere.
+
+In the web UI the graph canvas (the **Graph** page and the notebook's graph
+panel) has the same three controls in its bottom-right corner, alongside the
+mouse wheel and drag it always had.
+
 Over MCP this is the standard `ui/request-display-mode` request. The view shows
 its Expand button only if the host lists `fullscreen` in
 `hostContext.availableDisplayModes`, so a host that cannot give it the window

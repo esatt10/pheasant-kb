@@ -1443,3 +1443,57 @@ export interface TuningMechanism {
   /** False when the score came from the offline `stub` embedder. */
   semantic?: boolean;
 }
+
+/**
+ * `GET /ready` — whether this process should be receiving traffic, and why
+ * not. Answered with a 503 *and this body* when it is not ready.
+ */
+export interface ReadyStatus {
+  status: "ready" | "not_ready" | "draining" | "standby";
+  reason?: string;
+  role?: string;
+  indexes_locally?: boolean;
+  drains_queue?: boolean;
+  leader?: boolean;
+  draining_for_seconds?: number;
+  graph_generation?: { loaded?: string | null; published?: string | null; source?: string };
+}
+
+/**
+ * Where a published sync is between being requested and being indexed. Only
+ * `claimed` means an indexer is working on it; `awaiting_claim` is the
+ * pre-claim interval a role-split region used to report as nothing at all.
+ */
+export type QueueTaskState =
+  | "awaiting_claim"
+  | "retry_scheduled"
+  | "claimed"
+  | "claim_lapsed"
+  | "dead";
+
+export interface QueueTask {
+  task_id: string;
+  source: string;
+  mode: string;
+  state: QueueTaskState;
+  enqueued_at: string | null;
+  visible_at: string | null;
+  waiting_seconds: number | null;
+  claimed_by: string | null;
+  attempts: number;
+  max_attempts: number;
+  last_error: string | null;
+  /** 1-based place in line among `awaiting_claim` tasks; null otherwise. */
+  position: number | null;
+}
+
+/** `GET /queue`. `listing: "unavailable"` means "cannot list", never "empty". */
+export interface IndexQueueStatus {
+  knowledge_base: string;
+  enabled: boolean;
+  backend: string | null;
+  listing: "complete" | "unavailable" | "not_applicable";
+  depth: Record<string, number> | null;
+  tasks: QueueTask[];
+  counts: Record<QueueTaskState, number>;
+}

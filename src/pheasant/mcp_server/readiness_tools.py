@@ -179,6 +179,13 @@ class ReadinessTools:
 
         return ingestion_service.acknowledge_indexed(self.services, knowledge_base, submission_id)
 
+    def get_index_queue(self, knowledge_base: str, limit: int = 50) -> dict:
+        """Outstanding index tasks, each with its pre-claim state."""
+
+        from pheasant.services import index_queue as index_queue_service
+
+        return index_queue_service.queue_status(self.services, knowledge_base, limit=limit)
+
     def reconcile_ingest(self, knowledge_base: str, submission_id: str | None = None) -> dict:
         """Submitted against held, with the silent-loss count named."""
 
@@ -314,6 +321,23 @@ def register_readiness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         """Cross the index barrier for receipts whose artifacts now exist."""
 
         return tools.acknowledge_ingest(knowledge_base, submission_id)
+
+    @mcp.tool()
+    @anticipated
+    def get_index_queue(knowledge_base: str, limit: int = 50) -> dict:
+        """Outstanding index tasks and whether an indexer has claimed each one.
+
+        On a fleet, ``sync_source`` answers ``status: queued``: the sync was
+        published, not run. Each task here is ``awaiting_claim`` (no indexer
+        has taken it yet; watch ``waiting_seconds``), ``retry_scheduled``,
+        ``claimed``, ``claim_lapsed`` (its indexer stopped heartbeating) or
+        ``dead``. ``listing: "unavailable"`` means the backend can count its
+        backlog but not list it, so an empty ``tasks`` there is not "nothing
+        waiting". With the queue off, syncs run where they are asked and this
+        reports ``enabled: false``.
+        """
+
+        return tools.get_index_queue(knowledge_base, limit)
 
     @mcp.tool()
     @anticipated

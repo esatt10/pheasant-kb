@@ -125,6 +125,9 @@
   .tool svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6;
     stroke-linecap: round; stroke-linejoin: round; }
   .hint { font-size: 12px; color: var(--muted); }
+  .tool.icon { padding: 2px 7px; }
+  .diagram svg.pannable { cursor: grab; }
+  .diagram svg.panning { cursor: grabbing; }
   /* Expanded: the visual is the whole page. Everything else in the result is
      still there, and is shown again on collapse. */
   body.fs { overflow: hidden; }
@@ -451,6 +454,7 @@
     holder.__tools = tools;
     holder.__body = body;
     holder.__canvas = body.firstElementChild instanceof SVGElement ? body.firstElementChild : null;
+    if (holder.__canvas) attachView(holder);
     visuals.add(holder);
     const grounding = visual.grounding || {};
     holder.append(el("p", { class: "muted" },
@@ -483,6 +487,9 @@
     expand: "M9.5 2H14v4.5 M6.5 14H2V9.5 M14 2 9 7 M2 14l5-5",
     collapse: "M14 6.5H9.5V2 M2 9.5h4.5V14 M9.5 6.5 14 2 M6.5 9.5 2 14",
     reset: "M2.5 8a5.5 5.5 0 1 0 1.8-4 M2.5 2.5v3h3",
+    zoomin: "M7 4.5v5 M4.5 7h5 M11 11l3 3 M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10z",
+    zoomout: "M4.5 7h5 M11 11l3 3 M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10z",
+    fit: "M2 5.5V2h3.5 M10.5 2H14v3.5 M14 10.5V14h-3.5 M5.5 14H2v-3.5",
   };
   function tool(label, icon, title, onClick) {
     const icons = svg("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" });
@@ -498,6 +505,12 @@
     const tools = holder && holder.__tools;
     if (!tools) return;
     tools.replaceChildren();
+    if (holder.__canvas) {
+      tools.append(
+        iconTool("zoomin", "Zoom in (or Ctrl + scroll)", () => zoomBy(holder, 1.25)),
+        iconTool("zoomout", "Zoom out", () => zoomBy(holder, 0.8)),
+        tool("Fit", "fit", "Fit the whole diagram in view", () => fitView(holder)));
+    }
     if (holder === expanded) {
       if (movable(holder)) {
         tools.append(el("span", { class: "hint" }, "Drag a node to move it"),
@@ -512,6 +525,107 @@
           .catch(() => { requested = null; });
       }));
     }
+  }
+
+  function iconTool(icon, title, onClick) {
+    const button = tool("", icon, title, onClick);
+    button.classList.add("icon");
+    return button;
+  }
+
+  // ---- zoom, pan, fit: the viewBox is the camera
+  //
+  // Every diagram is an SVG drawn in its own units, so zooming and panning
+  // move the viewBox and nothing else: no node is re-laid out, a dragged
+  // node keeps where it was put, and citations stay attached to their
+  // elements. Fit returns to the framing the diagram would have without
+  // any of it - the stage when expanded, the drawn extent inline.
+
+  function viewOf(canvas) {
+    const box = canvas.viewBox.baseVal;
+    return { x: box.x, y: box.y, w: box.width, h: box.height };
+  }
+  function setView(canvas, view) {
+    canvas.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
+  }
+  function homeOf(holder) {
+    const canvas = holder.__canvas;
+    if (!canvas.__home) canvas.__home = viewOf(canvas);
+    return canvas.__home;
+  }
+
+  function zoomBy(holder, factor, at) {
+    const canvas = holder.__canvas;
+    if (!canvas || !canvas.viewBox.baseVal.width) return;
+    const home = homeOf(holder), view = viewOf(canvas);
+    // Between an eighth of the diagram and four times its frame.
+    const w = Math.min(home.w * 4, Math.max(home.w / 8, view.w / factor));
+    const k = w / view.w;
+    const cx = at ? at.x : view.x + view.w / 2, cy = at ? at.y : view.y + view.h / 2;
+    setView(canvas, { x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k, w, h: view.h * k });
+    canvas.classList.add("pannable");
+  }
+
+  function fitView(holder) {
+    const canvas = holder.__canvas;
+    if (!canvas) return;
+    canvas.classList.remove("pannable");
+    if (holder === expanded && movable(holder)) { fitStage(holder); return; }
+    // Inline, the framing to return to is the one the diagram was drawn in -
+    // unless a node was moved while expanded, when the drawn extent no
+    // longer holds every node and has to be measured again.
+    const moved = canvas.__scene && scene(canvas).nodes.some((r) => r.dx || r.dy);
+    if (moved && !canvas.__fixed) { fitExtent(canvas); return; }
+    if (canvas.__home) setView(canvas, canvas.__home);
+  }
+
+  function attachView(holder) {
+    const canvas = holder.__canvas;
+    homeOf(holder);
+    const point = (event) => {
+      const matrix = canvas.getScreenCTM();
+      return matrix ? new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()) : null;
+    };
+    // Inline, the wheel scrolls the conversation unless Ctrl/⌘ is held (as
+    // on a map in a page); expanded, the diagram is the page and the wheel
+    // zooms it.
+    canvas.addEventListener("wheel", (event) => {
+      if (!(event.ctrlKey || event.metaKey || holder === expanded)) return;
+      event.preventDefault();
+      zoomBy(holder, Math.exp(-event.deltaY * 0.0015), point(event));
+    }, { passive: false });
+    // Panning drags the background; a node still belongs to its own drag
+    // (expanded) or click (inline). A touch pans only when expanded, so a
+    // finger scrolling past an inline diagram still scrolls.
+    let pan = null, swallow = false;
+    canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest && event.target.closest("g.node")) return;
+      if (event.pointerType === "touch" && holder !== expanded) return;
+      pan = { id: event.pointerId, x: event.clientX, y: event.clientY, view: viewOf(canvas), moved: false };
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!pan || event.pointerId !== pan.id) return;
+      const dx = event.clientX - pan.x, dy = event.clientY - pan.y;
+      if (!pan.moved) {
+        if (Math.hypot(dx, dy) < 4) return;
+        pan.moved = true;
+        canvas.classList.add("panning", "pannable");
+        try { canvas.setPointerCapture(pan.id); } catch (_) { /* still works */ }
+      }
+      const rect = canvas.getBoundingClientRect();
+      const sx = pan.view.w / (rect.width || 1), sy = pan.view.h / (rect.height || 1);
+      setView(canvas, { x: pan.view.x - dx * sx, y: pan.view.y - dy * sy, w: pan.view.w, h: pan.view.h });
+    });
+    const finish = (event) => {
+      if (!pan || event.pointerId !== pan.id) return;
+      if (pan.moved) { swallow = true; setTimeout(() => { swallow = false; }, 0); }
+      canvas.classList.remove("panning");
+      pan = null;
+    };
+    canvas.addEventListener("pointerup", finish);
+    canvas.addEventListener("pointercancel", finish);
+    canvas.addEventListener("click", (event) => { if (swallow) event.stopPropagation(); }, true);
   }
 
   function collapse() {
@@ -643,6 +757,7 @@
     const x = (base.w - w) / 2, y = (base.h - h) / 2;
     canvas.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
     canvas.__stage = { x, y, w, h };
+    canvas.__home = { x, y, w, h };
     // A window that shrank must not strand a node outside it.
     for (const record of scene(canvas).nodes) clampInto(canvas, record, record.dx, record.dy, true);
   }
@@ -669,6 +784,7 @@
     }
     const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
     canvas.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+    canvas.__home = { x: x0, y: y0, w, h };
     canvas.setAttribute("width", w); canvas.setAttribute("height", h);
     canvas.style.maxWidth = w + "px"; canvas.style.minWidth = Math.round(w * 0.7) + "px";
   }

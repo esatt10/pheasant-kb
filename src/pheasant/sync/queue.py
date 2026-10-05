@@ -150,6 +150,16 @@ class TaskQueue:
     def depth(self) -> dict[str, int]:
         raise NotImplementedError
 
+    def outstanding(self, limit: int = 50) -> list[dict[str, Any]] | None:
+        """Unfinished tasks, oldest first, or ``None`` when this backend cannot list them.
+
+        ``None`` is not "empty". A broker that can count its backlog but not
+        enumerate it (JetStream, without consuming) has to say *unknown*, or a
+        reader shows a queue with nothing waiting while three syncs sit in it.
+        """
+
+        return None
+
     def close(self) -> None:
         """Release backend resources. Default no-op."""
 
@@ -394,6 +404,22 @@ class LocalQueue(TaskQueue):
         ):
             counts[str(row["status"])] = int(row["c"])
         return counts
+
+    def outstanding(self, limit: int = 50) -> list[dict[str, Any]] | None:
+        """Pending, in-flight and dead rows, oldest first: the pre-claim backlog.
+
+        Read straight off the claim index's leading column. Nothing here
+        claims or touches a row, so a reader polling it cannot perturb the
+        race argument above.
+        """
+
+        rows = self.state.rows(
+            f"SELECT id, {', '.join(self.EXTRA_COLUMNS)}, status, attempts, max_attempts, "
+            f"owner, visible_at, enqueued_at, updated_at, last_error FROM {self.TABLE} "
+            "WHERE status IN (?,?,?) ORDER BY enqueued_at, id LIMIT ?",
+            (PENDING, INFLIGHT, DEAD, max(1, int(limit))),
+        )
+        return [dict(row) for row in rows]
 
     def requeue_dead(self) -> int:
         """Replay dead-lettered tasks after the cause is fixed.

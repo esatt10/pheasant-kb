@@ -47,6 +47,8 @@ export interface SessionState {
   layout: GraphLayout;
   /** Sources rail collapsed to a spine, giving the other panes its width. */
   railCollapsed: boolean;
+  /** Graph/facts/node panel collapsed to a spine, giving the chat its width. */
+  panelCollapsed: boolean;
   /** Nodes the last answer surfaced; non-empty means the canvas is filtered. */
   surfacedIds: string[];
   focusIds: string[];
@@ -88,6 +90,7 @@ const INITIAL: SessionState = {
   // animation on the first view of a large knowledge base.
   layout: "concentric",
   railCollapsed: false,
+  panelCollapsed: false,
   surfacedIds: [],
   focusIds: [],
   answer: null,
@@ -111,6 +114,7 @@ export type SessionAction =
   | { type: "show-all"; value: boolean }
   | { type: "set-layout"; layout: GraphLayout }
   | { type: "toggle-rail" }
+  | { type: "toggle-panel" }
   | { type: "clear-answer-filter" }
   | { type: "set-workflow"; workflow: string | null }
   | { type: "set-draft"; text: string }
@@ -173,6 +177,8 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       };
     case "toggle-rail":
       return { ...state, railCollapsed: !state.railCollapsed };
+    case "toggle-panel":
+      return { ...state, panelCollapsed: !state.panelCollapsed };
     case "set-layout":
       return { ...state, layout: action.layout };
     case "center-node":
@@ -314,6 +320,8 @@ const PERSISTED_KEYS = [
   "answerDepth",
   "railWidth",
   "panelWidth",
+  "railCollapsed",
+  "panelCollapsed",
 ] as const;
 
 function hydrate(): SessionState {
@@ -328,6 +336,8 @@ function hydrate(): SessionState {
       hiddenTypes: Array.isArray(saved.hiddenTypes) ? saved.hiddenTypes : INITIAL.hiddenTypes,
       depth: clampDepth(saved.depth ?? DEFAULT_DEPTH),
       panelTab: saved.panelTab ?? INITIAL.panelTab,
+      railCollapsed: saved.railCollapsed === true,
+      panelCollapsed: saved.panelCollapsed === true,
       workflow: saved.workflow ?? INITIAL.workflow,
       answerDepth: saved.answerDepth ?? INITIAL.answerDepth,
       railWidth: Number(saved.railWidth) || DEFAULT_RAIL_WIDTH,

@@ -126,7 +126,9 @@ export function Notebook() {
 
   return (
     <div
-      className={`notebook${state.railCollapsed ? " notebook--rail-collapsed" : ""}`}
+      className={`notebook${state.railCollapsed ? " notebook--rail-collapsed" : ""}${
+        state.panelCollapsed ? " notebook--panel-collapsed" : ""
+      }`}
       ref={layoutRef}
       style={
         {
@@ -174,7 +176,7 @@ export function Notebook() {
       />
       )}
 
-      <section className="pane">
+      <section className="pane pane--main">
         <header className="pane__header">
           <span className="pane__title">Chat</span>
           <div className="pane__actions">
@@ -214,6 +216,7 @@ export function Notebook() {
         </div>
       </section>
 
+      {state.panelCollapsed ? null : (
       <PaneResizer
         variable="--panel"
         edge="right"
@@ -224,7 +227,23 @@ export function Notebook() {
         label="Resize graph panel"
         onCommit={(width) => dispatch({ type: "set-pane-width", pane: "panel", width })}
       />
+      )}
 
+      {state.panelCollapsed ? (
+        <aside className="pane pane--panel">
+          <div className="rail-collapsed__body">
+            <button
+              className="btn btn--small btn--icon"
+              onClick={() => dispatch({ type: "toggle-panel" })}
+              title="Show the graph"
+              aria-label="Show graph panel"
+            >
+              ‹
+            </button>
+            <span className="rail-collapsed__label">Graph · Facts · Node</span>
+          </div>
+        </aside>
+      ) : (
       <aside className="pane pane--panel">
         <header className="pane__header">
           <div className="tabs" style={{ flex: 1 }}>
@@ -247,6 +266,14 @@ export function Notebook() {
               Node
             </button>
           </div>
+          <button
+            className="btn btn--small btn--icon"
+            onClick={() => dispatch({ type: "toggle-panel" })}
+            title="Collapse the graph panel to give the chat more room"
+            aria-label="Collapse graph panel"
+          >
+            ›
+          </button>
         </header>
 
         {state.panelTab === "graph" ? (
@@ -339,6 +366,7 @@ export function Notebook() {
           </div>
         ) : null}
       </aside>
+      )}
 
       {showWorkflowDialog ? (
         <div className="modal-scrim" onClick={() => setShowWorkflowDialog(false)}>
