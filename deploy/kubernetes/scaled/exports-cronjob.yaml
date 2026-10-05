@@ -48,7 +48,7 @@ spec:
             fsGroup: 10001
           containers:
             - name: export
-              image: ghcr.io/esatt10/pheasant:0.13.1
+              image: ghcr.io/esatt10/pheasant:0.13.2
               imagePullPolicy: IfNotPresent
               args: ["export", "parquet", "--config", "/config/pheasant.yaml"]
               env:
