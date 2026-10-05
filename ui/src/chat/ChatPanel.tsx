@@ -13,7 +13,12 @@ import type {
 import { historyFor, useSession } from "../state/session";
 import { AnswerBody } from "./AnswerBody";
 import { InventoryListing, listingText } from "./InventoryListing";
-import { KeywordMenu, keywordMatches } from "./KeywordMenu";
+import {
+  KeywordReference,
+  insertKeyword,
+  keywordMatches,
+  useKeywordReference,
+} from "./KeywordReference";
 import { McpAppFrame } from "./McpAppFrame";
 import { SourceStrip } from "./SourceStrip";
 
@@ -78,6 +83,10 @@ export function ChatPanel({
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
+  // The @-keyword quick reference: a floating card beside the chat column.
+  const reference = useKeywordReference();
+  const keywords = status?.keywords ?? [];
   // Keyed by turn id rather than a single ref: the effect below always needs
   // *the newest turn's* element, and turns re-render with new array
   // identities (new question appended, then the same turn updated in place
@@ -155,7 +164,12 @@ export function ChatPanel({
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // Tab completes a keyword being typed as the first word.
-    const completions = event.key === "Tab" ? keywordMatches(draft, status?.keywords ?? []) : [];
+    if (event.key === "/" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      reference.toggle();
+      return;
+    }
+    const completions = event.key === "Tab" ? keywordMatches(draft, keywords) : [];
     if (completions.length > 0) {
       event.preventDefault();
       dispatch({ type: "set-draft", text: `${completions[0].keyword} ` });
@@ -170,7 +184,7 @@ export function ChatPanel({
   const extractive = status ? !status.ready : false;
 
   return (
-    <div className="chat">
+    <div className="chat" ref={chatRef}>
       <div className="chat__scroll">
         {turns.length === 0 ? (
           <div className="chat-empty">
@@ -260,11 +274,17 @@ export function ChatPanel({
       </div>
 
       <div className="chat__composer">
-        <KeywordMenu
+        <KeywordReference
+          keywords={keywords}
           draft={draft}
-          keywords={status?.keywords ?? []}
-          onPick={(keyword) => {
-            dispatch({ type: "set-draft", text: keyword });
+          pinned={reference.open}
+          anchorRef={chatRef}
+          onClose={() => {
+            reference.setOpen(false);
+            textareaRef.current?.focus();
+          }}
+          onInsert={(text) => {
+            dispatch({ type: "set-draft", text: insertKeyword(draft, text) });
             textareaRef.current?.focus();
           }}
         />
@@ -300,6 +320,17 @@ export function ChatPanel({
           </button>
         </div>
         <div className="composer__hint">
+          {keywords.length > 0 ? (
+            <button
+              type="button"
+              className={`btn btn--small${reference.open ? " btn--active" : ""}`}
+              aria-pressed={reference.open}
+              onClick={reference.toggle}
+              title="Keyword quick reference (Ctrl+/)"
+            >
+              @ keywords
+            </button>
+          ) : null}
           {sourceFilter ? <span className="pill pill--accent">scoped to {sourceFilter}</span> : null}
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>

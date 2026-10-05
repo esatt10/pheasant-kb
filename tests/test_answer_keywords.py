@@ -324,3 +324,27 @@ def test_the_ui_knows_every_keyword_kind() -> None:
     union = types.split("export interface AnswerKeyword", 1)[1].split("}", 1)[0]
     for kind in {keyword.kind for keyword in keywords.KEYWORDS}:
         assert f'"{kind}"' in union, kind
+
+
+def test_the_reference_cards_phrases_are_still_read_from_the_index() -> None:
+    """The chat's quick-reference card lists `@pheasant` phrasings with `<…>`
+    slots. Filled in, every one must still be answered from the index: a card
+    that advertises a phrasing the reader no longer understands is worse than
+    no card."""
+
+    from pheasant.assistant import inventory
+    from tests.conftest import REPO_ROOT
+
+    card = (REPO_ROOT / "ui" / "src" / "chat" / "KeywordReference.tsx").read_text(encoding="utf-8")
+    block = card.split("export const PHEASANT_PHRASES", 1)[1].split("];", 1)[0]
+    phrases = re.findall(r'phrase: "([^"]+)"', block)
+    assert len(phrases) >= 10
+    slots = {"<name>": "notes", "<source>": "code", "<path>": "deploy.md", "<text>": "deploy"}
+    for phrase in phrases:
+        filled = phrase
+        for slot, value in slots.items():
+            filled = filled.replace(slot, value, 1)
+        filled = filled.replace("<source>", "notes")
+        assert "<" not in filled, phrase
+        read = inventory.read_question(filled, sources=["notes", "code"])
+        assert read is not None and read.action != "help", phrase

@@ -978,7 +978,10 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `@links` `@more` are `@pheasant` shorthands. First word only (several may
   lead), removed before the question is searched, wins over the request's pin,
   reported in `keywords`; `@pheasant` alone counts anywhere.
-  `tests/test_answer_keywords.py`.
+  `tests/test_answer_keywords.py`. The UI's quick reference
+  (`ui/src/chat/KeywordReference.tsx`, **@ keywords** / Ctrl+/) is a non-modal
+  card docked beside the chat column, never over it or the sources rail; its
+  `PHEASANT_PHRASES` are held to the reader by a test that fills their slots.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

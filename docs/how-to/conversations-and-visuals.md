@@ -201,9 +201,17 @@ was read in `keywords` (`used`, and `unknown` for a leading `@word` that is no
 keyword, which stays in the question), and `route.decided_by` names
 `keyword` for each axis a keyword set. `@table` alone, with no question, gets
 the help listing. `GET /assistant/status` lists the keywords this region
-answers, which is what the UI's composer offers when a message starts with
-`@`. `assistant.keywords: false` turns them off; `@pheasant` stays governed by
-`assistant.inventory.mode`.
+answers. `assistant.keywords: false` turns them off; `@pheasant` stays
+governed by `assistant.inventory.mode`.
+
+In the web UI, **@ keywords** under the chat box (or **Ctrl+/**) opens a quick
+reference: a floating card with every keyword, its example, and the
+`@pheasant` phrasings, docked beside the chat column so the conversation and
+the sources stay in view. It is not modal, so you keep typing while it is
+open. Click a keyword to start the message with it, or an example to use it;
+drag the card by its header to move it, and **Dock** puts it back. Typing
+`@` as the first word shows it on its own, narrowed to what you have typed so
+far, and **Tab** completes the first match.
 
 ## Visuals
 
