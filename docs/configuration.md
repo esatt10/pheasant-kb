@@ -1453,9 +1453,17 @@ routes there. See
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `mode` | `auto` \| `keyword` \| `off` | `auto` | `auto` reads the question with deterministic rules and honours `@pheasant`. `keyword` honours only `@pheasant`, for a region where the automatic reading is ever wrong. `off` answers everything by retrieval. |
-| `max_items` | integer | `50` | Rows a listing shows in the answer (at most 500). The tools page past it with `offset`. |
+| `max_items` | integer | `50` | Rows a listing shows in the answer (at most 500): one page. `@pheasant … page N` and `@pheasant more` page through the rest; the tools page with `offset`. |
 
 Query-time only, so a change applies to the next question.
+
+`assistant.keywords` (boolean, default `true`) turns the **first-word
+keywords** on or off: `@table`, `@list`, `@steps`, `@compare`, `@quotes`,
+`@brief` (the shape of a written answer), `@overview` / `@detailed` (length),
+`@diagram` / `@image` / any diagram shape (pictures), `@search` (the ranked
+hits, no model) and the index shorthands `@source`, `@doc`, `@docs`, `@links`,
+`@more`. Off, a leading `@word` stays in the question. See
+[first-word keywords](how-to/conversations-and-visuals.md#first-word-keywords).
 
 ### `assistant.latency` â€” request budgets and answer admission
 

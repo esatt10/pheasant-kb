@@ -33,6 +33,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from typing import Any
 
+from pheasant.persistence.graph_codec import _batched, edge_attrs
 from pheasant.persistence.graph_rows import GraphRowStore
 
 
@@ -218,6 +219,34 @@ class SqlGraph:
         # want: regrouping here meant a second pass and a second set of
         # objects over every row a hub node returns.
         return self.rows.out_edges(self.kb_id, node_ids, targets, priority_types, limit_per_source)
+
+    def in_edges_batch(self, node_ids: list[str]) -> dict[str, list[tuple[str, str, dict]]]:
+        """``{target: [(source, target, {seq: attrs})]}``: what points at each node.
+
+        A seek on ``idx_graph_edges_target`` per batch, the index the delta
+        write keeps for removing a node's incoming half. The resident graph
+        has no such index and scans its edge keys instead. A serving read
+        ("what links to this document"), so it lives here rather than in the
+        row store's write path.
+        """
+
+        state = self.rows.state
+        grouped: dict[str, list[tuple[str, str, dict]]] = {}
+        for batch in _batched(sorted(set(node_ids))):
+            clause, params = state.dialect.in_clause("target", batch)
+            current: tuple[str, str] | None = None
+            edge_map: dict[int, Any] = {}
+            for row in state.rows(
+                f"SELECT * FROM graph_edges WHERE kb_id=? AND {clause}"
+                " ORDER BY target, source, type, seq",
+                (self.kb_id, *params),
+            ):
+                pair = (str(row["source"]), str(row["target"]))
+                if pair != current:
+                    current, edge_map = pair, {}
+                    grouped.setdefault(pair[1], []).append((pair[0], pair[1], edge_map))
+                edge_map[len(edge_map)] = edge_attrs(row)
+        return grouped
 
     def prefetch_nodes(
         self, node_ids: list[str], materialized: bool = False

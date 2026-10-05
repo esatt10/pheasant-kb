@@ -618,6 +618,95 @@ def test_documents_refuse_with_one_text(
     assert response.json()["detail"] == str(refused.value)
 
 
+def test_a_source_is_described_identically_on_both_surfaces(region: dict[str, Any]) -> None:
+    over_http = _http(region, "get", "/sources/docs/overview")
+    over_mcp = region["tools"].describe_source(region["kb"], "docs")
+
+    assert over_http == over_mcp
+    assert over_mcp["totals"]["documents"] == len(CORPUS)
+    assert {row["directory"] for row in over_mcp["by_directory"]} == {"guide/", "notes/"}
+
+
+@pytest.mark.parametrize("path", ["guide/deploy.md", "DEPLOY.md", "docs/notes/rotation.md", ".md"])
+def test_a_document_is_described_identically_on_both_surfaces(
+    region: dict[str, Any], path: str
+) -> None:
+    over_http = _http(region, "get", "/documents/detail", params={"path": path})
+    over_mcp = region["tools"].describe_document(region["kb"], path)
+
+    assert over_http == over_mcp
+    if path == ".md":
+        assert over_mcp["document"] is None and over_mcp["total_candidates"] == len(CORPUS)
+    else:
+        assert over_mcp["document"]["source"] == "docs"
+
+
+@pytest.mark.parametrize(
+    ("params", "kwargs"),
+    [
+        ({}, {}),
+        (
+            {"source_name": "docs", "cross_source_only": True},
+            {"source_name": "docs", "cross_source_only": True},
+        ),
+        ({"edge_type": ["references"], "limit": 1}, {"edge_types": ["references"], "limit": 1}),
+        (
+            {"document": "deploy.md", "direction": "in"},
+            {"document": "deploy.md", "direction": "in"},
+        ),
+    ],
+)
+def test_document_links_list_identically_on_both_surfaces(
+    region: dict[str, Any], params: dict[str, Any], kwargs: dict[str, Any]
+) -> None:
+    over_http = _http(region, "get", "/documents/links", params=params)
+    over_mcp = region["tools"].list_document_links(region["kb"], **kwargs)
+
+    assert over_http == over_mcp
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "call", "status"),
+    [
+        ("/sources/nowhere/overview", {}, ("describe_source", ("nowhere",), {}), 404),
+        (
+            "/documents/detail",
+            {"path": "missing.md"},
+            ("describe_document", ("missing.md",), {}),
+            404,
+        ),
+        (
+            "/documents/links",
+            {"other_source": "docs"},
+            ("list_document_links", (), {"other_source": "docs"}),
+            422,
+        ),
+        (
+            "/documents/links",
+            {"direction": "in"},
+            ("list_document_links", (), {"direction": "in"}),
+            422,
+        ),
+        (
+            "/documents/links",
+            {"document": "missing.md"},
+            ("list_document_links", (), {"document": "missing.md"}),
+            404,
+        ),
+    ],
+)
+def test_details_refuse_with_one_text(
+    region: dict[str, Any], path: str, params: dict[str, Any], call: tuple, status: int
+) -> None:
+    response = region["client"].get(path, params=params)
+    name, args, kwargs = call
+    with pytest.raises(ServiceError) as refused:
+        getattr(region["tools"], name)(region["kb"], *args, **kwargs)
+
+    assert response.status_code == status
+    assert response.json()["detail"] == str(refused.value)
+
+
 # ---------------------------------------------------------------------------
 # The matrix stays complete
 # ---------------------------------------------------------------------------
@@ -644,6 +733,9 @@ CONFORMED = {
     "queue_status": ("GET /queue", "get_index_queue"),
     "overview": ("GET /knowledge-base/overview", "describe_knowledge_base"),
     "documents": ("GET /documents", "list_documents"),
+    "source": ("GET /sources/{name}/overview", "describe_source"),
+    "document": ("GET /documents/detail", "describe_document"),
+    "links": ("GET /documents/links", "list_document_links"),
 }
 
 
@@ -658,6 +750,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import graph as graph_service
     from pheasant.services import index_queue as index_queue_service
     from pheasant.services import inventory as inventory_service
+    from pheasant.services import inventory_detail as inventory_detail_service
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
 
@@ -669,6 +762,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         media_service,
         index_queue_service,
         inventory_service,
+        inventory_detail_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
@@ -707,6 +801,11 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # operations and by the assistant that renders their result.
     public.discard("normalize_extensions")
     public.discard("extension_of")
+    # The listing's scope, row shape and ACL filter, shared with
+    # `inventory_detail` so a document is listable on exactly the same terms
+    # wherever it is described.
+    public.discard("document_row")
+    public.discard("reader")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

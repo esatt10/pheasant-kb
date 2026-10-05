@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace
 from typing import Any
 
 from pheasant.assistant.chat import (
@@ -282,7 +283,8 @@ def answer_question(
     the route asked for is built — unless ``defer_visual``, which the
     streaming route uses to send the answer first and the picture after.
     """
-    from pheasant.assistant import conversation, inventory, inventory_answer, routing
+    from pheasant.assistant import conversation, inventory, inventory_answer, routing, search_answer
+    from pheasant.assistant import keywords as first_words
     from pheasant.assistant.retrieval import PheasantRetriever
     from pheasant.assistant.workflows import (
         WorkflowRequest,
@@ -293,6 +295,26 @@ def answer_question(
 
     settings = getattr(config, "assistant", None)
     env = env if env is not None else dict(os.environ)
+    # First-word keywords (`@table`, `@detailed`, `@doc`, `@search` …) say
+    # what kind of answer is wanted. They are read off the words and then
+    # removed, so what is searched and written about is the question itself.
+    asked_as = question
+    directives = (
+        first_words.read(question)
+        if getattr(settings, "keywords", True) is not False
+        else first_words.Directives(text=question)
+    )
+    routed_question = (
+        first_words.inventory_form(question)
+        if directives.inventory
+        else directives.text
+        if directives.used
+        else question
+    )
+    if directives.used:
+        question = directives.text
+    depth = directives.depth or depth
+    visual = directives.visual or visual
     max_results = max_results or int(getattr(settings, "max_context_chunks", 8) or 8)
 
     from pheasant.request_budget import RequestBudget
@@ -347,6 +369,8 @@ def answer_question(
         merged_options[key] = value
     merged_options.update(nested_for_workflow)
     merged_options.update(options or {})
+    if directives.form:
+        merged_options["form"] = directives.form
     # A depth named on the request pins it, exactly like a pinned intent;
     # "auto" (or nothing) leaves it to the router.
     if depth and str(depth).lower() in routing.DEPTHS:
@@ -364,12 +388,29 @@ def answer_question(
     # a follow-up the model rewrote is read again below.
     inventory_settings = getattr(settings, "inventory", None)
     inventory_mode = str(getattr(inventory_settings, "mode", "auto") or "auto")
-    asked = inventory.route(question, mode=inventory_mode, state=state, visual=visual_route)
+    asked = inventory.route(
+        routed_question, mode=inventory_mode, state=state, visual=visual_route, history=turns
+    )
+    if (
+        asked is None
+        and directives.used
+        and not (directives.search or directives.inventory)
+        and not question.strip()
+    ):
+        asked = inventory.InventoryQuestion(
+            action="help",
+            trigger="keyword",
+            why=f"{directives.used[-1]} with no question after it",
+            notes=(f"add a question after {directives.used[-1]}",),
+        )
+    if asked is not None and directives.inventory:
+        asked = replace(asked, keyword=directives.used[-1])
+    deterministic = asked is not None or directives.search
     rewrite_started = time.perf_counter()
     from pheasant.assistant.providers import collect_token_usage
 
     with collect_token_usage() as rewrite_usage:
-        if asked is None:
+        if not deterministic:
             search_question, how = conversation.standalone_question(question, turns, llm)
         else:
             search_question, how = question, None
@@ -388,6 +429,8 @@ def answer_question(
             or (
                 "skipped: a question about the knowledge base itself"
                 if asked is not None
+                else "skipped: @search lists the hits for the words as typed"
+                if directives.search
                 else "no conversational rewrite needed"
             ),
             duration_seconds=rewrite_seconds,
@@ -453,6 +496,22 @@ def answer_question(
             )
             context_steps.append(failed)
             _report(on_step, failed)
+    if result is None and directives.search:
+        result = search_answer.answer(
+            question,
+            retriever,
+            source_name=source_name,
+            principal=principal,
+            principal_groups=principal_groups,
+            report=lambda step: _report(on_step, step),
+        )
+        visual_route, visual_why, visual_by, shape, shape_why = (
+            "none",
+            "@search lists hits",
+            "keyword",
+            None,
+            "",
+        )
     try:
         budget.check()
         if result is None:
@@ -488,6 +547,13 @@ def answer_question(
     route["shape"] = shape
     if shape_why:
         route["why"]["shape"] = shape_why
+    keyword_axes = {"depth": directives.depth, "visual": directives.visual, "form": directives.form}
+    for axis, value in keyword_axes.items():
+        if value and route.get("intent") not in {"inventory", "search"}:
+            route.setdefault("decided_by", {})[axis] = "keyword"
+            route.setdefault("why", {})[axis] = f"asked with {' '.join(directives.used)}"
+    if directives.form and route.get("intent") not in {"inventory", "search"}:
+        route["form"] = directives.form
     routing.record_route(route)
 
     assistant_effort = getattr(settings, "reasoning_effort", None)
@@ -508,7 +574,7 @@ def answer_question(
     )
 
     payload = {
-        "question": question,
+        "question": asked_as,
         "answer": answer_text,
         "answer_mode": result.mode,
         "mode": result.mode,
@@ -582,9 +648,11 @@ def answer_question(
     }
     if search_question and how:
         payload["search_question"] = search_question
+    if directives.used or directives.unknown:
+        payload["keywords"] = directives.as_dict()
     if inventory_data is not None:
         payload["inventory"] = inventory_data
-    elif inventory_mode != "off" and inventory.looks_close(question):
+    elif inventory_mode != "off" and not directives.used and inventory.looks_close(question):
         # Not routed, but close: say how to ask it, without touching the answer.
         payload["inventory_hint"] = inventory.HINT
     if visual_route != "none":

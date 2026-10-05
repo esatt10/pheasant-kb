@@ -1,13 +1,14 @@
 # Answer length, conversations, visuals and figures
 
-The assistant reads three things off every question, and each is a choice you
+The assistant reads three things off every question, a fourth when you name it,, and each is a choice you
 can also make yourself:
 
 | Axis | Values | Decided by |
 |---|---|---|
-| **intent** | `knowledge` · `procedural` · `inventory` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)) |
-| **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned |
-| **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned |
+| **intent** | `knowledge` · `procedural` · `inventory` · `search` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)); `search` by `@search` |
+| **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned; or a [first-word keyword](#first-word-keywords) |
+| **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned; or a keyword |
+| **form** | prose (default) · `table` · `list` · `steps` · `compare` · `quotes` · `brief` | a first-word keyword only |
 
 None of them costs a model call to decide. The rules are deterministic, so an
 offline region and a connected one read a question the same way, and the
@@ -109,6 +110,14 @@ Two ways in:
   @pheasant file types
   @pheasant recent documents
   @pheasant sync status
+  @pheasant source notes                    # one source in detail
+  @pheasant document runbooks/rotation.md   # one document in detail
+  @pheasant what links to deploy.md         # its backlinks
+  @pheasant links to deploy.md              # the same, paged
+  @pheasant links between notes and code    # how two sources relate
+  @pheasant cross-source links
+  @pheasant list documents page 3           # any listing pages
+  @pheasant more                            # the next page of the last listing
   ```
 
 Every such answer ends by naming the tool it came from and the `@pheasant`
@@ -119,10 +128,82 @@ answer text itself is unchanged. The payload has `route.intent: "inventory"`,
 `workflow: "inventory"` and an `inventory` block holding the tool's own result,
 so an agent reads structured data rather than parsing a table.
 
+### One source, one document, and how they link
+
+Three narrower questions are answered the same way, from
+`services.inventory_detail` (MCP `describe_source`, `describe_document`,
+`list_document_links`; HTTP `GET /sources/{name}/overview`,
+`GET /documents/detail`, `GET /documents/links`):
+
+- **A source**: "tell me about the notes source", `@pheasant notes`. Its type,
+  location and status, its documents by file type and by top-level folder, the
+  newest five, and how many links its documents make to each other source and
+  receive from them, per edge type.
+- **A document**: "what links to deploy.md", "what does sync.py import",
+  `@pheasant document runbooks/rotation.md`. The path can be a relative path,
+  `<source>/<path>`, or any unique part of one (`rotation`); several matches
+  come back as a list to choose from. The answer gives its outline (section
+  headings), the symbols it defines, the documents it links to and is linked
+  from (with the edge type and whether the link crosses sources), and the
+  references it makes that resolve to nothing this region holds.
+- **Links**: "links between notes and code", "how are the notes and code
+  sources related", "cross-source links", `@pheasant links in notes`,
+  `@pheasant imports in code`, and one document's links a page at a time
+  (`@pheasant links to deploy.md`, `links from sync.py`), which is where a
+  document's "…and 71 more" backlinks point. A summary per source pair and
+  edge type, then one row per linked pair of documents.
+
+A *link* is a graph edge whose two ends are both indexed documents: resolved
+`imports`, `references`, `embeds`, `links_to` and the like, drawn at sync time
+by the deterministic resolvers. Structure (`contains`, `indexes`, `has_chunk`,
+`has_heading`) is never a link. Without `@pheasant`, a document question has to
+name something that looks like a file (`deploy.md`), every source name has to
+be a registered source, and a document the index does not hold is answered by
+searching. With `@pheasant`, a miss is said.
+
+### Long listings
+
+A listing shows `assistant.inventory.max_items` rows (50 by default) and names
+the question for the next page (`@pheasant list documents page 2`); asking it,
+or `@pheasant more`, returns that page. `more` reads the conversation's
+`history`, because the region keeps no chat state: each `more` after a listing
+goes one page further. The `inventory.page` block carries the same thing as
+data (`number`, `pages`, `next_question`) plus the HTTP `endpoint` and
+`params` the listing came from. The web UI uses those to draw the listing as a
+table that scrolls inside the answer and grows in place (**Load more**, **Load
+all**) without asking a new question.
+
 Listings leave out memory records (list those with `memory_list`) and internal
 sources. Under `security.acl_enforced`, lists and counts include only what the
 caller may read. If the automatic reading is ever wrong for your corpus, set
 `assistant.inventory.mode: keyword` (only `@pheasant` routes) or `off`.
+
+## First-word keywords
+
+A keyword as the **first word** of a message says what kind of answer you
+want, so the question does not have to be phrased for a rule to notice.
+Several can lead one message (`@detailed @table …`). `@pheasant` is the one
+keyword that counts anywhere. A keyword later in the sentence, or an email
+address, is just text.
+
+| Keyword | Answers with |
+|---|---|
+| `@source <name>`, `@doc <path>`, `@docs …`, `@links …`, `@more` | Shorthand for `@pheasant source …`, `document …`, `documents …`, `links …`, `more`. From the index, no search, no model. |
+| `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
+| `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
+| `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
+| `@diagram`, `@image`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
+
+The keyword is removed before the question is searched or written about, and
+it wins over the request's own `depth` / `visual` (it was typed into this
+message; the length selector is a standing preference). The payload says what
+was read in `keywords` (`used`, and `unknown` for a leading `@word` that is no
+keyword, which stays in the question), and `route.decided_by` names
+`keyword` for each axis a keyword set. `@table` alone, with no question, gets
+the help listing. `GET /assistant/status` lists the keywords this region
+answers, which is what the UI's composer offers when a message starts with
+`@`. `assistant.keywords: false` turns them off; `@pheasant` stays governed by
+`assistant.inventory.mode`.
 
 ## Visuals
 

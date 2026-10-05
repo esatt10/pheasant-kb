@@ -164,17 +164,22 @@ line of its own. Only use the listed numbers, and never describe an image \
 beyond its caption."""
 
 
-def system_prompt_for(intent: str | None, depth: str | None = None, figures: bool = False) -> str:
+def system_prompt_for(
+    intent: str | None, depth: str | None = None, figures: bool = False, form: str | None = None
+) -> str:
     """The answering prompt for an intent, falling back to the base rules.
 
     ``depth`` appends the length instruction (none for ``short``, which is the
-    prompt pheasant has always sent) and ``figures`` the rule for showing an
-    image; both default to adding nothing.
+    prompt pheasant has always sent), ``form`` the shape a first-word keyword
+    asked for (``@table``, ``@steps`` …, ``assistant.keywords``) and
+    ``figures`` the rule for showing an image; all default to adding nothing.
     """
+    from pheasant.assistant.keywords import form_instruction
     from pheasant.assistant.routing import depth_instruction
 
     prompt = INTENT_SYSTEM_PROMPTS.get(str(intent or ""), SYSTEM_PROMPT)
     prompt += depth_instruction(str(depth or "short"))
+    prompt += form_instruction(form)
     if figures:
         prompt += FIGURE_RULE
     return prompt

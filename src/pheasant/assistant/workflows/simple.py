@@ -148,7 +148,12 @@ class SimpleWorkflow:
                 answer_started = time.perf_counter()
                 with collect_token_usage() as usage:
                     answer = llm.complete(
-                        system_prompt_for(intent, answering_depth, figures=bool(figures)),
+                        system_prompt_for(
+                            intent,
+                            answering_depth,
+                            figures=bool(figures),
+                            form=options.get("form"),
+                        ),
                         build_prompt(
                             request.question,
                             citations,

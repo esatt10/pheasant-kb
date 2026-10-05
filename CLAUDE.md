@@ -145,7 +145,9 @@ pheasant-kb/
 │   │                            index_queue (the pre-claim interval: what
 │   │                            a published sync is doing before an
 │   │                            indexer claims it), inventory (what the
-│   │                            knowledge base holds: overview, documents)
+│   │                            knowledge base holds: overview, documents),
+│   │                            inventory_detail (one source, one document,
+│   │                            the links between documents)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -155,6 +157,9 @@ pheasant-kb/
 │   │                            (around every workflow), routing (depth,
 │   │                            visual, shape), inventory (questions about
 │   │                            the knowledge base itself, + @pheasant),
+│   │                            inventory_focus (one source / document /
+│   │                            links, + paging), keywords (first-word
+│   │                            @table, @doc, @search …), search_answer,
 │   │                            conversation, longform,
 │   │                            visuals, visual_specs (the shape grammar),
 │   │                            visual_uml (class/activity/state/use case),
@@ -168,7 +173,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 158 pytest modules, offline by design
+└── tests/                     ← 160 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -953,6 +958,27 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   failed lookup is answered by the workflow. `assistant.inventory.mode:
   keyword|off` narrows it. `tests/test_assistant_inventory.py` holds a
   labelled set with both sides, the UI's own starter prompts included.
+- **One source, one document, and the links between them** come the same way
+  (`assistant.inventory_focus` reads, `services.inventory_detail` answers; MCP
+  `describe_source` / `describe_document` / `list_document_links`, HTTP
+  `/sources/{name}/overview`, `/documents/detail`, `/documents/links`). A link
+  is a graph edge with an indexed document at both ends, never structure.
+  Incoming edges are `in_edges_batch` (a seek on `idx_graph_edges_target` for
+  `SqlGraph`, one pass over the edge keys for the resident graph, a scan
+  through the graph service), and `tests/test_inventory_relations.py` holds
+  the backends equal. Without `@pheasant` a document must look like a file and
+  a miss is searched; with it a miss is said. A listing is a page: `page N`
+  reads back, `inventory.page` names the next question and the HTTP endpoint
+  the UI pages in place with, and `@pheasant more` continues from `history`.
+- **A first word can say what kind of answer is wanted** (`assistant.keywords`):
+  `@table` `@list` `@steps` `@compare` `@quotes` `@brief` add one FORMAT
+  instruction to `system_prompt_for` (grounding unchanged), `@overview`
+  `@detailed` pin depth, `@diagram` `@image` and any shape pin visual,
+  `@search` lists the ranked hits with no model, and `@source` `@doc` `@docs`
+  `@links` `@more` are `@pheasant` shorthands. First word only (several may
+  lead), removed before the question is searched, wins over the request's pin,
+  reported in `keywords`; `@pheasant` alone counts anywhere.
+  `tests/test_answer_keywords.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is
