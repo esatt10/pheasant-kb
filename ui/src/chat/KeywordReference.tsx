@@ -261,17 +261,21 @@ export function KeywordReference({
                   className="keyref__keyword"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => onInsert(keyword.keyword)}
-                  title={
-                    keyword.aliases.length
-                      ? `Start the message with ${keyword.keyword} (also ${keyword.aliases.join(", ")})`
-                      : `Start the message with ${keyword.keyword}`
-                  }
+                  title={`Start the message with ${keyword.keyword}`}
                 >
                   {keyword.keyword}
                 </button>
                 <div className="keyref__about">
                   {/* Summaries are Markdown for the help answer; plain text here. */}
                   <span>{keyword.summary.replace(/`/g, "")}</span>
+                  {/* Aliases: other spellings the reader accepts for the very same
+                      keyword. Shown because typing one ("@fi") filters to its
+                      keyword ("@doc"), which is otherwise a puzzle. */}
+                  {keyword.aliases.length ? (
+                    <span className="keyref__aliases">
+                      Same as typing {joinOr(keyword.aliases)}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     className="keyref__example"
@@ -337,6 +341,13 @@ export function insertKeyword(draft: string, inserted: string): string {
   }
   if (/^\s*@[\w-]*$/.test(draft)) return `${inserted} `;
   return `${inserted} ${draft.trimStart()}`;
+}
+
+/** `["@a", "@b", "@c"]` → `"@a, @b or @c"`. */
+function joinOr(names: string[]): string {
+  return names.length < 2
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
 function clamp(value: number, low: number, high: number): number {

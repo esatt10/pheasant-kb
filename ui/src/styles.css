@@ -4478,6 +4478,12 @@ select.text-input {
   line-height: 1.4;
 }
 
+.keyref__aliases {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-style: italic;
+}
+
 .keyref__example {
   padding: 0;
   color: var(--muted);
