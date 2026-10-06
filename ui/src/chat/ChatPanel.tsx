@@ -12,6 +12,13 @@ import type {
 } from "../api/types";
 import { historyFor, useSession } from "../state/session";
 import { AnswerBody } from "./AnswerBody";
+import { InventoryListing, listingText } from "./InventoryListing";
+import {
+  KeywordReference,
+  insertKeyword,
+  keywordMatches,
+  useKeywordReference,
+} from "./KeywordReference";
 import { McpAppFrame } from "./McpAppFrame";
 import { SourceStrip } from "./SourceStrip";
 
@@ -38,6 +45,7 @@ const STEP_LABELS: Record<string, string> = {
   context: "Reading the question in context…",
   classify: "Reading the question…",
   inventory: "Listing from the index…",
+  search: "Ranking the search hits…",
   outline: "Outlining a long answer…",
   sections: "Writing the sections…",
   visual: "Drawing the visual…",
@@ -56,6 +64,7 @@ const SUGGESTIONS = [
   "What decisions are recorded here, and why?",
   // Questions about the knowledge base itself are answered from the index.
   "@pheasant what's in this knowledge base?",
+  "@pheasant how are my sources linked?",
 ];
 
 export function ChatPanel({
@@ -74,6 +83,10 @@ export function ChatPanel({
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
+  // The @-keyword quick reference: a floating card beside the chat column.
+  const reference = useKeywordReference();
+  const keywords = status?.keywords ?? [];
   // Keyed by turn id rather than a single ref: the effect below always needs
   // *the newest turn's* element, and turns re-render with new array
   // identities (new question appended, then the same turn updated in place
@@ -150,6 +163,18 @@ export function ChatPanel({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Tab completes a keyword being typed as the first word.
+    if (event.key === "/" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      reference.toggle();
+      return;
+    }
+    const completions = event.key === "Tab" ? keywordMatches(draft, keywords) : [];
+    if (completions.length > 0) {
+      event.preventDefault();
+      dispatch({ type: "set-draft", text: `${completions[0].keyword} ` });
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit(draft);
@@ -159,7 +184,7 @@ export function ChatPanel({
   const extractive = status ? !status.ready : false;
 
   return (
-    <div className="chat">
+    <div className="chat" ref={chatRef}>
       <div className="chat__scroll">
         {turns.length === 0 ? (
           <div className="chat-empty">
@@ -249,6 +274,20 @@ export function ChatPanel({
       </div>
 
       <div className="chat__composer">
+        <KeywordReference
+          keywords={keywords}
+          draft={draft}
+          pinned={reference.open}
+          anchorRef={chatRef}
+          onClose={() => {
+            reference.setOpen(false);
+            textareaRef.current?.focus();
+          }}
+          onInsert={(text) => {
+            dispatch({ type: "set-draft", text: insertKeyword(draft, text) });
+            textareaRef.current?.focus();
+          }}
+        />
         <div className="composer">
           <textarea
             ref={textareaRef}
@@ -259,7 +298,7 @@ export function ChatPanel({
                 ? `Ask about ${sourceFilter}…`
                 : sourceTypeFilter
                   ? `Ask about your ${sourceTypeFilter} sources…`
-                  : "Ask anything about your sources — or @pheasant to list what is indexed…"
+                  : "Ask anything — or start with @ for @pheasant, @table, @doc, @search…"
             }
             onChange={(event) => {
               dispatch({ type: "set-draft", text: event.target.value });
@@ -281,6 +320,17 @@ export function ChatPanel({
           </button>
         </div>
         <div className="composer__hint">
+          {keywords.length > 0 ? (
+            <button
+              type="button"
+              className={`btn btn--small${reference.open ? " btn--active" : ""}`}
+              aria-pressed={reference.open}
+              onClick={reference.toggle}
+              title="Keyword quick reference (Ctrl+/)"
+            >
+              @ keywords
+            </button>
+          ) : null}
           {sourceFilter ? <span className="pill pill--accent">scoped to {sourceFilter}</span> : null}
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>
@@ -445,15 +495,32 @@ function AnswerTurn({
       ? null
       : chosen;
   const visualCitations = drawn ? drawn.citations : answer.citations;
+  // A paged listing with rows is drawn as a table that grows in place; an
+  // empty one is just its sentence.
+  const listing =
+    answer.inventory?.page && answer.inventory.page.total > 0 ? listingText(answer.answer) : null;
+  const onCite = (index: number) => onCitationClick(byIndex.get(index)?.node_id);
   return (
     <div className="msg">
       <div className="msg__answer">
-        <AnswerBody
-          text={answer.answer}
-          onCite={(index) => onCitationClick(byIndex.get(index)?.node_id)}
-          figures={answer.figures ?? []}
-          onFigure={(figure) => onCitationClick(figure.node_id)}
-        />
+        {listing && answer.inventory ? (
+          <>
+            {listing.body ? <AnswerBody text={listing.body} onCite={onCite} /> : null}
+            <InventoryListing
+              inventory={answer.inventory}
+              lead={listing.lead}
+              onSelect={onCitationClick}
+            />
+            {listing.footer ? <AnswerBody text={listing.footer} onCite={onCite} /> : null}
+          </>
+        ) : (
+          <AnswerBody
+            text={answer.answer}
+            onCite={onCite}
+            figures={answer.figures ?? []}
+            onFigure={(figure) => onCitationClick(figure.node_id)}
+          />
+        )}
       </div>
       {visual ? (
         <div className="msg__visual">
@@ -472,9 +539,20 @@ function AnswerTurn({
         />
       ) : null}
       {answer.inventory_hint ? <p className="msg__hint">{answer.inventory_hint}</p> : null}
+      {answer.keywords?.unknown ? (
+        <p className="msg__hint">
+          {answer.keywords.unknown} is not a keyword, so it was searched as written. Type @ at the
+          start of a message to see the keywords.
+        </p>
+      ) : null}
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
       <div className="msg__meta">
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
+        {(answer.keywords?.used ?? []).map((keyword) => (
+          <span className="pill pill--accent" key={keyword} title="Asked with this keyword">
+            {keyword}
+          </span>
+        ))}
         {answer.route && answer.route.depth !== "short" ? (
           <span className="pill" title={answer.route.why?.depth}>
             {answer.route.depth}
@@ -484,6 +562,8 @@ function AnswerTurn({
           <span title="Answered from the index directly, without searching">
             from the index{answer.inventory ? ` · ${answer.inventory.tool}` : ""}
           </span>
+        ) : answer.mode === "search" ? (
+          <span title="The ranked hits, with no model writing an answer">search hits · no model</span>
         ) : answer.mode === "llm" ? (
           <span>
             {answer.provider}
@@ -492,7 +572,7 @@ function AnswerTurn({
         ) : (
           <span>extracted passages</span>
         )}
-        {answer.mode === "inventory" ? null : (
+        {answer.mode === "inventory" || answer.mode === "search" ? null : (
           <>
             <span>·</span>
             <span>{answer.citations.length} sources</span>

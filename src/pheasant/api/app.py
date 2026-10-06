@@ -4969,6 +4969,7 @@ def create_app(
     # ------------------------------------------------------------------
     @app.get("/assistant/status")
     def assistant_status(session_id: str | None = None) -> dict:
+        from pheasant.assistant.keywords import keyword_catalog
         from pheasant.assistant.providers import PROVIDERS, resolve_auto_provider
 
         settings = config.assistant
@@ -5005,6 +5006,8 @@ def create_app(
             # False means answers will be extractive rather than synthesized.
             "ready": selected is not None,
             "credential_source": selected.get("source") if selected else None,
+            # First-word keywords, for the composer to offer as you type.
+            "keywords": keyword_catalog(settings),
         }
 
     @app.post("/assistant/key")

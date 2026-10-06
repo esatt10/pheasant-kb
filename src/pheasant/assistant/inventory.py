@@ -37,7 +37,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pheasant.ingestion.content_types import CODE_LANGUAGES
@@ -46,11 +46,30 @@ logger = logging.getLogger(__name__)
 
 KEYWORD = "@pheasant"
 MODES = ("auto", "keyword", "off")
-ACTIONS = ("help", "overview", "sources", "documents", "counts", "types", "recent", "sync")
+ACTIONS = (
+    "help",
+    "overview",
+    "sources",
+    "documents",
+    "counts",
+    "types",
+    "recent",
+    "sync",
+    # One source, one document, the links between documents, and the next
+    # page of a listing (`assistant.inventory_focus`).
+    "source",
+    "document",
+    "links",
+    "more",
+)
+#: Actions whose answer is a page of a longer list.
+PAGED_ACTIONS = ("documents", "recent", "links")
 #: Documents shown for "recent" when the question names no number.
 RECENT_DEFAULT = 10
 
 _KEYWORD_RE = re.compile(r"(?<![\w@])@pheasant\b[:,]?", re.IGNORECASE)
+#: "… page 3", "… (p. 3)": which page of a listing, read off the end.
+_PAGE_RE = re.compile(r"(?:,? ?\(?(?:page|pg\.?|p\.) ?(?P<page>\d{1,4})\)?)$")
 
 #: Words naming a kind of document, and the extensions each one means. A
 #: language name from ``CODE_LANGUAGES`` works too ("list the python files"),
@@ -257,6 +276,23 @@ class InventoryQuestion:
     #: read, so the answer can say so instead of guessing.
     unread: str | None = None
     notes: tuple[str, ...] = ()
+    #: ``document``: the path asked about; ``direction`` is ``in`` ("what links
+    #: to it"), ``out`` ("what does it link to") or ``None`` (both).
+    path: str | None = None
+    direction: str | None = None
+    #: ``links``: the second source, edge types, and whether to keep only
+    #: links that cross from one source to another.
+    other_source: str | None = None
+    edge_types: tuple[str, ...] = ()
+    cross_source_only: bool = False
+    #: Which page of a listing, 1-based. ``None`` is the first.
+    page: int | None = None
+    #: The request as read: the question without ``@pheasant`` and without
+    #: its page, normalized. ``@pheasant {text} page N`` reads back the same.
+    text: str = ""
+    #: The keyword it was asked with, when that was a shorthand (``@doc``)
+    #: rather than ``@pheasant`` itself, so the answer can say which.
+    keyword: str | None = None
 
 
 def has_keyword(question: str) -> bool:
@@ -284,6 +320,11 @@ def read_question(
     if not keyword and mode != "auto":
         return None
     text = _normalize(_KEYWORD_RE.sub(" ", question or "") if keyword else question)
+    page = None
+    paged = _PAGE_RE.search(text)
+    if paged and paged.start() > 0:
+        page = max(1, int(paged.group("page")))
+        text = text[: paged.start()].strip(" ,")
     trigger = "keyword" if keyword else "rule"
     resolver = _SourceResolver(sources)
     found = _read(text, keyword=keyword, sources=resolver)
@@ -292,7 +333,9 @@ def read_question(
         found = _read(f"list {text}", keyword=True, sources=resolver)
     if found is not None:
         action, why, filters = found
-        return InventoryQuestion(action=action, trigger=trigger, why=why, **filters)
+        return InventoryQuestion(
+            action=action, trigger=trigger, why=why, page=page, text=text, **filters
+        )
     if not keyword:
         return None
     if not text:
@@ -302,7 +345,12 @@ def read_question(
         rest = text.split(" ", 1)[1] if " " in text else ""
         filters = _tail_filters(rest, keyword=True, sources=resolver) or {}
         return InventoryQuestion(
-            action=command, trigger=trigger, why=f"@pheasant {text.split()[0]}", **filters
+            action=command,
+            trigger=trigger,
+            why=f"@pheasant {text.split()[0]}",
+            page=page,
+            text=text,
+            **filters,
         )
     return InventoryQuestion(
         action="help", trigger=trigger, why="@pheasant with a request it cannot read", unread=text
@@ -448,34 +496,103 @@ def _read(
         return "sync", "asks about indexing status", {}
     if any(p.match(text) for p in _OVERVIEW):
         return "overview", "asks what the knowledge base contains", {}
-    return None
+    from pheasant.assistant.inventory_focus import read_focus
+
+    focused = read_focus(text, keyword=keyword, find_source=sources.find, reserved=_COMMANDS)
+    if focused is None:
+        return None
+    action, why, filters = focused
+    if "edge_types" in filters:
+        filters["edge_types"] = tuple(filters["edge_types"])
+    return action, why, {key: value for key, value in filters.items() if value is not None}
 
 
 def route(
-    question: str, *, mode: str, state: Any, visual: str = "none"
+    question: str,
+    *,
+    mode: str,
+    state: Any,
+    visual: str = "none",
+    history: Iterable[Any] = (),
 ) -> InventoryQuestion | None:
     """:func:`read_question` for the answering pipeline: never raises.
 
     A rule-matched question that also asked for a picture ("draw a diagram of
     the sources") is left to the workflow, which can draw. ``@pheasant`` is
     explicit and always routes here. Source names are read from ``state``
-    only once a pattern has matched.
+    only once a pattern has matched, and at most once per call.
+
+    ``@pheasant more`` is read against ``history``, the turns the caller sent:
+    the region keeps no chat state, so "the next page" is the page after the
+    one the conversation last asked for (:func:`continue_from`).
     """
 
+    known: list[str] | None = None
+
     def sources() -> list[str]:
+        nonlocal known
+        if known is not None:
+            return known
+        known = []
         if state is None:
-            return []
+            return known
         try:
-            return [str(row["name"]) for row in state.rows("SELECT name FROM sources")]
+            known = [str(row["name"]) for row in state.rows("SELECT name FROM sources")]
         except Exception:  # a filter it cannot resolve falls through to retrieval
             logger.debug("source names unavailable for inventory routing", exc_info=True)
-            return []
+        return known
 
     try:
         asked = read_question(question, mode=mode, sources=sources)
+        if asked is not None and asked.action == "more":
+            asked = continue_from(history, mode=mode, sources=sources)
     except Exception:  # routing must never take an answer down
         logger.exception("inventory routing failed; answering by retrieval")
         return None
     if asked is not None and asked.trigger == "rule" and visual != "none":
         return None
     return asked
+
+
+def continue_from(
+    history: Iterable[Any],
+    *,
+    mode: str = "auto",
+    sources: Iterable[str] | Callable[[], Iterable[str]] = (),
+) -> InventoryQuestion:
+    """The next page of the listing the conversation last asked for.
+
+    Walks back over the turns: each ``@pheasant more`` before the listing
+    moves one page further on, so "list documents", "more", "more" asks for
+    page 4. A turn that was not about the index ends the walk, because "more"
+    after a search answer is not a request to page through an older listing.
+    """
+
+    from pheasant.assistant.keywords import inventory_form
+
+    skipped = 0
+    for turn in reversed(list(history or ())):
+        asked_before = getattr(turn, "question", None)
+        if asked_before is None and isinstance(turn, dict):
+            asked_before = turn.get("question")
+        earlier = read_question(inventory_form(str(asked_before or "")), mode=mode, sources=sources)
+        if earlier is None:
+            break
+        if earlier.action == "more":
+            skipped += 1
+            continue
+        if earlier.action in PAGED_ACTIONS:
+            page = (earlier.page or 1) + skipped + 1
+            return replace(
+                earlier,
+                trigger="keyword",
+                page=page,
+                why=f"the next page of “{earlier.text}” (page {page})",
+            )
+        break
+    return InventoryQuestion(
+        action="help",
+        trigger="keyword",
+        why="@pheasant more, with no earlier listing",
+        notes=("there is no earlier listing in this conversation to continue",),
+    )

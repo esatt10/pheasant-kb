@@ -30,6 +30,8 @@ import type {
   WorkflowCatalog,
   IndexQueueStatus,
   ReadyStatus,
+  InventoryPage,
+  InventoryListingPage,
 } from "./types";
 import type {
   ConfigSection,
@@ -384,6 +386,20 @@ export const api = {
     }),
   /** Every question-answering workflow this deployment can run. */
   workflows: () => request<WorkflowCatalog>("/assistant/workflows"),
+  /** One page of an inventory listing, from the endpoint the answer named. */
+  inventoryPage: (
+    endpoint: InventoryPage["endpoint"],
+    params: InventoryPage["params"],
+    offset: number,
+    limit: number,
+  ) =>
+    request<InventoryListingPage>(
+      `${endpoint === "/documents/links" ? "/documents/links" : "/documents"}${qs({
+        ...params,
+        offset,
+        limit,
+      })}`,
+    ),
   chat: (body: {
     question: string;
     session_id?: string | null;

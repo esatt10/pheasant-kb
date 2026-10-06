@@ -360,6 +360,26 @@ class SimpleMultiDiGraph:
             edges = {node_id: entries[:cut] for node_id, entries in edges.items()}
         return edges
 
+    def in_edges_batch(self, node_ids):
+        """Incoming edges for each of ``node_ids``: ``{target: [(source, target, edges)]}``.
+
+        Only the outgoing half is indexed here (see ``remove_nodes_from``), so
+        this is one pass over the edge keys: O(total edges), done in-process
+        and once per call, rather than once per node. The row backend answers
+        the same question off ``idx_graph_edges_target``. A serving read
+        ("what links to this document"), never an indexing pass.
+        """
+
+        wanted = set(node_ids)
+        found: dict[str, list] = {}
+        with self._lock:
+            for (source, target), edge_map in self._edges.items():
+                if target in wanted and edge_map:
+                    found.setdefault(target, []).append(
+                        (source, target, {key: dict(data) for key, data in edge_map.items()})
+                    )
+        return found
+
     def prefetch_nodes(self, node_ids, materialized=False):
         """Attributes for a whole frontier. See :meth:`out_edges_batch`.
 

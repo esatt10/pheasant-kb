@@ -256,6 +256,56 @@ export interface AssistantStatus {
   ready: boolean;
   /** Where the resolvable credential came from, or null when there is none. */
   credential_source: "session" | "environment" | null;
+  /** First-word keywords the composer can offer as you type. */
+  keywords?: AnswerKeyword[];
+}
+
+/** One first-word keyword (`@table`, `@doc` …) and what it answers with. */
+export interface AnswerKeyword {
+  keyword: string;
+  aliases: string[];
+  kind: "inventory" | "search" | "form" | "depth" | "visual";
+  group: string;
+  summary: string;
+  example: string;
+  /** True for `@pheasant`, which counts anywhere in a message. */
+  anywhere: boolean;
+}
+
+/** Where a paged inventory listing is, and how to move through it. */
+export interface InventoryPage {
+  number: number;
+  size: number;
+  total: number;
+  pages: number;
+  next_question: string | null;
+  previous_question: string | null;
+  endpoint: "/documents" | "/documents/links";
+  params: Record<string, string | string[] | boolean>;
+}
+
+export interface InventoryDocument {
+  id: string;
+  source: string;
+  path: string;
+  type?: string;
+  extension?: string;
+  size_bytes?: number | null;
+  last_indexed_at?: string | null;
+}
+
+export interface InventoryLink {
+  from: { id: string; source: string; path: string };
+  to: { id: string; source: string; path: string };
+  edge_types: string[];
+  cross_source: boolean;
+}
+
+export interface InventoryListingPage {
+  documents?: InventoryDocument[];
+  links?: InventoryLink[];
+  total: number;
+  pagination: { limit: number; offset: number; returned: number; has_more: boolean };
 }
 
 export interface Citation {
@@ -492,7 +542,7 @@ export interface ChatAnswer {
   answer: string;
   /** `inventory`: a question about the knowledge base itself, answered from
    * the index (`describe_knowledge_base` / `list_documents`), not a search. */
-  mode: "llm" | "extractive" | "inventory";
+  mode: "llm" | "extractive" | "inventory" | "search";
   provider: string | null;
   model: string | null;
   credential_source: "session" | "environment" | null;
@@ -521,6 +571,18 @@ export interface ChatAnswer {
     tool: string;
     filters: Record<string, unknown>;
     result: Record<string, unknown>;
+    /** Present for a paged listing (documents, recent, links). */
+    page?: InventoryPage;
+  };
+  /** The first-word keywords this question was asked with. */
+  keywords?: {
+    used: string[];
+    /** A leading `@word` that is no keyword; it stayed in the question. */
+    unknown: string | null;
+    form: string | null;
+    depth: string | null;
+    visual: string | null;
+    search: boolean;
   };
   /** Set when a question read close to one about the knowledge base itself
    * but was searched instead: how to ask it explicitly with `@pheasant`. */

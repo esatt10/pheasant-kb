@@ -236,7 +236,9 @@ def write_long(
     if request is not None:
         request.report(steps[-1])
 
-    section_system = system_prompt_for(intent, figures=bool(figures)) + SECTION_RULES
+    section_system = (
+        system_prompt_for(intent, figures=bool(figures), form=options.get("form")) + SECTION_RULES
+    )
     budget = int(options.get("section_output_tokens") or 1200)
 
     def write(section: dict, own: list[dict]) -> str:

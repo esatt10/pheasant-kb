@@ -53,6 +53,9 @@ Legend: — means "not offered on this surface"; use one of the others.
 | Repo map | — | `GET /sources/{id}/repo-map` | — | `get_repo_map` |
 | Describe the knowledge base (sources, counts, file types) | — | `GET /knowledge-base/overview` | Chat: "list all sources", `@pheasant overview` | `describe_knowledge_base` |
 | List indexed documents | — | `GET /documents` | Chat: "list all documents", `@pheasant pdfs in notes` | `list_documents` |
+| Describe one source | — | `GET /sources/{name}/overview` | Chat: "tell me about the notes source", `@source notes` | `describe_source` |
+| Describe one document and its links | — | `GET /documents/detail` | Chat: "what links to deploy.md", `@doc deploy.md` | `describe_document` |
+| List links between documents and sources | — | `GET /documents/links` | Chat: "links between notes and code", `@links` | `list_document_links` |
 | Node content | — | `GET /nodes/content` | Node inspector | — |
 | Explain a node | — | `GET /nodes/explain` | — | `explain_node` |
 | Graph neighbors | — | `GET /graph/neighbors` | Knowledge panel | `get_graph_neighbors` |

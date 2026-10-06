@@ -875,7 +875,9 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
         )
         system = (
             system_prompt_for(
-                str(state.get("intent") or "knowledge"), str(state.get("depth") or "short")
+                str(state.get("intent") or "knowledge"),
+                str(state.get("depth") or "short"),
+                form=options.get("form"),
             )
             + "\n\nFirst assess whether the passages contain enough evidence, then answer "
             "in this same reply. Return one JSON object containing boolean "
@@ -1060,7 +1062,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             steps.extend(long_steps)
         else:
             answer = llm.complete(
-                system_prompt_for(intent, depth, figures=bool(figures)),
+                system_prompt_for(intent, depth, figures=bool(figures), form=options.get("form")),
                 build_prompt(
                     state["question"],
                     citations,

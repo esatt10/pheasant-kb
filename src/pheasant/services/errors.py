@@ -90,6 +90,15 @@ class SourceNotFound(ServiceError):
         self.name = name
 
 
+class DocumentNotFound(ServiceError):
+    status = 404
+    code = "UNKNOWN_DOCUMENT"
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"Unknown document: {path}")
+        self.path = path
+
+
 class NodeNotFound(ServiceError):
     status = 404
     code = "UNKNOWN_NODE"

@@ -50,7 +50,7 @@ MAX_DOCUMENTS = 500
 MAX_EXTENSIONS = 12
 ORDERS = ("path", "recent")
 
-_SCOPE = (
+ARTIFACT_SCOPE = (
     "a.type <> ? AND substr(a.source_id, 1, 2) <> '__' "
     "AND NOT EXISTS (SELECT 1 FROM removed_sources r WHERE r.source_id = a.source_id)"
 )
@@ -86,7 +86,7 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
         raise SourceNotFound(request.source_name)
     extensions = normalize_extensions(request.extensions)
 
-    where = [_SCOPE]
+    where = [ARTIFACT_SCOPE]
     params: list[Any] = [MEMORY_ARTIFACT_TYPE]
     if request.source_name:
         where.append("a.source_id = ?")
@@ -107,7 +107,7 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
     clause = " AND ".join(where)
     columns = "a.id, a.source_id, a.relative_path, a.type, a.size_bytes, a.last_indexed_at"
 
-    admit = _reader(context, request.principal, request.principal_groups)
+    admit = reader(context, request.principal, request.principal_groups)
     if admit is None:
         total = int(
             context.state.rows(
@@ -131,7 +131,7 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
         total = len(readable)
         rows = readable[offset : offset + limit]
 
-    listed = [_document(row) for row in rows]
+    listed = [document_row(row) for row in rows]
     return {
         "knowledge_base": kb_id,
         "documents": listed,
@@ -177,10 +177,10 @@ def overview(
     rows = context.state.rows(
         "SELECT a.id, a.source_id, a.relative_path, a.size_bytes, a.last_indexed_at"
         + (", a.acl" if context.config.security.acl_enforced else "")
-        + f" FROM artifacts a WHERE {_SCOPE}",
+        + f" FROM artifacts a WHERE {ARTIFACT_SCOPE}",
         (MEMORY_ARTIFACT_TYPE,),
     )
-    admit = _reader(context, principal, principal_groups)
+    admit = reader(context, principal, principal_groups)
     if admit is not None:
         rows = admit(rows)
 
@@ -258,7 +258,7 @@ def extension_of(path: Any) -> str:
     return suffix or "(none)"
 
 
-def _document(row: Any) -> dict[str, Any]:
+def document_row(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source": row["source_id"],
@@ -274,7 +274,7 @@ def _escape_like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _reader(context: ServiceContext, principal: str | None, groups: list[str] | None) -> Any:
+def reader(context: ServiceContext, principal: str | None, groups: list[str] | None) -> Any:
     """A filter keeping the rows ``principal`` may read, or ``None`` if ACLs are off.
 
     The rule ``services.graph.require_readable`` applies to one artifact,

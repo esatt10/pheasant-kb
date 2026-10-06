@@ -996,6 +996,7 @@ class AssistantSettings(ModelMixin):
     latency: AssistantLatencySettings = field(default_factory=lambda: AssistantLatencySettings())
     #: Questions about the knowledge base itself, answered from the index.
     inventory: AssistantInventorySettings = field(default_factory=AssistantInventorySettings)
+    keywords: bool = True  # first-word ``@table``, ``@doc`` … (assistant.keywords)
     max_facts: int = 12
     # Which question-answering workflow runs. "auto" picks the LangGraph
     # agent when the [agent] extra is installed AND a model is reachable,
