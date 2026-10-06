@@ -232,6 +232,17 @@ def test_a_figure_marker_with_no_figure_is_dropped() -> None:
 
     assert cleaned == "See [fig:1] and ."
     assert dropped == 1
+    assert figures[0]["shown"] is False
+
+
+def test_a_standalone_figure_marker_is_marked_shown() -> None:
+    from pheasant.assistant.answering import verify_figures
+
+    figures = [{"figure": 1, "node_id": "img"}]
+    cleaned, dropped = verify_figures("[fig:1]", figures)
+
+    assert cleaned == "[fig:1]"
+    assert dropped == 0
     assert figures[0]["shown"] is True
 
 
