@@ -1460,7 +1460,7 @@ Query-time only, so a change applies to the next question.
 `assistant.keywords` (boolean, default `true`) turns the **first-word
 keywords** on or off: `@table`, `@list`, `@steps`, `@compare`, `@quotes`,
 `@brief` (the shape of a written answer), `@overview` / `@detailed` (length),
-`@diagram` / `@image` / any diagram shape (pictures), `@search` (the ranked
+`@diagram` / any diagram shape (pictures), `@search` (the ranked
 hits, no model) and the index shorthands `@source`, `@doc`, `@docs`, `@links`,
 `@more`. Off, a leading `@word` stays in the question. See
 [first-word keywords](how-to/conversations-and-visuals.md#first-word-keywords).
