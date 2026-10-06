@@ -12,7 +12,7 @@ question so a rule notices. A keyword says it directly:
   unchanged, so every cell, bullet and step still cites its passage.
 * **Length**: ``@overview`` (medium) and ``@detailed`` (long), the same pins
   the request's ``depth`` takes.
-* **Pictures**: ``@diagram``, ``@image``, and any diagram shape by name
+* **Pictures**: ``@diagram`` and any diagram shape by name
   (``@timeline``, ``@flow``, ``@mindmap`` ...), the same pins as ``visual``.
 * **Deterministic answers**, with no model in the path: ``@search`` (the
   ranked hybrid-search hits, as a table), and the index lookups ``@source``,
@@ -199,15 +199,6 @@ KEYWORDS: tuple[Keyword, ...] = (
         "`@mindmap`, `@sequence`, `@hierarchy` …) to choose it.",
         "@diagram the sync pipeline",
         ("draw", "visual"),
-        group="Pictures",
-    ),
-    Keyword(
-        "image",
-        "visual",
-        "image",
-        "Show the images the cited documents hold.",
-        "@image the architecture figure",
-        ("figure", "images"),
         group="Pictures",
     ),
 )

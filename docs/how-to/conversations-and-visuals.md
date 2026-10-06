@@ -183,8 +183,8 @@ caller may read. If the automatic reading is ever wrong for your corpus, set
 A keyword as the **first word** of a message says what kind of answer you
 want, so the question does not have to be phrased for a rule to notice.
 Several can lead one message (`@detailed @table …`). `@pheasant` is the one
-keyword that counts anywhere. A keyword later in the sentence, or an email
-address, is just text.
+keyword that counts anywhere. Other keywords later in a sentence and email
+addresses are just text.
 
 | Keyword | Answers with |
 |---|---|
@@ -192,7 +192,7 @@ address, is just text.
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
 | `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
-| `@diagram`, `@image`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
+| `@diagram`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A grounded picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
 
 The keyword is removed before the question is searched or written about, and
 it wins over the request's own `depth` / `visual` (it was typed into this

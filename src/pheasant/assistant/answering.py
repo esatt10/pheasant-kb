@@ -34,6 +34,7 @@ from pheasant.assistant.chat import (
 logger = logging.getLogger(__name__)
 
 _FIGURE_RE = re.compile(r"\[fig:(\d{1,2})\]")
+_STANDALONE_FIGURE_RE = re.compile(r"(?m)^\s*\[fig:(\d{1,2})\]\s*$")
 
 
 def number_figures(figures: list[dict], citations: list[dict]) -> list[dict]:
@@ -56,10 +57,12 @@ def number_figures(figures: list[dict], citations: list[dict]) -> list[dict]:
 
 
 def verify_figures(answer: str, figures: list[dict]) -> tuple[str, int]:
-    """Drop ``[fig:n]`` markers with no figure; flag the ones shown.
+    """Drop unknown ``[fig:n]`` markers; flag figures rendered inline.
 
     The same rule ``verify_node`` applies to ``[n]``: a marker that resolves
     to nothing would render as a broken image, which is worse than none.
+    Only a standalone marker becomes an inline image; a marker inside a
+    sentence remains a text chip, so it must not suppress the image gallery.
     Returns ``(answer, dropped)``.
     """
     valid = {int(f["figure"]) for f in figures}
@@ -73,7 +76,7 @@ def verify_figures(answer: str, figures: list[dict]) -> tuple[str, int]:
         return ""
 
     cleaned = _FIGURE_RE.sub(replace, answer or "")
-    shown = {int(n) for n in _FIGURE_RE.findall(cleaned)}
+    shown = {int(n) for n in _STANDALONE_FIGURE_RE.findall(cleaned)}
     for figure in figures:
         figure["shown"] = int(figure["figure"]) in shown
     return cleaned, dropped
