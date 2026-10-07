@@ -173,7 +173,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 160 pytest modules, offline by design
+└── tests/                     ← 161 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -2252,6 +2252,15 @@ Each of these cost real time. They are listed because the shape recurs.
   against the two mutants that are the real hazards. Generated files and
   minified bundles are what a codebase source indexes by default now.
 
+- **A guard derived from the CORS list refuses a Compose service name.**
+  `_transport_security` builds the MCP DNS-rebinding allow-list from
+  `server.api.cors_origins`, so a region reached as `http://pheasant:8765`
+  or `http://api:8765` by another container answers every MCP call **421**
+  unless that origin is listed. Every in-process test is loopback and passes.
+  Found by running pheasant-swarm-search's container against the bundled
+  region; `answers/swarm-lab.json` and `answers/pheasant-lab.json` list the
+  service names now (and restate the defaults, because an answer replaces the
+  whole list), and `tests/test_swarm_lab_profile.py` holds both.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the

@@ -1075,7 +1075,10 @@ def test_the_fleet_answer_files_regenerate_the_same_defaults(name: str) -> None:
     assert answers["sync.concurrency.remote_worker_pdf_pages_per_task"] == 500
 
 
-@pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])
+@pytest.mark.parametrize(
+    "path",
+    [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml", COMPOSE / "swarm-lab.yaml"],
+)
 def test_standalone_profiles_keep_fixed_chunking(path: Path) -> None:
     """Rule 7: one container keeps exactly what it indexed before."""
 

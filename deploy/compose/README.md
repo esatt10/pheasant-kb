@@ -9,6 +9,7 @@ stored in YAML.
 | `local-small.yaml` | Local SQLite, no broker or workers | BM25/text search and extractive answers; MCP and durable memory remain enabled | Laptop, offline, small corpus |
 | `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and an agentic workflow using GPT-6 Luna for evidence grading and GPT-6 Sol for answers | One capable workstation/container |
 | `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Concurrent hybrid retrieval with bounded per-process answer admission; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
+| `swarm-lab.yaml` | Single-node SQLite, one container (`role: all`) | Keyword + graph retrieval with no model key; MCP over streamable HTTP; durable memory for the lab's P1 arm | The region pheasant-swarm-search's `docker-compose.yml` bundles (it vendors this file) |
 
 The fleet chunks every source by plan (`chunk_strategy: auto`), including UI
 uploads: code by top-level block, Markdown by heading, spreadsheets by row, and
@@ -51,7 +52,13 @@ python -m pheasant setup --answers deploy/compose/answers/local-small.json --acc
 python -m pheasant setup --answers deploy/compose/answers/local-advanced.json --accept-defaults --plain --target docker --output deploy/compose/local-advanced.yaml --force
 python -m pheasant setup --answers deploy/compose/answers/scalable.json --accept-defaults --plain --target compose --output deploy/compose/fleet.yaml --force
 python -m pheasant setup --answers deploy/compose/answers/worker.json --accept-defaults --plain --target compose --output deploy/compose/worker.yaml --force
+python -m pheasant setup --answers deploy/compose/answers/swarm-lab.json --accept-defaults --plain --target compose --output deploy/compose/swarm-lab.yaml --force
 ```
+
+`swarm-lab.yaml` is copied verbatim into pheasant-swarm-search as
+`deploy/pheasant/pheasant.yaml`; copy it again after regenerating.
+`tests/test_swarm_lab_profile.py` fails when the YAML and its answer file
+disagree.
 
 ## Run the profiles
 
@@ -130,9 +137,17 @@ docker compose --env-file .env -f deploy/compose/docker-compose.pheasant-lab.yml
 ```
 
 **Driving this fleet from pheasant-swarm-search.** The lab connects over
-streamable HTTP MCP (`PHEASANT_MCP_URL=http://127.0.0.1:8765/mcp`) with the
-same `PHEASANT_API_TOKEN`, and its shipped `configs/pheasant-mcp.example.yaml`
-targets 0.13.4: it submits through `submit_documents`, registers the landing
+streamable HTTP MCP with the same `PHEASANT_API_TOKEN` - from the host as
+`http://127.0.0.1:8765/mcp`, or in Docker with the lab's
+`docker-compose.fleet.yml`, which joins this project's `pheasant-lab_default`
+network and connects as `http://api:8765/mcp` (its console's `lab-fleet`
+connection). That second form needs `http://api:8765` in
+`server.api.cors_origins`, which `answers/pheasant-lab.json` now sets:
+pheasant derives its MCP DNS-rebinding allow-list from that list, and a host
+it does not name is answered **421 Misdirected Request** on every MCP call.
+Regenerate `pheasant.yaml` from the answer file after pulling this change.
+Its shipped `configs/pheasant-mcp.example.yaml`
+targets 0.13.5: it submits through `submit_documents`, registers the landing
 directory (`/state` is allow-listed above), waits on `get_index_queue` while a
 queued sync awaits an indexer, and reads `describe_source` once the barrier is
 crossed to compare the region's document count with its receipts. MCP

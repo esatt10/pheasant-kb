@@ -1,0 +1,97 @@
+{
+  "pheasant.name": "pheasant-lab",
+  "pheasant.description": "Single-container region for pheasant-swarm-search's Docker Compose: MCP over streamable HTTP, the lab's landing directory allow-listed, durable memory for the P1 arm, keyword search with no model key",
+  "pheasant.environment": "compose",
+  "pheasant.log_level": "INFO",
+  "pheasant.state_path": "/state",
+  "pheasant.workspace_root": "/workspace",
+  "pheasant.exports_path": "/exports",
+  "server.host": "0.0.0.0",
+  "server.port": 8765,
+  "server.role": "all",
+  "server.mcp.enabled": true,
+  "server.mcp.transports": {
+    "stdio": false,
+    "streamable_http": true,
+    "sse": false
+  },
+  "server.api.enabled": true,
+  "server.api.openapi": true,
+  "server.api.cors_origins": [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://pheasant:8765"
+  ],
+  "server.api.max_concurrent_requests": 32,
+  "server.api.drain_seconds": 10,
+  "server.ui.enabled": true,
+  "server.ui.graph_visualization": true,
+  "storage.backend": "sqlite",
+  "storage.graph_snapshots": true,
+  "storage.max_state_size_gb": 20,
+  "search.default_mode": "hybrid",
+  "search.max_results_default": 10,
+  "search.embeddings.enabled": false,
+  "search.embeddings.provider": "stub",
+  "ingestion.captioner.provider": "stub",
+  "ingestion.transcriber.provider": "stub",
+  "ingestion.extractor.provider": "auto",
+  "ingestion.extractor.html_text": true,
+  "sync.watcher.enabled": true,
+  "sync.scheduler.enabled": true,
+  "sync.scheduler.interval_seconds": 900,
+  "sync.concurrency.max_parallel_sources": 2,
+  "sync.concurrency.max_parallel_files": 8,
+  "sync.concurrency.file_executor": "thread",
+  "sync.queue.enabled": false,
+  "security.allow_workspace_roots": [
+    "/workspace",
+    "/memory",
+    "/state"
+  ],
+  "security.allow_user_selected_source_paths": false,
+  "security.read_only_sources": true,
+  "security.deny_path_traversal": true,
+  "security.default_exclude_secrets": true,
+  "security.acl_enforced": false,
+  "security.api_auth.token_env": "PHEASANT_API_TOKEN",
+  "memory.consolidation_enabled": true,
+  "memory.default_policy": "prefer",
+  "memory.steering_enabled": true,
+  "memory.usage_tracking": true,
+  "assistant.enabled": true,
+  "assistant.provider": "none",
+  "evaluation.enabled": true,
+  "evaluation.on_material_snapshot": false,
+  "readiness.enabled": true,
+  "readiness.corpus_denylist": [
+    "benchmark/*",
+    "*.answers.json"
+  ],
+  "sources": [
+    {
+      "name": "agent-memory",
+      "type": "memory",
+      "path": "/memory",
+      "description": "Durable agent memory (the lab's P1 arm writes here)",
+      "include": [
+        "**/*.md"
+      ],
+      "exclude": [
+        "**/*.archived"
+      ],
+      "sync": {
+        "on_startup": true,
+        "on_file_change": "debounce",
+        "on_git_commit": false,
+        "interval_seconds": 60
+      }
+    }
+  ]
+}

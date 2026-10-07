@@ -1,0 +1,145 @@
+pheasant:
+  name: pheasant-lab
+  description: 'Single-container region for pheasant-swarm-search''s Docker Compose:
+    MCP over streamable HTTP, the lab''s landing directory allow-listed, durable memory
+    for the P1 arm, keyword search with no model key'
+  environment: compose
+  log_level: INFO
+  state_path: /state
+  workspace_root: /workspace
+  exports_path: /exports
+server:
+  host: 0.0.0.0
+  port: 8765
+  role: all
+  mcp:
+    enabled: true
+    transports:
+      stdio: false
+      streamable_http: true
+      sse: false
+  api:
+    enabled: true
+    openapi: true
+    cors_origins:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - http://localhost:8765
+      - http://127.0.0.1:8765
+      - http://localhost:8080
+      - http://127.0.0.1:8080
+      - http://localhost:3000
+      - http://127.0.0.1:3000
+      - http://pheasant:8765
+    max_concurrent_requests: 32
+    drain_seconds: 10
+  ui:
+    enabled: true
+    graph_visualization: true
+storage:
+  backend: sqlite
+  graph_snapshots: true
+  max_state_size_gb: 20
+search:
+  default_mode: hybrid
+  max_results_default: 10
+  embeddings:
+    enabled: false
+    provider: stub
+ingestion:
+  captioner:
+    provider: stub
+  transcriber:
+    provider: stub
+  extractor:
+    provider: auto
+    html_text: true
+sync:
+  watcher:
+    enabled: true
+  scheduler:
+    enabled: true
+    interval_seconds: 900
+  concurrency:
+    max_parallel_sources: 2
+    max_parallel_files: 8
+    file_executor: thread
+  queue:
+    enabled: false
+  limits:
+    max_files: 50000
+    max_file_size_mb: 1024
+security:
+  allow_workspace_roots:
+    - /workspace
+    - /memory
+    - /state
+  allow_user_selected_source_paths: false
+  read_only_sources: true
+  deny_path_traversal: true
+  default_exclude_secrets: true
+  acl_enforced: false
+  api_auth:
+    token_env: PHEASANT_API_TOKEN
+    behind_authenticating_proxy: false
+memory:
+  consolidation_enabled: true
+  default_policy: prefer
+  steering_enabled: true
+  usage_tracking: true
+  max_records: null
+  session_max_records: null
+  user_max_records: null
+  org_max_records: null
+  max_records_per_subject: null
+assistant:
+  enabled: true
+  provider: none
+  model: null
+  workflow: auto
+  retrieval:
+    max_rounds: 3
+    per_query_results: 8
+    max_context_passages: 12
+    expand_graph: true
+    expand_depth: 2
+    grade_evidence: true
+    grader_model: null
+    retrieval_modes:
+      - text
+      - vector
+evaluation:
+  enabled: true
+  on_material_snapshot: false
+  max_results: 10
+  maximum_queries_per_run: 500
+  run_stale_seconds: 90.0
+  promotion:
+    enabled: false
+readiness:
+  enabled: true
+  corpus_denylist:
+    - benchmark/*
+    - '*.answers.json'
+sources:
+  - name: agent-memory
+    type: memory
+    path: /memory
+    description: Durable agent memory (the lab's P1 arm writes here)
+    include:
+      - '**/*.md'
+    exclude:
+      - '**/*.archived'
+    sync:
+      on_startup: true
+      on_file_change: debounce
+      on_git_commit: false
+      interval_seconds: 60
+graph:
+  memory_entity_bridging: true
+observability:
+  otlp_endpoint: ''
+  interactions:
+    enabled: false
+synapse:
+  publish: false
