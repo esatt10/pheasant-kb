@@ -129,6 +129,17 @@ python -m pheasant doctor -c pheasant.yaml --no-require-paths
 docker compose --env-file .env -f deploy/compose/docker-compose.pheasant-lab.yml config --quiet
 ```
 
+**Driving this fleet from pheasant-swarm-search.** The lab connects over
+streamable HTTP MCP (`PHEASANT_MCP_URL=http://127.0.0.1:8765/mcp`) with the
+same `PHEASANT_API_TOKEN`, and its shipped `configs/pheasant-mcp.example.yaml`
+targets 0.13.4: it submits through `submit_documents`, registers the landing
+directory (`/state` is allow-listed above), waits on `get_index_queue` while a
+queued sync awaits an indexer, and reads `describe_source` once the barrier is
+crossed to compare the region's document count with its receipts. MCP
+`sync_source` publishes to the queue only when `graph.query_service_url` is
+set, as it is here; a hand-built role-split region without a graph service
+indexes MCP syncs in the call even on `--role api`, while HTTP `/sync` refuses.
+
 Before regeneration, preserve existing secret values, source registrations,
 named volumes and workspace mounts. Keep one API, graph service and active
 indexer with four preparation workers and one logger until measurements justify
