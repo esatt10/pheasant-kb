@@ -39,6 +39,8 @@ re-earn every property the first one has, starting with rule 1.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import uuid
 from dataclasses import dataclass, field
@@ -108,6 +110,18 @@ class SubmissionRequest:
     #: Who submitted. Recorded on every receipt so a swarm can attribute a
     #: document to the worker that found it.
     agent_id: str | None = None
+
+
+def decode_submission_content(text: str, content_encoding: str = "utf-8") -> bytes:
+    """Decode a transport payload; original file bytes go to the normal landing zone."""
+    if content_encoding == "utf-8":
+        return text.encode("utf-8")
+    if content_encoding != "base64":
+        raise InvalidRequest("content_encoding must be utf-8 or base64")
+    try:
+        return base64.b64decode(text, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise InvalidRequest("Invalid base64 document content") from exc
 
 
 def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any]:

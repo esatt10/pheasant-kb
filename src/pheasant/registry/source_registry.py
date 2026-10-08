@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from itertools import islice
 
@@ -8,6 +9,8 @@ from pheasant.config.loader import config_hash
 from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.persistence.state_store import StateStore
+
+logger = logging.getLogger(__name__)
 
 
 def now() -> str:
@@ -29,20 +32,31 @@ class SourceRegistry:
         )
         for source in self.config.sources:
             if not self.state.source_removed(source.name):
+                upload_dir = owned_upload_directory(
+                    self.config.pheasant.state_path,
+                    source.name,
+                    source.type.value,
+                    source.path,
+                )
+                if source.enabled and upload_dir is not None and not upload_dir.is_dir():
+                    # A configured upload source exists before its first file.
+                    # On a fresh state volume its owned directory must exist
+                    # before startup sync or it is reported as path_missing.
+                    # Serving replicas may mount /state read-only; the writer
+                    # (or db-init) creates it, so a read-only replica can defer.
+                    try:
+                        upload_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        logger.warning(
+                            "could not create configured upload directory %s",
+                            upload_dir,
+                            exc_info=True,
+                        )
                 # The UI-owned landing zone accepts every supported document.
                 # A generated config may name that same source with the
                 # code-shaped default include list. On restart the indexer
                 # would otherwise see no ZIP/PDF and prune their indexed rows.
-                if (
-                    owned_upload_directory(
-                        self.config.pheasant.state_path,
-                        source.name,
-                        source.type.value,
-                        source.path,
-                    )
-                    is not None
-                    and "**/*" not in source.include
-                ):
+                if upload_dir is not None and "**/*" not in source.include:
                     source.include = ["**/*"]
                 self.register_source(source, revive=False)
 

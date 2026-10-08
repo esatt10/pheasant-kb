@@ -1803,6 +1803,9 @@ class SyncEngine:
                     else None
                 )
                 self._ensure_persisted_graph_loaded()
+                from pheasant.memory.source_removal import retire_source_memories
+
+                retire_source_memories(self, source_name)
                 self.graph_builder.remove_source_content(source_name)
                 self.flush_node_index()
                 # Publish graph removal before deleting the registry entry. If
@@ -1826,6 +1829,18 @@ class SyncEngine:
                 self.manifests.delete(source_name)
                 self.state.delete_source(source_name)
                 self.config.sources = [s for s in self.config.sources if s.name != source_name]
+        from pheasant.memory.source_removal import SOURCE_REMOVAL_MARKER
+        from pheasant.memory.store import MemoryStore, memory_source
+
+        source = memory_source(self.config, self.state)
+        if source is not None and source.name != source_name:
+            pending = Path(source.path) / SOURCE_REMOVAL_MARKER
+            if pending.is_file():
+                # Reconcile on redelivery too. An empty memory tree needs a
+                # full sync because incremental guards against empty listings.
+                mode = "incremental" if MemoryStore(source.path).list_records() else "full"
+                self.sync_source(source.name, mode)
+                pending.unlink(missing_ok=True)
         nodes, edges = self._graph_counts()
         report("saving", 1, 1, f"removed {source_name}")
         return SyncResult(source_name, 0, 0, nodes, edges, "removed")

@@ -63,6 +63,11 @@ files. The removal remains in effect across restarts until the source is
 explicitly registered again; an old source entry in generated YAML does not
 silently revive it.
 
+Source removal also reconciles linked agent memories. A memory supported only
+by the removed source is archived and leaves search. A memory also supported
+by a source that remains gets a corrected record with a note that the old
+source was deprecated and removed. Unlinked memories are left alone.
+
 ## Web pages
 
 List the URLs; nothing else is required. `path` may be omitted — the

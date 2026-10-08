@@ -120,6 +120,7 @@ class ReadinessTools:
         source_name: str = "submissions",
         submission_id: str | None = None,
         agent_id: str | None = None,
+        content_encoding: str = "utf-8",
     ) -> dict:
         """Persist documents with an idempotency key and a receipt per item.
 
@@ -138,7 +139,9 @@ class ReadinessTools:
         items = [
             ingestion_service.SubmissionItem(
                 relative_path=str(entry.get("relative_path") or ""),
-                content=str(entry.get("text") or "").encode("utf-8"),
+                content=ingestion_service.decode_submission_content(
+                    str(entry.get("text") or ""), content_encoding
+                ),
                 idempotency_key=entry.get("idempotency_key"),
                 metadata=dict(entry.get("metadata") or {}),
             )
@@ -289,6 +292,7 @@ def register_readiness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         source_name: str = "submissions",
         submission_id: str | None = None,
         agent_id: str | None = None,
+        content_encoding: str = "utf-8",
     ) -> dict:
         """Persist documents with an idempotency key and one receipt per item.
 
@@ -296,12 +300,15 @@ def register_readiness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         "metadata"?}``. Re-submitting under a key this region has already seen
         folds onto the receipt it wrote rather than making a second copy.
 
+        Set content_encoding="base64" to submit original PDF or other binary file bytes
+        in each entry's text field. The default "utf-8" retains text submissions.
+
         Acceptance is not searchability: sync the source, then call
         `acknowledge_ingest`.
         """
 
         return tools.submit_documents(
-            knowledge_base, documents, source_name, submission_id, agent_id
+            knowledge_base, documents, source_name, submission_id, agent_id, content_encoding
         )
 
     @mcp.tool()

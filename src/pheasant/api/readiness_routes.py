@@ -45,6 +45,7 @@ class SubmittedDocument(BaseModel):
 
 
 class SubmitDocumentsRequest(BaseModel):
+    content_encoding: str = "utf-8"
     documents: list[SubmittedDocument]
     source_name: str = "submissions"
     knowledge_base: str | None = None
@@ -148,7 +149,7 @@ def register_readiness_routes(app: FastAPI, *, config: Any, services: Any, engin
         items = [
             ingestion_service.SubmissionItem(
                 relative_path=entry.relative_path,
-                content=entry.text.encode("utf-8"),
+                content=ingestion_service.decode_submission_content(entry.text, req.content_encoding),
                 idempotency_key=entry.idempotency_key,
                 metadata=entry.metadata or {},
             )

@@ -64,10 +64,10 @@ import type {
   UploadResponse,
 } from "./types";
 
-// In dev, requests go to `/api/*` which Vite proxies to the pheasant container.
-// When the bundle is served by pheasant itself, the API is same-origin (root).
-const API_BASE =
-  import.meta.env.VITE_PHEASANT_API_BASE ?? (import.meta.env.DEV ? "/api" : "");
+// The standalone UI and Vite dev server call `/api/*`, which their proxy
+// forwards to pheasant. The single-container image explicitly builds with an
+// empty base because it serves the UI and API from the same origin.
+const API_BASE = import.meta.env.VITE_PHEASANT_API_BASE ?? "/api";
 
 const API_TOKEN_KEY = "pheasant.api.token";
 const API_AUTH_REQUIRED_EVENT = "pheasant:api-auth-required";
@@ -121,6 +121,7 @@ function signalApiAuthRequired(): void {
 
 function requestHeaders(initial?: HeadersInit, json = true): Headers {
   const headers = new Headers(initial);
+  if (json && !headers.has("accept")) headers.set("accept", "application/json");
   if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
   const token = getApiToken();
   if (token && !headers.has("authorization")) {
@@ -181,31 +182,64 @@ function errorDetail(body: unknown, fallback: string): string {
   return messages.length > 0 ? messages.join("; ") : fallback;
 }
 
+function invalidJsonResponse(requestPath: string, contentType: string | null): string {
+  const responseType = contentType || "an unrecognized content type";
+  return (
+    "The API request to " +
+    requestPath +
+    " returned " +
+    responseType +
+    " instead of JSON. Check the UI API base and proxy; a separately hosted UI must send API requests to the Pheasant server."
+  );
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: initialHeaders, ...requestInit } = init ?? {};
-  const response = await fetch(`${API_BASE}${path}`, {
+  const fetchInit = {
     ...requestInit,
     headers: requestHeaders(initialHeaders),
-  });
+  };
+  let requestPath = `${API_BASE}${path}`;
+  let response = await fetch(requestPath, fetchInit);
+  const isGet = !requestInit.method || requestInit.method.toUpperCase() === "GET";
+  // A bundle built for same-origin hosting may be served by a static UI proxy
+  // instead. If that proxy returns its SPA shell for an API GET, retry through
+  // the conventional /api proxy before surfacing the configuration error.
+  if (
+    !API_BASE &&
+    isGet &&
+    response.headers.get("content-type")?.toLowerCase().includes("text/html")
+  ) {
+    requestPath = `/api${path}`;
+    response = await fetch(requestPath, fetchInit);
+  }
   if (response.status === 401) signalApiAuthRequired();
+  const contentType = response.headers.get("content-type");
+  const responseText = await response.text();
+  let body: unknown;
+  let isJson = true;
+  try {
+    body = JSON.parse(responseText);
+  } catch {
+    isJson = false;
+  }
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
+    let detail = isJson
+      ? errorDetail(body, `${response.status} ${response.statusText}`)
+      : invalidJsonResponse(requestPath, contentType);
     let code: string | null = null;
     let retryable = false;
-    try {
-      const body = await response.json();
-      detail = errorDetail(body, detail);
-      if (body && typeof body === "object") {
-        const fields = body as { code?: unknown; retryable?: unknown };
-        code = typeof fields.code === "string" ? fields.code : null;
-        retryable = fields.retryable === true;
-      }
-    } catch {
-      /* response had no JSON body */
+    if (body && typeof body === "object") {
+      const fields = body as { code?: unknown; retryable?: unknown };
+      code = typeof fields.code === "string" ? fields.code : null;
+      retryable = fields.retryable === true;
     }
     throw new ApiError(detail, response.status, code, retryable);
   }
-  return (await response.json()) as T;
+  if (!isJson) {
+    throw new ApiError(invalidJsonResponse(requestPath, contentType), response.status);
+  }
+  return body as T;
 }
 
 function qs(
