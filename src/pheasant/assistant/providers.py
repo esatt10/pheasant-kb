@@ -13,7 +13,10 @@ Wire shapes (all POST + JSON):
 * anthropic  ``{base_url}/v1/messages`` — ``x-api-key`` +
   ``anthropic-version`` headers; text is the first ``type == "text"``
   block of ``content``. ``temperature`` is NOT sent: current models
-  (Opus 5 / Sonnet 5 / Opus 4.8+) reject sampling parameters with a 400.
+  (Opus 5.5 / Sonnet 5.5 / Haiku 5.5, Opus 5 / Sonnet 5 / Opus 4.8+) reject
+  sampling parameters with a 400. ``reasoning_effort`` is
+  ``output_config.effort`` (``low``) or a ``thinking`` block that turns
+  thinking off (``none``), for the Claude 5.5 models only.
 * gemini     ``{base_url}/models/{model}:generateContent`` —
   ``x-goog-api-key`` header; text is joined from
   ``candidates[0].content.parts[].text``.
@@ -29,6 +32,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from pheasant.assistant.catalog import (
+    ANTHROPIC_DEFAULT_EFFORT,
+    ANTHROPIC_THINKING_OFF,
+)
 from pheasant.assistant.catalog import (
     AUTO_ORDER as CATALOG_AUTO_ORDER,
 )
@@ -171,10 +178,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "anthropic": ProviderSpec(
         id="anthropic",
         label="Anthropic",
-        # Sonnet 5 is the default: strong grounded synthesis at a price that
+        # Sonnet 5.5 is the default: strong grounded synthesis at a price that
         # suits a per-question retrieval surface. Override with
-        # assistant.model (e.g. claude-opus-5) for harder corpora.
-        default_model="claude-sonnet-5",
+        # assistant.model (claude-opus-5-5 for harder corpora,
+        # claude-haiku-5-5 for the cheapest grounded answers).
+        default_model="claude-sonnet-5-5",
         default_base_url="https://api.anthropic.com",
         api_key_env="ANTHROPIC_API_KEY",
         key_hint="sk-ant-…",
@@ -364,9 +372,16 @@ def complete(
     base = (base_url or spec.default_base_url).rstrip("/")
 
     if provider == "anthropic":
-        if reasoning_effort is not None:
-            raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
-        return _anthropic(base, api_key, model, system, prompt, max_output_tokens, timeout)
+        return _anthropic(
+            base,
+            api_key,
+            model,
+            system,
+            prompt,
+            max_output_tokens,
+            timeout,
+            reasoning_effort=reasoning_effort,
+        )
     if provider == "openai":
         return _openai(
             base,
@@ -381,21 +396,44 @@ def complete(
             on_delta=on_delta,
         )
     if reasoning_effort is not None:
-        raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
+        raise ProviderError("reasoning_effort is not supported by the Gemini provider")
     return _gemini(
         base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
     )
 
 
 def _anthropic(
-    base: str, key: str, model: str, system: str, prompt: str, max_tokens: int, timeout: float
+    base: str,
+    key: str,
+    model: str,
+    system: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: float,
+    *,
+    reasoning_effort: str | None = None,
 ) -> str:
-    payload = {
+    payload: dict = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if reasoning_effort is not None:
+        if model not in ANTHROPIC_DEFAULT_EFFORT:
+            raise ProviderError(f"reasoning_effort is not enabled for Anthropic model {model!r}")
+        if reasoning_effort == "low":
+            payload["output_config"] = {"effort": "low"}
+        elif reasoning_effort == "none":
+            off = ANTHROPIC_THINKING_OFF.get(model)
+            if off is None:
+                raise ProviderError(
+                    f"Anthropic model {model!r} cannot turn thinking off; "
+                    "use reasoning_effort 'low' instead"
+                )
+            payload["thinking"] = dict(off)
+        else:
+            raise ProviderError(f"unsupported reasoning_effort {reasoning_effort!r}")
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
     note_model_call()
     data = _http_json(f"{base}/v1/messages", payload, headers, timeout)

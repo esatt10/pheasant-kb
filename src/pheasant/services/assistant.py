@@ -437,10 +437,10 @@ RETRIEVAL_FIELD_HELP: dict[str, str] = {
     "grade_evidence": "ask the model to grade its own evidence before answering.",
     "grader_model": "optional model for evidence sufficiency checks when separate grading is "
     "enabled; combined grade-and-answer uses the assistant model for both.",
-    "planner_reasoning_effort": "optional Luna reasoning effort for query planning; unset "
-    "preserves the provider default.",
-    "grader_reasoning_effort": "optional Luna reasoning effort for evidence grading; unset "
-    "preserves the provider default.",
+    "planner_reasoning_effort": "optional Luna or Claude 5.5 reasoning effort for query "
+    "planning; unset preserves the provider default.",
+    "grader_reasoning_effort": "optional Luna or Claude 5.5 reasoning effort for evidence "
+    "grading; unset preserves the provider default.",
     "verify_citations": "drop [n] markers that do not resolve to a real citation.",
     "max_facts": "graph facts surfaced alongside the answer.",
 }

@@ -91,7 +91,7 @@ order Anthropic → OpenAI → Gemini.
 ```yaml
 assistant:
   provider: auto            # or: anthropic | openai | gemini | none
-  # model: claude-sonnet-5  # provider default when unset
+  # model: claude-sonnet-5-5  # provider default when unset
 ```
 
 ```bash

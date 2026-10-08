@@ -520,3 +520,34 @@ def test_chat_stream_uses_an_async_generator_not_a_threadpool_wrapped_one(
         "iterate_in_threadpool — an open or abandoned stream then holds a "
         "worker-thread token for as long as the connection stays open"
     )
+
+
+def test_a_claude_5_5_answer_reports_the_effort_it_ran_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        providers_module,
+        "_http_json",
+        lambda url, payload, headers, timeout: {
+            "content": [{"type": "text", "text": "Because content is hashed [1]."}]
+        },
+    )
+    config = _Config()
+    config.assistant.provider = "anthropic"
+    config.assistant.model = "claude-opus-5-5"
+    try:
+        payload = chat_module.answer_question(
+            "why is sync idempotent",
+            search=_FakeSearch(_results()),
+            knowledge_base="kb",
+            config=config,
+            graph=_graph(),
+            env={"ANTHROPIC_API_KEY": "test-key"},
+        )
+    finally:
+        config.assistant.provider = "auto"  # restore the shared class attributes
+        config.assistant.model = None
+
+    assert payload["model"] == "claude-opus-5-5"
+    # Unset keeps Opus 5.5's own default, which is medium rather than high.
+    assert payload["reasoning_effort"]["answer"] == {"requested": None, "effective": "medium"}

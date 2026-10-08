@@ -587,7 +587,7 @@ assistant:
   # "auto" picks the first provider whose key env var is set on the container
   # (ANTHROPIC_API_KEY, then OPENAI_API_KEY, then GEMINI_API_KEY).
   provider: auto
-  # model: claude-sonnet-5      # provider default when unset
+  # model: claude-sonnet-5-5    # provider default when unset; or claude-opus-5-5 / claude-haiku-5-5
   # base_url: https://api.anthropic.com
   # api_key_env: ANTHROPIC_API_KEY   # env var NAME; the key never lands in config
   # Let a UI user paste their own key for the life of a browser session. It is
@@ -598,7 +598,7 @@ assistant:
   max_context_chunks: 8
   max_output_tokens: 4096
   request_timeout_seconds: 90.0   # ceiling per provider call; a deadline shortens it
-  # reasoning_effort: low           # none | low; unset keeps the model's default
+  # reasoning_effort: low           # none | low (gpt-6-luna, Claude 5.5; Opus 5.5 takes low only); unset keeps the model's default
   # Optional end-to-end answer deadlines and process-wide answer admission.
   # Over the limit, a request gets 429 + Retry-After and code ASSISTANT_BUSY.
   # latency:

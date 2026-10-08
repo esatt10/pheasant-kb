@@ -25,6 +25,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
+from pheasant.assistant.catalog import ANTHROPIC_DEFAULT_EFFORT
 from pheasant.assistant.chat import (
     _known_workflow_names,
     build_prompt,
@@ -562,12 +563,16 @@ def answer_question(
     assistant_effort = getattr(settings, "reasoning_effort", None)
     planner_effort = merged_options.get("planner_reasoning_effort")
     grader_effort = merged_options.get("grader_reasoning_effort")
-    is_openai = getattr(llm, "provider", None) == "openai"
+    provider_id = getattr(llm, "provider", None)
 
     def effective_effort(requested: Any, model: str | None) -> str | None:
-        if not is_openai or model != "gpt-6-luna":
+        if provider_id == "openai" and model == "gpt-6-luna":
+            default = "medium"
+        elif provider_id == "anthropic" and model in ANTHROPIC_DEFAULT_EFFORT:
+            default = ANTHROPIC_DEFAULT_EFFORT[model]
+        else:
             return None
-        return str(requested) if requested is not None else "medium"
+        return str(requested) if requested is not None else default
 
     effective_answer_effort = effective_effort(assistant_effort, result.model)
     effective_planner_effort = effective_effort(planner_effort or assistant_effort, result.model)

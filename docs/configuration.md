@@ -1372,7 +1372,7 @@ default and works fully offline.
 |---|---|---|---|
 | `enabled` | bool | `true` | `false` makes `/assistant/chat` return 403. |
 | `provider` | str | `auto` | `auto` \| `anthropic` \| `openai` \| `gemini` \| `none`. `auto` picks the first provider whose key env var is set, in the order Anthropic → OpenAI → Gemini. |
-| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-6-luna`, `gemini-2.5-flash`). |
+| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5-5`, `gpt-6-luna`, `gemini-2.5-flash`). The Claude 5.5 family — `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` — is supported with `provider: anthropic`. |
 | `base_url` | str \| null | `null` | Point at a gateway or self-hosted OpenAI-spec endpoint. |
 | `api_key_env` | str \| null | `null` | Read the key from a differently-named variable. Defaults to the provider's own (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). |
 | `allow_session_keys` | bool | `true` | Let a UI user paste a key for their browser session. Held in server memory behind an opaque token — never written to config, `/state`, or logs; dropped on expiry, revoke, or restart. Set `false` to require the env var. |
@@ -1380,7 +1380,7 @@ default and works fully offline.
 | `max_context_chunks` | int | `8` | Passages retrieved and offered to the model. |
 | `max_output_tokens` | int | `4096` | Per-answer output cap sent to the provider. |
 | `request_timeout_seconds` | float | `90.0` | Maximum provider-call timeout; an active assistant deadline shortens it. Provider truncation is reported as incomplete. |
-| `reasoning_effort` | str \| null | `null` | Optional Luna reasoning control (`none` or `low`). Unset preserves the model default. Unsupported settings fail explicitly. |
+| `reasoning_effort` | str \| null | `null` | Optional reasoning control (`none` or `low`) for `gpt-6-luna` and the Claude 5.5 models. On Claude, `low` is `output_config.effort: low` and `none` turns thinking off (`between_tools` on Sonnet 5.5, `disabled` on Haiku 5.5); Opus 5.5 cannot turn thinking off, so `none` is refused for it. Unset preserves the model default (Luna, Opus 5.5 and Haiku 5.5 `medium`, Sonnet 5.5 `high`). Unsupported settings fail explicitly. |
 | `latency` | block | unset | Optional end-to-end answer deadlines and process-wide answer admission. See below. |
 | `max_facts` | int | `12` | Graph facts surfaced per answer, collected round-robin across the cited sources. |
 | `workflow` | str | `auto` | Which agent workflow answers a question: `auto` \| `knowledge-summary` \| `agentic` \| `simple` \| any registered plugin name. `auto` = `agentic` when the `[agent]` extra is installed *and* a model is reachable, else `simple`. An unknown or failing workflow degrades to `simple` with the reason attached to the answer. |
@@ -1406,8 +1406,8 @@ typed home, which is what makes them validated, editable from the UI
 | `expand_per_node` | int \| null | `4` | Neighbours taken per expanded node. |
 | `grade_evidence` | bool \| null | `true` | Ask the model to grade its own evidence before answering. |
 | `grader_model` | str \| null | `null` | Optional separate model for evidence sufficiency checks when combined grade-and-answer is off. |
-| `planner_reasoning_effort` | str \| null | `null` | Optional Luna `none` or `low` override for planning; overrides `assistant.reasoning_effort`. |
-| `grader_reasoning_effort` | str \| null | `null` | Optional Luna `none` or `low` override for evidence grading; overrides `assistant.reasoning_effort`. |
+| `planner_reasoning_effort` | str \| null | `null` | Optional `none` or `low` override (Luna or Claude 5.5) for planning; overrides `assistant.reasoning_effort`. |
+| `grader_reasoning_effort` | str \| null | `null` | Optional `none` or `low` override (Luna or Claude 5.5) for evidence grading; overrides `assistant.reasoning_effort`. |
 | `verify_citations` | bool \| null | `true` | Drop `[n]` markers that do not resolve to a real citation. |
 | `max_facts` | int \| null | `12` | Graph facts surfaced alongside the answer. |
 
