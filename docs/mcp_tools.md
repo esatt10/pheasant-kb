@@ -116,6 +116,17 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `get_snapshot` | A snapshot's manifest, and whether the region still stands where it says. Drift names the manifest *sections* that moved: `corpus` means somebody indexed, `retrieval` means a tuning bundle was applied, `memory` means a record was written. |
 | `list_snapshots` | Every snapshot this region holds, saying which are sealed. |
 
+`submit_documents` carries each binary document as base64 inside one MCP JSON
+request. Pheasant's default `sync.limits.max_file_size_mb` is **1024 MiB per
+file**; Pheasant does not impose a 4 MiB batch limit. An MCP client, gateway, or
+reverse proxy may impose a smaller *whole-request* limit before Pheasant sees
+the call. Splitting a batch helps only while each encoded file fits that
+limit. For larger PDFs, send the original bytes to the multipart HTTP
+`POST /sources/upload` endpoint (repeat the `files` field for a batch), or
+mount a folder as a source and call `sync_source`. The multipart endpoint uses
+the same per-file limit and reports rejected files individually. Check the
+actual ingress's request-size setting when a whole HTTP batch is refused.
+
 ### Raw retrieval with graph expansion
 
 `search_context` is retrieval with no model in the path — three arms fused by

@@ -13,6 +13,7 @@ Acceptance:
 
 from __future__ import annotations
 
+import base64
 import io
 import zipfile
 from pathlib import Path
@@ -188,6 +189,50 @@ def test_a_second_upload_adds_to_the_same_source(loaded_config, config_path: Pat
     assert {p.name for p in directory.iterdir()} == {"one.md", "two.md"}
     # Still one source, not two.
     assert sum(1 for s in client.get("/sources").json() if s["name"] == "uploads") == 1
+
+
+def test_twenty_pdfs_in_one_request_can_exceed_four_mib(loaded_config, config_path: Path) -> None:
+    """The file limit is per item; there is no Pheasant 4 MiB batch limit."""
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+    pdf = b"%PDF-1.7\n" + b"x" * (256 * 1024)
+    files = [
+        ("files", (f"part-{index:02d}.pdf", io.BytesIO(pdf), "application/pdf"))
+        for index in range(20)
+    ]
+
+    response = client.post(
+        "/sources/upload",
+        files=files,
+        data={"source_name": "large-batch", "sync_now": "false"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["stored"]) == 20
+    assert body["rejected"] == []
+    assert sum(item["size_bytes"] for item in body["stored"]) > 4 * 1024 * 1024
+
+
+def test_receipted_pdf_batch_can_exceed_four_mib(loaded_config, config_path: Path) -> None:
+    """The shared submission path accepts a JSON batch beyond 4 MiB too."""
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+    encoded = base64.b64encode(b"%PDF-1.7\n" + b"x" * (256 * 1024)).decode("ascii")
+    documents = [{"relative_path": f"part-{index:02d}.pdf", "text": encoded} for index in range(20)]
+
+    response = client.post(
+        "/ingest/submit",
+        json={
+            "source_name": "receipted-batch",
+            "content_encoding": "base64",
+            "documents": documents,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.request.content) > 4 * 1024 * 1024
+    body = response.json()
+    assert len(body["accepted"]) == 20
+    assert body["rejected"] == []
 
 
 def test_one_rejected_file_does_not_lose_the_rest(loaded_config, config_path: Path) -> None:
