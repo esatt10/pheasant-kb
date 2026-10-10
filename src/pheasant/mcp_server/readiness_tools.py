@@ -302,8 +302,10 @@ def register_readiness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
 
         Set content_encoding="base64" to submit original PDF or other binary file bytes
         in each entry's text field. The default "utf-8" retains text submissions.
-        Large base64 batches may exceed an MCP client's or proxy's request limit;
-        use HTTP POST /sources/upload with multipart files for large PDFs.
+        HTTP MCP requests default to a 64 MiB whole-body limit, configurable with
+        server.mcp.max_request_body_size_mb. Account for base64 and JSON overhead;
+        clients and proxies may impose smaller limits. Multipart /sources/upload
+        does not preserve this tool's receipts or idempotency keys.
 
         Acceptance is not searchability: sync the source, then call
         `acknowledge_ingest`.

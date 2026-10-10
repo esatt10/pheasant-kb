@@ -117,15 +117,16 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `list_snapshots` | Every snapshot this region holds, saying which are sealed. |
 
 `submit_documents` carries each binary document as base64 inside one MCP JSON
-request. Pheasant's default `sync.limits.max_file_size_mb` is **1024 MiB per
-file**; Pheasant does not impose a 4 MiB batch limit. An MCP client, gateway, or
-reverse proxy may impose a smaller *whole-request* limit before Pheasant sees
-the call. Splitting a batch helps only while each encoded file fits that
-limit. For larger PDFs, send the original bytes to the multipart HTTP
-`POST /sources/upload` endpoint (repeat the `files` field for a batch), or
-mount a folder as a source and call `sync_source`. The multipart endpoint uses
-the same per-file limit and reports rejected files individually. Check the
-actual ingress's request-size setting when a whole HTTP batch is refused.
+request. Pheasant defaults to **64 MiB per HTTP MCP request**, configured by
+`server.mcp.max_request_body_size_mb`. The limit covers the entire JSON body,
+including base64's roughly one-third expansion. The separate default
+`sync.limits.max_file_size_mb` is **1024 MiB per file**; to submit a file near
+that size through MCP, raise the whole-request limit accordingly. An MCP client,
+gateway, or reverse proxy may impose a smaller limit before Pheasant sees the
+call. Batch by encoded request size so each request stays below the smallest
+limit in the path. `POST /sources/upload` accepts multipart originals, but it
+does not return ingestion receipts or preserve submission idempotency keys; it
+is not interchangeable with `submit_documents` for receipt-based workflows.
 
 ### Raw retrieval with graph expansion
 

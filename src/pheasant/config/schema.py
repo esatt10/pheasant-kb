@@ -245,9 +245,17 @@ class PheasantSettings(ModelMixin):
 @dataclass
 class McpSettings(ModelMixin):
     enabled: bool = True
+    #: Whole HTTP MCP request limit, including JSON and base64 overhead.
+    #: Separate from the per-file sync limit. Keep bounded because the SDK
+    #: parses each accepted request in memory.
+    max_request_body_size_mb: int = 64
     transports: dict[str, bool] = field(
         default_factory=lambda: {"stdio": True, "streamable_http": True, "sse": False}
     )
+
+    def __post_init__(self) -> None:
+        if self.max_request_body_size_mb <= 0:
+            raise ValueError("server.mcp.max_request_body_size_mb must be positive")
 
 
 @dataclass
