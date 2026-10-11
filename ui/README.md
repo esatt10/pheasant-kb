@@ -97,7 +97,7 @@ npm run preview    # serve the production build locally
 
 | Build variable | Default | Purpose |
 |---|---|---|
-| `VITE_PHEASANT_API_BASE` | `/api` in dev, same-origin in prod | Where the API lives. |
+| `VITE_PHEASANT_API_BASE` | `/api` | Where the API lives. Set it to an empty string when building a bundle served directly by the Pheasant API. |
 | `VITE_PHEASANT_GRAPH_NODE_LIMIT` | `1200` | Node budget per graph request. |
 | `VITE_PHEASANT_GRAPH_LINK_LIMIT` | `3600` | Link budget per graph request. |
 
@@ -114,12 +114,11 @@ Step-by-step for all of these, plus how to avoid serving a stale bundle:
   proxying `/api/*` to the pheasant container, on `http://localhost:8080`.
   Pass `--build` whenever the UI source changed: Compose reuses an existing
   local image for the tag otherwise, so edits appear to do nothing.
-- **Served by pheasant:** `npm run build` and the API mounts `dist/`
+- **Served by pheasant:** `VITE_PHEASANT_API_BASE="" npm run build` and the API mounts `dist/`
   automatically at its own port (`http://localhost:8765`), or point
   `PHEASANT_UI_DIST` at a bundle elsewhere. Mounted only when
-  `server.ui.enabled` is true and the directory exists. Build this one *without*
-  `VITE_PHEASANT_API_BASE` so the bundle calls the API same-origin rather than
-  through `/api`.
+  `server.ui.enabled` is true and the directory exists. The empty base makes
+  this bundle call the same-origin API rather than going through `/api`.
 - **Published image:** `ghcr.io/esatt10/pheasant-ui:<pheasant version>` — built
   from the same commit as the pheasant image and tagged with the same version,
   so the pair always match.

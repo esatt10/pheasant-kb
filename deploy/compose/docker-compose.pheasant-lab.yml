@@ -132,7 +132,8 @@ services:
     # result sets; answer admission bounds active model/retrieval requests.
     # Repeated 40-request/c8 hybrid stress plateaus around 1.0 GiB after
     # allocator warm-up; 2 GiB leaves one full warm working set of headroom.
-    mem_limit: 2048m
+    # A 1024 MiB base64 MCP body is parsed in memory before submission.
+    mem_limit: 4096m
     cpus: 1.0
     command: ["serve", "--role", "api"]
     depends_on:

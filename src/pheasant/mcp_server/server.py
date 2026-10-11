@@ -1171,6 +1171,7 @@ def _streamable_http_options(config: PheasantConfig) -> dict[str, Any]:
     return {
         "json_response": True,
         "stateless_http": True,
+        "max_request_body_size": config.server.mcp.max_request_body_size_mb * 1024 * 1024,
         "transport_security": _transport_security(config),
         "host": config.server.host,
     }
@@ -1227,6 +1228,7 @@ def run_mcp_server(config: PheasantConfig, transport: str = "stdio") -> None:
             host=config.server.host,
             port=config.server.port,
             sse_path="/sse",
+            max_request_body_size=config.server.mcp.max_request_body_size_mb * 1024 * 1024,
             transport_security=_transport_security(config),
         )
         return

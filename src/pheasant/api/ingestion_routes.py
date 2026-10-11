@@ -191,22 +191,33 @@ def register_ingestion_routes(
         limits = config.sync.limits
         max_bytes = (limits.max_file_size_mb or 0) * 1024 * 1024 or None
 
-        # Reading each upload's body is genuine async I/O and stays on the
-        # event loop. Everything after it — the disk write, the source
-        # registry, the audit log, and (wait=True) the whole sync pipeline —
-        # is blocking, synchronous work, so it moves onto a worker thread
-        # below. Left on the loop, one slow upload stalls every other
-        # request this process is serving: measured, a single wait=true
-        # upload delayed a *concurrently issued* GET /ready by the same ~5s
-        # the upload itself took.
-        pairs: list[tuple[str | None, bytes]] = [
-            (upload.filename, await upload.read()) for upload in files
-        ]
+        # FastAPI has already spooled the multipart files. Read and land them
+        # one at a time on the worker thread, so a 20-file batch does not hold
+        # all 20 byte strings in memory. Disk writes, source registration and
+        # (wait=True) syncing are blocking too; keeping the whole sequence off
+        # the event loop lets concurrent readiness requests finish promptly.
 
         def _finish_upload() -> dict:
             stored: list[dict] = []
             rejected: list[dict] = []
-            for filename, data in pairs:
+            for upload in files:
+                filename = upload.filename
+                if max_bytes is not None and upload.size is not None and upload.size > max_bytes:
+                    rejected.append(
+                        {
+                            "filename": filename,
+                            "error": (
+                                f"{filename or 'upload'} is {upload.size // (1024 * 1024)} MB, "
+                                f"over the {max_bytes // (1024 * 1024)} MB per-file limit "
+                                "(sync.limits.max_file_size_mb)"
+                            ),
+                        }
+                    )
+                    continue
+                # Some UploadFile implementations do not report size. In that
+                # case, stop at one byte over the limit; landing.write will
+                # apply the usual per-file refusal without reading the rest.
+                data = upload.file.read(max_bytes + 1 if max_bytes is not None else -1)
                 try:
                     placement = landing.write(
                         name,
@@ -236,6 +247,8 @@ def register_ingestion_routes(
                     # region is the caller's proxy for it, and the caller did
                     # nothing wrong.
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+                finally:
+                    del data
                 stored.append(placement.stored.__dict__)
             if not stored:
                 raise HTTPException(

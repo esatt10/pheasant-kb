@@ -5382,6 +5382,23 @@ def _mount_ui(app: FastAPI, config: PheasantConfig) -> None:
     index = target / "index.html"
 
     @app.middleware("http")
+    async def _ui_api_prefix(request: Request, call_next: Any) -> Response:
+        """Accept the sidecar-style API base when this image serves the UI.
+
+        A browser tab can keep an older bundle that calls ``/api/*`` after the
+        same-origin image is rebuilt. The sidecar normally strips that prefix;
+        the bundled UI has no sidecar. Route both spellings through the same
+        handlers and bearer-token guard, without aliasing internal endpoints.
+        """
+        path = request.scope.get("path", "")
+        if path.startswith("/api/") and not path.startswith("/api/internal/"):
+            request.scope["path"] = path[4:]
+            raw_path = request.scope.get("raw_path")
+            if isinstance(raw_path, bytes) and raw_path.startswith(b"/api/"):
+                request.scope["raw_path"] = raw_path[4:]
+        return await call_next(request)
+
+    @app.middleware("http")
     async def _ui_navigation(request: Request, call_next: Any) -> Response:
         """Refreshing a UI tab whose path is also an API route loads the UI.
 

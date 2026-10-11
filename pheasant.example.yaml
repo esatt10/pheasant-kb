@@ -29,6 +29,9 @@ server:
   role: all
   mcp:
     enabled: true
+    # Whole HTTP MCP request, including base64 and JSON overhead; per-file
+    # ingestion still follows sync.limits.max_file_size_mb.
+    max_request_body_size_mb: 64
     transports:
       stdio: true
       streamable_http: true

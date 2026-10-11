@@ -10,6 +10,7 @@
   "server.port": 8765,
   "server.role": "all",
   "server.mcp.enabled": true,
+  "server.mcp.max_request_body_size_mb": 1024,
   "server.mcp.transports": {
     "stdio": false,
     "streamable_http": true,
@@ -20,6 +21,17 @@
   "server.api.max_concurrent_requests": 32,
   "server.api.drain_seconds": 20,
   "server.api.graph_refresh_seconds": 30,
+  "server.api.cors_origins": [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://host.docker.internal:8765"
+  ],
   "server.ui.enabled": true,
   "server.ui.graph_visualization": true,
   "storage.backend": "postgres",

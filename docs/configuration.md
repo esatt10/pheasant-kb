@@ -226,6 +226,7 @@ both answer correctly. That property is pinned by a test.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `true` | Global MCP enable/disable toggle. |
+| `max_request_body_size_mb` | integer | `64` | Maximum whole HTTP MCP request in MiB, including JSON and base64 overhead. Applies to Streamable HTTP and SSE; must be positive. Independent of `sync.limits.max_file_size_mb`. Increase it for larger binary submissions, allowing for base64's roughly one-third expansion. |
 | `transports.stdio` | bool | `true` | Enables local stdio transport (common for editor integrations). |
 | `transports.streamable_http` | bool | `true` | Enables HTTP streaming MCP transport. |
 | `transports.sse` | bool | `false` | Enables SSE transport if your client requires it. |

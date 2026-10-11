@@ -39,6 +39,7 @@ from pheasant.ingestion.walk import (
     aggregate_depth_counts,
     walk_source,
 )
+from pheasant.memory.source_removal import reconcile_after_source_removal, retire_source_memories
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
@@ -1803,6 +1804,7 @@ class SyncEngine:
                     else None
                 )
                 self._ensure_persisted_graph_loaded()
+                retire_source_memories(self, source_name)
                 self.graph_builder.remove_source_content(source_name)
                 self.flush_node_index()
                 # Publish graph removal before deleting the registry entry. If
@@ -1811,21 +1813,17 @@ class SyncEngine:
                     self.config.knowledge_base_id,
                     self.graph_builder.graph,
                 )
-                # Vectors live in their own LanceDB store, outside the
-                # relational rows removed below. Prune them after publishing
-                # the graph delta so a retry can finish cleanup idempotently.
+                # Prune vectors after graph publication so retries finish cleanup.
                 if self.vectors is not None:
                     self.vectors.prune_source(source_name, set())
                     self.vectors.flush()
-                # Uploaded bytes live outside the index under a per-source
-                # namespace. Delete only when the registered source path proves
-                # ownership of that exact directory; normal folder sources keep
-                # their original user files.
+                # Delete only upload-owned bytes; leave ordinary source files.
                 if uploaded_files is not None and uploaded_files.exists():
                     shutil.rmtree(uploaded_files)
                 self.manifests.delete(source_name)
                 self.state.delete_source(source_name)
                 self.config.sources = [s for s in self.config.sources if s.name != source_name]
+        reconcile_after_source_removal(self, source_name)
         nodes, edges = self._graph_counts()
         report("saving", 1, 1, f"removed {source_name}")
         return SyncResult(source_name, 0, 0, nodes, edges, "removed")

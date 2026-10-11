@@ -116,6 +116,18 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `get_snapshot` | A snapshot's manifest, and whether the region still stands where it says. Drift names the manifest *sections* that moved: `corpus` means somebody indexed, `retrieval` means a tuning bundle was applied, `memory` means a record was written. |
 | `list_snapshots` | Every snapshot this region holds, saying which are sealed. |
 
+`submit_documents` carries each binary document as base64 inside one MCP JSON
+request. Pheasant defaults to **64 MiB per HTTP MCP request**, configured by
+`server.mcp.max_request_body_size_mb`. The limit covers the entire JSON body,
+including base64's roughly one-third expansion. The separate default
+`sync.limits.max_file_size_mb` is **1024 MiB per file**; to submit a file near
+that size through MCP, raise the whole-request limit accordingly. An MCP client,
+gateway, or reverse proxy may impose a smaller limit before Pheasant sees the
+call. Batch by encoded request size so each request stays below the smallest
+limit in the path. `POST /sources/upload` accepts multipart originals, but it
+does not return ingestion receipts or preserve submission idempotency keys; it
+is not interchangeable with `submit_documents` for receipt-based workflows.
+
 ### Raw retrieval with graph expansion
 
 `search_context` is retrieval with no model in the path — three arms fused by
