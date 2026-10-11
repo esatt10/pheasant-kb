@@ -11,6 +11,21 @@ from pheasant.memory.store import MemoryStore, memory_source
 SOURCE_REMOVAL_MARKER = ".source-removal-pending"
 
 
+def reconcile_after_source_removal(engine: Any, source_name: str) -> None:
+    """Reindex changed memories after graph removal, including on redelivery."""
+
+    source = memory_source(engine.config, engine.state)
+    if source is None or source.name == source_name:
+        return
+    pending = Path(source.path) / SOURCE_REMOVAL_MARKER
+    if not pending.is_file():
+        return
+    # An empty memory tree needs a full sync; incremental skips empty listings.
+    mode = "incremental" if MemoryStore(source.path).list_records() else "full"
+    engine.sync_source(source.name, mode)
+    pending.unlink(missing_ok=True)
+
+
 def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     """Archive sole-source memories and correct composites before graph removal.
 
@@ -29,9 +44,7 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     interrupted = {
         record.supersedes
         for record in all_records
-        if recovery_tag in record.tags
-        and record.supersedes
-        and record.supersedes in prior
+        if recovery_tag in record.tags and record.supersedes and record.supersedes in prior
     }
     recovered = 0
     if interrupted:
@@ -67,8 +80,7 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
                     members.setdefault(record_id, set()).add(member_id)
                 continue
             if not any(
-                edge.get("type") in {"about", "references", "imports"}
-                for edge in edges.values()
+                edge.get("type") in {"about", "references", "imports"} for edge in edges.values()
             ):
                 continue
             attrs = nodes.get(target) or {}
@@ -86,8 +98,7 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     live_sources = {
         str(row["id"])
         for row in engine.state.rows(
-            "SELECT id FROM sources WHERE id NOT IN "
-            "(SELECT source_id FROM removed_sources)"
+            "SELECT id FROM sources WHERE id NOT IN (SELECT source_id FROM removed_sources)"
         )
     }
 
@@ -106,9 +117,7 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     for record_id, record in sorted(by_id.items()):
         sources = sources_for(record_id, set())
         if source_name in sources:
-            affected.append(
-                (record, sorted((sources & live_sources) - {source_name, source.name}))
-            )
+            affected.append((record, sorted((sources & live_sources) - {source_name, source.name})))
     if not affected:
         return {"archived": recovered, "corrected": 0}
 

@@ -58,8 +58,9 @@ CEILINGS: dict[str, int] = {
     "assistant/retrieval.py": 1650,
     "assistant/workflows/agentic.py": 1600,
     "cli.py": 3200,
-    # Typed query budgets, admission and stage-specific Luna effort settings.
-    "config/schema.py": 2250,
+    # Typed query budgets, admission, and MCP request-size validation belong
+    # with their dataclass settings; this explicit raise accounts for that field.
+    "config/schema.py": 2260,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

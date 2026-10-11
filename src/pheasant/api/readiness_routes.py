@@ -149,7 +149,9 @@ def register_readiness_routes(app: FastAPI, *, config: Any, services: Any, engin
         items = [
             ingestion_service.SubmissionItem(
                 relative_path=entry.relative_path,
-                content=ingestion_service.decode_submission_content(entry.text, req.content_encoding),
+                content=ingestion_service.decode_submission_content(
+                    entry.text, req.content_encoding
+                ),
                 idempotency_key=entry.idempotency_key,
                 metadata=entry.metadata or {},
             )
