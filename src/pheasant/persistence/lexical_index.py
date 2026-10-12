@@ -17,10 +17,12 @@ from pheasant.persistence.sql import Dialect
 
 logger = logging.getLogger(__name__)
 
-#: ``storage.lexical_index`` values. ``tsvector`` is the generated column and
-#: GIN index in :data:`~pheasant.persistence.schema.POSTGRES_EXTRAS`, and needs
-#: nothing but stock Postgres.
-LEXICAL_INDEXES = ("tsvector", "pg_textsearch")
+#: ``storage.lexical_index`` values, the default first. ``pg_textsearch`` needs
+#: Postgres 17+ with the extension preloaded, which every shipped Postgres image
+#: has; ``tsvector`` is the generated column and GIN index in
+#: :data:`~pheasant.persistence.schema.POSTGRES_EXTRAS` and needs nothing but
+#: stock Postgres, which keeps it the way out for a server without it.
+LEXICAL_INDEXES = ("pg_textsearch", "tsvector")
 
 #: The columns the ``pg_textsearch`` backend indexes, in ``chunks_fts`` order
 #: and in the order ``RankingParameters`` weights them (8/3/2/1 by default).
@@ -50,11 +52,15 @@ def bm25_repeat_counts(weights: tuple[float, ...]) -> tuple[int, ...]:
     counts = tuple(int(round(float(weight))) for weight in weights)
     if any(abs(float(w) - c) > 1e-9 for w, c in zip(weights, counts, strict=True)):
         raise ValueError(
-            "storage.lexical_index 'pg_textsearch' needs whole-number column weights "
-            f"(search.ranking title/path/heading/text), got {list(weights)}"
+            "storage.lexical_index 'pg_textsearch' (the Postgres default) needs "
+            "whole-number column weights (search.ranking title/path/heading/text), "
+            f"got {list(weights)}. Round them, or set storage.lexical_index: tsvector."
         )
     if not any(counts):
-        raise ValueError("storage.lexical_index 'pg_textsearch' needs a non-zero column weight")
+        raise ValueError(
+            "storage.lexical_index 'pg_textsearch' needs a non-zero column weight; "
+            "set one, or set storage.lexical_index: tsvector."
+        )
     return counts
 
 
@@ -101,18 +107,17 @@ def postgres_bm25_ddl(counts: tuple[int, ...]) -> str:
 
 
 def validate_lexical_index(name: str, dialect: Dialect) -> str:
-    """The setting, normalized, or a refusal naming what to change."""
+    """The setting, normalized, or a refusal naming the accepted values.
+
+    SQLite takes either value and means FTS5 by both: the setting chooses
+    between two Postgres mechanisms, and a standalone region that never set it
+    must start exactly as it always has (rule 7).
+    """
 
     name = str(name).strip().lower()
     if name not in LEXICAL_INDEXES:
         raise ValueError(
             f"Unknown storage.lexical_index {name!r}; expected one of {', '.join(LEXICAL_INDEXES)}"
-        )
-    if name == "pg_textsearch" and not dialect.is_postgres:
-        raise ValueError(
-            "storage.lexical_index is 'pg_textsearch', which is a Postgres "
-            "extension, but storage.backend is not 'postgres'. SQLite always "
-            "ranks with FTS5's own bm25(); remove the setting or switch backend."
         )
     return name
 

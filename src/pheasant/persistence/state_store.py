@@ -134,7 +134,9 @@ class StateStore:
         #: this store does not rank with pg_textsearch. The search path uses
         #: the index only while the ranking in force has these same weights.
         self.bm25_counts = (
-            bm25_repeat_counts(tuple(lexical_weights)) if lexical_index == "pg_textsearch" else None
+            bm25_repeat_counts(tuple(lexical_weights))
+            if lexical_index == "pg_textsearch" and backend.dialect.is_postgres
+            else None
         )
 
     @classmethod
@@ -147,7 +149,7 @@ class StateStore:
 
         storage = getattr(config, "storage", None)
         backend_name = str(getattr(storage, "backend", "sqlite") or "sqlite")
-        lexical_index = str(getattr(storage, "lexical_index", "tsvector") or "tsvector")
+        lexical_index = str(getattr(storage, "lexical_index", "") or "pg_textsearch")
         # The base weights, before any tuning overlay: the index is built at
         # boot from what the config says, and a bundle that moves a column
         # weight later is ranked on tsvector until the config catches up.

@@ -300,10 +300,14 @@ unchanged either way.
 | `backend` | `sqlite` \| `postgres` | `sqlite` | SQLite is a file and permits **one writer process per knowledge base** — pheasant's hard scaling ceiling. Postgres lifts it. |
 | `dsn_env` | string | `PHEASANT_DATABASE_URL` | Name of the environment variable holding the libpq DSN. Only the variable *name* goes in YAML — a DSN carries a password, and there is deliberately no field to paste one into. |
 | `pool_size` | integer | `10` | Server-side connections this process may hold. Unlike a SQLite file handle, each is a real process on the database. |
-| `lexical_index` | `tsvector` \| `pg_textsearch` | `tsvector` | What the lexical arm ranks with on Postgres. `pg_textsearch` is the BM25 extension (Postgres 17+); see [below](#bm25-on-postgres-storagelexical_index-pg_textsearch). SQLite always uses FTS5 and refuses `pg_textsearch`. |
+| `lexical_index` | `pg_textsearch` \| `tsvector` | `pg_textsearch` | What the lexical arm ranks with on Postgres: BM25 from the pg_textsearch extension (Postgres 17+, preloaded), or the stock `tsvector`/`ts_rank_cd` arm. See [below](#bm25-on-postgres-storagelexical_index). SQLite ignores it and always uses FTS5. |
 
 Postgres needs the extra: `pip install 'pheasant-kb[postgres]'` (the published
-image already has it).
+image already has it), and a server that can load the pg_textsearch extension,
+which the default lexical arm uses: PostgreSQL 17 or 18 with
+`shared_preload_libraries = 'pg_textsearch'`. The `timescale/timescaledb-ha:pg17`
+image is that server, and it is the one every shipped compose file and CI job
+runs. See [below](#bm25-on-postgres-storagelexical_index) for running without it.
 
 ```yaml
 storage:
@@ -337,63 +341,45 @@ indexes (rebuilt for the target dialect), in-flight queue and lease claims
 (meaningless once detached from the process that claimed them), and evaluation
 *replay checkpoints* — a checkpoint is a cached retrieval result, and since the
 two backends rank differently (see below), reusing one across the migration
-would make a single run's numbers half FTS5 and half `ts_rank_cd`. An
+would make a single run's numbers half FTS5 and half Postgres. An
 interrupted batch simply replays from scratch on the new backend.
 
-#### One difference worth knowing about
+#### BM25 on Postgres (`storage.lexical_index`)
 
-Ranking is not identical between the two. SQLite ranks with FTS5's `bm25()`;
-Postgres uses `ts_rank_cd`, which has no inverse document frequency and no
-term-frequency saturation of its own. pheasant supplies both — the rank is a
-sum over query terms of `IDF x saturated rank`, and titles/paths are tokenized
-the way FTS5's `unicode61` does so a search for `deploy` still matches
-`deploy-gateway.md`. What remains is that BM25 normalizes each column by *that
-column's* length while `ts_rank_cd` normalizes the whole vector once, so the
-two can disagree about ranks 2-3 when a title match on a common word competes
-with body matches on rare ones. The top hit agrees on the gold set;
-`tests/test_backend_parity.py` is the gate.
-
-#### BM25 on Postgres (`storage.lexical_index: pg_textsearch`)
-
-[pg_textsearch](https://github.com/timescale/pg_textsearch) is a Postgres
-extension that indexes BM25 directly and answers top-k with Block-Max WAND.
-Selecting it replaces the `ts_rank_cd` arm above with one index scan:
-
-```yaml
-storage:
-  backend: postgres
-  lexical_index: pg_textsearch
-```
+On Postgres the lexical arm ranks with
+[pg_textsearch](https://github.com/timescale/pg_textsearch), an extension that
+indexes BM25 directly and answers top-k with Block-Max WAND: one index scan
+per search. This is the default and needs no configuration beyond the server.
 
 Measured on the PostgreSQL source tree (2,719 files), 15 queries, the lexical
 arm alone, same database:
 
 | | 20,400 chunks | 102,000 chunks |
 |---|---|---|
-| `tsvector` (default) | 75.5 ms | 330.7 ms |
-| `pg_textsearch` | **3.6 ms** | **4.7 ms** |
+| `tsvector` | 75.5 ms | 330.7 ms |
+| `pg_textsearch` (default) | **3.6 ms** | **4.7 ms** |
 | SQLite FTS5, for reference | 26.5 ms | — |
 
 `tsvector` grows with the corpus because it ranks every row its `OR` query
 admits, after a separate document-frequency lookup; the BM25 index reads
-roughly what its `LIMIT` asks for. Ranking also moves closer to SQLite: the
-top hit agreed with FTS5 on 11 of 15 queries (`tsvector`: 9), the top three
-files overlapped 71% (`tsvector`: 40%), and the parity gold set's one
-`tsvector` residual, `deploy gateway`, ranks correctly.
+roughly what its `LIMIT` asks for. Ranking is also closer to SQLite: the top
+hit agreed with FTS5 on 11 of 15 queries (`tsvector`: 9), the top three files
+overlapped 71% (`tsvector`: 40%), and every query in
+`tests/test_backend_parity.py`'s gold set ranks as it does on SQLite.
 
-**What it needs.** PostgreSQL 17 or 18, with the extension installed and
-`shared_preload_libraries = 'pg_textsearch'`. The `timescale/timescaledb-ha:pg17`
-image ships both, preloaded; CI runs on it. pheasant runs `CREATE EXTENSION
-IF NOT EXISTS pg_textsearch` at boot, which needs a superuser. If pheasant's
-role is not one, run that statement once yourself. A server that cannot load
-the extension is a startup refusal naming these steps, not a quiet fallback.
+**What it needs.** PostgreSQL 17 or 18 with the extension installed and
+`shared_preload_libraries = 'pg_textsearch'` — the `timescale/timescaledb-ha:pg17`
+image, preloaded. pheasant runs `CREATE EXTENSION IF NOT EXISTS pg_textsearch`
+at boot, which needs a superuser; if pheasant's role is not one, run that
+statement once yourself. A server that cannot load the extension is a startup
+refusal naming these steps, not a quiet fallback.
 
 **What it costs.**
 
-- *A one-time index build at boot.* The first start after you select it
-  builds the index over existing chunks, about 70 s at 102k chunks, while
+- *A one-time index build at boot.* The first start against an existing
+  database builds the index over its chunks, about 70 s at 102k chunks, while
   holding the schema lock, so other processes starting together wait for it.
-  No re-index is needed, and setting it back to `tsvector` drops the index.
+  No re-index is needed.
 - *Writes.* Every chunk write also maintains the BM25 index. A full re-sync
   of 386 files measured 20–24 s against 15.5–16 s on `tsvector`. The index is
   about the size of the GIN index beside it (70 MB vs 65 MB at 102k chunks).
@@ -404,8 +390,8 @@ column appears as many times as its weight (`title` 8, `path` 3,
 weights: as extra term frequency that BM25 then saturates, so a filename match
 counts for more but not eightfold more. Two consequences:
 
-- The column weights in `search.ranking` must be whole numbers, or startup is
-  refused. Changing them rebuilds the index on the next start.
+- The column weights in `search.ranking` must be whole numbers on Postgres,
+  or startup is refused. Changing them rebuilds the index on the next start.
 - The index answers only for the weights it was built on. A tuning bundle
   that changes a column weight is served by `tsvector`, which reads weights
   per query, until the config's `search.ranking` matches. That is slower, not
@@ -414,6 +400,48 @@ counts for more but not eightfold more. Two consequences:
 
 Source-scoped searches rank with the whole region's corpus statistics rather
 than the source's own, because the index keeps one set per table.
+
+**Upgrading a Postgres 16 deployment.** The compose stacks used
+`postgres:16-alpine` on a volume named `pheasant-pg`; they now run
+`timescale/timescaledb-ha:pg17` on `pheasant-pg17`, because a Postgres 16 data
+directory cannot be opened by 17. The old volume is left untouched. To carry
+its data across, stop the stack, dump the old volume with the old image, then
+restore into the new one before starting pheasant (`<project>` is your compose
+project name; `docker volume ls` shows it):
+
+```bash
+docker compose stop
+docker run --rm -v <project>_pheasant-pg:/var/lib/postgresql/data postgres:16-alpine \
+  sh -c 'su-exec postgres pg_ctl -D /var/lib/postgresql/data -w start >/dev/null \
+         && pg_dump -U pheasant pheasant' > pheasant.sql
+docker compose up -d postgres
+docker compose exec -T postgres psql -U pheasant -d pheasant -v ON_ERROR_STOP=1 < pheasant.sql
+docker compose up -d
+```
+
+The first start then builds the BM25 index over the restored chunks. Restore
+before anything else starts: pheasant creates an empty schema on boot, and the
+restore stops on the first table that already exists.
+
+Or start empty and re-sync: chunks, the full-text index and the graph are
+rebuilt from the sources, but memory records, observations and evaluation
+proof are not — dump those. A database you run yourself needs the same server
+change; until then set `storage.lexical_index: tsvector`.
+
+#### Running without the extension (`lexical_index: tsvector`)
+
+`tsvector` is the stock-Postgres arm: a generated `search_vector` column and
+GIN index, ranked by `ts_rank_cd`. It needs nothing but Postgres, and setting
+it drops the BM25 index on the next start. Its ranking is not identical to
+SQLite's: `ts_rank_cd` has no inverse document frequency and no term-frequency
+saturation of its own, so pheasant supplies both — the rank is a sum over
+query terms of `IDF x saturated rank`, and titles/paths are tokenized the way
+FTS5's `unicode61` does so a search for `deploy` still matches
+`deploy-gateway.md`. What remains is that BM25 normalizes each column by *that
+column's* length while `ts_rank_cd` normalizes the whole vector once, so the
+two can disagree about ranks 2-3 when a title match on a common word competes
+with body matches on rare ones; the parity suite pins the one gold query
+where it does.
 
 
 ## `search` (retrieval behavior)

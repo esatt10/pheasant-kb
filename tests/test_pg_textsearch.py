@@ -1,11 +1,12 @@
 """``storage.lexical_index: pg_textsearch`` — the BM25 extension as the lexical arm.
 
-Two halves. The offline half runs everywhere and holds the parts that need no
-server: the setting's refusals, the weights-to-repetition rule, the one shared
-index expression, and the literal the query inlines. The live half needs a
-Postgres with pg_textsearch loaded, and skips — loudly, with the reason —
-without one, unless ``PHEASANT_REQUIRE_PG_TEXTSEARCH=1`` makes that a failure,
-which is how the CI job that builds the extension stops it skipping silently.
+The Postgres default. Two halves. The offline half runs everywhere and holds
+the parts that need no server: the setting's refusals, SQLite ignoring it, the
+weights-to-repetition rule, the one shared index expression, and the literal
+the query inlines. The live half needs a Postgres with pg_textsearch loaded,
+and skips — loudly, with the reason — without one, unless
+``PHEASANT_REQUIRE_PG_TEXTSEARCH=1`` makes that a failure, which is how CI's
+backend-parity job stops it skipping silently.
 
     PHEASANT_TEST_POSTGRES_DSN=postgresql://user@127.0.0.1:5433/scratch \\
         pytest -q tests/test_pg_textsearch.py
@@ -45,20 +46,38 @@ DEFAULT_COUNTS = (8, 3, 2, 1)
 # --- offline -------------------------------------------------------------
 
 
-def test_the_default_is_tsvector_and_needs_no_extension() -> None:
-    """Rule 7, and a ranking change is never a side effect of an upgrade."""
-
+def test_postgres_ranks_with_pg_textsearch_by_default() -> None:
     config = PheasantConfig.model_validate({"pheasant": {"name": "kb"}})
-    assert config.storage.lexical_index == "tsvector"
+    assert config.storage.lexical_index == "pg_textsearch"
 
 
-def test_sqlite_refuses_pg_textsearch(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Postgres extension"):
-        StateStore(tmp_path / "s.db", lexical_index="pg_textsearch")
+def test_sqlite_ranks_with_fts5_whatever_the_setting_says(tmp_path: Path) -> None:
+    """Rule 7: the default must not change what a standalone region does.
+
+    ``pg_textsearch`` is the setting's default, so SQLite has to accept it,
+    and it must not reach the weights rule either — a standalone region with
+    a fractional column weight ranks with FTS5, which takes any weight.
+    """
+
+    for value in ("pg_textsearch", "tsvector"):
+        store = StateStore(tmp_path / f"{value}.db", lexical_index=value)
+        assert store.bm25_counts is None
+    fractional = StateStore(
+        tmp_path / "f.db", lexical_index="pg_textsearch", lexical_weights=(8.5, 3, 2, 1)
+    )
+    assert fractional.bm25_counts is None
     with pytest.raises(ValueError, match="Unknown storage.lexical_index"):
         StateStore(tmp_path / "s.db", lexical_index="pg_search")
-    # tsvector on SQLite is the setting's default and simply means FTS5.
-    assert StateStore(tmp_path / "s.db", lexical_index="tsvector").bm25_counts is None
+
+
+def test_the_standalone_default_config_opens_on_fts5(tmp_path: Path) -> None:
+    config = PheasantConfig.model_validate(
+        {"pheasant": {"name": "kb", "state_path": str(tmp_path / "state")}}
+    )
+    store = StateStore.from_config(config, tmp_path / "s.db")
+    store.migrate()
+    assert not store.dialect.is_postgres
+    assert store.lexical_index == "pg_textsearch" and store.bm25_counts is None
 
 
 def test_a_store_opened_without_config_never_manages_the_index(tmp_path: Path) -> None:
@@ -72,7 +91,7 @@ def test_a_store_opened_without_config_never_manages_the_index(tmp_path: Path) -
 def test_weights_become_repetition_counts_or_are_refused() -> None:
     assert bm25_repeat_counts((8.0, 3.0, 2.0, 1.0)) == DEFAULT_COUNTS
     assert bm25_repeat_counts((4, 0, 0, 1)) == (4, 0, 0, 1)
-    with pytest.raises(ValueError, match="whole-number"):
+    with pytest.raises(ValueError, match="storage.lexical_index: tsvector"):
         bm25_repeat_counts((8.5, 3.0, 2.0, 1.0))
     with pytest.raises(ValueError, match="non-zero"):
         bm25_repeat_counts((0.0, 0.0, 0.0, 0.0))

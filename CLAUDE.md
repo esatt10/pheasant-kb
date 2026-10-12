@@ -280,8 +280,10 @@ their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
     container have each caught bugs a mock could not. When a change touches a
     backend, run that backend. When it touches the image, build the image.
     CI does the Postgres half for you on **every** PR (`ci.yml`'s
-    `backend-parity` job, deliberately unfiltered); locally it is
-    `PHEASANT_TEST_POSTGRES_DSN=… pytest -q`, which turns on the parity suite
+    `backend-parity` job, deliberately unfiltered, on
+    `timescale/timescaledb-ha:pg17` with `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`);
+    locally it is `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a
+    Postgres 17 that preloads pg_textsearch, which turns on the parity suite
     and the lease/queue differential. Neither replaces running the thing you
     changed. The same holds for the `agent` extra the image ships: CI's 3.12
     leg installs it with `PHEASANT_REQUIRE_AGENT=1` (a skipped agentic test is
@@ -628,18 +630,20 @@ Three arms — text (BM25 over an FTS5 or `tsvector` index), vector (LanceDB),
 and graph — fused by **reciprocal rank fusion**, because the arms score on
 incomparable scales and raw-score merging silently degraded to text-only.
 
-**Postgres can rank lexically with BM25 itself** (`storage.lexical_index:
-pg_textsearch`, opt-in, Postgres 17+ with the extension preloaded). One
-expression index over a per-chunk document in which each column is repeated
-by its weight, which is FTS5's weighting (weight as term frequency, then
-saturation), and one Block-Max WAND top-k scan per search: 3.6 ms against
-`tsvector`'s 75.5 ms at 20k chunks, 4.7 against 330.7 at 102k, and the
-parity residual (`deploy gateway`) closes. The weights live in the index, so
-column weights must be integers and a bundle that moves one is served by
-`tsvector` until the config matches. The index is built and dropped at boot
-to match the setting, and costs ~1.3-1.5x on chunk writes.
-`docs/configuration.md`, `persistence/lexical_index.py`,
-`search/pg_textsearch.py`.
+**On Postgres the lexical arm is BM25 from the pg_textsearch extension**
+(`storage.lexical_index`, default `pg_textsearch`; Postgres 17+ with the
+extension preloaded, which is why every shipped Postgres and every CI job runs
+`timescale/timescaledb-ha:pg17`). One expression index over a per-chunk
+document in which each column is repeated by its weight, which is FTS5's
+weighting (weight as term frequency, then saturation), and one Block-Max WAND
+top-k scan per search: 3.6 ms against `tsvector`'s 75.5 ms at 20k chunks, 4.7
+against 330.7 at 102k, and the gold set ranks as SQLite does. The weights live
+in the index, so column weights must be integers on Postgres and a bundle that
+moves one is served by `tsvector` until the config matches. The index is built
+(or dropped, under `tsvector`) at boot, and costs ~1.3-1.5x on chunk writes. A
+server without the extension is a startup refusal; `tsvector` is the stock-
+Postgres way out. SQLite ignores the setting (rule 7). `docs/configuration.md`,
+`persistence/lexical_index.py`, `search/pg_textsearch.py`.
 
 Ranking carries deliberate structure: `chunks_fts.title` holds the file's
 **basename** with BM25 column weights `8/3/2/1`, and structural priors divide
@@ -1123,11 +1127,15 @@ set rather than about every replica's.
 Selectable backends, dependency-free side first: `storage.backend`
 sqlite|postgres, `sync.queue.backend` off|local|nats,
 `sync.concurrency.worker_transport` http|grpc,
-`observability.interactions.queue.backend` off|local|nats. One exception, and
-it is deliberate: `storage.graph_format` defaults to `rows`, the side that is
+`observability.interactions.queue.backend` off|local|nats. Two exceptions,
+both deliberate. `storage.graph_format` defaults to `rows`, the side that is
 *better*, because both sides need the same state store and neither adds a
 dependency — the rule is about not requiring infrastructure, not about
-preferring the older mechanism.
+preferring the older mechanism. And `storage.lexical_index` defaults to
+`pg_textsearch`, which does ask more of the server than stock Postgres; it is
+the default anyway because it only applies once a region has already chosen
+Postgres, the standalone SQLite path is untouched, and every Postgres pheasant
+ships is a server that has it.
 
 The fourth axis rises with **request traffic, not corpus churn**, which is why
 it is a separate queue and a separate role rather than a `kind` column: sharing

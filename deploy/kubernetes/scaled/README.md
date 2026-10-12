@@ -15,10 +15,16 @@ kubectl apply -f deploy/kubernetes/scaled/
 These are hard requirements, not recommendations. Each one exists because of
 something in pheasant's design, so they are stated with the reason:
 
-1. **Postgres** (`storage.backend: postgres`). SQLite permits one writer per
-   file, and it is not one file across pods anyway. The DSN is read from the
-   env var named by `storage.dsn_env` — put it in a Secret, never in the
-   ConfigMap.
+1. **Postgres 17+ with pg_textsearch preloaded** (`storage.backend: postgres`).
+   SQLite permits one writer per file, and it is not one file across pods
+   anyway. The DSN is read from the env var named by `storage.dsn_env` — put
+   it in a Secret, never in the ConfigMap. The lexical arm ranks with the
+   pg_textsearch BM25 extension by default, so the server needs
+   `shared_preload_libraries = 'pg_textsearch'` (the
+   `timescale/timescaledb-ha:pg17` image has it) and pheasant's role must be a
+   superuser or find `CREATE EXTENSION pg_textsearch` already run. Without it
+   the pods refuse to start; `storage.lexical_index: tsvector` runs on stock
+   Postgres instead. See `docs/configuration.md`.
 
 2. **A ReadWriteMany volume for `/state`.** The knowledge graph is a file the
    indexer writes and the graph-query service reads; API replicas also read
