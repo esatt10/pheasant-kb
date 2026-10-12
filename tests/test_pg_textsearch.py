@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from pheasant.config.schema import PheasantConfig
+from pheasant.memory.policy import MemoryPolicy
 from pheasant.persistence.lexical_index import (
     bm25_document_expression,
     bm25_index_name,
@@ -157,6 +159,49 @@ def test_the_index_answers_only_for_the_weights_it_was_built_on() -> None:
     assert bm25_counts_for(state, RankingParameters(title_weight=4.0)) is None
     assert bm25_counts_for(SimpleNamespace(bm25_counts=None), RankingParameters()) is None
     assert bm25_counts_for(object(), RankingParameters()) is None
+
+
+def test_postgres_memory_filter_preserves_policy_without_joining_ranked_rows() -> None:
+    """A memory join ahead of LIMIT turns the BM25 top-k into a full sort."""
+
+    state = SimpleNamespace(dialect=SimpleNamespace(is_postgres=True))
+    store = SearchStore(state)
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE chunks (artifact_id TEXT PRIMARY KEY)")
+    connection.execute(
+        "CREATE TABLE memory_records (artifact_id TEXT, record_id TEXT, "
+        "scope TEXT, subject TEXT, kind TEXT, valid_from TEXT, "
+        "valid_until TEXT, tier TEXT)"
+    )
+    for artifact_id in ("corpus", "valid", "rule", "expired"):
+        connection.execute("INSERT INTO chunks VALUES (?)", (artifact_id,))
+    for artifact_id, kind, valid_until in (
+        ("valid", "fact", None),
+        ("rule", "alias", None),
+        ("expired", "fact", "2020-01-01T00:00:00Z"),
+    ):
+        connection.execute(
+            "INSERT INTO memory_records VALUES (?, ?, 'user', NULL, ?, NULL, ?, 'hot')",
+            (artifact_id, artifact_id, kind, valid_until),
+        )
+
+    for mode, expected in (
+        ("prefer", {"corpus", "valid"}),
+        ("off", {"corpus"}),
+        ("only", {"valid"}),
+    ):
+        join, where, params = store._memory_sql(
+            MemoryPolicy.parse(mode), "2026-10-12T00:00:00Z"
+        )
+        assert not join
+        assert "EXISTS" in where
+        found = {
+            row[0]
+            for row in connection.execute(
+                "SELECT chunks.artifact_id FROM chunks WHERE TRUE" + where, params
+            )
+        }
+        assert found == expected
 
 
 # --- live ----------------------------------------------------------------

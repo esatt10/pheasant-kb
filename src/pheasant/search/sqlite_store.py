@@ -364,6 +364,25 @@ class SearchStore:
             return "", "", []
         from pheasant.memory.policy import sql_predicate
 
+        if self.state.dialect.is_postgres:
+            # A LEFT JOIN makes PostgreSQL sort every chunk before the BM25
+            # LIMIT. Membership checks keep filtering inside the ranked query
+            # while allowing pg_textsearch's ordered index scan to lead it.
+            alias = "candidate_memory"
+            condition, params = sql_predicate(policy, now=now, alias=alias)
+            present = (
+                f"EXISTS (SELECT 1 FROM memory_records {alias} "
+                f"WHERE {alias}.artifact_id = chunks.artifact_id AND {condition})"
+            )
+            absent = (
+                f"NOT EXISTS (SELECT 1 FROM memory_records {alias} "
+                f"WHERE {alias}.artifact_id = chunks.artifact_id)"
+            )
+            if policy.mode == "off":
+                return "", f" AND {absent}", []
+            if policy.mode == "only":
+                return "", f" AND {present}", list(params)
+            return "", f" AND ({absent} OR {present})", list(params)
         condition, params = sql_predicate(policy, now=now, alias="memory_records")
         join = "LEFT JOIN memory_records ON memory_records.artifact_id = chunks.artifact_id"
         return join, f" AND {condition}", list(params)
