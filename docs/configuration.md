@@ -300,6 +300,7 @@ unchanged either way.
 | `backend` | `sqlite` \| `postgres` | `sqlite` | SQLite is a file and permits **one writer process per knowledge base** — pheasant's hard scaling ceiling. Postgres lifts it. |
 | `dsn_env` | string | `PHEASANT_DATABASE_URL` | Name of the environment variable holding the libpq DSN. Only the variable *name* goes in YAML — a DSN carries a password, and there is deliberately no field to paste one into. |
 | `pool_size` | integer | `10` | Server-side connections this process may hold. Unlike a SQLite file handle, each is a real process on the database. |
+| `lexical_index` | `tsvector` \| `pg_textsearch` | `tsvector` | What the lexical arm ranks with on Postgres. `pg_textsearch` is the BM25 extension (Postgres 17+); see [below](#bm25-on-postgres-storagelexical_index-pg_textsearch). SQLite always uses FTS5 and refuses `pg_textsearch`. |
 
 Postgres needs the extra: `pip install 'pheasant-kb[postgres]'` (the published
 image already has it).
@@ -351,6 +352,68 @@ column's* length while `ts_rank_cd` normalizes the whole vector once, so the
 two can disagree about ranks 2-3 when a title match on a common word competes
 with body matches on rare ones. The top hit agrees on the gold set;
 `tests/test_backend_parity.py` is the gate.
+
+#### BM25 on Postgres (`storage.lexical_index: pg_textsearch`)
+
+[pg_textsearch](https://github.com/timescale/pg_textsearch) is a Postgres
+extension that indexes BM25 directly and answers top-k with Block-Max WAND.
+Selecting it replaces the `ts_rank_cd` arm above with one index scan:
+
+```yaml
+storage:
+  backend: postgres
+  lexical_index: pg_textsearch
+```
+
+Measured on the PostgreSQL source tree (2,719 files), 15 queries, the lexical
+arm alone, same database:
+
+| | 20,400 chunks | 102,000 chunks |
+|---|---|---|
+| `tsvector` (default) | 75.5 ms | 330.7 ms |
+| `pg_textsearch` | **3.6 ms** | **4.7 ms** |
+| SQLite FTS5, for reference | 26.5 ms | — |
+
+`tsvector` grows with the corpus because it ranks every row its `OR` query
+admits, after a separate document-frequency lookup; the BM25 index reads
+roughly what its `LIMIT` asks for. Ranking also moves closer to SQLite: the
+top hit agreed with FTS5 on 11 of 15 queries (`tsvector`: 9), the top three
+files overlapped 71% (`tsvector`: 40%), and the parity gold set's one
+`tsvector` residual, `deploy gateway`, ranks correctly.
+
+**What it needs.** PostgreSQL 17 or 18, with the extension installed and
+`shared_preload_libraries = 'pg_textsearch'`. The `timescale/timescaledb-ha:pg17`
+image ships both, preloaded; CI runs on it. pheasant runs `CREATE EXTENSION
+IF NOT EXISTS pg_textsearch` at boot, which needs a superuser. If pheasant's
+role is not one, run that statement once yourself. A server that cannot load
+the extension is a startup refusal naming these steps, not a quiet fallback.
+
+**What it costs.**
+
+- *A one-time index build at boot.* The first start after you select it
+  builds the index over existing chunks, about 70 s at 102k chunks, while
+  holding the schema lock, so other processes starting together wait for it.
+  No re-index is needed, and setting it back to `tsvector` drops the index.
+- *Writes.* Every chunk write also maintains the BM25 index. A full re-sync
+  of 386 files measured 20–24 s against 15.5–16 s on `tsvector`. The index is
+  about the size of the GIN index beside it (70 MB vs 65 MB at 102k chunks).
+
+**How it ranks.** The index covers one document per chunk in which each
+column appears as many times as its weight (`title` 8, `path` 3,
+`heading_path` 2, `text` 1). That is how FTS5's `bm25()` applies column
+weights: as extra term frequency that BM25 then saturates, so a filename match
+counts for more but not eightfold more. Two consequences:
+
+- The column weights in `search.ranking` must be whole numbers, or startup is
+  refused. Changing them rebuilds the index on the next start.
+- The index answers only for the weights it was built on. A tuning bundle
+  that changes a column weight is served by `tsvector`, which reads weights
+  per query, until the config's `search.ranking` matches. That is slower, not
+  wrong, and it is logged once. The structural priors, fusion and over-fetch
+  parameters apply as usual.
+
+Source-scoped searches rank with the whole region's corpus statistics rather
+than the source's own, because the index keeps one set per table.
 
 
 ## `search` (retrieval behavior)

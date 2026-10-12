@@ -353,6 +353,11 @@ def test_known_residual_postgres_lacks_per_column_length_normalization(both) -> 
     This test asserts the divergence *currently exists*. It goes red the day
     someone adds real IDF — a pg_search/ParadeDB backend, or a df-weighted
     tsquery — which is exactly when this docstring needs deleting.
+
+    ``storage.lexical_index: pg_textsearch`` is such a backend and closes it;
+    ``tests/test_pg_textsearch.py`` asserts this query ranks correctly there.
+    This test stays because ``tsvector`` is still the default and still has
+    the residual.
     """
 
     query = "deploy gateway"

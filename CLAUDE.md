@@ -121,7 +121,8 @@ pheasant-kb/
 │   │                            okf (OKF bundle detection + its graph),
 │   │                            figures (what an answer can show)
 │   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
-│   │                            graph_search, hybrid, fusion (the one RRF
+│   │                            pg_textsearch (the BM25-extension lexical
+│   │                            query), graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
 │   │                            block's declared shape), criteria, vector,
 │   │                            vector_indexer (embed-on-sync, off the
@@ -130,7 +131,9 @@ pheasant-kb/
 │   ├── memory/                ← store, projection, policy, steering, salience,
 │   │                            bridge, maintenance, formation, benchmark
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
-│   │                            schema, graph_store (file|rows), graph_rows
+│   │                            schema, lexical_index (the pg_textsearch
+│   │                            index and its migration), graph_store
+│   │                            (file|rows), graph_rows
 │   │                            (the delta write), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
 │   │                            receipts (what happened to what a caller
@@ -173,7 +176,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 161 pytest modules, offline by design
+└── tests/                     ← 162 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -624,6 +627,19 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
 Three arms — text (BM25 over an FTS5 or `tsvector` index), vector (LanceDB),
 and graph — fused by **reciprocal rank fusion**, because the arms score on
 incomparable scales and raw-score merging silently degraded to text-only.
+
+**Postgres can rank lexically with BM25 itself** (`storage.lexical_index:
+pg_textsearch`, opt-in, Postgres 17+ with the extension preloaded). One
+expression index over a per-chunk document in which each column is repeated
+by its weight, which is FTS5's weighting (weight as term frequency, then
+saturation), and one Block-Max WAND top-k scan per search: 3.6 ms against
+`tsvector`'s 75.5 ms at 20k chunks, 4.7 against 330.7 at 102k, and the
+parity residual (`deploy gateway`) closes. The weights live in the index, so
+column weights must be integers and a bundle that moves one is served by
+`tsvector` until the config matches. The index is built and dropped at boot
+to match the setting, and costs ~1.3-1.5x on chunk writes.
+`docs/configuration.md`, `persistence/lexical_index.py`,
+`search/pg_textsearch.py`.
 
 Ranking carries deliberate structure: `chunks_fts.title` holds the file's
 **basename** with BM25 column weights `8/3/2/1`, and structural priors divide
@@ -2252,6 +2268,30 @@ Each of these cost real time. They are listed because the shape recurs.
   against the two mutants that are the real hazards. Generated files and
   minified bundles are what a codebase source indexes by default now.
 
+- **A weight applied after saturation is a different weight.** The first
+  `pg_textsearch` arm summed four per-column BM25 indexes times 8/3/2/1. It
+  looked like the obvious port and inverted the parity gold set's rare-term
+  query, because FTS5 adds a column's weight to *term frequency* and
+  saturates the sum, so a title match is worth about twice a body match
+  rather than eight times. One index over the columns repeated by weight
+  reproduces FTS5's arithmetic. Reusing a tuned parameter in a different
+  formula reuses the number, not what it meant.
+- **A score in the select list can cost fifty times the index scan that
+  already computed it.** pg_textsearch re-scores a select-list `<@>`
+  standalone, re-flattening and re-tokenizing each chunk: 38 ms of a 39 ms
+  query, against 0.7 ms for the scan. Its planner hook swaps in the scan's
+  own score only when a select entry `equal()`s a *separate* resjunk ORDER BY
+  entry, and Postgres merges two identically spelled expressions into one at
+  parse time. So the two are spelled differently and fold to one constant,
+  which is also why the terms are an inlined, sanitized literal: a generic
+  plan does not fold parameters. `EXPLAIN (VERBOSE)` showing
+  `bm25_get_current_score()` is the check, and the test that asserts it is the
+  one a tidy-up would break.
+- **A fallback that applies the same filters makes a broken fast path pass
+  every filter test.** The first filters test for the BM25 arm survived a
+  mutant that dropped its `WHERE`: the statement errored, the `tsvector`
+  fallback answered correctly, and every assertion held. A test of a path
+  behind a fallback has to assert that the path answered.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the

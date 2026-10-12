@@ -158,6 +158,52 @@ jobs:
           PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_parity
         run: python -m pytest -q
 
+  lexical-pg-textsearch:
+    # `storage.lexical_index: pg_textsearch`, the BM25 extension as the
+    # lexical arm. It needs Postgres 17+ with the extension preloaded, which
+    # the job above's postgres:16 cannot load, so its tests skip there. This
+    # job runs the whole suite on a server that has it (timescaledb-ha ships
+    # pg_textsearch preloaded), and PHEASANT_REQUIRE_PG_TEXTSEARCH turns those
+    # skips into failures: a server that lost the extension cannot pass by
+    # skipping. Unfiltered for the same reason as the job above.
+    name: Lexical arm on pg_textsearch (Postgres 17)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg17
+        env:
+          POSTGRES_USER: pheasant
+          POSTGRES_PASSWORD: pheasant
+          POSTGRES_DB: pheasant_parity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pheasant -h 127.0.0.1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project, test and Postgres dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,mcp,postgres]"
+
+      - name: Run pytest suite against Postgres 17 with pg_textsearch
+        env:
+          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_parity
+          PHEASANT_REQUIRE_PG_TEXTSEARCH: "1"
+        run: python -m pytest -q
+
   package-build:
     name: Build Python package
     runs-on: ubuntu-latest
