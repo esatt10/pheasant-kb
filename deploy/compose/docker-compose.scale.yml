@@ -61,7 +61,12 @@ x-fleet-env: &fleet-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Postgres 17 with pg_textsearch preloaded: the lexical arm ranks with its
+    # BM25 index by default (storage.lexical_index). A new volume, because a
+    # Postgres 16 data directory cannot be opened by 17 -- the old
+    # `pheasant-pg` volume is left as it was; see docs/configuration.md for
+    # moving its data across.
+    image: timescale/timescaledb-ha:pg17
     restart: unless-stopped
     command: ["postgres", "-c", "max_connections=100"]
     mem_limit: 1280m
@@ -71,7 +76,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pheasant}
       POSTGRES_DB: pheasant
     volumes:
-      - pheasant-pg:/var/lib/postgresql/data
+      - pheasant-pg17:/home/postgres/pgdata
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pheasant"]
       interval: 10s
@@ -93,7 +98,7 @@ services:
       retries: 20
 
   db-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     restart: "no"
     entrypoint: ["python", "-c"]
     command:
@@ -108,7 +113,7 @@ services:
       - pheasant-exports:/exports
 
   workspace-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     restart: "no"
     user: "0:0"
     entrypoint: ["sh", "-c"]
@@ -122,7 +127,7 @@ services:
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
 
   api:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -172,7 +177,7 @@ services:
       start_period: 30s
 
   graph:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -203,7 +208,7 @@ services:
       start_period: 60s
 
   indexer:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -250,7 +255,7 @@ services:
   # is a multi-row insert per batch, and batches are 500 observations by
   # default.
   logger:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     build:
       context: ../..
     profiles: ["observability"]
@@ -285,7 +290,7 @@ services:
       start_period: 30s
 
   worker:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.5}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.13.6}
     build:
       context: ../..
     restart: unless-stopped
@@ -320,5 +325,5 @@ volumes:
   pheasant-workspace:
   pheasant-memory:
   pheasant-exports:
-  pheasant-pg:
+  pheasant-pg17:
   pheasant-nats:

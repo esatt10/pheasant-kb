@@ -13,7 +13,7 @@ name: pheasant-log-tier-ci
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: timescale/timescaledb-ha:pg17  # Postgres 17 + pg_textsearch, preloaded
     environment:
       POSTGRES_USER: pheasant
       POSTGRES_PASSWORD: pheasant

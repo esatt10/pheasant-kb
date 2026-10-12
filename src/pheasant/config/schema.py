@@ -400,6 +400,8 @@ class StorageSettings(ModelMixin):
     #: handle a Postgres connection is a server process, so this is a real
     #: resource on the database, not just on the client.
     pool_size: int = 10
+    #: Postgres lexical arm: ``pg_textsearch`` (BM25, PG 17+) or ``tsvector``.
+    lexical_index: str = "pg_textsearch"
 
 
 @dataclass

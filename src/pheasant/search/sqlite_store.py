@@ -7,6 +7,12 @@ import time
 from typing import Any
 
 from pheasant.persistence.state_store import StateStore
+from pheasant.search.pg_textsearch import (
+    bm25_counts_for,
+    bm25_query_text,
+    pg_textsearch_sql,
+    warn_bm25_unavailable,
+)
 from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
 
 logger = logging.getLogger(__name__)
@@ -386,42 +392,28 @@ class SearchStore:
             tokens = steering.expand(tokens)
         match_expr = " OR ".join(f'"{token}"' for token in tokens) if tokens else query
 
-        # Params are positional, so they must be assembled in the order the
-        # placeholders appear in the final SQL: the ranking expression sits in
-        # the SELECT, ahead of every WHERE clause.
         postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
         ranking = self.ranking_parameters()
         prior_sql, prior_params = _structural_prior(
             steering, tokens, postgres=postgres, ranking=ranking
         )
-        rank_sql, rank_params = "", []
-        if postgres:
-            rank_sql, rank_params, match_tokens = _postgres_rank_expression(
-                self.state, tokens, source_name, ranking=ranking
-            )
-            match_expr = " | ".join(match_tokens) if match_tokens else query
-        # Params are positional, so they must be assembled in the order the
-        # placeholders appear in the final SQL. On Postgres the ranking
-        # expression (`-{rank_sql}`) precedes the divisor (`/ {prior_sql}`),
-        # which precedes the CROSS JOIN's tsquery, which precedes every WHERE
-        # clause. On SQLite `bm25(...)` takes no parameters, so `prior_params`
-        # is still first and this is the order it always was.
-        params: list[object] = [*rank_params, *prior_params, match_expr]
-        where = "search_vector @@ query_ts" if postgres else "chunks_fts MATCH ?"
-        exclusion_where, exclusion_params = _exclusion_sql(steering)
+        # The filters every lexical query shape applies, as an `AND …` suffix
+        # and its params in placeholder order.
+        filter_where = ""
+        filter_params: list[object] = []
         if source_name:
             # All three joined Postgres tables carry source_id. Leaving this
             # unqualified makes the primary query fail as ambiguous and used
             # to send every scoped search down the corpus-wide LIKE fallback.
-            where += " AND chunks_fts.source_id = ?"
-            params.append(source_name)
+            filter_where += " AND chunks_fts.source_id = ?"
+            filter_params.append(source_name)
         # Restrict to one section of a document's taxonomy. Pushed into SQL
         # rather than filtered afterwards: a section is a narrow slice, and
         # post-filtering a globally-ranked page of hits can return nothing from
         # the requested section while its chunks sit just past the cut.
         if section_needle(section):
-            where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
-            params.append(f"%{section_needle(section)}%")
+            filter_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
+            filter_params.append(f"%{section_needle(section)}%")
         # Step 33.6 — agent-memory policy. Pushed into SQL for the same reason
         # as `section`: `mode="only"` is a very narrow slice, and post-filtering
         # a globally-ranked page would return an empty list while the matching
@@ -429,93 +421,153 @@ class SearchStore:
         # region actually has memory records, so a region without agent memory
         # runs the identical query it ran before this step.
         memory_join, memory_where, memory_params = self._memory_sql(memory_policy, memory_now)
-        where += memory_where
-        params.extend(memory_params)
-        where += exclusion_where
-        params.extend(exclusion_params)
-        params.append(max_results)
-        if postgres:
-            # `ts_rank_cd` is positive-better; `bm25()` is negative-better and
-            # everything downstream — the ORDER BY, and the `raw < 0` score
-            # mapping below — is built around that. Negating here preserves
-            # both, so the result-processing loop is shared rather than forked.
-            #
-            # The weight array is ordered {D,C,B,A}. It carries the measured
-            # 8/3/2/1 column weights from the 2026-08-03 retrieval overhaul,
-            # normalized onto ts_rank_cd's 0-1 scale: title A, path B,
-            # heading_path C, text D. This preserves the *ordering* of the four
-            # fields' importance. It does not reproduce BM25's arithmetic, and
-            # `tests/test_backend_parity.py` gates on measured retrieval
-            # quality rather than on the two backends agreeing on a number.
-            sql = f"""
-            SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
-                   chunks_fts.path, chunks_fts.heading_path, chunks.text,
-                   chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
-                   artifacts.relative_path,
-                   -{rank_sql} / {prior_sql} AS rank_score
-            FROM chunks_fts
-            JOIN chunks ON chunks.id = chunks_fts.chunk_id
-            JOIN artifacts ON artifacts.id = chunks_fts.artifact_id
-            CROSS JOIN to_tsquery('simple', ?) AS query_ts
-            {memory_join}
-            WHERE {where}
-            ORDER BY rank_score LIMIT ?
-            """
-        else:
-            sql = f"""
-            SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
-                   chunks_fts.path, chunks_fts.heading_path, chunks.text,
-                   chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
-                   artifacts.relative_path,
-                   bm25(chunks_fts, {ranking.bm25_weights}) / {prior_sql} AS rank_score
-            FROM chunks_fts
-            JOIN chunks ON chunks.id = chunks_fts.chunk_id
-            JOIN artifacts ON artifacts.id = chunks_fts.artifact_id
-            {memory_join}
-            WHERE {where}
-            ORDER BY rank_score LIMIT ?
-            """
-        try:
+        filter_where += memory_where
+        filter_params.extend(memory_params)
+        exclusion_where, exclusion_params = _exclusion_sql(steering)
+        filter_where += exclusion_where
+        filter_params.extend(exclusion_params)
+
+        rows: list[Any] | None = None
+        bm25_counts = bm25_counts_for(self.state, ranking) if postgres else None
+        bm25_text = bm25_query_text(tokens) if bm25_counts else ""
+        # No searchable term at all: the tsvector path below handles that
+        # shape already (its LIKE fallback), so there is nothing to win here.
+        if bm25_counts and bm25_text:
+            sql, params = pg_textsearch_sql(
+                bm25_text,
+                bm25_counts,
+                prior_sql=prior_sql,
+                prior_params=prior_params,
+                memory_join=memory_join,
+                filter_where=filter_where,
+                filter_params=filter_params,
+                max_results=max_results,
+            )
             started = time.perf_counter()
             try:
                 rows = self.state.rows(sql, tuple(params))
+            except Exception:
+                # Migration refused to start without the extension, so this
+                # is an index dropped or broken since boot. The tsvector
+                # column and its GIN index are always there; rank with them
+                # rather than with the LIKE scan below.
+                warn_bm25_unavailable()
             finally:
-                if postgres:
-                    from pheasant.request_budget import record_active_timing
+                from pheasant.request_budget import record_active_timing
 
-                    record_active_timing(
-                        "postgres_lexical_rank",
-                        time.perf_counter() - started,
-                        query_terms=len(tokens),
-                    )
-        except Exception:
-            fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
-            fallback_params: list[object] = [f"%{query}%", f"%{query}%"]
-            if source_name:
-                fallback_where += " AND chunks.source_id = ?"
-                fallback_params.append(source_name)
-            if section_needle(section):
-                fallback_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
-                fallback_params.append(f"%{section_needle(section)}%")
-            # The fallback has to enforce the same policy. Leaving it out would
-            # make a corrected memory reappear on exactly the path taken when
-            # FTS5 is unavailable — a leak that only shows up in the degraded
-            # configuration, which is the worst place to have one.
-            fallback_where += memory_where
-            fallback_params.extend(memory_params)
-            fallback_where += exclusion_where
-            fallback_params.extend(exclusion_params)
-            fallback_params.append(max_results)
-            rows = self.state.rows(
-                f"""SELECT chunks.id AS chunk_id, chunks.source_id, chunks.artifact_id,
-                artifacts.relative_path AS path, chunks.heading_path, chunks.text,
-                chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
-                artifacts.relative_path, 0.0 AS rank_score
-                FROM chunks JOIN artifacts ON artifacts.id=chunks.artifact_id
+                record_active_timing(
+                    "postgres_lexical_rank",
+                    time.perf_counter() - started,
+                    query_terms=len(tokens),
+                    lexical_index="pg_textsearch",
+                )
+        if rows is None:
+            rank_sql, rank_params = "", []
+            if postgres:
+                rank_sql, rank_params, match_tokens = _postgres_rank_expression(
+                    self.state, tokens, source_name, ranking=ranking
+                )
+                match_expr = " | ".join(match_tokens) if match_tokens else query
+            # Params are positional, so they must be assembled in the order the
+            # placeholders appear in the final SQL. On Postgres the ranking
+            # expression (`-{rank_sql}`) precedes the divisor (`/ {prior_sql}`),
+            # which precedes the CROSS JOIN's tsquery, which precedes every
+            # WHERE clause. On SQLite `bm25(...)` takes no parameters, so
+            # `prior_params` is still first and this is the order it always was.
+            params: list[object] = [
+                *rank_params,
+                *prior_params,
+                match_expr,
+                *filter_params,
+                max_results,
+            ]
+            where = "search_vector @@ query_ts" if postgres else "chunks_fts MATCH ?"
+            where += filter_where
+            if postgres:
+                # `ts_rank_cd` is positive-better; `bm25()` is negative-better
+                # and everything downstream — the ORDER BY, and the `raw < 0`
+                # score mapping below — is built around that. Negating here
+                # preserves both, so the result-processing loop is shared
+                # rather than forked.
+                #
+                # The weight array is ordered {D,C,B,A}. It carries the measured
+                # 8/3/2/1 column weights from the 2026-08-03 retrieval overhaul,
+                # normalized onto ts_rank_cd's 0-1 scale: title A, path B,
+                # heading_path C, text D. This preserves the *ordering* of the
+                # four fields' importance. It does not reproduce BM25's
+                # arithmetic, and `tests/test_backend_parity.py` gates on
+                # measured retrieval quality rather than on the two backends
+                # agreeing on a number.
+                sql = f"""
+                SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
+                       chunks_fts.path, chunks_fts.heading_path, chunks.text,
+                       chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
+                       artifacts.relative_path,
+                       -{rank_sql} / {prior_sql} AS rank_score
+                FROM chunks_fts
+                JOIN chunks ON chunks.id = chunks_fts.chunk_id
+                JOIN artifacts ON artifacts.id = chunks_fts.artifact_id
+                CROSS JOIN to_tsquery('simple', ?) AS query_ts
                 {memory_join}
-                WHERE {fallback_where} LIMIT ?""",
-                tuple(fallback_params),
-            )
+                WHERE {where}
+                ORDER BY rank_score LIMIT ?
+                """
+            else:
+                sql = f"""
+                SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
+                       chunks_fts.path, chunks_fts.heading_path, chunks.text,
+                       chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
+                       artifacts.relative_path,
+                       bm25(chunks_fts, {ranking.bm25_weights}) / {prior_sql} AS rank_score
+                FROM chunks_fts
+                JOIN chunks ON chunks.id = chunks_fts.chunk_id
+                JOIN artifacts ON artifacts.id = chunks_fts.artifact_id
+                {memory_join}
+                WHERE {where}
+                ORDER BY rank_score LIMIT ?
+                """
+            try:
+                started = time.perf_counter()
+                try:
+                    rows = self.state.rows(sql, tuple(params))
+                finally:
+                    if postgres:
+                        from pheasant.request_budget import record_active_timing
+
+                        record_active_timing(
+                            "postgres_lexical_rank",
+                            time.perf_counter() - started,
+                            query_terms=len(tokens),
+                        )
+            except Exception:
+                fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
+                fallback_params: list[object] = [f"%{query}%", f"%{query}%"]
+                if source_name:
+                    fallback_where += " AND chunks.source_id = ?"
+                    fallback_params.append(source_name)
+                if section_needle(section):
+                    fallback_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
+                    fallback_params.append(f"%{section_needle(section)}%")
+                # The fallback has to enforce the same policy. Leaving it out
+                # would make a corrected memory reappear on exactly the path
+                # taken when FTS5 is unavailable — a leak that only shows up in
+                # the degraded configuration, which is the worst place to have
+                # one.
+                fallback_where += memory_where
+                fallback_params.extend(memory_params)
+                fallback_where += exclusion_where
+                fallback_params.extend(exclusion_params)
+                fallback_params.append(max_results)
+                rows = self.state.rows(
+                    f"""SELECT chunks.id AS chunk_id, chunks.source_id, chunks.artifact_id,
+                    artifacts.relative_path AS path, chunks.heading_path, chunks.text,
+                    chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
+                    artifacts.relative_path, 0.0 AS rank_score
+                    FROM chunks JOIN artifacts ON artifacts.id=chunks.artifact_id
+                    {memory_join}
+                    WHERE {fallback_where} LIMIT ?""",
+                    tuple(fallback_params),
+                )
         # No concept-term expansion pass. It used to top up short result sets
         # from `artifact_terms`, and it was measured dead: it only ran when FTS
         # returned FEWER than max_results, and on a real corpus every query
