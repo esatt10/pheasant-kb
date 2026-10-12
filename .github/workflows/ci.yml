@@ -121,11 +121,16 @@ jobs:
     # the first time, and repeating it one level down would buy nothing.
     # `tests/test_workflow_coverage.py` fails if this job stops being
     # unfiltered, stops running Postgres, or stops setting the DSN.
+    #
+    # The image is the one every shipped Postgres runs: Postgres 17 with
+    # pg_textsearch preloaded, because the lexical arm defaults to it there.
+    # PHEASANT_REQUIRE_PG_TEXTSEARCH turns that suite's skips into failures, so
+    # a server that lost the extension cannot pass by skipping.
     name: Backend parity against a real Postgres
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: timescale/timescaledb-ha:pg17
         env:
           POSTGRES_USER: pheasant
           POSTGRES_PASSWORD: pheasant
@@ -133,7 +138,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U pheasant"
+          --health-cmd "pg_isready -U pheasant -h 127.0.0.1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -156,6 +161,7 @@ jobs:
       - name: Run pytest suite against Postgres
         env:
           PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_parity
+          PHEASANT_REQUIRE_PG_TEXTSEARCH: "1"
         run: python -m pytest -q
 
   package-build:

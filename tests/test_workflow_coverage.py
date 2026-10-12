@@ -42,6 +42,15 @@ DIALECT_MARKERS = re.compile(
 
 DSN_VARIABLE = "PHEASANT_TEST_POSTGRES_DSN"
 
+#: Images that are a Postgres server. ``timescaledb-ha`` is the one every
+#: shipped Postgres runs, because it preloads pg_textsearch, the lexical arm's
+#: default there; matching on "postgres" alone stopped seeing it.
+POSTGRES_IMAGE = re.compile(r"postgres|timescaledb")
+
+#: Set by the job that runs Postgres, so the pg_textsearch suite fails rather
+#: than skips on a server that cannot load the extension.
+REQUIRE_PG_TEXTSEARCH = "PHEASANT_REQUIRE_PG_TEXTSEARCH"
+
 
 def _workflow(name: str) -> dict[str, Any]:
     # `on:` is the YAML 1.1 boolean True once parsed, which is a trap worth
@@ -61,7 +70,7 @@ def _pull_request_trigger(document: dict[str, Any]) -> dict[str, Any] | None:
 
 def _runs_postgres(job: dict[str, Any]) -> bool:
     services = job.get("services") or {}
-    return any("postgres" in str(spec.get("image", "")) for spec in services.values())
+    return any(POSTGRES_IMAGE.search(str(spec.get("image", ""))) for spec in services.values())
 
 
 def _sets_the_dsn(job: dict[str, Any]) -> bool:
@@ -96,6 +105,28 @@ def test_some_job_runs_postgres_on_every_pull_request() -> None:
         "change happens to touch, which is how sync/locks.py — the per-source lease — "
         "ended up with none."
     )
+
+
+def test_that_job_runs_the_lexical_default_rather_than_skipping_it() -> None:
+    """The Postgres default lexical arm needs an extension stock Postgres lacks.
+
+    On a server without pg_textsearch its suite skips, and a skip reads like a
+    pass. The job must run an image that has it and set the variable that
+    turns those skips into failures.
+    """
+
+    for workflow, name, job in _unfiltered_postgres_jobs():
+        env = dict(job.get("env") or {})
+        for step in job.get("steps") or []:
+            env.update(step.get("env") or {})
+        assert str(env.get(REQUIRE_PG_TEXTSEARCH)) == "1", (
+            f"{workflow}:{name} runs Postgres without {REQUIRE_PG_TEXTSEARCH}=1, so the "
+            "default lexical arm's tests may skip there"
+        )
+        images = [str(spec.get("image", "")) for spec in (job.get("services") or {}).values()]
+        assert any("timescaledb-ha" in image for image in images), (
+            f"{workflow}:{name} runs {images}, which do not preload pg_textsearch"
+        )
 
 
 def test_that_job_runs_the_whole_suite_rather_than_a_curated_list() -> None:

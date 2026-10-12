@@ -67,7 +67,9 @@ GOLD: list[tuple[str, str]] = [
 ]
 
 
-#: The one query the Postgres arm still ranks differently, and why.
+#: The one query the ``tsvector`` lexical arm still ranks differently, and why.
+#: The default Postgres arm (``pg_textsearch``) has no residual; this set is
+#: ``storage.lexical_index: tsvector`` only.
 #:
 #: Three real gaps were found and fixed (see `_postgres_rank_expression` and
 #: the schema's tokenizer note): no IDF at all, no term-frequency saturation,
@@ -116,7 +118,9 @@ def _corpus(root: Path) -> Path:
     return workspace
 
 
-def _config(root: Path, workspace: Path, backend: str) -> PheasantConfig:
+def _config(
+    root: Path, workspace: Path, backend: str, lexical_index: str | None = None
+) -> PheasantConfig:
     data: dict[str, Any] = {
         "pheasant": {
             "name": "parity",
@@ -138,11 +142,15 @@ def _config(root: Path, workspace: Path, backend: str) -> PheasantConfig:
     if backend == "postgres":
         data["storage"]["backend"] = "postgres"
         data["storage"]["dsn_env"] = "PHEASANT_TEST_POSTGRES_DSN"
+    if lexical_index:
+        data["storage"]["lexical_index"] = lexical_index
     return PheasantConfig.model_validate(data)
 
 
-def _index(root: Path, workspace: Path, backend: str) -> dict[str, Any]:
-    config = _config(root, workspace, backend)
+def _index(
+    root: Path, workspace: Path, backend: str, lexical_index: str | None = None
+) -> dict[str, Any]:
+    config = _config(root, workspace, backend, lexical_index)
     engine = SyncEngine(config)
     try:
         result = engine.sync_source("docs", "full")
@@ -192,6 +200,8 @@ def both(tmp_path: Path) -> dict[str, dict[str, Any]]:
     return {
         "sqlite": _index(tmp_path, workspace, "sqlite"),
         "postgres": _index(tmp_path, workspace, "postgres"),
+        # Last, because selecting it drops the BM25 index the default built.
+        "tsvector": _index(tmp_path, workspace, "postgres", "tsvector"),
     }
 
 
@@ -292,16 +302,17 @@ def test_corpus_size_comes_from_the_planner_estimate_once_it_exists(tmp_path: Pa
 def test_retrieval_quality_holds_on_the_gold_set(both) -> None:
     """Measured quality, not score equality — see the module docstring.
 
-    The IDF-sensitive query is exempted for Postgres only, and only because
-    :func:`test_known_divergence_postgres_has_no_idf` asserts that exact
-    failure instead. Skipping it silently here would turn a documented
-    limitation into an invisible one.
+    The default Postgres arm gets every query. The ``tsvector`` arm is exempted
+    on its one residual only because
+    :func:`test_known_residual_postgres_lacks_per_column_length_normalization`
+    asserts that exact failure instead. Skipping it silently here would turn a
+    documented limitation into an invisible one.
     """
 
-    for backend in ("sqlite", "postgres"):
+    for backend in ("sqlite", "postgres", "tsvector"):
         ranked = both[backend]["ranked"]
         for query, expected in GOLD:
-            if backend == "postgres" and query in POSTGRES_RANK_RESIDUAL:
+            if backend == "tsvector" and query in POSTGRES_RANK_RESIDUAL:
                 continue
             hits = ranked[query]
             assert hits, f"{backend}: {query!r} returned nothing"
@@ -323,14 +334,15 @@ def test_postgres_and_sqlite_agree_on_the_top_hit(both) -> None:
     coincidence, and would have to be relaxed by the first real corpus.
     """
 
-    for query, _ in GOLD:
-        if query in POSTGRES_RANK_RESIDUAL:
-            continue
-        sqlite_hits = both["sqlite"]["ranked"][query]
-        postgres_hits = both["postgres"]["ranked"][query]
-        assert sqlite_hits[:1] == postgres_hits[:1], query
-        # Same documents found, whatever order they came back in.
-        assert set(sqlite_hits) == set(postgres_hits), query
+    for backend in ("postgres", "tsvector"):
+        for query, _ in GOLD:
+            if backend == "tsvector" and query in POSTGRES_RANK_RESIDUAL:
+                continue
+            sqlite_hits = both["sqlite"]["ranked"][query]
+            postgres_hits = both[backend]["ranked"][query]
+            assert sqlite_hits[:1] == postgres_hits[:1], (backend, query)
+            # Same documents found, whatever order they came back in.
+            assert set(sqlite_hits) == set(postgres_hits), (backend, query)
 
 
 @postgres
@@ -353,11 +365,17 @@ def test_known_residual_postgres_lacks_per_column_length_normalization(both) -> 
     This test asserts the divergence *currently exists*. It goes red the day
     someone adds real IDF — a pg_search/ParadeDB backend, or a df-weighted
     tsquery — which is exactly when this docstring needs deleting.
+
+    ``pg_textsearch``, the Postgres default, is such a backend and closes it:
+    the gold-set test above holds it to this query. This test stays, pinned to
+    ``storage.lexical_index: tsvector``, because that arm is still selectable
+    and still has the residual.
     """
 
     query = "deploy gateway"
     assert both["sqlite"]["ranked"][query][0] == "deploy-gateway.md"
-    postgres_ranking = both["postgres"]["ranked"][query]
+    assert both["postgres"]["ranked"][query][0] == "deploy-gateway.md"
+    postgres_ranking = both["tsvector"]["ranked"][query]
     # It *matches* now — the tokenizer fix did that, and before it the file
     # named for the query did not appear at all. It simply is not first.
     assert "deploy-gateway.md" in postgres_ranking[:2], (

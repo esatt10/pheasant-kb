@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.persistence.backends import SqliteBackend, StateBackend, open_backend
+from pheasant.persistence.lexical_index import (
+    bm25_repeat_counts,
+    migrate_lexical_index,
+    validate_lexical_index,
+)
 from pheasant.persistence.schema import schema_for
 from pheasant.persistence.secrets import resolve_dsn
 from pheasant.persistence.sql import SQLITE
@@ -89,7 +94,14 @@ class StateStore:
     all readers as far as WAL's MVCC snapshot isolation is concerned.
     """
 
-    def __init__(self, path: str | Path | None = None, *, backend: StateBackend | None = None):
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        backend: StateBackend | None = None,
+        lexical_index: str | None = None,
+        lexical_weights: tuple[float, ...] = (8.0, 3.0, 2.0, 1.0),
+    ):
         """Open the store.
 
         ``path`` is what every existing caller passes and still means "a
@@ -97,6 +109,14 @@ class StateStore:
         :class:`~pheasant.persistence.backends.StateBackend` (see
         :func:`from_config`) to run on Postgres instead. Exactly one is
         required.
+
+        ``lexical_index`` is ``storage.lexical_index``. ``None`` — every caller
+        that is not :meth:`from_config` — means "not configured here", and
+        :meth:`migrate` then neither creates nor drops the ``pg_textsearch``
+        indexes: a migration tool or a test opening the database must not tear
+        down what the region's own config asked for. ``lexical_weights`` are
+        the configured title/path/heading/text weights the BM25 index is built
+        on (see :func:`~pheasant.persistence.lexical_index.bm25_repeat_counts`).
         """
 
         if backend is None:
@@ -107,6 +127,17 @@ class StateStore:
         # Kept for the many callers that read `store.path` (backups, logging,
         # the migration command). None on a backend that has no file.
         self.path = getattr(backend, "path", None)
+        if lexical_index is not None:
+            lexical_index = validate_lexical_index(lexical_index, backend.dialect)
+        self.lexical_index = lexical_index
+        #: The repetition counts the BM25 index is built on, or ``None`` when
+        #: this store does not rank with pg_textsearch. The search path uses
+        #: the index only while the ranking in force has these same weights.
+        self.bm25_counts = (
+            bm25_repeat_counts(tuple(lexical_weights))
+            if lexical_index == "pg_textsearch" and backend.dialect.is_postgres
+            else None
+        )
 
     @classmethod
     def from_config(cls, config: Any, path: str | Path | None = None) -> StateStore:
@@ -118,15 +149,25 @@ class StateStore:
 
         storage = getattr(config, "storage", None)
         backend_name = str(getattr(storage, "backend", "sqlite") or "sqlite")
+        lexical_index = str(getattr(storage, "lexical_index", "") or "pg_textsearch")
+        # The base weights, before any tuning overlay: the index is built at
+        # boot from what the config says, and a bundle that moves a column
+        # weight later is ranked on tsvector until the config catches up.
+        from pheasant.search.ranking import RankingParameters
+
+        base = RankingParameters.from_config(config)
+        weights = (base.title_weight, base.path_weight, base.heading_weight, base.text_weight)
         if backend_name.lower() != "postgres":
-            return cls(path)
+            return cls(path, lexical_index=lexical_index, lexical_weights=weights)
         return cls(
             backend=open_backend(
                 path,
                 backend="postgres",
                 dsn=resolve_dsn(storage),
                 pool_size=int(getattr(storage, "pool_size", 10) or 10),
-            )
+            ),
+            lexical_index=lexical_index,
+            lexical_weights=weights,
         )
 
     @property
@@ -344,6 +385,10 @@ class StateStore:
             )
             if version and str(version[0]["value"]) == SCHEMA_VERSION and schema_present:
                 self._migrate_artifact_terms_node_lookup()
+                # Outside the schema-version marker on purpose: the marker
+                # says the *tables* are current, and a region switching
+                # `lexical_index` changes no table.
+                migrate_lexical_index(self)
                 return
             self.backend.executescript(schema_for(self.backend.dialect))
             if "acl" not in self.backend.table_columns("artifacts"):
@@ -365,6 +410,7 @@ class StateStore:
             # named in only one place exists on exactly one backend.
             self._migrate_tuning_control()
             self._migrate_artifact_terms_node_lookup()
+            migrate_lexical_index(self)
             self.conn.execute(
                 "INSERT INTO pheasant_schema_meta(key, value, updated_at) VALUES(?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
