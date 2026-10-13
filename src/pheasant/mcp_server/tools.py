@@ -804,6 +804,7 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools):
         as_of: str | None = None,
         expand: Any = None,
         path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -876,6 +877,7 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools):
                 source_name=source_name,
                 section=section,
                 path_prefix=path_prefix,
+                exclude_documents=exclude_documents,
                 principal=principal,
                 principal_groups=principal_groups,
                 memory=memory,

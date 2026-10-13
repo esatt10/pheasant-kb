@@ -111,6 +111,12 @@ export interface SessionState {
   browserHeight: number;
   /** Width of the folder list beside the file viewer, in px. */
   browserTreeWidth: number;
+  /**
+   * Documents left out of every answer, as `source/path`. Sent as
+   * `exclude_documents` for the source in scope; the omit toggle on an open
+   * file adds and removes them, and the composer clears them.
+   */
+  excluded: string[];
 }
 
 export const DEFAULT_RAIL_WIDTH = 280;
@@ -154,11 +160,14 @@ const INITIAL: SessionState = {
   chatCollapsed: false,
   browserHeight: DEFAULT_BROWSER_HEIGHT,
   browserTreeWidth: DEFAULT_TREE_WIDTH,
+  excluded: [],
 };
 
 export type SessionAction =
   | { type: "filter-source"; source: string | null }
   | { type: "set-path-scope"; scope: PathScope | null }
+  | { type: "toggle-excluded"; document: string }
+  | { type: "clear-excluded"; source?: string | null }
   | { type: "filter-source-type"; sourceType: string | null }
   | { type: "toggle-type"; nodeType: string }
   | { type: "open-tab"; tab: PanelTab }
@@ -207,6 +216,24 @@ export const GRAPH_LAYOUTS: { value: GraphLayout; label: string }[] = [
   { value: "columns", label: "Columns" },
 ];
 
+/** The region refuses more than this many names in one request. */
+const MAX_EXCLUDED = 50;
+
+/**
+ * The omitted documents that apply to a question scoped to `source` (and,
+ * under a folder scope, to that folder): one outside the scope is left out
+ * already, and sending it would only add noise.
+ */
+export function excludedInScope(
+  excluded: string[],
+  source: string | null,
+  scope: PathScope | null,
+): string[] {
+  if (scope?.kind === "file") return [];
+  const prefix = scope ? `${scope.source}/${scope.path}/` : source ? `${source}/` : "";
+  return excluded.filter((d) => d.startsWith(prefix));
+}
+
 function clampDepth(depth: number): number {
   if (!Number.isFinite(depth)) return DEFAULT_DEPTH;
   return Math.min(MAX_DEPTH, Math.max(MIN_DEPTH, Math.round(depth)));
@@ -221,6 +248,20 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         ...state,
         sourceFilter: action.source,
         pathScope: state.pathScope?.source === action.source ? state.pathScope : null,
+      };
+    case "toggle-excluded":
+      return {
+        ...state,
+        excluded: state.excluded.includes(action.document)
+          ? state.excluded.filter((d) => d !== action.document)
+          : [...state.excluded, action.document].slice(-MAX_EXCLUDED),
+      };
+    case "clear-excluded":
+      return {
+        ...state,
+        excluded: action.source
+          ? state.excluded.filter((d) => !d.startsWith(`${action.source}/`))
+          : [],
       };
     case "set-path-scope":
       // Scoping to a folder scopes to its source too, so the rail, the graph
@@ -459,6 +500,7 @@ const PERSISTED_KEYS = [
   "chatCollapsed",
   "browserHeight",
   "browserTreeWidth",
+  "excluded",
 ] as const;
 
 function hydrate(): SessionState {
@@ -485,6 +527,9 @@ function hydrate(): SessionState {
       chatCollapsed: saved.chatCollapsed === true && saved.browser?.open === true,
       browserHeight: Number(saved.browserHeight) || DEFAULT_BROWSER_HEIGHT,
       browserTreeWidth: Number(saved.browserTreeWidth) || DEFAULT_TREE_WIDTH,
+      excluded: Array.isArray(saved.excluded)
+        ? saved.excluded.filter((d): d is string => typeof d === "string" && d.includes("/")).slice(-MAX_EXCLUDED)
+        : [],
     };
   } catch {
     return INITIAL;

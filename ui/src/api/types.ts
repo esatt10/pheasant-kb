@@ -264,11 +264,11 @@ export interface AssistantStatus {
 export interface AnswerKeyword {
   keyword: string;
   aliases: string[];
-  kind: "inventory" | "search" | "form" | "depth" | "visual";
+  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope";
   group: string;
   summary: string;
   example: string;
-  /** True for `@pheasant`, which counts anywhere in a message. */
+  /** True for `@pheasant` and the scope keywords, which count anywhere. */
   anywhere: boolean;
 }
 
@@ -587,6 +587,24 @@ export interface ChatAnswer {
   /** Set when a question read close to one about the knowledge base itself
    * but was searched instead: how to ask it explicitly with `@pheasant`. */
   inventory_hint?: string;
+  /** Where the answer was allowed to look, when a folder, a file, an
+   * exclusion or `@current` / `@dir` / `@exclude` narrowed it. */
+  scope?: AnswerScope;
+}
+
+/** The scope an answer was read under (`services.scope`). */
+export interface AnswerScope {
+  source_name: string | null;
+  path_prefix: string | null;
+  kind: "file" | "folder" | null;
+  /** `source/path` of each document left out. */
+  excluded: string[];
+  /** Names given to leave out that name no document. */
+  unresolved: string[];
+  notes: string[];
+  keywords: string[];
+  /** `@current` / `@dir` with nothing open to read it against. */
+  missing: string | null;
 }
 
 /** One earlier exchange sent back so a follow-up can be understood. */

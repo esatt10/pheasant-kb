@@ -255,6 +255,11 @@ export function SourceBrowser({
                         ⌖
                       </span>
                     ) : null}
+                    {state.excluded.includes(`${browser.source}/${file.path}`) ? (
+                      <span className="browser-row__scope browser-row__omitted" title="Left out of every answer">
+                        ⊘
+                      </span>
+                    ) : null}
                     <span className="browser-row__size">{formatBytes(file.size_bytes)}</span>
                   </button>
                 );

@@ -152,7 +152,9 @@ pheasant-kb/
 │   │                            inventory_detail (one source, one document,
 │   │                            the links between documents), source_browser
 │   │                            (a source as folders and files, one file
-│   │                            read for a viewer)
+│   │                            read for a viewer), scope (a folder, a
+│   │                            file, minus excluded documents; @current
+│   │                            and @dir resolved)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -164,7 +166,8 @@ pheasant-kb/
 │   │                            the knowledge base itself, + @pheasant),
 │   │                            inventory_focus (one source / document /
 │   │                            links, + paging), inventory_browse
-│   │                            (@taxonomy), keywords (first-word
+│   │                            (@taxonomy), inventory_scope (@current /
+│   │                            @dir / @exclude on a lookup), keywords (first-word
 │   │                            @table, @doc, @search …), search_answer,
 │   │                            conversation, longform,
 │   │                            visuals, visual_specs (the shape grammar),
@@ -179,7 +182,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 163 pytest modules, offline by design
+└── tests/                     ← 164 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -652,8 +655,13 @@ Ranking carries deliberate structure: `chunks_fts.title` holds the file's
 **basename** with BM25 column weights `8/3/2/1`, and structural priors divide
 by path depth and by tests/samples membership. Query expansion drops framing
 stopwords. Criteria (`source_name`, `exclude_sources`, `node_types`,
-`min_score`, `section`, `path_prefix`, `principal`) are available identically
-on MCP and HTTP. `path_prefix` (one file, or everything under one folder) is
+`min_score`, `section`, `path_prefix`, `exclude_documents`, `principal`) are
+available identically on MCP and HTTP. `exclude_documents` names documents to
+leave out (a file name, path, `source/path` or id), resolved once per request
+under the inventory ACL by `services/scope.py` into an `Exclusion` of artifact
+ids (`NOT IN` in the text arm's SQL) and (source, path) pairs (the other
+arms); a name matching nothing is refused over the API and a note in a
+question. `path_prefix` (one file, or everything under one folder) is
 the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
 spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
@@ -1024,7 +1032,14 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   listing from the index and opens the view there, honouring the chat's
   source scope. A "Search this folder/file" toggle (`browser/ScopeToggle.tsx`)
   sets `pathScope`, sent as `path_prefix` with every question; at a source's
-  root it is the rail's source toggle. `tests/test_source_browser.py`.
+  root it is the rail's source toggle. **Omit from answers**
+  (`browser/OmitToggle.tsx`) keeps a session list sent as `exclude_documents`.
+  `@current`, `@dir` and `@exclude <names>` say the same in a message, count
+  anywhere, and narrow `@pheasant` lookups too (`assistant/inventory_scope.py`);
+  the first two read `current_document` / `current_directory`, which the
+  caller sends because the region keeps no UI state, and with nothing open
+  the answer says so rather than searching everything.
+  `tests/test_source_browser.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

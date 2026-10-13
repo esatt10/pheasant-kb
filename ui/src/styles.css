@@ -5169,6 +5169,14 @@ select.text-input {
   font-weight: 600;
 }
 .scope-toggle__icon { font-size: 13px; line-height: 1; }
+.scope-toggle--omitted {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.scope-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.browser-row__omitted { color: var(--warn); }
+.answer-scope { display: flex; flex-wrap: wrap; gap: 6px; }
 .browser-row__scope { color: var(--accent); font-size: 13px; }
 .scope-pill { gap: 6px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .scope-pill__clear {

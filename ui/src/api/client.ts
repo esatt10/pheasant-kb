@@ -467,6 +467,11 @@ export const api = {
       source_name?: string | null;
       /** One file, or everything under one folder, of `source_name`. */
       path_prefix?: string | null;
+      /** Documents to leave out: names, `source/path`s or artifact ids. */
+      exclude_documents?: string[] | null;
+      /** What `@current` and `@dir` mean: the open file and folder, as `source/path`. */
+      current_document?: string | null;
+      current_directory?: string | null;
       /** Scope the answer to these kinds of source (repository, gdrive, …). */
       source_types?: string[] | null;
       exclude_source_types?: string[] | null;

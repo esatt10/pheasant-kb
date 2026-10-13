@@ -10,7 +10,8 @@ import type {
   VisualResponse,
   WorkflowStep,
 } from "../api/types";
-import { browsedFrom, historyFor, useSession } from "../state/session";
+import { browsedFrom, excludedInScope, historyFor, useSession } from "../state/session";
+import { AnswerScope } from "./AnswerScope";
 import { AnswerBody } from "./AnswerBody";
 import { InventoryListing, listingText } from "./InventoryListing";
 import {
@@ -78,7 +79,8 @@ export function ChatPanel({
   // store, so leaving for Sources or Settings and coming back finds the thread
   // exactly where it was — including a half-typed question.
   const { state, dispatch } = useSession();
-  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth, pathScope } = state;
+  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth, pathScope, browser } = state;
+  const omitted = excludedInScope(state.excluded, pathScope?.source ?? sourceFilter, pathScope);
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
@@ -112,6 +114,11 @@ export function ChatPanel({
           // A folder or file scope names its own source.
           source_name: pathScope?.source ?? sourceFilter,
           path_prefix: pathScope?.path ?? null,
+          exclude_documents: omitted.length ? omitted : null,
+          // What `@current` and `@dir` mean: whatever the taxonomy view shows.
+          current_document: browser.open && browser.file ? `${browser.file.source}/${browser.file.path}` : null,
+          current_directory:
+            browser.open && browser.source ? (browser.path ? `${browser.source}/${browser.path}` : browser.source) : null,
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
@@ -362,6 +369,20 @@ export function ChatPanel({
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>
           ) : null}
+          {omitted.length ? (
+            <span className="pill scope-pill" title={`Left out of every answer:\n${omitted.join("\n")}`}>
+              omitting {omitted.length === 1 ? omitted[0].split("/").pop() : `${omitted.length} documents`}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "clear-excluded", source: pathScope?.source ?? sourceFilter })}
+                aria-label="Stop omitting documents"
+                title="Search the omitted documents again"
+              >
+                ✕
+              </button>
+            </span>
+          ) : null}
           <select
             className="composer__depth"
             value={answerDepth ?? "auto"}
@@ -593,6 +614,7 @@ function AnswerTurn({
           </button>
         </p>
       ) : null}
+      {answer.scope ? <AnswerScope scope={answer.scope} /> : null}
       {answer.inventory_hint ? <p className="msg__hint">{answer.inventory_hint}</p> : null}
       {answer.keywords?.unknown ? (
         <p className="msg__hint">

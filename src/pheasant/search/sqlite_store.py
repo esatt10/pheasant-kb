@@ -381,6 +381,7 @@ class SearchStore:
         memory_now: str | None = None,
         steering: Any = None,
         path_prefix: str | None = None,
+        exclude: Any = None,
     ) -> list[dict]:
         # Natural-language queries ("where does the X service run") must not
         # fall to FTS5's implicit-AND — a single unmatched stopword would
@@ -419,7 +420,7 @@ class SearchStore:
             filter_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
             filter_params.append(f"%{section_needle(section)}%")
         # One file or folder of a source: in SQL for the reason `section` is.
-        scope_where, scope_params = path_scope_sql(path_prefix)
+        scope_where, scope_params = path_scope_sql(path_prefix, exclude)
         filter_where += scope_where
         filter_params.extend(scope_params)
         # Step 33.6 — agent-memory policy. Pushed into SQL for the same reason

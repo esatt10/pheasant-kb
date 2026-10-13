@@ -579,6 +579,7 @@ class PheasantRetriever:
         principal: str | None = None,
         principal_groups: list[str] | None = None,
         path_prefix: str | None = None,
+        exclusion: Any = None,
     ) -> None:
         self.search_engine = search
         self.knowledge_base = knowledge_base
@@ -603,6 +604,7 @@ class PheasantRetriever:
         # here"), held for the same reason: every search and every graph or
         # document read in this answer must stay inside it.
         self.path_prefix = path_scope(path_prefix) or None
+        self.exclusion = exclusion or None  # documents `@exclude` left out
         self.principal = principal
         self.principal_groups = list(principal_groups or ())
         # Per-request memo: an agent loop re-issues overlapping queries, and
@@ -636,6 +638,10 @@ class PheasantRetriever:
         if self.source_name and self.source_name not in {raw_source, canonical_source}:
             return False
         if self.path_prefix and not path_within(relative_path, self.path_prefix):
+            return False
+        if self.exclusion and not self.exclusion.admits(
+            {"node_id": artifact_id, "source_id": raw_source, "relative_path": relative_path}
+        ):
             return False
         source_type = (self._source_type_cache or {}).get(raw_source) or (
             self._source_type_cache or {}
@@ -758,6 +764,7 @@ class PheasantRetriever:
             tuple(self.source_types or ()),
             tuple(self.exclude_source_types or ()),
             self.path_prefix,
+            id(self.exclusion),
         )
         if cache_key in self._cache:
             return [
@@ -786,7 +793,11 @@ class PheasantRetriever:
             principal_groups=principal_groups,
             security=getattr(self.config, "security", None),
             memory=self.memory,
-            **({"path_prefix": self.path_prefix} if self.path_prefix else {}),
+            **(
+                {"path_prefix": self.path_prefix, "exclude": self.exclusion}
+                if self.path_prefix or self.exclusion
+                else {}
+            ),
         )
         failed_arms = payload.get("arm_failures") or []
         if failed_arms:

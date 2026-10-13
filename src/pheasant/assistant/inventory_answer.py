@@ -156,6 +156,8 @@ def lookup(
             offset=(page - 1) * limit,
             principal=principal,
             principal_groups=principal_groups,
+            path_prefix=asked.path_prefix,
+            exclude_documents=list(asked.exclude),
         )
         result = inventory.documents(context, request)
         params = {
@@ -163,6 +165,8 @@ def lookup(
             "extension": list(result["filters"]["extensions"]),
             "path_contains": result["filters"]["path_contains"],
             "order": request.order,
+            "path_prefix": request.path_prefix,
+            "exclude_document": list(request.exclude_documents or []),
         }
         return {
             "tool": "list_documents",
@@ -237,6 +241,8 @@ def lookup(
                 limit=1,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=asked.path_prefix,
+                exclude_documents=list(asked.exclude),
             ),
         )
         return {"tool": "list_documents", "result": result}
@@ -725,7 +731,10 @@ def _span(start: int, count: int, total: int) -> str:
 def _scope(asked: InventoryQuestion) -> str:
     parts = []
     if asked.source_name:
-        parts.append(f" in `{asked.source_name}`")
+        where = "/".join(part for part in (asked.source_name, asked.path_prefix) if part)
+        parts.append(f" in `{where}`")
+    if asked.exclude:
+        parts.append(f", leaving out {_n(len(asked.exclude), 'document')}")
     if asked.path_contains:
         parts.append(f" with “{asked.path_contains}” in the path")
     return "".join(parts)

@@ -42,8 +42,11 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         offset: int = 0,
         principal: str | None = None,
         principal_groups: list[str] | None = Query(default=None),
+        path_prefix: str | None = None,
+        exclude_document: list[str] | None = Query(default=None),
     ) -> dict:
-        """The indexed documents, filtered and paged. ``extension`` repeats."""
+        """The indexed documents, filtered and paged. ``extension`` and
+        ``exclude_document`` repeat."""
 
         return inventory.documents(
             services,
@@ -56,6 +59,8 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
                 offset=offset,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=path_prefix,
+                exclude_documents=list(exclude_document or []),
             ),
         )
 

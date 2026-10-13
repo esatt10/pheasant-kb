@@ -57,6 +57,11 @@ class ChatRequest(BaseModel):
     # `GET /documents/tree` lists it. Every retrieval the answer runs stays
     # inside it (the web UI's "search only here" in the taxonomy view).
     path_prefix: str | None = None
+    # Documents to leave out (names, paths or ids), and what the caller has
+    # open — which `@current` and `@dir` in the question are read against.
+    exclude_documents: list[str] | None = None
+    current_document: str | None = None
+    current_directory: str | None = None
 
     def service_request(self) -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
@@ -75,6 +80,9 @@ class ChatRequest(BaseModel):
             depth=self.depth,
             visual=self.visual,
             path_prefix=self.path_prefix,
+            exclude_documents=self.exclude_documents,
+            current_document=self.current_document,
+            current_directory=self.current_directory,
         )
 
 

@@ -57,6 +57,8 @@ class InventoryTools:
         offset: int = 0,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import inventory
@@ -73,6 +75,8 @@ class InventoryTools:
                 offset=offset,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=path_prefix,
+                exclude_documents=list(exclude_documents or []),
             ),
         )
 
@@ -226,11 +230,16 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         offset: int = 0,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         """List the indexed documents, not search them.
 
         Filters: source_name (one source), extensions (["pdf", ".md"]),
-        path_contains (a case-insensitive substring of the relative path).
+        path_contains (a case-insensitive substring of the relative path),
+        path_prefix (one folder or file of source_name, exact, as
+        browse_source lists it) and exclude_documents (names, paths or ids to
+        leave out; a name matching nothing in scope is refused).
         order is "path" (by source, then path) or "recent" (last indexed
         first). Pages with limit (at most 500) and offset, and returns the
         total with has_more. Each document's id is its graph node id, so
@@ -249,6 +258,8 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             offset,
             principal,
             principal_groups,
+            path_prefix,
+            exclude_documents,
         )
 
     @mcp.tool()

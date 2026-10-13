@@ -297,6 +297,10 @@ class InventoryQuestion:
     #: The keyword it was asked with, when that was a shorthand (``@doc``)
     #: rather than ``@pheasant`` itself, so the answer can say which.
     keyword: str | None = None
+    #: A folder or file the listing is narrowed to, and ``source/path`` of
+    #: documents it leaves out (``@dir`` / ``@current`` / ``@exclude``).
+    path_prefix: str | None = None
+    exclude: tuple[str, ...] = ()
 
 
 def has_keyword(question: str) -> bool:

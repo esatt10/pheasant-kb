@@ -154,6 +154,7 @@ class HybridSearch:
         extra_steering_records: list[dict[str, Any]] | None = None,
         explain: bool = False,
         path_prefix: str | None = None,
+        exclude: Any = None,
     ) -> dict:
         """Run one query across the arms and fuse them.
 
@@ -185,8 +186,9 @@ class HybridSearch:
         re-implementation of it, and nothing is written anywhere: a candidate
         cannot reach production ranking by being evaluated.
 
-        ``path_prefix`` narrows to one file or folder like ``section`` does
-        (see ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
+        ``path_prefix`` narrows to one file or folder like ``section`` does, and
+        ``exclude`` (a ``criteria.Exclusion``) leaves named documents out (see
+        ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
         """
         mode = mode if mode in VALID_MODES else "hybrid"
         # Clamped, not just floored: `max_results` arrives straight off an
@@ -234,7 +236,7 @@ class HybridSearch:
         # the same again for a memory policy, where `only` narrows to a handful
         # of records and `off` can drop a lot.
         sectioned = bool(section_needle(section))
-        scoped = bool(path_scope(path_prefix))
+        scoped = bool(path_scope(path_prefix)) or bool(exclude)
         ranking = self.ranking_parameters()
         narrowed = enforced or sectioned or scoped or memory_filtered
         fetch_n = ranking.overfetch(max_results, filtering=narrowed)
@@ -305,7 +307,7 @@ class HybridSearch:
                         memory_policy=policy if memory_index else None,
                         memory_now=memory_now,
                         steering=steering,
-                        **({"path_prefix": path_prefix} if scoped else {}),
+                        **({"path_prefix": path_prefix, "exclude": exclude} if scoped else {}),
                     )
                 finally:
                     if admitted:
@@ -421,7 +423,9 @@ class HybridSearch:
             _filter_stage("section")
 
         if scoped:  # the text arm was narrowed in SQL
-            vector_results, graph_results = scope_hits(path_prefix, vector_results, graph_results)
+            vector_results, graph_results = scope_hits(
+                path_prefix, vector_results, graph_results, exclude=exclude
+            )
             _filter_stage("path")
 
         if memory_index:

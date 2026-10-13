@@ -122,6 +122,14 @@ class AnswerRequest:
     #: retrieval this answer runs stays inside it (the taxonomy view's
     #: "search only here").
     path_prefix: str | None = None
+    #: Documents to leave out, by name, path or id (`services.scope`); in a
+    #: question an unresolvable one is said in a note rather than refused.
+    exclude_documents: list[str] | None = None
+    #: What the caller has open, which ``@current`` and ``@dir`` are read
+    #: against: a document as ``source/path`` or an artifact id, and a folder
+    #: as ``source/path`` (``source`` alone for its root).
+    current_document: str | None = None
+    current_directory: str | None = None
 
 
 def admit(context: ServiceContext, request: AnswerRequest) -> None:
@@ -210,6 +218,9 @@ def answer(
                 defer_visual=defer_visual,
                 request_budget=budget,
                 path_prefix=request.path_prefix,
+                exclude_documents=request.exclude_documents,
+                current_document=request.current_document,
+                current_directory=request.current_directory,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["admission_ms"] = admission_ms

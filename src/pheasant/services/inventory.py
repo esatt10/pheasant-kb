@@ -72,6 +72,10 @@ class DocumentsRequest:
     offset: int = 0
     principal: str | None = None
     principal_groups: list[str] | None = None
+    #: One folder or file of ``source_name`` (exact, as `browse_source` lists
+    #: it), and documents to leave out by name, path or id (`services.scope`).
+    path_prefix: str | None = None
+    exclude_documents: list[str] | None = None
 
 
 def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, Any]:
@@ -96,6 +100,24 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
         # is a placeholder to psycopg.
         where.append("(" + " OR ".join("LOWER(a.relative_path) LIKE ?" for _ in extensions) + ")")
         params.extend(f"%{extension}" for extension in extensions)
+    scope = None
+    if request.path_prefix or request.exclude_documents:
+        from pheasant.search.criteria import path_scope_sql
+        from pheasant.services import scope as scope_service
+
+        scope = scope_service.resolve(
+            context,
+            source_name=request.source_name,
+            path_prefix=request.path_prefix,
+            exclude_documents=request.exclude_documents,
+            principal=request.principal,
+            principal_groups=request.principal_groups,
+        )
+        scoped, scoped_params = path_scope_sql(
+            scope.path_prefix, scope.exclusion, column="a.relative_path"
+        )
+        where.append("1 = 1" + scoped)
+        params.extend(scoped_params)
     if request.path_contains and request.path_contains.strip():
         where.append("LOWER(a.relative_path) LIKE ? ESCAPE '\\'")
         params.append(f"%{_escape_like(request.path_contains.strip().lower())}%")
@@ -148,6 +170,7 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
             "path_contains": (request.path_contains or "").strip() or None,
             "order": request.order,
         },
+        **({"scope": scope.as_dict()} if scope is not None else {}),
     }
 
 

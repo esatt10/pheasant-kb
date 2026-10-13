@@ -13,6 +13,7 @@ existing importers keep working.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -115,21 +116,50 @@ def path_within(relative_path: Any, scope: Any) -> bool:
     return have == wanted or have.startswith(f"{wanted}/")
 
 
-def path_scope_sql(scope: Any, column: str = "artifacts.relative_path") -> tuple[str, list[Any]]:
-    """``(" AND …", params)`` keeping rows whose ``column`` is within ``scope``.
+@dataclass(frozen=True)
+class Exclusion:
+    """Documents left out of a search, by identity — what ``services.scope``
+    resolved from the names a caller gave.
+
+    Carried two ways because the arms identify a hit two ways: the text arm
+    filters ``artifacts.id`` in SQL, and a vector or graph hit (a chunk, a
+    symbol) is matched on the ``(source, relative_path)`` of its document.
+    Empty is falsy, so "nothing excluded" costs nothing anywhere.
+    """
+
+    ids: frozenset[str] = frozenset()
+    pairs: frozenset[tuple[str, str]] = frozenset()
+
+    def __bool__(self) -> bool:
+        return bool(self.ids or self.pairs)
+
+    def admits(self, hit: dict) -> bool:
+        if str(hit.get("node_id") or "") in self.ids:
+            return False
+        return (source_of(hit), path_of(hit)) not in self.pairs
+
+
+def path_scope_sql(
+    scope: Any, exclude: Exclusion | None = None, column: str = "artifacts.relative_path"
+) -> tuple[str, list[Any]]:
+    """``(" AND …", params)`` keeping rows within ``scope`` and not excluded.
 
     ``substr(...) = ?`` rather than ``LIKE 'x/%'``: SQLite's ``LIKE`` folds
     ASCII case and Postgres's does not, so the obvious spelling would scope
     the two backends differently. Both dialects spell ``substr`` alike.
     """
 
+    where, params = "", []
     wanted = path_scope(scope)
-    if not wanted:
-        return "", []
-    return (
-        f" AND ({column} = ? OR substr({column}, 1, ?) = ?)",
-        [wanted, len(wanted) + 1, f"{wanted}/"],
-    )
+    if wanted:
+        where = f" AND ({column} = ? OR substr({column}, 1, ?) = ?)"
+        params = [wanted, len(wanted) + 1, f"{wanted}/"]
+    if exclude and exclude.ids:
+        ids = sorted(exclude.ids)
+        table = column.rsplit(".", 1)[0] if "." in column else "artifacts"
+        where += f" AND {table}.id NOT IN ({', '.join('?' for _ in ids)})"
+        params.extend(ids)
+    return where, params
 
 
 def path_of(item: dict) -> str:
@@ -141,15 +171,24 @@ def path_of(item: dict) -> str:
     return str(item.get("relative_path") or "")
 
 
-def scope_hits(scope: Any, *arms: list[dict]) -> tuple[list[dict], ...]:
-    """Each arm's hits that lie within ``scope``, for the arms SQL cannot narrow.
+def scope_hits(
+    scope: Any, *arms: list[dict], exclude: Exclusion | None = None
+) -> tuple[list[dict], ...]:
+    """Each arm's hits within ``scope`` and not excluded, for the arms SQL cannot narrow.
 
     The vector arm's hits carry their path. A graph node outside any file (an
     entity, a stub) carries none and cannot be "in" a folder, so it goes —
     the call ``section`` makes for a node with no breadcrumb.
     """
 
-    return tuple([hit for hit in arm if path_within(path_of(hit), scope)] for arm in arms)
+    return tuple(
+        [
+            hit
+            for hit in arm
+            if path_within(path_of(hit), scope) and (not exclude or exclude.admits(hit))
+        ]
+        for arm in arms
+    )
 
 
 def source_of(item: dict) -> str:

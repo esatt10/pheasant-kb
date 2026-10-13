@@ -357,6 +357,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         as_of: str | None = None,
         expand: dict | int | bool | None = None,
         path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -450,6 +451,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             as_of=as_of,
             expand=expand,
             path_prefix=path_prefix,
+            exclude_documents=exclude_documents,
         )
 
     @mcp.tool()

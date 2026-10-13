@@ -26,6 +26,8 @@ export const PHEASANT_PHRASES: { phrase: string; does: string }[] = [
   { phrase: "@pheasant sync status", does: "health and the index queue" },
   { phrase: "@pheasant list documents page 2", does: "any listing, any page" },
   { phrase: "@pheasant more", does: "the next page of the last listing" },
+  { phrase: "@pheasant how many documents @dir", does: "any listing, only the open folder" },
+  { phrase: "@pheasant list documents @exclude <path>", does: "any listing, less a named document" },
 ];
 
 const STORE_KEY = "pheasant.keywordReference";
@@ -238,7 +240,8 @@ export function KeywordReference({
       </header>
       <p className="keyref__rule">
         Start a message with a keyword; several can lead (<code>@detailed @table …</code>).
-        Only <code>@pheasant</code> works anywhere.
+        <code>@pheasant</code> and the scope keywords (<code>@current</code>, <code>@dir</code>,{" "}
+        <code>@exclude name</code>) work anywhere; the scope ones read what the taxonomy view has open.
         {typing ? " Tab completes the first match." : ""}
       </p>
       {typing ? null : (

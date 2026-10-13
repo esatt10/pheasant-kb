@@ -175,6 +175,9 @@ class SearchRequest:
     #: One file, or everything under one folder, of the source: the taxonomy
     #: view's "search only here". Narrows the arms like `section` does.
     path_prefix: str | None = None
+    #: Documents to leave out — names, paths or artifact ids, resolved within
+    #: the scope above (`services.scope`). An unresolvable name is refused.
+    exclude_documents: list[str] | None = None
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
@@ -277,6 +280,18 @@ def _search(
 ) -> dict[str, Any]:
     """One retrieval, once the knowledge base and any snapshot pin are settled."""
 
+    scope = None
+    if request.path_prefix or request.exclude_documents:
+        from pheasant.services import scope as scope_service
+
+        scope = scope_service.resolve(
+            context,
+            source_name=request.source_name,
+            path_prefix=request.path_prefix,
+            exclude_documents=request.exclude_documents,
+            principal=request.principal,
+            principal_groups=request.principal_groups,
+        )
     ranking = context.searcher.ranking_parameters()
     fetch = ranking.overfetch(request.max_results, filtering=request.filtering)
     started = time.perf_counter()
@@ -294,7 +309,11 @@ def _search(
             section=request.section,
             memory=request.memory,
             explain=request.explain,
-            **({"path_prefix": request.path_prefix} if request.path_prefix else {}),
+            **(
+                {"path_prefix": scope.path_prefix, "exclude": scope.exclusion}
+                if scope is not None
+                else {}
+            ),
         )
     except Exception:
         metrics.REGISTRY.inc("pheasant_search_total", mode=request.mode, outcome="error")
@@ -325,6 +344,10 @@ def _search(
     # generation cannot tell "the document is not indexed" from "this replica
     # has not picked up the index that has it" — and those call for opposite
     # responses.
+    if scope is not None:
+        # What the search was allowed to see, as resolved: a caller who named
+        # `deploy.md` learns which documents that left out.
+        payload["scope"] = scope.as_dict()
     payload["graph_generation"] = getattr(context.engine, "loaded_graph_generation", None)
     payload["lineage"] = _lineage(
         context,
