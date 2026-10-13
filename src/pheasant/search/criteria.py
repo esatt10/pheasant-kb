@@ -13,6 +13,7 @@ existing importers keep working.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -60,6 +61,134 @@ def apply_retrieval_criteria(
                 continue
         kept.append(item)
     return kept
+
+
+def section_needle(section: str | None) -> str:
+    """The comparable form of a requested section, or ``""`` for no filter.
+
+    Lowercased and stripped, and that is the whole rule — the SQL above matches
+    ``LOWER(heading_path) LIKE '%needle%'`` and :func:`section_matches` does
+    ``needle in heading_path.lower()``, which are the same test. Keeping the
+    normalization in one function is what stops the two from drifting apart.
+    """
+    return (section or "").strip().lower()
+
+
+def section_matches(heading_path: object, section: str | None) -> bool:
+    """Does a hit's breadcrumb sit inside the requested section?
+
+    Substring, not equality, because people cite the section and not the whole
+    path: ``§ 12.3``, ``Article IV`` and ``Termination`` should each reach
+    ``MASTER SERVICES AGREEMENT > Article IV Term and Termination > § 12.3``.
+    Matching the breadcrumb rather than only its last crumb is what makes
+    asking for an Article return everything nested under it.
+    """
+    needle = section_needle(section)
+    if not needle:
+        return True
+    return needle in str(heading_path or "").lower()
+
+
+def path_scope(path: Any) -> str:
+    """A file or folder inside a source, normalized: ``"/guide/setup/"`` → ``"guide/setup"``.
+
+    ``""`` means no scope. ``.`` and ``..`` segments are dropped rather than
+    followed, so a scope can only ever narrow, never climb out of a source.
+    """
+
+    parts = [p for p in str(path or "").replace("\\", "/").split("/") if p and p not in {".", ".."}]
+    return "/".join(parts)
+
+
+def path_within(relative_path: Any, scope: Any) -> bool:
+    """Is ``relative_path`` the scoped file, or anything under the scoped folder?
+
+    Exact and case-sensitive, as the SQL form is (`path_scope_sql`): the
+    scope is a path the index itself listed, so it is spelled as indexed, and
+    a case-blind match here would agree with SQLite's ``LIKE`` and disagree
+    with Postgres's.
+    """
+
+    wanted = path_scope(scope)
+    if not wanted:
+        return True
+    have = str(relative_path or "").replace("\\", "/").strip("/")
+    return have == wanted or have.startswith(f"{wanted}/")
+
+
+@dataclass(frozen=True)
+class Exclusion:
+    """Documents left out of a search, by identity — what ``services.scope``
+    resolved from the names a caller gave.
+
+    Carried two ways because the arms identify a hit two ways: the text arm
+    filters ``artifacts.id`` in SQL, and a vector or graph hit (a chunk, a
+    symbol) is matched on the ``(source, relative_path)`` of its document.
+    Empty is falsy, so "nothing excluded" costs nothing anywhere.
+    """
+
+    ids: frozenset[str] = frozenset()
+    pairs: frozenset[tuple[str, str]] = frozenset()
+
+    def __bool__(self) -> bool:
+        return bool(self.ids or self.pairs)
+
+    def admits(self, hit: dict) -> bool:
+        if str(hit.get("node_id") or "") in self.ids:
+            return False
+        return (source_of(hit), path_of(hit)) not in self.pairs
+
+
+def path_scope_sql(
+    scope: Any, exclude: Exclusion | None = None, column: str = "artifacts.relative_path"
+) -> tuple[str, list[Any]]:
+    """``(" AND …", params)`` keeping rows within ``scope`` and not excluded.
+
+    ``substr(...) = ?`` rather than ``LIKE 'x/%'``: SQLite's ``LIKE`` folds
+    ASCII case and Postgres's does not, so the obvious spelling would scope
+    the two backends differently. Both dialects spell ``substr`` alike.
+    """
+
+    where, params = "", []
+    wanted = path_scope(scope)
+    if wanted:
+        where = f" AND ({column} = ? OR substr({column}, 1, ?) = ?)"
+        params = [wanted, len(wanted) + 1, f"{wanted}/"]
+    if exclude and exclude.ids:
+        ids = sorted(exclude.ids)
+        table = column.rsplit(".", 1)[0] if "." in column else "artifacts"
+        where += f" AND {table}.id NOT IN ({', '.join('?' for _ in ids)})"
+        params.extend(ids)
+    return where, params
+
+
+def path_of(item: dict) -> str:
+    """The relative path a search hit came from, whichever arm produced it."""
+
+    provenance = item.get("provenance")
+    if isinstance(provenance, dict) and provenance.get("relative_path"):
+        return str(provenance["relative_path"])
+    return str(item.get("relative_path") or "")
+
+
+def scope_hits(
+    scope: Any, *arms: list[dict], exclude: Exclusion | None = None
+) -> tuple[list[dict], ...]:
+    """Each arm's hits within ``scope`` and not excluded, for the arms SQL cannot narrow.
+
+    The vector arm's hits carry their path. A graph node outside any file (an
+    entity, a stub) carries none and cannot be "in" a folder, so it goes —
+    the call ``section`` makes for a node with no breadcrumb.
+    """
+
+    return tuple(
+        [
+            hit
+            for hit in arm
+            if path_within(path_of(hit), scope) and (not exclude or exclude.admits(hit))
+        ]
+        for arm in arms
+    )
 
 
 def source_of(item: dict) -> str:

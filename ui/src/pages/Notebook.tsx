@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -15,13 +15,21 @@ import { EmptyState } from "../components/EmptyState";
 import { PaneResizer } from "../components/PaneResizer";
 import { WorkflowPanel } from "../components/WorkflowPanel";
 import { colorForNode } from "../graph/graphStyles";
+import { DragHandle } from "../browser/DragHandle";
 import { useSessionId } from "../hooks/useSessionId";
 import {
+  DEFAULT_BROWSER_HEIGHT,
   DEFAULT_DEPTH,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_RAIL_WIDTH,
   useSession,
 } from "../state/session";
+
+// The browser and its renderers (syntax highlighting included) load the first
+// time it opens, so a workspace that never browses never pays for them.
+const SourceBrowser = lazy(() =>
+  import("../browser/SourceBrowser").then((module) => ({ default: module.SourceBrowser })),
+);
 
 /**
  * The workspace: sources on the left, conversation in the middle, knowledge on
@@ -39,6 +47,7 @@ export function Notebook() {
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [showWorkflowDialog, setShowWorkflowDialog] = useState(false);
   const layoutRef = useRef<HTMLDivElement>(null);
+  const stackRef = useRef<HTMLDivElement>(null);
 
   const overview = useQuery({
     queryKey: ["overview"],
@@ -111,7 +120,28 @@ export function Notebook() {
     [dispatch, nodeById],
   );
 
+  /** Put text in the composer (unfolding the chat if it was folded) and focus it. */
+  const askInChat = useCallback(
+    (text: string) => {
+      if (state.chatCollapsed) dispatch({ type: "toggle-chat-collapsed" });
+      dispatch({ type: "set-draft", text: `${text} ` });
+      window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 0);
+    },
+    [dispatch, state.chatCollapsed],
+  );
+
+  const showInGraph = useCallback(
+    (nodeId: string) => {
+      if (state.panelCollapsed) dispatch({ type: "toggle-panel" });
+      dispatch({ type: "center-node", nodeId });
+      dispatch({ type: "open-tab", tab: "graph" });
+    },
+    [dispatch, state.panelCollapsed],
+  );
+
   const hasContent = overview.data?.has_content ?? false;
+  const browserOpen = state.browser.open;
+  const split = browserOpen && !state.browserCollapsed && !state.chatCollapsed;
 
   if (overview.isSuccess && !hasContent) {
     return (
@@ -159,6 +189,7 @@ export function Notebook() {
           onSelect={(source) => dispatch({ type: "filter-source", source })}
           onSelectType={(sourceType) => dispatch({ type: "filter-source-type", sourceType })}
           onChanged={() => overview.refetch()}
+          onBrowse={(source) => dispatch({ type: "open-browser", source, path: "" })}
         />
         )}
       </aside>
@@ -176,45 +207,107 @@ export function Notebook() {
       />
       )}
 
-      <section className="pane pane--main">
-        <header className="pane__header">
-          <span className="pane__title">Chat</span>
-          <div className="pane__actions">
-            {state.turns.length > 0 ? (
+      <div
+        className={`main-stack${browserOpen ? " main-stack--browser" : ""}${
+          split ? " main-stack--split" : ""
+        }${browserOpen && state.chatCollapsed ? " main-stack--chat-folded" : ""}${
+          browserOpen && state.browserCollapsed ? " main-stack--browser-folded" : ""
+        }`}
+        ref={stackRef}
+        style={{ "--browser": `${state.browserHeight}px` } as CSSProperties}
+      >
+        {browserOpen ? (
+          <Suspense
+            fallback={
+              <section className="pane browser centered muted small">
+                <span className="spinner" />
+              </section>
+            }
+          >
+            <SourceBrowser onAsk={askInChat} onShowInGraph={showInGraph} />
+          </Suspense>
+        ) : null}
+        {split ? (
+          <DragHandle
+            axis="y"
+            variable="--browser"
+            containerRef={stackRef}
+            min={160}
+            max={(box) => box.height - 180}
+            defaultSize={DEFAULT_BROWSER_HEIGHT}
+            label="Resize the source browser and the chat"
+            onCommit={(height) => dispatch({ type: "set-pane-width", pane: "browser", width: height })}
+          />
+        ) : null}
+        <section className={`pane pane--main${browserOpen && state.chatCollapsed ? " pane--folded" : ""}`}>
+          <header className="pane__header">
+            {browserOpen ? (
               <button
-                className="btn btn--small"
-                onClick={() => dispatch({ type: "new-conversation" })}
-                title="Clear this thread and start fresh"
+                className="btn btn--small btn--icon"
+                onClick={() => dispatch({ type: "toggle-chat-collapsed" })}
+                aria-label={state.chatCollapsed ? "Expand the chat" : "Fold the chat"}
+                title={
+                  state.chatCollapsed
+                    ? "Expand the chat"
+                    : "Fold the chat to give the source browser the height"
+                }
               >
-                New conversation
+                {state.chatCollapsed ? "▴" : "▾"}
               </button>
             ) : null}
-            <button
-              className="btn btn--small"
-              onClick={() => setShowWorkflowDialog(true)}
-              title="Choose how questions are answered"
-            >
-              {state.workflow ?? "Workflow"}
-            </button>
-            <button
-              className="btn btn--small"
-              onClick={() => setShowModelDialog(true)}
-              title="Connect an LLM to synthesize answers"
-            >
-              {status.data?.ready ? "Model connected" : "Connect model"}
-            </button>
+            <span className="pane__title">Chat</span>
+            <div className="pane__actions">
+              {browserOpen ? null : (
+                <button
+                  className="btn btn--small"
+                  onClick={() => dispatch({ type: "open-browser", source: state.sourceFilter, path: "" })}
+                  title="Browse a source's folders and files above the chat (or type @taxonomy)"
+                >
+                  Taxonomy
+                </button>
+              )}
+              {state.turns.length > 0 ? (
+                <button
+                  className="btn btn--small"
+                  onClick={() => dispatch({ type: "new-conversation" })}
+                  title="Clear this thread and start fresh"
+                >
+                  New conversation
+                </button>
+              ) : null}
+              <button
+                className="btn btn--small"
+                onClick={() => setShowWorkflowDialog(true)}
+                title="Choose how questions are answered"
+              >
+                {state.workflow ?? "Workflow"}
+              </button>
+              <button
+                className="btn btn--small"
+                onClick={() => setShowModelDialog(true)}
+                title="Connect an LLM to synthesize answers"
+              >
+                {status.data?.ready ? "Model connected" : "Connect model"}
+              </button>
+            </div>
+          </header>
+          {/* Folded, the chat is hidden rather than unmounted: an answer being
+              written must still land in the thread when it is unfolded. */}
+          <div
+            className="pane__body"
+            style={{ overflow: "hidden" }}
+            hidden={browserOpen && state.chatCollapsed}
+          >
+            <ChatPanel
+              status={status.data}
+              sessionId={sessionId}
+              hasContent={hasContent}
+              onCitationClick={focusNode}
+              onConnectModel={() => setShowModelDialog(true)}
+            />
           </div>
-        </header>
-        <div className="pane__body" style={{ overflow: "hidden" }}>
-          <ChatPanel
-            status={status.data}
-            sessionId={sessionId}
-            hasContent={hasContent}
-            onCitationClick={focusNode}
-            onConnectModel={() => setShowModelDialog(true)}
-          />
-        </div>
-      </section>
+        </section>
+      </div>
 
       {state.panelCollapsed ? null : (
       <PaneResizer
@@ -362,6 +455,7 @@ export function Notebook() {
                 dispatch({ type: "open-tab", tab: "graph" });
               }}
               onPivot={focusNode}
+              onOpenFile={(source, path) => dispatch({ type: "open-file", file: { source, path } })}
             />
           </div>
         ) : null}

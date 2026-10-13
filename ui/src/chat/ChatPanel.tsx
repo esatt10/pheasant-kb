@@ -10,7 +10,8 @@ import type {
   VisualResponse,
   WorkflowStep,
 } from "../api/types";
-import { historyFor, useSession } from "../state/session";
+import { browsedFrom, excludedInScope, historyFor, useSession } from "../state/session";
+import { AnswerScope } from "./AnswerScope";
 import { AnswerBody } from "./AnswerBody";
 import { InventoryListing, listingText } from "./InventoryListing";
 import {
@@ -78,7 +79,8 @@ export function ChatPanel({
   // store, so leaving for Sources or Settings and coming back finds the thread
   // exactly where it was — including a half-typed question.
   const { state, dispatch } = useSession();
-  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth } = state;
+  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth, pathScope, browser } = state;
+  const omitted = excludedInScope(state.excluded, pathScope?.source ?? sourceFilter, pathScope);
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
@@ -109,7 +111,14 @@ export function ChatPanel({
         {
           question,
           session_id: sessionId,
-          source_name: sourceFilter,
+          // A folder or file scope names its own source.
+          source_name: pathScope?.source ?? sourceFilter,
+          path_prefix: pathScope?.path ?? null,
+          exclude_documents: omitted.length ? omitted : null,
+          // What `@current` and `@dir` mean: whatever the taxonomy view shows.
+          current_document: browser.open && browser.file ? `${browser.file.source}/${browser.file.path}` : null,
+          current_directory:
+            browser.open && browser.source ? (browser.path ? `${browser.source}/${browser.path}` : browser.source) : null,
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
@@ -156,6 +165,11 @@ export function ChatPanel({
   const submit = (text: string) => {
     const question = text.trim();
     if (!question || ask.isPending) return;
+    // `@taxonomy` on its own opens the browser at once, on the source the chat
+    // is scoped to; the answer (from the index, no model) confirms where.
+    if (/^@(taxonomy|browse|folders)$/i.test(question)) {
+      dispatch({ type: "open-browser", source: sourceFilter, path: "" });
+    }
     const id = `${Date.now()}-${turns.length}`;
     dispatch({ type: "ask", id, question });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -294,7 +308,9 @@ export function ChatPanel({
             rows={1}
             value={draft}
             placeholder={
-              sourceFilter
+              pathScope
+                ? `Ask about ${pathScope.source}/${pathScope.path}…`
+                : sourceFilter
                 ? `Ask about ${sourceFilter}…`
                 : sourceTypeFilter
                   ? `Ask about your ${sourceTypeFilter} sources…`
@@ -331,9 +347,41 @@ export function ChatPanel({
               @ keywords
             </button>
           ) : null}
-          {sourceFilter ? <span className="pill pill--accent">scoped to {sourceFilter}</span> : null}
+          {pathScope ? (
+            <span
+              className="pill pill--accent scope-pill"
+              title={`Questions are answered only from ${pathScope.source}/${pathScope.path}`}
+            >
+              only {pathScope.kind === "file" ? "from" : "in"} {pathScope.source}/{pathScope.path}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "set-path-scope", scope: null })}
+                aria-label="Stop searching only here"
+                title={`Search all of ${pathScope.source} again`}
+              >
+                ✕
+              </button>
+            </span>
+          ) : sourceFilter ? (
+            <span className="pill pill--accent">scoped to {sourceFilter}</span>
+          ) : null}
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>
+          ) : null}
+          {omitted.length ? (
+            <span className="pill scope-pill" title={`Left out of every answer:\n${omitted.join("\n")}`}>
+              omitting {omitted.length === 1 ? omitted[0].split("/").pop() : `${omitted.length} documents`}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "clear-excluded", source: pathScope?.source ?? sourceFilter })}
+                aria-label="Stop omitting documents"
+                title="Search the omitted documents again"
+              >
+                ✕
+              </button>
+            </span>
           ) : null}
           <select
             className="composer__depth"
@@ -497,8 +545,16 @@ function AnswerTurn({
   const visualCitations = drawn ? drawn.citations : answer.citations;
   // A paged listing with rows is drawn as a table that grows in place; an
   // empty one is just its sentence.
+  const { dispatch } = useSession();
+  const browsed = browsedFrom(answer);
+  // A folder listing is its own view (the browser above the chat), so it is
+  // never drawn as the paged documents table.
   const listing =
-    answer.inventory?.page && answer.inventory.page.total > 0 ? listingText(answer.answer) : null;
+    answer.inventory?.page && answer.inventory.page.total > 0 && !browsed
+      ? listingText(answer.answer)
+      : null;
+  const openFile = (file: { source: string; path: string; chunkId?: string | null }) =>
+    dispatch({ type: "open-file", file });
   const onCite = (index: number) => onCitationClick(byIndex.get(index)?.node_id);
   return (
     <div className="msg">
@@ -510,6 +566,7 @@ function AnswerTurn({
               inventory={answer.inventory}
               lead={listing.lead}
               onSelect={onCitationClick}
+              onOpen={openFile}
             />
             {listing.footer ? <AnswerBody text={listing.footer} onCite={onCite} /> : null}
           </>
@@ -536,8 +593,28 @@ function AnswerTurn({
           citations={answer.citations}
           onSelect={onCitationClick}
           onVisualize={(citation) => draw.mutate([citation])}
+          onOpen={(citation) =>
+            openFile({
+              source: citation.source_id as string,
+              path: citation.relative_path as string,
+              chunkId: citation.chunk_id ?? null,
+            })
+          }
         />
       ) : null}
+      {browsed ? (
+        <p className="msg__hint">
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => dispatch({ type: "open-browser", source: browsed.source, path: browsed.path })}
+            title="Show this folder in the source browser above the chat"
+          >
+            Open in the taxonomy view
+          </button>
+        </p>
+      ) : null}
+      {answer.scope ? <AnswerScope scope={answer.scope} /> : null}
       {answer.inventory_hint ? <p className="msg__hint">{answer.inventory_hint}</p> : null}
       {answer.keywords?.unknown ? (
         <p className="msg__hint">

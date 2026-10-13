@@ -9,7 +9,8 @@ import { colorForNode } from "../graph/graphStyles";
  * The Sources rail.
  *
  * Selecting a source scopes both retrieval and the graph to it — the same
- * "which of my sources am I asking about" control, applied once.
+ * "which of my sources am I asking about" control, applied once. "browse"
+ * opens it as folders and files in the taxonomy view above the chat.
  */
 export function SourceRail({
   sources,
@@ -19,6 +20,7 @@ export function SourceRail({
   onSelectType,
   onChanged,
   onCollapse,
+  onBrowse,
 }: {
   sources: SourceRecord[];
   selected: string | null;
@@ -27,6 +29,8 @@ export function SourceRail({
   onSelectType: (type: string | null) => void;
   onChanged: () => void;
   onCollapse?: () => void;
+  /** Open a source (or, with null, every source) in the taxonomy view. */
+  onBrowse?: (name: string | null) => void;
 }) {
   const [adding, setAdding] = useState(false);
 
@@ -56,6 +60,15 @@ export function SourceRail({
               aria-label="Collapse sources"
             >
               ‹
+            </button>
+          ) : null}
+          {onBrowse ? (
+            <button
+              className="btn btn--small"
+              onClick={() => onBrowse(selected)}
+              title="Browse folders and files above the chat (@taxonomy)"
+            >
+              Browse
             </button>
           ) : null}
           <button
@@ -142,6 +155,15 @@ export function SourceRail({
                 </span>
               </button>
               <div className="source-item__actions">
+                {onBrowse ? (
+                  <button
+                    className="btn btn--small btn--ghost"
+                    onClick={() => onBrowse(source.name)}
+                    title={`Browse ${source.name}'s folders and files above the chat`}
+                  >
+                    browse
+                  </button>
+                ) : null}
                 <button
                   className="btn btn--small btn--ghost"
                   onClick={() => sync.mutate(source.name)}

@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { QueueTask, SourceRecord } from "../api/types";
@@ -7,6 +8,7 @@ import { QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegio
 import { AddSourceWizard } from "../sources/AddSourceWizard";
 import { TaxonomyOutline } from "../sources/TaxonomyOutline";
 import { QuickAdd } from "../components/QuickAdd";
+import { useSession } from "../state/session";
 
 const SYNC_MODES = ["incremental", "full", "validate_only", "repair"];
 
@@ -27,6 +29,8 @@ export function hasTaxonomy(source: SourceRecord): boolean {
 
 export function SourcesPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { dispatch } = useSession();
   const sources = useQuery({
     queryKey: ["sources"],
     queryFn: api.sources,
@@ -214,6 +218,16 @@ export function SourcesPage() {
                 />
                 <button className="btn btn--small" onClick={() => setEditingSource(source)}>
                   edit
+                </button>
+                <button
+                  className="btn btn--small"
+                  onClick={() => {
+                    dispatch({ type: "open-browser", source: source.name, path: "" });
+                    navigate("/");
+                  }}
+                  title="Browse its folders and files in the workspace, above the chat"
+                >
+                  browse
                 </button>
                 {hasTaxonomy(source) ? (
                   <button

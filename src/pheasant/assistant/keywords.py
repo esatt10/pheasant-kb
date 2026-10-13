@@ -16,8 +16,17 @@ question so a rule notices. A keyword says it directly:
   (``@timeline``, ``@flow``, ``@mindmap`` ...), the same pins as ``visual``.
 * **Deterministic answers**, with no model in the path: ``@search`` (the
   ranked hybrid-search hits, as a table), and the index lookups ``@source``,
-  ``@doc``, ``@docs``, ``@links`` and ``@more``, which are shorthand for
-  ``@pheasant source …``, ``@pheasant document …`` and so on.
+  ``@doc``, ``@docs``, ``@links``, ``@taxonomy`` and ``@more``, which are
+  shorthand for ``@pheasant source …``, ``@pheasant document …`` and so on.
+  ``@taxonomy`` lists one folder of a source; the web UI also opens its
+  source browser there, above the chat.
+* **Scope**, anywhere in the message like ``@pheasant``: ``@current`` (the
+  open document), ``@dir`` (its folder, or the folder being browsed) and
+  ``@exclude <names>`` (documents to leave out: ``@exclude deploy.md`` or
+  ``@exclude "a b.pdf",notes.md``). They narrow whatever else the message
+  asks for — an answer, ``@search``, ``@docs``, ``@doc``, ``@links``,
+  ``@taxonomy`` — and are resolved by ``services.scope`` against the
+  ``current_document`` / ``current_directory`` the caller sends.
 
 A keyword counts only as the **first word** of the message (several may lead
 it: ``@detailed @table …``), so a question that merely mentions one, or an
@@ -103,6 +112,16 @@ KEYWORDS: tuple[Keyword, ...] = (
         group="Answered without a model",
     ),
     Keyword(
+        "taxonomy",
+        "inventory",
+        "taxonomy",
+        "Browse a source as folders and files, one level at a time. The web UI opens "
+        "its source browser above the chat.",
+        "@taxonomy notes guides/",
+        ("browse", "folders"),
+        group="Answered without a model",
+    ),
+    Keyword(
         "more",
         "inventory",
         "more",
@@ -110,6 +129,34 @@ KEYWORDS: tuple[Keyword, ...] = (
         "@more",
         ("next",),
         group="Answered without a model",
+    ),
+    Keyword(
+        "current",
+        "scope",
+        "document",
+        "Only the document open in the taxonomy view (current_document). Anywhere in the "
+        "message; combines with every other keyword.",
+        "@current what does this say about rotation",
+        ("this",),
+        group="Where to look",
+    ),
+    Keyword(
+        "dir",
+        "scope",
+        "directory",
+        "Only the folder being browsed, or the open document's folder (current_directory).",
+        "@dir @docs",
+        ("directory", "cwd"),
+        group="Where to look",
+    ),
+    Keyword(
+        "exclude",
+        "scope",
+        "exclude",
+        "Leave documents out, by name, path or id: `@exclude deploy.md,notes.md`. Repeatable.",
+        "@dir @exclude README.md how is it deployed",
+        ("omit", "without"),
+        group="Where to look",
     ),
     Keyword(
         "search",
@@ -251,6 +298,18 @@ inside a quote, and never quote text the passages do not contain.""",
 }
 
 _LEADING = re.compile(r"^\s*@(?P<name>[a-z][\w-]*)\b[:,]?\s*", re.IGNORECASE)
+#: Scope keywords count anywhere, like ``@pheasant``. ``@exclude`` takes the
+#: next token (quoted, or up to whitespace) as its comma-separated names.
+_SCOPE_FLAG = re.compile(r"(?<![\w@.])@(?P<name>current|this|dir|directory|cwd)\b[:,]?", re.I)
+_NAME = r"(?:\"[^\"]*\"|'[^']*'|“[^”]*”|[^\s,\"'“]+)"
+#: After ``, `` a further name must look like a file (a dot or a slash, or
+#: quoted), so ``@exclude a.md, what changed`` keeps its question.
+_FILEISH = r"(?:\"[^\"]*\"|'[^']*'|“[^”]*”|[^\s,\"'“]*[./][^\s,\"'“]*)"
+_SCOPE_EXCLUDE = re.compile(
+    rf"(?<![\w@.])@(?P<name>exclude|omit|without)\b[:,]?"
+    rf"(?P<arg>\s+{_NAME}(?:,{_NAME}|,\s+{_FILEISH})*)?",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -269,6 +328,10 @@ class Directives:
     depth: str | None = None
     visual: str | None = None
     why: dict[str, str] = field(default_factory=dict)
+    #: ``document`` (``@current``), ``directory`` (``@dir``) or ``None``.
+    scope: str | None = None
+    #: Names ``@exclude`` gave, unresolved (``services.scope`` resolves them).
+    exclude: tuple[str, ...] = ()
 
     @property
     def any(self) -> bool:
@@ -282,14 +345,16 @@ class Directives:
             "depth": self.depth,
             "visual": self.visual,
             "search": self.search,
+            # Only when a scope keyword was read: the payload is unchanged otherwise.
+            **({"scope": self.scope} if self.scope else {}),
+            **({"exclude": list(self.exclude)} if self.exclude else {}),
         }
 
 
 def read(question: str) -> Directives:
     """The keywords leading ``question``. Pure; never raises."""
 
-    text = question or ""
-    used: list[str] = []
+    text, used, scope, exclude = _read_scope(question or "")
     found: dict[str, object] = {}
     unknown = None
     while True:
@@ -330,7 +395,41 @@ def read(question: str) -> Directives:
         form=found.get("form"),  # type: ignore[arg-type]
         depth=found.get("depth"),  # type: ignore[arg-type]
         visual=found.get("visual"),  # type: ignore[arg-type]
+        scope=scope,
+        exclude=exclude,
     )
+
+
+def _read_scope(text: str) -> tuple[str, list[str], str | None, tuple[str, ...]]:
+    """Take the scope keywords out of ``text``, wherever they are."""
+
+    used: list[str] = []
+    scope: str | None = None
+    exclude: list[str] = []
+
+    def take(matched: re.Match[str]) -> str:
+        nonlocal scope
+        keyword = _BY_NAME[matched.group("name").lower()]
+        if f"@{keyword.name}" not in used:
+            used.append(f"@{keyword.name}")
+        if keyword.value == "exclude":
+            raw = (matched.groupdict().get("arg") or "").strip()
+            exclude.extend(
+                part.strip().strip("\"'“”").strip()
+                for part in re.findall(r'"[^"]*"|\'[^\']*\'|“[^”]*”|[^,]+', raw)
+                if part.strip().strip("\"'“”").strip()
+            )
+        else:
+            # The narrower wins: `@dir @current` asks about one document.
+            scope = "document" if "document" in {scope, keyword.value} else keyword.value
+        return " "
+
+    cleaned = _SCOPE_FLAG.sub(take, _SCOPE_EXCLUDE.sub(take, text))
+    if not used:
+        return text, [], None, ()
+    # `@exclude a.md, what changed` leaves the comma that separated them.
+    text = " ".join(cleaned.split()).lstrip(",;: ")
+    return text, used, scope, tuple(dict.fromkeys(exclude))
 
 
 def inventory_form(question: str) -> str:
@@ -371,7 +470,7 @@ def catalog() -> list[dict[str, object]]:
             "group": keyword.group,
             "summary": keyword.summary,
             "example": keyword.example,
-            "anywhere": keyword.name == INVENTORY_KEYWORD,
+            "anywhere": keyword.name == INVENTORY_KEYWORD or keyword.kind == "scope",
         }
         for keyword in KEYWORDS
     ]
@@ -385,7 +484,8 @@ def keyword_catalog(settings: object) -> list[dict[str, object]]:
     return [
         row
         for row in catalog()
-        if (row["kind"] != "inventory" or inventory_on) and (row["anywhere"] or first_words)
+        if (row["kind"] != "inventory" or inventory_on)
+        and (row["keyword"] == f"@{INVENTORY_KEYWORD}" or first_words)
     ]
 
 

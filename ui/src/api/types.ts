@@ -264,11 +264,11 @@ export interface AssistantStatus {
 export interface AnswerKeyword {
   keyword: string;
   aliases: string[];
-  kind: "inventory" | "search" | "form" | "depth" | "visual";
+  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope";
   group: string;
   summary: string;
   example: string;
-  /** True for `@pheasant`, which counts anywhere in a message. */
+  /** True for `@pheasant` and the scope keywords, which count anywhere. */
   anywhere: boolean;
 }
 
@@ -280,7 +280,7 @@ export interface InventoryPage {
   pages: number;
   next_question: string | null;
   previous_question: string | null;
-  endpoint: "/documents" | "/documents/links";
+  endpoint: "/documents" | "/documents/links" | "/documents/tree";
   params: Record<string, string | string[] | boolean>;
 }
 
@@ -587,6 +587,24 @@ export interface ChatAnswer {
   /** Set when a question read close to one about the knowledge base itself
    * but was searched instead: how to ask it explicitly with `@pheasant`. */
   inventory_hint?: string;
+  /** Where the answer was allowed to look, when a folder, a file, an
+   * exclusion or `@current` / `@dir` / `@exclude` narrowed it. */
+  scope?: AnswerScope;
+}
+
+/** The scope an answer was read under (`services.scope`). */
+export interface AnswerScope {
+  source_name: string | null;
+  path_prefix: string | null;
+  kind: "file" | "folder" | null;
+  /** `source/path` of each document left out. */
+  excluded: string[];
+  /** Names given to leave out that name no document. */
+  unresolved: string[];
+  notes: string[];
+  keywords: string[];
+  /** `@current` / `@dir` with nothing open to read it against. */
+  missing: string | null;
 }
 
 /** One earlier exchange sent back so a follow-up can be understood. */
@@ -1571,4 +1589,111 @@ export interface IndexQueueStatus {
   depth: Record<string, number> | null;
   tasks: QueueTask[];
   counts: Record<QueueTaskState, number>;
+}
+
+/**
+ * How a document renders best, as the region classifies it
+ * (`services.source_browser.classify`).
+ */
+export type DocumentViewer =
+  | "markdown"
+  | "code"
+  | "json"
+  | "yaml"
+  | "table"
+  | "notebook"
+  | "html"
+  | "svg"
+  | "pdf"
+  | "spreadsheet"
+  | "slides"
+  | "document"
+  | "image"
+  | "audio"
+  | "text";
+
+export interface BrowseCrumb {
+  name: string;
+  source: string;
+  path: string;
+}
+
+export interface BrowseFolder {
+  name: string;
+  /** The folder's path inside its source; `""` for a source at the top level. */
+  path: string;
+  documents: number;
+  /** Set at the top level, where every folder is a source. */
+  source?: string;
+  source_type?: string | null;
+}
+
+export interface BrowseFile {
+  id: string;
+  name: string;
+  path: string;
+  type: string;
+  extension: string;
+  size_bytes?: number | null;
+  last_indexed_at?: string | null;
+  viewer: DocumentViewer;
+  language?: string | null;
+}
+
+/** One level of a source (`GET /documents/tree`); no source is the sources. */
+export interface BrowseResponse {
+  knowledge_base: string;
+  source: string | null;
+  path: string;
+  parent: string | null;
+  breadcrumbs: BrowseCrumb[];
+  directories: BrowseFolder[];
+  files: BrowseFile[];
+  totals: { directories: number; files: number; documents: number };
+  page: { offset: number; limit: number; returned: number; has_more: boolean };
+}
+
+export interface DocumentOutlineEntry {
+  title: string;
+  path: string;
+  level: number;
+  line?: number | null;
+}
+
+/** One document's content for a viewer (`GET /documents/content`). */
+export interface DocumentContent {
+  knowledge_base: string;
+  document: {
+    id: string;
+    source: string;
+    path: string;
+    name: string;
+    type: string;
+    extension: string;
+    size_bytes?: number | null;
+    last_indexed_at?: string | null;
+    sha256?: string | null;
+    mime_type?: string | null;
+  };
+  breadcrumbs: BrowseCrumb[];
+  viewer: DocumentViewer;
+  language: string | null;
+  content: string | null;
+  /**
+   * `file` when read from the indexed file; `extracted` for a binary format's
+   * indexed text; `chunks` when a text file was not readable here as indexed.
+   */
+  content_origin: "file" | "extracted" | "chunks" | null;
+  truncated: boolean;
+  outline: DocumentOutlineEntry[];
+  /** The line span of the cited passage this document was opened at. */
+  focus: {
+    chunk_id: string;
+    chunk_index?: number;
+    start_line?: number | null;
+    end_line?: number | null;
+    heading_path?: string | null;
+    excerpt?: string;
+  } | null;
+  raw: { available: boolean; mime_type: string | null };
 }

@@ -77,6 +77,10 @@ class AssistantTools:
         history: list[dict] | None = None,
         depth: str | None = None,
         visual: str | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
+        current_document: str | None = None,
+        current_directory: str | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -114,6 +118,10 @@ class AssistantTools:
                 history=history if history is not None else [],
                 depth=depth,
                 visual=visual,
+                path_prefix=path_prefix,
+                exclude_documents=exclude_documents,
+                current_document=current_document,
+                current_directory=current_directory,
             ),
         )
 
@@ -226,6 +234,10 @@ def register_assistant_tools(
         history: list[dict] | None = None,
         depth: str | None = None,
         visual: str | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
+        current_document: str | None = None,
+        current_directory: str | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -260,6 +272,17 @@ def register_assistant_tools(
         memory controls how this region's agent memory takes part, exactly as
         on search_context.
 
+        path_prefix keeps every retrieval inside one file, or one folder, of
+        source_name, as browse_source lists it ("docs/guides").
+
+        exclude_documents leaves documents out by name, path or id. In the
+        question, @current and @dir scope it to current_document (a
+        "source/path" or artifact id) and current_directory ("source/path",
+        or "source" for its root) — what you have open — and @exclude <names>
+        leaves documents out; they combine with every other keyword ("@dir
+        @docs", "@current @doc", "@dir @exclude README.md how is it built").
+        The answer's "scope" says what was searched and left out.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -283,6 +306,10 @@ def register_assistant_tools(
             history=history,
             depth=depth,
             visual=visual,
+            path_prefix=path_prefix,
+            exclude_documents=exclude_documents,
+            current_document=current_document,
+            current_directory=current_directory,
         )
 
     @mcp.tool(meta=app_meta())

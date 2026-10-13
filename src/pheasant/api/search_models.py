@@ -32,6 +32,12 @@ class SearchCriteria(BaseModel):
     # Restrict to one part of a document's extracted taxonomy, matched against
     # the heading breadcrumb. Only meaningful for sources with taxonomy on.
     section: str | None = None
+    # One file, or everything under one folder, of `source_name` — a path as
+    # `GET /documents/tree` lists it. Narrows every arm, like `section`.
+    path_prefix: str | None = None
+    # Documents to leave out: names, paths or artifact ids, resolved within the
+    # scope (`services.scope`). A name that resolves to nothing is refused.
+    exclude_documents: list[str] | None = None
     # Step 33.6 — the same retrieval criteria the MCP tool has always had.
     # They lived only on the MCP surface, so the same region answered a query
     # differently depending on which protocol asked; the router, which reaches
@@ -77,6 +83,8 @@ class SearchCriteria(BaseModel):
             max_results=self.max_results,
             source_name=self.source_name,
             section=self.section,
+            path_prefix=self.path_prefix,
+            exclude_documents=self.exclude_documents,
             principal=self.principal,
             principal_groups=self.principal_groups,
             memory=self.memory,

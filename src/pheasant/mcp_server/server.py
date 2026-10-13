@@ -356,6 +356,8 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         snapshot_id: str | None = None,
         as_of: str | None = None,
         expand: dict | int | bool | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -394,6 +396,10 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         taxonomy, matched against the breadcrumb — "§ 12.3", "Article IV" or a
         section's wording all work, and naming a parent returns everything
         nested under it. Only meaningful for sources with taxonomy enabled.
+
+        path_prefix keeps one file, or everything under one folder, of
+        source_name: a path as browse_source lists it ("docs/guides" or
+        "docs/guides/setup.md"), matched exactly.
 
         source_types/exclude_source_types scope by the kind of source —
         repository, gdrive, web_collection, markdown_folder — rather than by name, which
@@ -444,6 +450,8 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             snapshot_id=snapshot_id,
             as_of=as_of,
             expand=expand,
+            path_prefix=path_prefix,
+            exclude_documents=exclude_documents,
         )
 
     @mcp.tool()

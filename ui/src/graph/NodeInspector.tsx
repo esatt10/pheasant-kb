@@ -13,6 +13,8 @@ interface NodeInspectorProps {
   onExpand: (nodeId: string, depth?: number) => void;
   onShowChunks: (nodeId: string) => void;
   onPivot: (nodeId: string) => void;
+  /** Open a document node's file in the viewer above the chat. */
+  onOpenFile?: (source: string, path: string) => void;
 }
 
 type Tab = "overview" | "relationships" | "content";
@@ -37,6 +39,8 @@ function renderMarkdown(text: string): string {
 
 const CONTENT_TYPES = new Set(["file", "document", "markdown_note", "memory_record", "chunk"]);
 const ARTIFACT_TYPES = new Set(["file", "document", "markdown_note", "memory_record"]);
+/** Nodes that are a whole file the viewer can open. Memory records are listed by the memory page. */
+const OPENABLE_TYPES = new Set(["file", "document", "markdown_note", "image", "audio"]);
 
 // Internal bookkeeping the user never needs to see.
 const HIDDEN_KEYS = new Set(["label", "type", "id", "knowledge_base_id"]);
@@ -48,6 +52,7 @@ export function NodeInspector({
   onExpand,
   onShowChunks,
   onPivot,
+  onOpenFile,
 }: NodeInspectorProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [view, setView] = useState<View>("rich");
@@ -111,6 +116,15 @@ export function NodeInspector({
         {ARTIFACT_TYPES.has(node.type ?? "") ? (
           <button className="btn btn--small" onClick={() => onShowChunks(selectedId)}>
             Show passages on graph
+          </button>
+        ) : null}
+        {onOpenFile && OPENABLE_TYPES.has(node.type ?? "") && node.source_id && node.relative_path ? (
+          <button
+            className="btn btn--small"
+            onClick={() => onOpenFile(String(node.source_id), String(node.relative_path))}
+            title="Open this file, rendered, above the chat"
+          >
+            Open file
           </button>
         ) : null}
       </div>

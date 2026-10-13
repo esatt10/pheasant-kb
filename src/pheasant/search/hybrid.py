@@ -10,22 +10,28 @@ from typing import Any
 
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.memory.policy import (
-    PREFER_SHARE,
     MemoryPolicy,
     admits,
-    describe,
     load_memory_index,
     may_filter,
     resolve,
     utc_now_iso,
 )
 from pheasant.search import fusion
-from pheasant.search.criteria import source_type_map, stamp_source_types
+from pheasant.search.criteria import (
+    path_scope,
+    scope_hits,
+    section_matches,
+    section_needle,
+    source_type_map,
+    stamp_source_types,
+)
 from pheasant.search.fusion import Fused
 from pheasant.search.graph_search import search_graph
+from pheasant.search.memory_hits import annotate_memory, prefer_memory
 from pheasant.search.observability import observe_search, should_sample, stage_digest
 from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
-from pheasant.search.sqlite_store import SearchStore, section_matches, section_needle
+from pheasant.search.sqlite_store import SearchStore
 from pheasant.search.vector_store import VectorSearcher
 from pheasant.telemetry.interactions import annotate_current
 
@@ -147,6 +153,8 @@ class HybridSearch:
         steering_kinds: tuple[str, ...] | None = None,
         extra_steering_records: list[dict[str, Any]] | None = None,
         explain: bool = False,
+        path_prefix: str | None = None,
+        exclude: Any = None,
     ) -> dict:
         """Run one query across the arms and fuse them.
 
@@ -177,6 +185,10 @@ class HybridSearch:
         measures the rule retrieval would really apply rather than a
         re-implementation of it, and nothing is written anywhere: a candidate
         cannot reach production ranking by being evaluated.
+
+        ``path_prefix`` narrows to one file or folder like ``section`` does, and
+        ``exclude`` (a ``criteria.Exclusion``) leaves named documents out (see
+        ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
         """
         mode = mode if mode in VALID_MODES else "hybrid"
         # Clamped, not just floored: `max_results` arrives straight off an
@@ -224,8 +236,10 @@ class HybridSearch:
         # the same again for a memory policy, where `only` narrows to a handful
         # of records and `off` can drop a lot.
         sectioned = bool(section_needle(section))
+        scoped = bool(path_scope(path_prefix)) or bool(exclude)
         ranking = self.ranking_parameters()
-        fetch_n = ranking.overfetch(max_results, filtering=enforced or sectioned or memory_filtered)
+        narrowed = enforced or sectioned or scoped or memory_filtered
+        fetch_n = ranking.overfetch(max_results, filtering=narrowed)
         # Nothing is collected unless a caller asked or this search was
         # sampled, so the ordinary path allocates one `None` and does no extra
         # work at all.
@@ -293,6 +307,7 @@ class HybridSearch:
                         memory_policy=policy if memory_index else None,
                         memory_now=memory_now,
                         steering=steering,
+                        **({"path_prefix": path_prefix, "exclude": exclude} if scoped else {}),
                     )
                 finally:
                     if admitted:
@@ -407,6 +422,12 @@ class HybridSearch:
             ]
             _filter_stage("section")
 
+        if scoped:  # the text arm was narrowed in SQL
+            vector_results, graph_results = scope_hits(
+                path_prefix, vector_results, graph_results, exclude=exclude
+            )
+            _filter_stage("path")
+
         if memory_index:
             # The text arm was already narrowed in SQL. These two carry no
             # memory columns of their own, so they are filtered against the
@@ -456,7 +477,7 @@ class HybridSearch:
             _filter_stage("acl")
 
         if memory_index and policy.mode == "prefer":
-            text_results, vector_results, graph_results = _prefer_memory(
+            text_results, vector_results, graph_results = prefer_memory(
                 text_results, vector_results, graph_results, memory_index, max_results
             )
 
@@ -481,7 +502,7 @@ class HybridSearch:
             collect=stages,
         )
         if memory_index:
-            _annotate_memory(results, memory_index, policy)
+            annotate_memory(results, memory_index, policy)
             if self.usage_tracking:
                 # Step 33.9 — count what retrieval actually returned. Last,
                 # after truncation, so a record is credited for being *served*
@@ -740,61 +761,3 @@ def _merge_rrf(
         row["rank"] = rank
         results.append(row)
     return results
-
-
-def _annotate_memory(
-    results: list[dict[str, Any]],
-    memory_index: dict[str, dict[str, Any]],
-    policy: Any,
-) -> None:
-    """Mark which hits are remembered assertions rather than corpus content.
-
-    Added only to hits that *are* memory records, so a corpus result keeps the
-    exact shape it had before Step 33.6 — the same rule `heading_path` follows.
-
-    This is not decoration. A caller that cannot tell a remembered assertion
-    from a document has no way to weigh it differently, and the answering
-    prompt and the UI both need the distinction to be explicit rather than
-    inferred from a path that happens to start with a scope directory.
-    """
-    for item in results:
-        record = resolve(item, memory_index)
-        if record is None:
-            continue
-        item["memory"] = describe(record)
-        provenance = item.get("provenance")
-        if isinstance(provenance, dict):
-            provenance["memory"] = True
-    _ = policy
-
-
-def _prefer_memory(
-    text_results: list[dict[str, Any]],
-    vector_results: list[dict[str, Any]],
-    graph_results: list[dict[str, Any]],
-    memory_index: dict[str, dict[str, Any]],
-    max_results: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Guarantee memory a share of the slots under `mode="prefer"`.
-
-    Fusion ranks memory against a whole corpus, so on a large index a genuinely
-    relevant memory can lose every slot to documents that merely match more
-    words. `prefer` reserves up to half the results for memory hits by moving
-    them to the front of their own arm, which is enough for RRF to keep them:
-    their rank within the arm is what the fusion actually reads.
-
-    Deliberately a *reordering*, not a score change. Inventing a boost would
-    make the same query answer differently depending on a flag, in a way no
-    caller could predict; promoting within an arm is bounded, explainable and
-    leaves every other hit's relative order intact.
-    """
-    reserved = max(1, int(max_results * PREFER_SHARE))
-
-    def promote(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        remembered = [r for r in results if resolve(r, memory_index) is not None]
-        if not remembered:
-            return results
-        rest = [r for r in results if resolve(r, memory_index) is None]
-        return remembered[:reserved] + rest + remembered[reserved:]
-
-    return promote(text_results), promote(vector_results), promote(graph_results)

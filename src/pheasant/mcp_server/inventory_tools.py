@@ -12,7 +12,10 @@ bounded context. Two adapters over `services.inventory`:
 * ``describe_source`` / ``describe_document`` — one source or one document in
   detail, links in and out included (`services.inventory_detail`);
 * ``list_document_links`` — document-to-document links, per source pair and
-  edge type, paged.
+  edge type, paged;
+* ``browse_source`` / ``read_document`` — a source as folders and files, one
+  level at a time, and one file's content classified for a viewer
+  (`services.source_browser`).
 
 ``ask_knowledge_base`` answers "list the sources" from these same functions
 (``assistant.inventory``), so an agent that calls the tool and a person who
@@ -54,6 +57,8 @@ class InventoryTools:
         offset: int = 0,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import inventory
@@ -70,6 +75,8 @@ class InventoryTools:
                 offset=offset,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=path_prefix,
+                exclude_documents=list(exclude_documents or []),
             ),
         )
 
@@ -136,6 +143,56 @@ class InventoryTools:
             ),
         )
 
+    def browse_source(  # noqa: PLR0913 - one argument per filter
+        self,
+        knowledge_base: str,
+        source_name: str | None = None,
+        path: str = "",
+        limit: int = 200,
+        offset: int = 0,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import source_browser
+
+        return source_browser.browse(
+            self.services,
+            source_browser.BrowseRequest(
+                knowledge_base=knowledge_base,
+                source_name=source_name,
+                path=path,
+                limit=limit,
+                offset=offset,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
+        )
+
+    def read_document(  # noqa: PLR0913 - one argument per filter
+        self,
+        knowledge_base: str,
+        path: str,
+        source_name: str | None = None,
+        chunk_id: str | None = None,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import source_browser
+
+        return source_browser.read_document(
+            self.services,
+            source_browser.ReadRequest(
+                path=path,
+                knowledge_base=knowledge_base,
+                source_name=source_name,
+                chunk_id=chunk_id,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
+        )
+
 
 def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
     """Register the inventory tools. ``mcp`` and ``anticipated`` are handed in so
@@ -173,11 +230,16 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         offset: int = 0,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
+        exclude_documents: list[str] | None = None,
     ) -> dict:
         """List the indexed documents, not search them.
 
         Filters: source_name (one source), extensions (["pdf", ".md"]),
-        path_contains (a case-insensitive substring of the relative path).
+        path_contains (a case-insensitive substring of the relative path),
+        path_prefix (one folder or file of source_name, exact, as
+        browse_source lists it) and exclude_documents (names, paths or ids to
+        leave out; a name matching nothing in scope is refused).
         order is "path" (by source, then path) or "recent" (last indexed
         first). Pages with limit (at most 500) and offset, and returns the
         total with has_more. Each document's id is its graph node id, so
@@ -196,6 +258,8 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             offset,
             principal,
             principal_groups,
+            path_prefix,
+            exclude_documents,
         )
 
     @mcp.tool()
@@ -285,4 +349,55 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             principal_groups,
             document,
             direction,
+        )
+
+    @mcp.tool()
+    @anticipated
+    def browse_source(  # noqa: PLR0913 - one argument per filter
+        knowledge_base: str,
+        source_name: str | None = None,
+        path: str = "",
+        limit: int = 200,
+        offset: int = 0,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        """Browse a source like a file collection: one folder at a time.
+
+        With no source_name, lists the sources themselves as folders. With one,
+        lists the folder at path ("" is the source's root): its sub-folders,
+        each with the number of documents beneath it, and the files directly
+        in it (paged with limit, at most 500, and offset). breadcrumbs and
+        parent lead back up. Each file carries its viewer ("markdown", "code",
+        "pdf", "table" ...) and its id, which is its graph node id; read it
+        with read_document. Reads what was indexed, not the filesystem. With
+        security.acl_enforced on, only documents the principal may read.
+        """
+
+        return tools.browse_source(
+            knowledge_base, source_name, path, limit, offset, principal, principal_groups
+        )
+
+    @mcp.tool()
+    @anticipated
+    def read_document(  # noqa: PLR0913 - one argument per filter
+        knowledge_base: str,
+        path: str,
+        source_name: str | None = None,
+        chunk_id: str | None = None,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        """Read one indexed document's whole content, as the index holds it.
+
+        path is spelled as describe_document takes it, and must name exactly
+        one document. Returns the text (the original file when it is still
+        the one indexed, otherwise the chunks reassembled in order; PDFs and
+        office documents as their extracted text), how to render it (viewer,
+        language), its section outline with line numbers, and, given a cited
+        passage's chunk_id, the lines that passage spans (focus).
+        """
+
+        return tools.read_document(
+            knowledge_base, path, source_name, chunk_id, principal, principal_groups
         )

@@ -18,6 +18,11 @@ export function sectionLabel(headingPath: string | undefined): string | undefine
   return crumbs.length ? crumbs[crumbs.length - 1] : undefined;
 }
 
+/** A citation the viewer can open: a document, not a remembered assertion. */
+export function openable(citation: Citation): boolean {
+  return Boolean(citation.relative_path && citation.source_id && !citation.memory);
+}
+
 function chipTooltip(citation: Citation): string {
   const snippet = citation.snippet.slice(0, 300);
   return citation.heading_path ? `${citation.heading_path}\n\n${snippet}` : snippet;
@@ -38,11 +43,14 @@ export function SourceStrip({
   citations,
   onSelect,
   onVisualize,
+  onOpen,
 }: {
   citations: Citation[];
   onSelect: (nodeId: string | undefined) => void;
   /** "Visualize this passage": a diagram grounded in this one source. */
   onVisualize?: (citation: Citation) => void;
+  /** Open the cited file in the viewer above the chat, at the cited passage. */
+  onOpen?: (citation: Citation) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const ordered = [...citations].sort((a, b) => Number(b.used) - Number(a.used) || a.index - b.index);
@@ -75,6 +83,17 @@ export function SourceStrip({
             ) : null}
             {section ? <span className="source-chip__section">{section}</span> : null}
           </button>
+          {onOpen && openable(citation) ? (
+            <button
+              type="button"
+              className="source-chip__visualize"
+              onClick={() => onOpen(citation)}
+              title="Open this file at the cited passage"
+              aria-label={`Open source ${citation.index}`}
+            >
+              ↗
+            </button>
+          ) : null}
           {onVisualize ? (
             <button
               type="button"

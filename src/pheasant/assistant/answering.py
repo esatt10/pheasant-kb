@@ -270,6 +270,10 @@ def answer_question(
     visual: str | None = None,
     defer_visual: bool = False,
     request_budget: Any = None,
+    path_prefix: str | None = None,
+    exclude_documents: list[str] | None = None,
+    current_document: str | None = None,
+    current_directory: str | None = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -316,6 +320,26 @@ def answer_question(
     )
     if directives.used:
         question = directives.text
+    # Where to look (`services.scope`): `@current` / `@dir` read against what
+    # the caller has open, `@exclude` and `exclude_documents` resolved within.
+    scope = None
+    if directives.scope or directives.exclude or exclude_documents or path_prefix:
+        from pheasant.services import ServiceContext
+        from pheasant.services import scope as scope_service
+
+        scope = scope_service.resolve_keywords(
+            ServiceContext(config=config, state=state, searcher=search, graph=graph),
+            keyword=directives.scope,
+            current_document=current_document,
+            current_directory=current_directory,
+            source_name=source_name,
+            path_prefix=path_prefix,
+            exclude_documents=[*(exclude_documents or []), *directives.exclude],
+            used=tuple(k for k in directives.used if k in {"@current", "@dir", "@exclude"}),
+            principal=principal,
+            principal_groups=principal_groups,
+        )
+        source_name, path_prefix = scope.source_name, scope.path_prefix
     depth = directives.depth or depth
     visual = directives.visual or visual
     max_results = max_results or int(getattr(settings, "max_context_chunks", 8) or 8)
@@ -344,6 +368,8 @@ def answer_question(
         source_name=source_name,
         principal=principal,
         principal_groups=principal_groups,
+        path_prefix=path_prefix,
+        exclusion=scope.exclusion if scope is not None else None,
     )
 
     name = resolve_workflow_name(
@@ -406,8 +432,21 @@ def answer_question(
             why=f"{directives.used[-1]} with no question after it",
             notes=(f"add a question after {directives.used[-1]}",),
         )
+    if scope is not None and scope.missing:
+        # `@current` with nothing open is said, never answered from everywhere;
+        # `inventory_scope.apply` carries the scope's note onto it.
+        asked = inventory.InventoryQuestion(
+            action="help", trigger="keyword", why=f"{scope.missing} with nothing open"
+        )
     if asked is not None and directives.inventory:
         asked = replace(asked, keyword=directives.used[-1])
+    if asked is not None and scope is not None:
+        from pheasant.assistant import inventory_scope
+
+        asked = inventory_scope.apply(asked, scope, directives.inventory)
+    if asked is not None and asked.action == "taxonomy" and source_name and not asked.source_name:
+        # `@taxonomy` with no source browses the one the request is scoped to.
+        asked = replace(asked, source_name=source_name)
     deterministic = asked is not None or directives.search
     rewrite_started = time.perf_counter()
     from pheasant.assistant.providers import collect_token_usage
@@ -653,6 +692,10 @@ def answer_question(
         payload["search_question"] = search_question
     if directives.used or directives.unknown:
         payload["keywords"] = directives.as_dict()
+    if scope is not None and scope.active:
+        payload["scope"] = scope.as_dict()
+        if scope.notes and inventory_data is None:
+            payload["answer"] += "".join(f"\n\n_Note: {note}._" for note in scope.notes)
     if inventory_data is not None:
         payload["inventory"] = inventory_data
     elif inventory_mode != "off" and not directives.used and inventory.looks_close(question):

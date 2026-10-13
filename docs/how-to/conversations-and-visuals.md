@@ -182,13 +182,17 @@ caller may read. If the automatic reading is ever wrong for your corpus, set
 
 A keyword as the **first word** of a message says what kind of answer you
 want, so the question does not have to be phrased for a rule to notice.
-Several can lead one message (`@detailed @table …`). `@pheasant` is the one
-keyword that counts anywhere. Other keywords later in a sentence and email
-addresses are just text.
+Several can lead one message (`@detailed @table …`). `@pheasant` and the
+three scope keywords (`@current`, `@dir`, `@exclude`) count anywhere. Other
+keywords later in a sentence and email addresses are just text.
 
 | Keyword | Answers with |
 |---|---|
 | `@source <name>`, `@doc <path>`, `@docs …`, `@links …`, `@more` | Shorthand for `@pheasant source …`, `document …`, `documents …`, `links …`, `more`. From the index, no search, no model. |
+| `@taxonomy [source] [folder]` (`@browse`, `@folders`) | One folder of a source as folders and files, from the index with no model; alone, the sources. In the web UI it also opens the taxonomy view above the chat at that folder, on the source the chat is scoped to when none is named. |
+| `@current` (`@this`) | Only the open document: every search the answer runs, and any `@pheasant` lookup (`@current @doc` describes it, `@current @links` lists its links). |
+| `@dir` (`@directory`, `@cwd`) | Only the folder being browsed, or the open document's folder: answers, `@search`, and listings (`@dir @docs`, `@pheasant how many documents @dir`, `@dir @taxonomy`). |
+| `@exclude <name>[,<name>…]` (`@omit`, `@without`) | Leave documents out: a file name, a path, `source/path` or an artifact id; quote a name with spaces. Combines with everything above (`@dir @exclude deploy.md @docs`). A name that matches nothing is said in a note. |
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
 | `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
@@ -203,6 +207,15 @@ keyword, which stays in the question), and `route.decided_by` names
 the help listing. `GET /assistant/status` lists the keywords this region
 answers. `assistant.keywords: false` turns them off; `@pheasant` stays
 governed by `assistant.inventory.mode`.
+
+`@current` and `@dir` are read against `current_document` and
+`current_directory`, which the caller sends — the web UI sends the file and
+folder its taxonomy view has open; an agent sends whatever it is looking at.
+With nothing open, the answer says so rather than searching everything. The
+web UI's **Omit from answers** toggle on an open file sends the same
+`exclude_documents` `@exclude` does, the composer shows how many are omitted
+(✕ clears them), and an answer read under a narrowed scope shows where it
+looked under the text.
 
 In the web UI, **@ keywords** under the chat box (or **Ctrl+/**) opens a quick
 reference: a floating card with every keyword, its example, and the

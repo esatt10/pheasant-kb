@@ -7,6 +7,9 @@ import time
 from typing import Any
 
 from pheasant.persistence.state_store import StateStore
+
+# The section predicates live with the other criteria; re-exported for importers.
+from pheasant.search.criteria import path_scope_sql, section_matches, section_needle  # noqa: F401
 from pheasant.search.pg_textsearch import (
     bm25_counts_for,
     bm25_query_text,
@@ -377,6 +380,8 @@ class SearchStore:
         memory_policy: Any = None,
         memory_now: str | None = None,
         steering: Any = None,
+        path_prefix: str | None = None,
+        exclude: Any = None,
     ) -> list[dict]:
         # Natural-language queries ("where does the X service run") must not
         # fall to FTS5's implicit-AND — a single unmatched stopword would
@@ -414,6 +419,10 @@ class SearchStore:
         if section_needle(section):
             filter_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
             filter_params.append(f"%{section_needle(section)}%")
+        # One file or folder of a source: in SQL for the reason `section` is.
+        scope_where, scope_params = path_scope_sql(path_prefix, exclude)
+        filter_where += scope_where
+        filter_params.extend(scope_params)
         # Step 33.6 — agent-memory policy. Pushed into SQL for the same reason
         # as `section`: `mode="only"` is a very narrow slice, and post-filtering
         # a globally-ranked page would return an empty list while the matching
@@ -548,6 +557,8 @@ class SearchStore:
                 if section_needle(section):
                     fallback_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
                     fallback_params.append(f"%{section_needle(section)}%")
+                fallback_where += scope_where
+                fallback_params.extend(scope_params)
                 # The fallback has to enforce the same policy. Leaving it out
                 # would make a corrected memory reappear on exactly the path
                 # taken when FTS5 is unavailable — a leak that only shows up in
@@ -588,32 +599,6 @@ class SearchStore:
             score = (-raw_rank / (1.0 - raw_rank)) if raw_rank < 0 else 1.0
             results.append(_row_result(row, i, score, "SQLite FTS/path match"))
         return results
-
-
-def section_needle(section: str | None) -> str:
-    """The comparable form of a requested section, or ``""`` for no filter.
-
-    Lowercased and stripped, and that is the whole rule — the SQL above matches
-    ``LOWER(heading_path) LIKE '%needle%'`` and :func:`section_matches` does
-    ``needle in heading_path.lower()``, which are the same test. Keeping the
-    normalization in one function is what stops the two from drifting apart.
-    """
-    return (section or "").strip().lower()
-
-
-def section_matches(heading_path: object, section: str | None) -> bool:
-    """Does a hit's breadcrumb sit inside the requested section?
-
-    Substring, not equality, because people cite the section and not the whole
-    path: ``§ 12.3``, ``Article IV`` and ``Termination`` should each reach
-    ``MASTER SERVICES AGREEMENT > Article IV Term and Termination > § 12.3``.
-    Matching the breadcrumb rather than only its last crumb is what makes
-    asking for an Article return everything nested under it.
-    """
-    needle = section_needle(section)
-    if not needle:
-        return True
-    return needle in str(heading_path or "").lower()
 
 
 def _row_result(row, rank: int, score: float, reason: str) -> dict:
