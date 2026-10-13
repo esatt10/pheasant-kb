@@ -27,6 +27,17 @@ export interface OpenFile {
 }
 
 /**
+ * "Search only here": one folder, or one file, of a source that every
+ * question is answered from. The narrower sibling of `sourceFilter`, set from
+ * the taxonomy view; `path` is spelled as the index lists it.
+ */
+export interface PathScope {
+  source: string;
+  path: string;
+  kind: "folder" | "file";
+}
+
+/**
  * The source browser above the chat: which folder it shows and which file is
  * open beside it. `source: null` is the level above every source.
  */
@@ -47,6 +58,8 @@ export interface ChatTurn {
 export interface SessionState {
   /** Restrict retrieval + graph to one source, or null for everything. */
   sourceFilter: string | null;
+  /** Restrict retrieval further, to one folder or file of `sourceFilter`. */
+  pathScope: PathScope | null;
   /**
    * Restrict retrieval to one *kind* of source (repository, gdrive, web_collection…),
    * or null for every kind. Independent of `sourceFilter`: picking a type
@@ -112,6 +125,7 @@ export const MAX_DEPTH = 6;
 
 const INITIAL: SessionState = {
   sourceFilter: null,
+  pathScope: null,
   sourceTypeFilter: null,
   hiddenTypes: NOISY_NODE_TYPES,
   panelTab: "graph",
@@ -144,6 +158,7 @@ const INITIAL: SessionState = {
 
 export type SessionAction =
   | { type: "filter-source"; source: string | null }
+  | { type: "set-path-scope"; scope: PathScope | null }
   | { type: "filter-source-type"; sourceType: string | null }
   | { type: "toggle-type"; nodeType: string }
   | { type: "open-tab"; tab: PanelTab }
@@ -200,7 +215,19 @@ function clampDepth(depth: number): number {
 export function sessionReducer(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
     case "filter-source":
-      return { ...state, sourceFilter: action.source };
+      // A folder scope lives inside one source: choosing another source (or
+      // all of them) is choosing a scope that no longer contains it.
+      return {
+        ...state,
+        sourceFilter: action.source,
+        pathScope: state.pathScope?.source === action.source ? state.pathScope : null,
+      };
+    case "set-path-scope":
+      // Scoping to a folder scopes to its source too, so the rail, the graph
+      // and the composer all say the same thing.
+      return action.scope
+        ? { ...state, pathScope: action.scope, sourceFilter: action.scope.source }
+        : { ...state, pathScope: null };
     case "filter-source-type":
       // Selecting a type clears a source selected under a different one, so
       // the two controls cannot contradict each other on screen.
@@ -416,6 +443,7 @@ const STORAGE_KEY = "pheasant.workspace.v1";
  */
 const PERSISTED_KEYS = [
   "sourceFilter",
+  "pathScope",
   "sourceTypeFilter",
   "hiddenTypes",
   "depth",
@@ -441,6 +469,7 @@ function hydrate(): SessionState {
     return {
       ...INITIAL,
       sourceFilter: saved.sourceFilter ?? INITIAL.sourceFilter,
+      pathScope: hydrateScope(saved.pathScope, saved.sourceFilter ?? null),
       sourceTypeFilter: saved.sourceTypeFilter ?? INITIAL.sourceTypeFilter,
       hiddenTypes: Array.isArray(saved.hiddenTypes) ? saved.hiddenTypes : INITIAL.hiddenTypes,
       depth: clampDepth(saved.depth ?? DEFAULT_DEPTH),
@@ -460,6 +489,14 @@ function hydrate(): SessionState {
   } catch {
     return INITIAL;
   }
+}
+
+function hydrateScope(saved: unknown, source: string | null): PathScope | null {
+  if (!saved || typeof saved !== "object") return null;
+  const value = saved as Partial<PathScope>;
+  if (typeof value.source !== "string" || typeof value.path !== "string" || !value.path) return null;
+  if (value.source !== source) return null;
+  return { source: value.source, path: value.path, kind: value.kind === "file" ? "file" : "folder" };
 }
 
 function hydrateBrowser(saved: unknown): BrowserState {

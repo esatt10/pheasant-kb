@@ -118,6 +118,10 @@ class AnswerRequest:
     #: ``none`` / ``auto`` / ``diagram`` — whether a grounded visual rides
     #: along with the answer. ``None`` reads it off the question.
     visual: str | None = None
+    #: One file, or everything under one folder, of ``source_name``: every
+    #: retrieval this answer runs stays inside it (the taxonomy view's
+    #: "search only here").
+    path_prefix: str | None = None
 
 
 def admit(context: ServiceContext, request: AnswerRequest) -> None:
@@ -205,6 +209,7 @@ def answer(
                 visual=request.visual,
                 defer_visual=defer_visual,
                 request_budget=budget,
+                path_prefix=request.path_prefix,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["admission_ms"] = admission_ms

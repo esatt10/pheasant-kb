@@ -42,6 +42,9 @@ LONG = "\n".join(
 
 CORPUS: dict[str, str | bytes] = {
     "README.md": "# Readme\n\nWelcome.\n",
+    # A sibling whose name starts with a folder's: a path scope of `guide`
+    # must not reach it.
+    "guidebook.txt": "Restart the vault after rotation, says the guidebook.\n",
     "guide/deploy.md": "# Deploy\n\nIntro.\n\n## Steps\n\nRestart the vault.\n",
     "guide/Setup/install.md": "# Install\n\nRun the installer.\n",
     "guide/rotation.txt": LONG + "\n",
@@ -131,9 +134,9 @@ def test_a_source_root_lists_folders_with_counts_then_its_own_files(region: dict
         "guide": 3,
         "img": 1,
     }
-    assert [f["path"] for f in root["files"]] == ["README.md"]
-    assert root["files"][0]["viewer"] == "markdown"
-    assert root["totals"] == {"directories": 4, "files": 1, "documents": len(CORPUS)}
+    assert [f["path"] for f in root["files"]] == ["guidebook.txt", "README.md"]
+    assert root["files"][1]["viewer"] == "markdown"
+    assert root["totals"] == {"directories": 4, "files": 2, "documents": len(CORPUS)}
     assert root["parent"] is None
     assert root["breadcrumbs"] == [{"name": "docs", "source": "docs", "path": ""}]
 
@@ -434,6 +437,103 @@ def test_a_missing_folder_is_said_and_the_root_shown(region: dict[str, Any]) -> 
     assert "No folder 'nope' in source 'docs'" in answer["answer"]
 
 
+# ---------------------------------------------------------------------------
+# 5. Search only here: a file or folder as the retrieval scope
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("relative", "scope", "inside"),
+    [
+        ("guide/deploy.md", "guide", True),
+        ("guide/Setup/install.md", "/guide/", True),
+        ("guide/deploy.md", "guide/deploy.md", True),
+        ("guidebook.txt", "guide", False),
+        ("guide/deploy.md", "GUIDE", False),
+        ("README.md", "guide", False),
+        ("README.md", "", True),
+        ("guide/deploy.md", "../guide", True),
+        (None, "guide", False),
+    ],
+)
+def test_a_path_scope_is_a_file_or_everything_under_a_folder(
+    relative: str | None, scope: str, inside: bool
+) -> None:
+    from pheasant.search.criteria import path_within
+
+    assert path_within(relative, scope) is inside
+
+
+def _paths(payload: dict[str, Any]) -> list[str]:
+    from pheasant.search.criteria import path_of
+
+    return [path_of(item) for item in payload["results"]]
+
+
+@pytest.mark.parametrize("scope", ["guide", "guide/Setup", "guide/rotation.txt", "data"])
+def test_a_scoped_search_stays_inside_its_file_or_folder(
+    region: dict[str, Any], scope: str
+) -> None:
+    from pheasant.search.criteria import path_within
+
+    tools, kb = region["tools"], region["kb"]
+    query = "vault rotation installer runbook gateway port"
+    scoped = tools.search_context(kb, query, source_name="docs", path_prefix=scope)
+    over_http = region["client"].post(
+        "/search", json={"query": query, "source_name": "docs", "path_prefix": scope}
+    )
+
+    assert scoped["results"], f"nothing found under {scope}"
+    assert all(path_within(path, scope) for path in _paths(scoped)), _paths(scoped)
+    assert over_http.status_code == 200
+    assert _paths(over_http.json()) == _paths(scoped)
+
+
+def test_the_sibling_a_folder_scope_must_not_reach_is_found_without_one(
+    region: dict[str, Any],
+) -> None:
+    """`guidebook.txt` shares `guide`'s first five letters. Unscoped, the query
+    finds it; scoped to `guide`, it must be gone — the trap a `LIKE 'guide%'`
+    walks into."""
+
+    tools, kb = region["tools"], region["kb"]
+    unscoped = tools.search_context(kb, "guidebook", source_name="docs")
+    scoped = tools.search_context(kb, "guidebook", source_name="docs", path_prefix="guide")
+
+    assert "guidebook.txt" in _paths(unscoped)
+    assert "guidebook.txt" not in _paths(scoped)
+
+
+def test_no_scope_changes_nothing(region: dict[str, Any]) -> None:
+    tools, kb = region["tools"], region["kb"]
+    plain = tools.search_context(kb, "vault rotation", source_name="docs")
+    empty = tools.search_context(kb, "vault rotation", source_name="docs", path_prefix="")
+
+    assert _paths(plain) == _paths(empty)
+    assert len({p.split("/")[0] for p in _paths(plain)}) > 1, "the corpus must span folders"
+
+
+def test_a_scoped_answer_cites_only_that_folder(region: dict[str, Any]) -> None:
+    from pheasant.search.criteria import path_within
+
+    tools, kb = region["tools"], region["kb"]
+    question = "how do I restart the vault after rotation"
+    unscoped = tools.ask_knowledge_base(kb, question, source_name="docs")
+    scoped = tools.ask_knowledge_base(kb, question, source_name="docs", path_prefix="guide")
+    over_http = region["client"].post(
+        "/assistant/chat",
+        json={"question": question, "source_name": "docs", "path_prefix": "guide/rotation.txt"},
+    )
+
+    cited = [c.get("relative_path") for c in scoped["citations"]]
+    assert cited and all(path_within(path, "guide") for path in cited), cited
+    assert any(not path_within(c.get("relative_path"), "guide") for c in unscoped["citations"]), (
+        "unscoped, the answer must reach outside the folder or the scope proves nothing"
+    )
+    assert over_http.status_code == 200
+    assert {c["relative_path"] for c in over_http.json()["citations"]} == {"guide/rotation.txt"}
+
+
 POSTGRES_DSN = __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 
 
@@ -472,3 +572,10 @@ def test_the_tree_and_reads_agree_across_backends(tmp_path: Path) -> None:
         assert a == b, path
     with pytest.raises(InvalidRequest, match="No folder"):
         pg["tools"].browse_source(pg["kb"], "docs", "nope")
+    from pheasant.search.criteria import path_within
+
+    for scope in ("guide", "guide/rotation.txt"):
+        found = pg["tools"].search_context(
+            pg["kb"], "vault guidebook rotation", source_name="docs", path_prefix=scope
+        )
+        assert found["results"] and all(path_within(p, scope) for p in _paths(found)), scope

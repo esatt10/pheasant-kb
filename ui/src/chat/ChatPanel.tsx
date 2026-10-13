@@ -78,7 +78,7 @@ export function ChatPanel({
   // store, so leaving for Sources or Settings and coming back finds the thread
   // exactly where it was — including a half-typed question.
   const { state, dispatch } = useSession();
-  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth } = state;
+  const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth, pathScope } = state;
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
@@ -109,7 +109,9 @@ export function ChatPanel({
         {
           question,
           session_id: sessionId,
-          source_name: sourceFilter,
+          // A folder or file scope names its own source.
+          source_name: pathScope?.source ?? sourceFilter,
+          path_prefix: pathScope?.path ?? null,
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
@@ -299,7 +301,9 @@ export function ChatPanel({
             rows={1}
             value={draft}
             placeholder={
-              sourceFilter
+              pathScope
+                ? `Ask about ${pathScope.source}/${pathScope.path}…`
+                : sourceFilter
                 ? `Ask about ${sourceFilter}…`
                 : sourceTypeFilter
                   ? `Ask about your ${sourceTypeFilter} sources…`
@@ -336,7 +340,25 @@ export function ChatPanel({
               @ keywords
             </button>
           ) : null}
-          {sourceFilter ? <span className="pill pill--accent">scoped to {sourceFilter}</span> : null}
+          {pathScope ? (
+            <span
+              className="pill pill--accent scope-pill"
+              title={`Questions are answered only from ${pathScope.source}/${pathScope.path}`}
+            >
+              only {pathScope.kind === "file" ? "from" : "in"} {pathScope.source}/{pathScope.path}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "set-path-scope", scope: null })}
+                aria-label="Stop searching only here"
+                title={`Search all of ${pathScope.source} again`}
+              >
+                ✕
+              </button>
+            </span>
+          ) : sourceFilter ? (
+            <span className="pill pill--accent">scoped to {sourceFilter}</span>
+          ) : null}
           {sourceTypeFilter ? (
             <span className="pill pill--accent">only {sourceTypeFilter}</span>
           ) : null}

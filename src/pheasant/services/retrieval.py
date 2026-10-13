@@ -172,6 +172,9 @@ class SearchRequest:
     max_results: int = 10
     source_name: str | None = None
     section: str | None = None
+    #: One file, or everything under one folder, of the source: the taxonomy
+    #: view's "search only here". Narrows the arms like `section` does.
+    path_prefix: str | None = None
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
@@ -291,6 +294,7 @@ def _search(
             section=request.section,
             memory=request.memory,
             explain=request.explain,
+            **({"path_prefix": request.path_prefix} if request.path_prefix else {}),
         )
     except Exception:
         metrics.REGISTRY.inc("pheasant_search_total", mode=request.mode, outcome="error")

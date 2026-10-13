@@ -465,6 +465,8 @@ export const api = {
       mode?: string;
       max_results?: number;
       source_name?: string | null;
+      /** One file, or everything under one folder, of `source_name`. */
+      path_prefix?: string | null;
       /** Scope the answer to these kinds of source (repository, gdrive, …). */
       source_types?: string[] | null;
       exclude_source_types?: string[] | null;

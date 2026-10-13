@@ -270,6 +270,7 @@ def answer_question(
     visual: str | None = None,
     defer_visual: bool = False,
     request_budget: Any = None,
+    path_prefix: str | None = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -344,6 +345,7 @@ def answer_question(
         source_name=source_name,
         principal=principal,
         principal_groups=principal_groups,
+        path_prefix=path_prefix,
     )
 
     name = resolve_workflow_name(

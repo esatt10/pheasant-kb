@@ -652,7 +652,12 @@ Ranking carries deliberate structure: `chunks_fts.title` holds the file's
 **basename** with BM25 column weights `8/3/2/1`, and structural priors divide
 by path depth and by tests/samples membership. Query expansion drops framing
 stopwords. Criteria (`source_name`, `exclude_sources`, `node_types`,
-`min_score`, `section`, `principal`) are available identically on MCP and HTTP.
+`min_score`, `section`, `path_prefix`, `principal`) are available identically
+on MCP and HTTP. `path_prefix` (one file, or everything under one folder) is
+the taxonomy view's "search only here": like `section` it is pushed into the
+text arm's SQL and applied to vector and graph hits with the shared over-fetch,
+spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
+does not; the answering retriever holds it for every search and evidence read.
 
 **One over-fetch.** When a post-filter will drop rows the arms fetch further,
 so `max_results` keeps meaning "give me this many" — and that is
@@ -1017,7 +1022,9 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) sits above the chat in
   the main column, each foldable; `@taxonomy [source] [folder]` answers the
   listing from the index and opens the view there, honouring the chat's
-  source scope. `tests/test_source_browser.py`.
+  source scope. A "Search this folder/file" toggle (`browser/ScopeToggle.tsx`)
+  sets `pathScope`, sent as `path_prefix` with every question; at a source's
+  root it is the rail's source toggle. `tests/test_source_browser.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

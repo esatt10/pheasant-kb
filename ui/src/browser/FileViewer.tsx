@@ -9,6 +9,7 @@ import { AudioView, HtmlView, ImageView, PdfView, SvgView, ViewerLoading } from 
 import { NotebookView, parseNotebook } from "./views/NotebookView";
 import { ProseView, SlidesView } from "./views/ProseViews";
 import { fileIcon, formatBytes } from "./fileIcons";
+import { ScopeToggle } from "./ScopeToggle";
 
 /** The two ways most formats can be shown: as they render, or as their text. */
 type Mode = "rendered" | "source";
@@ -206,6 +207,7 @@ function LoadedViewer({
               ))}
             </nav>
           </div>
+          <ScopeToggle source={doc.source} path={doc.path} kind="file" />
           <button type="button" className="btn btn--small btn--icon btn--ghost" onClick={onClose} aria-label="Close file" title="Close file">
             ✕
           </button>

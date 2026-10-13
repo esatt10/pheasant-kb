@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { BrowseFile, BrowseFolder, BrowseResponse } from "../api/types";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { DragHandle } from "./DragHandle";
+import { ScopeToggle } from "./ScopeToggle";
 import { FileViewer } from "./FileViewer";
 import { fileIcon, formatBytes } from "./fileIcons";
 
@@ -67,6 +68,12 @@ export function SourceBrowser({
     if (!browser.source) return;
     dispatch({ type: "open-file", file: { source: browser.source, path: file.path } });
   };
+
+  /** Whether questions are currently answered from exactly this folder or file. */
+  const scopes = (source: string | null | undefined, path: string) =>
+    path
+      ? state.pathScope?.source === source && state.pathScope?.path === path
+      : !state.pathScope && Boolean(source) && state.sourceFilter === source && !browser.source;
 
   const title = browser.source ? [browser.source, ...browser.path.split("/").filter(Boolean)].join(" / ") : "All sources";
 
@@ -147,6 +154,9 @@ export function SourceBrowser({
           ))}
         </nav>
         <div className="pane__actions">
+          {browser.source && first?.source === browser.source ? (
+            <ScopeToggle source={browser.source} path={first.path} kind="folder" />
+          ) : null}
           <button
             type="button"
             className="btn btn--small btn--icon btn--ghost"
@@ -210,6 +220,11 @@ export function SourceBrowser({
                     {browser.source ? "📁" : "🗃"}
                   </span>
                   <span className="browser-row__name">{folder.name}</span>
+                  {scopes(folder.source ?? browser.source, folder.path) ? (
+                    <span className="browser-row__scope" title="Questions are answered only from here">
+                      ⌖
+                    </span>
+                  ) : null}
                   {folder.source_type ? <span className="pill">{folder.source_type}</span> : null}
                   <span className="browser-row__count" title={`${folder.documents} documents beneath`}>
                     {folder.documents.toLocaleString()}
@@ -235,6 +250,11 @@ export function SourceBrowser({
                       {fileIcon(file.viewer)}
                     </span>
                     <span className="browser-row__name">{file.name}</span>
+                    {scopes(browser.source, file.path) ? (
+                      <span className="browser-row__scope" title="Questions are answered only from this file">
+                        ⌖
+                      </span>
+                    ) : null}
                     <span className="browser-row__size">{formatBytes(file.size_bytes)}</span>
                   </button>
                 );

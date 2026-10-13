@@ -5145,3 +5145,39 @@ select.text-input {
   .viewer__body--outline { grid-template-columns: minmax(0, 1fr); }
   .viewer__outline { display: none; }
 }
+
+/* "Search only here": the taxonomy view's source toggle, one level finer. */
+.scope-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.scope-toggle:hover { border-color: var(--accent-border); color: var(--text); }
+.scope-toggle--active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.scope-toggle__icon { font-size: 13px; line-height: 1; }
+.browser-row__scope { color: var(--accent); font-size: 13px; }
+.scope-pill { gap: 6px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.scope-pill__clear {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.scope-pill__clear:hover { opacity: 1; }
