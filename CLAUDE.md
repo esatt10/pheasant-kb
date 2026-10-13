@@ -150,7 +150,9 @@ pheasant-kb/
 │   │                            indexer claims it), inventory (what the
 │   │                            knowledge base holds: overview, documents),
 │   │                            inventory_detail (one source, one document,
-│   │                            the links between documents)
+│   │                            the links between documents), source_browser
+│   │                            (a source as folders and files, one file
+│   │                            read for a viewer)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -161,7 +163,8 @@ pheasant-kb/
 │   │                            visual, shape), inventory (questions about
 │   │                            the knowledge base itself, + @pheasant),
 │   │                            inventory_focus (one source / document /
-│   │                            links, + paging), keywords (first-word
+│   │                            links, + paging), inventory_browse
+│   │                            (@taxonomy), keywords (first-word
 │   │                            @table, @doc, @search …), search_answer,
 │   │                            conversation, longform,
 │   │                            visuals, visual_specs (the shape grammar),
@@ -176,7 +179,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 162 pytest modules, offline by design
+└── tests/                     ← 163 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -995,13 +998,26 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   instruction to `system_prompt_for` (grounding unchanged), `@overview`
   `@detailed` pin depth, `@diagram` `@image` and any shape pin visual,
   `@search` lists the ranked hits with no model, and `@source` `@doc` `@docs`
-  `@links` `@more` are `@pheasant` shorthands. First word only (several may
+  `@links` `@taxonomy` `@more` are `@pheasant` shorthands. First word only (several may
   lead), removed before the question is searched, wins over the request's pin,
   reported in `keywords`; `@pheasant` alone counts anywhere.
   `tests/test_answer_keywords.py`. The UI's quick reference
   (`ui/src/chat/KeywordReference.tsx`, **@ keywords** / Ctrl+/) is a non-modal
   card docked beside the chat column, never over it or the sources rail; its
   `PHEASANT_PHRASES` are held to the reader by a test that fills their slots.
+- **A source browses like a file collection** (`services.source_browser`; MCP
+  `browse_source` / `read_document`, HTTP `GET /documents/tree`,
+  `/documents/content`, and `/documents/raw`, which is HTTP only because it
+  serves bytes to a browser's own PDF/image/audio viewer). The tree is read
+  from the artifact rows, one level at a time with breadcrumbs back up, under
+  the inventory scope and ACL rule, so it is the same on a replica with no
+  mount. A read is the indexed file only while its sha256 still matches,
+  otherwise the chunks reassembled with their overlap removed; a workbook is
+  re-extracted from its original (the indexed text loses its tabs). The web
+  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) sits above the chat in
+  the main column, each foldable; `@taxonomy [source] [folder]` answers the
+  listing from the index and opens the view there, honouring the chat's
+  source scope. `tests/test_source_browser.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

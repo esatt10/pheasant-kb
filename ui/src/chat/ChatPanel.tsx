@@ -10,7 +10,7 @@ import type {
   VisualResponse,
   WorkflowStep,
 } from "../api/types";
-import { historyFor, useSession } from "../state/session";
+import { browsedFrom, historyFor, useSession } from "../state/session";
 import { AnswerBody } from "./AnswerBody";
 import { InventoryListing, listingText } from "./InventoryListing";
 import {
@@ -156,6 +156,11 @@ export function ChatPanel({
   const submit = (text: string) => {
     const question = text.trim();
     if (!question || ask.isPending) return;
+    // `@taxonomy` on its own opens the browser at once, on the source the chat
+    // is scoped to; the answer (from the index, no model) confirms where.
+    if (/^@(taxonomy|browse|folders)$/i.test(question)) {
+      dispatch({ type: "open-browser", source: sourceFilter, path: "" });
+    }
     const id = `${Date.now()}-${turns.length}`;
     dispatch({ type: "ask", id, question });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -497,8 +502,16 @@ function AnswerTurn({
   const visualCitations = drawn ? drawn.citations : answer.citations;
   // A paged listing with rows is drawn as a table that grows in place; an
   // empty one is just its sentence.
+  const { dispatch } = useSession();
+  const browsed = browsedFrom(answer);
+  // A folder listing is its own view (the browser above the chat), so it is
+  // never drawn as the paged documents table.
   const listing =
-    answer.inventory?.page && answer.inventory.page.total > 0 ? listingText(answer.answer) : null;
+    answer.inventory?.page && answer.inventory.page.total > 0 && !browsed
+      ? listingText(answer.answer)
+      : null;
+  const openFile = (file: { source: string; path: string; chunkId?: string | null }) =>
+    dispatch({ type: "open-file", file });
   const onCite = (index: number) => onCitationClick(byIndex.get(index)?.node_id);
   return (
     <div className="msg">
@@ -510,6 +523,7 @@ function AnswerTurn({
               inventory={answer.inventory}
               lead={listing.lead}
               onSelect={onCitationClick}
+              onOpen={openFile}
             />
             {listing.footer ? <AnswerBody text={listing.footer} onCite={onCite} /> : null}
           </>
@@ -536,7 +550,26 @@ function AnswerTurn({
           citations={answer.citations}
           onSelect={onCitationClick}
           onVisualize={(citation) => draw.mutate([citation])}
+          onOpen={(citation) =>
+            openFile({
+              source: citation.source_id as string,
+              path: citation.relative_path as string,
+              chunkId: citation.chunk_id ?? null,
+            })
+          }
         />
+      ) : null}
+      {browsed ? (
+        <p className="msg__hint">
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => dispatch({ type: "open-browser", source: browsed.source, path: browsed.path })}
+            title="Show this folder in the source browser above the chat"
+          >
+            Open in the taxonomy view
+          </button>
+        </p>
       ) : null}
       {answer.inventory_hint ? <p className="msg__hint">{answer.inventory_hint}</p> : null}
       {answer.keywords?.unknown ? (

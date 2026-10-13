@@ -61,9 +61,13 @@ ACTIONS = (
     "document",
     "links",
     "more",
+    # One folder of a source, as a file collection (`services.source_browser`).
+    "taxonomy",
 )
 #: Actions whose answer is a page of a longer list.
-PAGED_ACTIONS = ("documents", "recent", "links")
+PAGED_ACTIONS = ("documents", "recent", "links", "taxonomy")
+#: Words that, after ``@pheasant``, ask for one folder of a source.
+BROWSE_WORDS = frozenset({"taxonomy", "browse", "folders", "folder", "tree"})
 #: Documents shown for "recent" when the question names no number.
 RECENT_DEFAULT = 10
 
@@ -327,6 +331,16 @@ def read_question(
         text = text[: paged.start()].strip(" ,")
     trigger = "keyword" if keyword else "rule"
     resolver = _SourceResolver(sources)
+    head, _, rest = text.partition(" ")
+    if keyword and head in BROWSE_WORDS:
+        return InventoryQuestion(
+            action="taxonomy",
+            trigger=trigger,
+            why=f"@pheasant {head}",
+            page=page,
+            text=text,
+            **_browse_target(rest, resolver),
+        )
     found = _read(text, keyword=keyword, sources=resolver)
     if found is None and keyword and text:
         # "@pheasant pdfs in notes" is a listing without its verb.
@@ -394,6 +408,31 @@ class _SourceResolver:
             raw = self._sources() if callable(self._sources) else self._sources
             self._names = {str(n).lower(): str(n) for n in raw or ()}
         return self._names.get(name.lower())
+
+
+def _browse_target(rest: str, sources: _SourceResolver) -> dict[str, Any]:
+    """``{source_name, path}`` from what follows ``@pheasant taxonomy``.
+
+    ``notes``, ``notes guides/setup``, ``notes/guides/setup`` and ``the notes
+    source`` all name the source ``notes``; a first word that is no source is
+    the start of a folder inside whichever source the request is scoped to,
+    which ``assistant.answering`` fills in. The folder is matched without
+    regard to case, so the lower-casing of the reading costs nothing.
+    """
+
+    words = re.sub(rf"^(?:the |in |of |for )+|\b{_SRC}\b", " ", rest).split()
+    if not words:
+        return {}
+    first = words[0].strip("/")
+    head, _, tail = first.partition("/")
+    source = sources.find(head)
+    if source is None:
+        return {"path": "/".join(w.strip("/") for w in words if w.strip("/"))}
+    folder = [part for part in (tail, *words[1:]) if part.strip("/")]
+    return {
+        "source_name": source,
+        "path": "/".join(part.strip("/") for part in folder) or None,
+    }
 
 
 def _types(*words: str | None) -> dict[str, Any]:

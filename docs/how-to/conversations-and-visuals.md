@@ -189,6 +189,7 @@ addresses are just text.
 | Keyword | Answers with |
 |---|---|
 | `@source <name>`, `@doc <path>`, `@docs …`, `@links …`, `@more` | Shorthand for `@pheasant source …`, `document …`, `documents …`, `links …`, `more`. From the index, no search, no model. |
+| `@taxonomy [source] [folder]` (`@browse`, `@folders`) | One folder of a source as folders and files, from the index with no model; alone, the sources. In the web UI it also opens the taxonomy view above the chat at that folder, on the source the chat is scoped to when none is named. |
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
 | `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |

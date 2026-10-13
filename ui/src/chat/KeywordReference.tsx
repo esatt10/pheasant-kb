@@ -12,6 +12,7 @@ import type { AnswerKeyword } from "../api/types";
 export const PHEASANT_PHRASES: { phrase: string; does: string }[] = [
   { phrase: "@pheasant list sources", does: "every source, with counts and status" },
   { phrase: "@pheasant source <name>", does: "one source: folders, types, links in and out" },
+  { phrase: "@pheasant taxonomy <source>", does: "browse its folders and files (opens above the chat)" },
   { phrase: "@pheasant list documents", does: "every document, a page at a time" },
   { phrase: "@pheasant pdfs in <source>", does: "filtered by type and source" },
   { phrase: "@pheasant documents matching <text>", does: "filtered by path" },

@@ -16,6 +16,27 @@ import { NOISY_NODE_TYPES } from "../graph/graphStyles";
 
 export type PanelTab = "graph" | "facts" | "node";
 
+/** A document open in the source browser's viewer. */
+export interface OpenFile {
+  source: string;
+  path: string;
+  /** The cited passage it was opened at, to scroll to and mark. */
+  chunkId?: string | null;
+  /** A section to open at (a Markdown link's `#fragment`). */
+  anchor?: string | null;
+}
+
+/**
+ * The source browser above the chat: which folder it shows and which file is
+ * open beside it. `source: null` is the level above every source.
+ */
+export interface BrowserState {
+  open: boolean;
+  source: string | null;
+  path: string;
+  file: OpenFile | null;
+}
+
 export interface ChatTurn {
   id: string;
   question: string;
@@ -67,10 +88,23 @@ export interface SessionState {
   /** Pane widths in px. The graph pane in particular needs to be growable. */
   railWidth: number;
   panelWidth: number;
+  /** The source browser, shown above the chat when open. */
+  browser: BrowserState;
+  /** Browser folded to its header strip, giving the chat the height. */
+  browserCollapsed: boolean;
+  /** Chat folded to its header strip, giving the browser the height. */
+  chatCollapsed: boolean;
+  /** Height of the browser while both it and the chat are unfolded, in px. */
+  browserHeight: number;
+  /** Width of the folder list beside the file viewer, in px. */
+  browserTreeWidth: number;
 }
 
 export const DEFAULT_RAIL_WIDTH = 280;
 export const DEFAULT_PANEL_WIDTH = 400;
+
+export const DEFAULT_BROWSER_HEIGHT = 420;
+export const DEFAULT_TREE_WIDTH = 260;
 
 export const DEFAULT_DEPTH = 3;
 export const MIN_DEPTH = 1;
@@ -101,6 +135,11 @@ const INITIAL: SessionState = {
   answerDepth: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
+  browser: { open: false, source: null, path: "", file: null },
+  browserCollapsed: false,
+  chatCollapsed: false,
+  browserHeight: DEFAULT_BROWSER_HEIGHT,
+  browserTreeWidth: DEFAULT_TREE_WIDTH,
 };
 
 export type SessionAction =
@@ -125,7 +164,13 @@ export type SessionAction =
   | { type: "new-conversation" }
   | { type: "new-topic" }
   | { type: "set-answer-depth"; depth: AnswerDepth | null }
-  | { type: "set-pane-width"; pane: "rail" | "panel"; width: number };
+  | { type: "set-pane-width"; pane: "rail" | "panel" | "browser" | "tree"; width: number }
+  | { type: "open-browser"; source: string | null; path?: string }
+  | { type: "open-file"; file: OpenFile }
+  | { type: "close-file" }
+  | { type: "close-browser" }
+  | { type: "toggle-browser-collapsed" }
+  | { type: "toggle-chat-collapsed" };
 
 /**
  * Canvas layout algorithms.
@@ -210,8 +255,12 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       };
     case "answered": {
       const surfaced = surfacedFrom(action.answer);
+      // `@taxonomy` answers from the index and, here, also opens the browser
+      // at the folder it listed, above the chat.
+      const browsed = browsedFrom(action.answer);
       return {
         ...state,
+        ...(browsed ? openBrowser(state, browsed.source, browsed.path) : {}),
         // Streaming chat first dispatches the text with visual.status=pending,
         // then dispatches the same turn again when its visual is ready. Replace
         // that turn by id so the completed MCP App result reaches the UI.
@@ -235,10 +284,47 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           turn.id === action.id && !turn.answer ? { ...turn, error: action.error } : turn,
         ),
       };
-    case "set-pane-width":
-      return action.pane === "rail"
-        ? { ...state, railWidth: Math.round(action.width) }
-        : { ...state, panelWidth: Math.round(action.width) };
+    case "set-pane-width": {
+      const width = Math.round(action.width);
+      if (action.pane === "rail") return { ...state, railWidth: width };
+      if (action.pane === "browser") return { ...state, browserHeight: width };
+      if (action.pane === "tree") return { ...state, browserTreeWidth: width };
+      return { ...state, panelWidth: width };
+    }
+    case "open-browser":
+      return { ...state, ...openBrowser(state, action.source, action.path ?? "") };
+    case "open-file": {
+      const slash = action.file.path.lastIndexOf("/");
+      return {
+        ...state,
+        ...openBrowser(state, action.file.source, slash > 0 ? action.file.path.slice(0, slash) : ""),
+        browser: {
+          open: true,
+          source: action.file.source,
+          path: slash > 0 ? action.file.path.slice(0, slash) : "",
+          file: action.file,
+        },
+      };
+    }
+    case "close-file":
+      return { ...state, browser: { ...state.browser, file: null } };
+    case "close-browser":
+      // The chat must not stay folded behind a browser that is gone.
+      return { ...state, browser: { ...state.browser, open: false }, chatCollapsed: false };
+    case "toggle-browser-collapsed":
+      return {
+        ...state,
+        browserCollapsed: !state.browserCollapsed,
+        // Folding one pane unfolds the other: two header strips and nothing
+        // else is a layout nobody asked for.
+        chatCollapsed: state.browserCollapsed ? state.chatCollapsed : false,
+      };
+    case "toggle-chat-collapsed":
+      return {
+        ...state,
+        chatCollapsed: !state.chatCollapsed,
+        browserCollapsed: state.chatCollapsed ? state.browserCollapsed : false,
+      };
     case "clear-view":
       // Back to the plain view: nothing selected, nothing focused, no answer
       // filter, centered on the knowledge base again. Deliberately keeps the
@@ -277,6 +363,24 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     default:
       return state;
   }
+}
+
+/** Open the browser, unfolded, at a folder. The open file stays if it is in the same source. */
+function openBrowser(
+  state: SessionState,
+  source: string | null,
+  path: string,
+): Pick<SessionState, "browser" | "browserCollapsed"> {
+  const file = state.browser.file && state.browser.file.source === source ? state.browser.file : null;
+  return { browser: { open: true, source, path, file }, browserCollapsed: false };
+}
+
+/** The folder a `@taxonomy` answer listed, if this answer is one. */
+export function browsedFrom(answer: ChatAnswer): { source: string | null; path: string } | null {
+  const inventory = answer.inventory;
+  if (!inventory || inventory.action !== "taxonomy") return null;
+  const result = inventory.result as { source?: string | null; path?: string };
+  return { source: result.source ?? null, path: result.path ?? "" };
 }
 
 /** Turns sent with a question: answered ones since the last "new topic". */
@@ -322,6 +426,11 @@ const PERSISTED_KEYS = [
   "panelWidth",
   "railCollapsed",
   "panelCollapsed",
+  "browser",
+  "browserCollapsed",
+  "chatCollapsed",
+  "browserHeight",
+  "browserTreeWidth",
 ] as const;
 
 function hydrate(): SessionState {
@@ -342,10 +451,30 @@ function hydrate(): SessionState {
       answerDepth: saved.answerDepth ?? INITIAL.answerDepth,
       railWidth: Number(saved.railWidth) || DEFAULT_RAIL_WIDTH,
       panelWidth: Number(saved.panelWidth) || DEFAULT_PANEL_WIDTH,
+      browser: hydrateBrowser(saved.browser),
+      browserCollapsed: saved.browserCollapsed === true,
+      chatCollapsed: saved.chatCollapsed === true && saved.browser?.open === true,
+      browserHeight: Number(saved.browserHeight) || DEFAULT_BROWSER_HEIGHT,
+      browserTreeWidth: Number(saved.browserTreeWidth) || DEFAULT_TREE_WIDTH,
     };
   } catch {
     return INITIAL;
   }
+}
+
+function hydrateBrowser(saved: unknown): BrowserState {
+  if (!saved || typeof saved !== "object") return INITIAL.browser;
+  const value = saved as Partial<BrowserState>;
+  const file =
+    value.file && typeof value.file.source === "string" && typeof value.file.path === "string"
+      ? { source: value.file.source, path: value.file.path }
+      : null;
+  return {
+    open: value.open === true,
+    source: typeof value.source === "string" ? value.source : null,
+    path: typeof value.path === "string" ? value.path : "",
+    file,
+  };
 }
 
 interface SessionContextValue {

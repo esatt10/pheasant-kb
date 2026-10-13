@@ -27,10 +27,13 @@ export function InventoryListing({
   inventory,
   lead,
   onSelect,
+  onOpen,
 }: {
   inventory: Inventory;
   lead: string;
   onSelect: (nodeId: string | undefined) => void;
+  /** Open a listed document in the viewer above the chat. */
+  onOpen?: (doc: { source: string; path: string }) => void;
 }) {
   const page = inventory.page as InventoryPage;
   const first = inventory.result as {
@@ -100,14 +103,14 @@ export function InventoryListing({
               ? links.map((link, index) => (
                   <tr key={`${link.from.id}-${link.to.id}-${index}`}>
                     <td>
-                      <PathButton doc={link.from} onSelect={onSelect} />
+                      <PathButton doc={link.from} onSelect={onSelect} onOpen={onOpen} />
                     </td>
                     <td className="inv__edge">
                       {link.edge_types.join(", ")}
                       {link.cross_source ? <span className="pill">cross-source</span> : null}
                     </td>
                     <td>
-                      <PathButton doc={link.to} onSelect={onSelect} />
+                      <PathButton doc={link.to} onSelect={onSelect} onOpen={onOpen} />
                     </td>
                   </tr>
                 ))
@@ -115,7 +118,7 @@ export function InventoryListing({
                   <tr key={doc.id}>
                     <td>{doc.source}</td>
                     <td>
-                      <PathButton doc={doc} onSelect={onSelect} bare />
+                      <PathButton doc={doc} onSelect={onSelect} onOpen={onOpen} bare />
                     </td>
                     <td>{size(doc.size_bytes)}</td>
                     <td>{(doc.last_indexed_at ?? "—").replace("T", " ").slice(0, 16)}</td>
@@ -157,21 +160,36 @@ export function InventoryListing({
 function PathButton({
   doc,
   onSelect,
+  onOpen,
   bare = false,
 }: {
   doc: { id: string; source: string; path: string };
   onSelect: (nodeId: string | undefined) => void;
+  onOpen?: (doc: { source: string; path: string }) => void;
   bare?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      className="inv__path"
-      onClick={() => onSelect(doc.id)}
-      title="Show this document in the graph"
-    >
-      {bare ? doc.path : `${doc.source}/${doc.path}`}
-    </button>
+    <>
+      <button
+        type="button"
+        className="inv__path"
+        onClick={() => onSelect(doc.id)}
+        title="Show this document in the graph"
+      >
+        {bare ? doc.path : `${doc.source}/${doc.path}`}
+      </button>
+      {onOpen ? (
+        <button
+          type="button"
+          className="source-chip__visualize inv__open"
+          onClick={() => onOpen({ source: doc.source, path: doc.path })}
+          title="Open this file above the chat"
+          aria-label={`Open ${doc.path}`}
+        >
+          ↗
+        </button>
+      ) : null}
+    </>
   );
 }
 

@@ -56,13 +56,24 @@ def answer(
     started = time.perf_counter()
     try:
         context = ServiceContext(config=config, state=state, searcher=search, graph=graph)
-        found = lookup(
-            asked,
-            context,
-            principal=principal,
-            principal_groups=principal_groups,
-            max_items=max_items,
-        )
+        if asked.action == "taxonomy":
+            from pheasant.assistant import inventory_browse
+
+            asked, found = inventory_browse.lookup(
+                asked,
+                context,
+                principal=principal,
+                principal_groups=principal_groups,
+                max_items=max_items,
+            )
+        else:
+            found = lookup(
+                asked,
+                context,
+                principal=principal,
+                principal_groups=principal_groups,
+                max_items=max_items,
+            )
         text = render(asked, found, max_items=max_items)
     except Exception:
         logger.exception("inventory lookup failed for %r; answering by retrieval", question)
@@ -275,7 +286,11 @@ def _focus_ids(result: dict[str, Any]) -> list[str]:
     """The graph nodes an answer is about, for the canvas to light up."""
 
     ids: list[str] = []
-    for doc in [*(result.get("documents") or []), *(result.get("recent") or [])]:
+    for doc in [
+        *(result.get("documents") or []),
+        *(result.get("recent") or []),
+        *(result.get("files") or []),
+    ]:
         ids.append(str(doc.get("id") or ""))
     if isinstance(result.get("document"), dict):
         ids.append(str(result["document"].get("id") or ""))
@@ -304,10 +319,17 @@ def render(asked: InventoryQuestion, found: dict[str, Any], *, max_items: int = 
         "source": _render_source,
         "document": _render_document,
         "links": _render_links,
+        "taxonomy": _render_taxonomy,
     }[asked.action](asked, result, max_items)
     notes = "".join(f"\n\n_Note: {note}._" for note in asked.notes)
     paging = _render_page(found.get("page"))
     return f"{body}{paging}{notes}\n\n{_footer(asked, found['tool'])}"
+
+
+def _render_taxonomy(asked: InventoryQuestion, result: dict[str, Any], max_items: int) -> str:
+    from pheasant.assistant.inventory_browse import render as render_folder
+
+    return render_folder(asked, result, max_items)
 
 
 def _render_page(page: dict[str, Any] | None) -> str:

@@ -16,8 +16,10 @@ question so a rule notices. A keyword says it directly:
   (``@timeline``, ``@flow``, ``@mindmap`` ...), the same pins as ``visual``.
 * **Deterministic answers**, with no model in the path: ``@search`` (the
   ranked hybrid-search hits, as a table), and the index lookups ``@source``,
-  ``@doc``, ``@docs``, ``@links`` and ``@more``, which are shorthand for
-  ``@pheasant source …``, ``@pheasant document …`` and so on.
+  ``@doc``, ``@docs``, ``@links``, ``@taxonomy`` and ``@more``, which are
+  shorthand for ``@pheasant source …``, ``@pheasant document …`` and so on.
+  ``@taxonomy`` lists one folder of a source; the web UI also opens its
+  source browser there, above the chat.
 
 A keyword counts only as the **first word** of the message (several may lead
 it: ``@detailed @table …``), so a question that merely mentions one, or an
@@ -100,6 +102,16 @@ KEYWORDS: tuple[Keyword, ...] = (
         "Links between documents, per source pair and edge type.",
         "@links between notes and code",
         ("relations", "graph"),
+        group="Answered without a model",
+    ),
+    Keyword(
+        "taxonomy",
+        "inventory",
+        "taxonomy",
+        "Browse a source as folders and files, one level at a time. The web UI opens "
+        "its source browser above the chat.",
+        "@taxonomy notes guides/",
+        ("browse", "folders"),
         group="Answered without a model",
     ),
     Keyword(

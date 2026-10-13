@@ -736,6 +736,11 @@ CONFORMED = {
     "source": ("GET /sources/{name}/overview", "describe_source"),
     "document": ("GET /documents/detail", "describe_document"),
     "links": ("GET /documents/links", "list_document_links"),
+    # Driven through both surfaces in tests/test_source_browser.py, refusal
+    # text included: its corpus holds the folders, images and overlapping
+    # chunks the two operations exist for.
+    "browse": ("GET /documents/tree", "browse_source"),
+    "read_document": ("GET /documents/content", "read_document"),
 }
 
 
@@ -753,6 +758,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import inventory_detail as inventory_detail_service
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
+    from pheasant.services import source_browser as source_browser_service
 
     public: set[str] = set()
     for module in (
@@ -763,6 +769,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         index_queue_service,
         inventory_service,
         inventory_detail_service,
+        source_browser_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
@@ -806,6 +813,14 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # wherever it is described.
     public.discard("document_row")
     public.discard("reader")
+    # `raw_document` exists on one transport on purpose: it serves a PDF's or
+    # an image's bytes to a browser's own viewer, and an agent reads the same
+    # document's text through `read_document`. `classify` and
+    # `clean_directory` are the browser's helpers, called inside both
+    # operations and by nothing that exposes them.
+    public.discard("raw_document")
+    public.discard("classify")
+    public.discard("clean_directory")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

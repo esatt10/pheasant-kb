@@ -408,6 +408,9 @@ def answer_question(
         )
     if asked is not None and directives.inventory:
         asked = replace(asked, keyword=directives.used[-1])
+    if asked is not None and asked.action == "taxonomy" and source_name and not asked.source_name:
+        # `@taxonomy` with no source browses the one the request is scoped to.
+        asked = replace(asked, source_name=source_name)
     deterministic = asked is not None or directives.search
     rewrite_started = time.perf_counter()
     from pheasant.assistant.providers import collect_token_usage

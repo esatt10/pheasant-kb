@@ -32,6 +32,8 @@ import type {
   ReadyStatus,
   InventoryPage,
   InventoryListingPage,
+  BrowseResponse,
+  DocumentContent,
 } from "./types";
 import type {
   ConfigSection,
@@ -579,6 +581,46 @@ export const api = {
       reader.readAsDataURL(blob);
     });
     return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), mimeType: blob.type || "image/png" };
+  },
+  /** One folder of a source, or with no source the sources themselves. */
+  browse: (options: { source?: string | null; path?: string; offset?: number; limit?: number }) =>
+    request<BrowseResponse>(
+      `/documents/tree${qs({
+        source_name: options.source ?? undefined,
+        path: options.path || undefined,
+        offset: options.offset || undefined,
+        limit: options.limit,
+      })}`,
+    ),
+  /** One document's content, classified for the viewer. */
+  documentContent: (options: { source?: string | null; path: string; chunkId?: string | null }) =>
+    request<DocumentContent>(
+      `/documents/content${qs({
+        path: options.path,
+        source_name: options.source ?? undefined,
+        chunk_id: options.chunkId ?? undefined,
+      })}`,
+    ),
+  /**
+   * A binary document's original bytes as an object URL (a PDF, an image, a
+   * recording), for the browser's own viewer. Fetched, not linked, for the
+   * same reason as `mediaObjectUrl`: an `<iframe>` cannot send the API token.
+   * The blob is re-typed to the type the region declared, so the browser
+   * never sniffs it into something else. The caller revokes the URL.
+   */
+  documentRawObjectUrl: async (options: {
+    source?: string | null;
+    path: string;
+    mimeType: string;
+  }): Promise<string> => {
+    const response = await fetch(
+      `${API_BASE}/documents/raw${qs({ path: options.path, source_name: options.source ?? undefined })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    const bytes = await response.arrayBuffer();
+    return URL.createObjectURL(new Blob([bytes], { type: options.mimeType }));
   },
   /** The MCP App view, to host in a sandboxed frame exactly as an MCP host would. */
   knowledgeView: async (): Promise<string> => {
