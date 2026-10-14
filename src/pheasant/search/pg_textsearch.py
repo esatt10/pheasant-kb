@@ -192,7 +192,7 @@ def pg_textsearch_sql(
     candidates on a 20k-chunk corpus, against 0.7 ms for the index scan that
     had already computed the same number. pg_textsearch's planner hook swaps
     a select-list score for the scan's own (``bm25_get_current_score()``)
-    when it ``equal()``\s a *separate* ORDER BY entry, and Postgres merges
+    when it is ``equal()`` to a *separate* ORDER BY entry, and Postgres merges
     two identically spelled expressions into one entry at parse time. So the
     select list says ``to_bm25query('…', 'idx')`` and the ORDER BY says
     ``'idx:…'::bm25query``: different trees when parsed, one constant once
