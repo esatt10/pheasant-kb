@@ -317,6 +317,18 @@ With enforcement on, `search_context` (library, MCP, HTTP `/search`) accepts
 before results are merged. The trust model: the region enforces *visibility*;
 the caller (the Synapse router, or your deployment perimeter) authenticates.
 
+A graph hit is judged by the file that owns it. A `chunk`, `heading` or
+`symbol` definition is minted once per file (its id embeds the path), so its
+`artifact_id` names its only owner and that artifact's ACL decides it. An
+`entity` or `external_reference` is shared by every file in the source that
+mentions it — its `artifact_id` is whichever file wrote it last — so it, a
+call-target symbol, a directory and a relationship hit resolve to no artifact
+and are withheld. One rule (`security.acl.acl_subject`) serves the search
+filter, the `expand` neighbour filter and the readiness ACL probe. Before it,
+the search filter judged every graph hit by its own id, which is an artifact
+row only for file nodes, so under enforcement the graph arm kept about one hit
+in twenty.
+
 Enforcement covers **every** surface that returns indexed content, not just
 `/search`: `get_relevant_files` / `POST /relevant-files` run the same filter,
 and the raw-content endpoints (`GET /files/summary`, `GET /nodes/content`)

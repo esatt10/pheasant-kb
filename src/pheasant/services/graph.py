@@ -126,11 +126,11 @@ def neighbor_filter(
 
     A graph walk returns node attributes, and a chunk node carries the opening
     of its text, so expanding a hit the caller may read must not surface a
-    neighbour they may not. A node is judged by the artifact it *is*, or else
-    the artifact it names as ``artifact_id`` (chunks, symbols, entities); a
-    node that resolves to neither (a directory, a source, a shared stub) is
-    withheld, which is the conservative rule the search path already applies
-    to graph hits with no artifact row.
+    neighbour they may not. A node is judged by the rule the search path
+    applies to graph hits, :func:`~pheasant.security.acl.acl_subject`: the
+    artifact it *is*, or else the file that owns it (a chunk, heading or
+    symbol definition). A node that resolves to neither (a directory, a
+    source, an entity or reference shared by several files) is withheld.
 
     ``None`` when ``security.acl_enforced`` is off, so a region that never
     turned enforcement on pays nothing for it.
@@ -139,22 +139,20 @@ def neighbor_filter(
     security = context.config.security
     if not security.acl_enforced:
         return None
-    from pheasant.security.acl import is_allowed
+    from pheasant.security.acl import acl_subject, is_allowed
 
     identities = _identities(context, principal, principal_groups)
     default_public = security.default_visibility != "private"
 
-    def owner(item: dict[str, Any]) -> str:
+    def subject(item: dict[str, Any]) -> str:
         node = item.get("node") or {}
-        return str(node.get("artifact_id") or item["node_id"])
+        return acl_subject(str(item["node_id"]), node.get("type"), node.get("artifact_id"))
 
     def admit(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        candidates = {str(item["node_id"]) for item in found} | {owner(item) for item in found}
-        acls = context.state.artifact_acls(sorted(candidates))
+        acls = context.state.artifact_acls(sorted({subject(item) for item in found}))
         kept = []
         for item in found:
-            node_id = str(item["node_id"])
-            key = node_id if node_id in acls else owner(item)
+            key = subject(item)
             if key in acls and is_allowed(acls[key], identities, default_public=default_public):
                 kept.append(item)
         return kept

@@ -27,6 +27,28 @@ from typing import Any
 
 PUBLIC = {"allow": [], "public": True}
 
+#: Graph node types minted once per file — the id embeds the file's path — so
+#: the ``artifact_id`` they carry names their only owner, and that artifact's
+#: ACL decides whether they may be shown. An ``entity`` or
+#: ``external_reference`` is keyed by (source, name) and shared by every file
+#: that mentions it: its ``artifact_id`` is whichever file wrote it last, which
+#: says nothing about who may read the name, so those stay withheld. So does a
+#: call-target ``symbol``, which carries no ``artifact_id`` at all.
+FILE_OWNED_NODE_TYPES = frozenset({"chunk", "heading", "symbol"})
+
+
+def acl_subject(node_id: str, node_type: Any, artifact_id: Any) -> str:
+    """The artifact id whose ACL decides whether a node may be shown.
+
+    The node itself when it *is* an artifact (or names no owner); the file
+    that owns it when it is one of :data:`FILE_OWNED_NODE_TYPES`. A caller
+    looks the result up with ``artifact_acls`` and withholds anything the
+    lookup does not return, so a node resolving to neither is denied.
+    """
+    if artifact_id and node_type in FILE_OWNED_NODE_TYPES:
+        return str(artifact_id)
+    return str(node_id)
+
 
 def normalize_acl(connector_type: str, raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Canonical ACL doc for one connector's captured metadata, or None.

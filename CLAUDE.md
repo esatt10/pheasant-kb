@@ -683,9 +683,12 @@ the first plus structure, so `expand` walks each hit's `node_id` with the one
 ≤25 seeds, ≤3 hops, ≤50 neighbours) and attaches a compact `graph` block.
 It runs after truncation and lineage, so hits and `query_id` are unchanged;
 a batch expands its merged results once. Under ACL enforcement
-`services.graph.neighbor_filter` applies the hits' artifact rule to
-neighbours (chunk nodes carry text) and drops anything reached *through* a
-withheld node, since `via` would name it. `include_graph_neighbors` was
+`services.graph.neighbor_filter` applies the hits' rule to neighbours
+(chunk nodes carry text) and drops anything reached *through* a withheld
+node, since `via` would name it. That rule is `security.acl.acl_subject`: a
+chunk, heading or symbol definition is judged by the file that owns it, and a
+shared entity or reference -- whose `artifact_id` is only its last writer --
+is withheld. `include_graph_neighbors` was
 accepted and never read; it stays inert (turning it on would change every
 caller passing its `True` default) and `expand` is the switch. The standalone
 walk tools (`get_graph_neighbors`, `get_graph_slice`, `/graph/*`) still apply

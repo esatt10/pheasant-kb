@@ -19,6 +19,7 @@ from pheasant.readiness.probes import (
     probe,
 )
 from pheasant.readiness.probes.ingestion import index_probe_source, probe_documents
+from pheasant.security.acl import acl_subject
 from pheasant.services import ingestion as ingest_service
 from pheasant.services import retrieval as retrieval_service
 from pheasant.services import snapshots as snapshot_service
@@ -166,30 +167,20 @@ def _principal_isolation(context: ProbeContext) -> ProbeResult:
 
 
 def _private_hits(context: ProbeContext, payload: dict[str, Any], other: str) -> list[str]:
-    """Results in this payload whose ACL allows only ``other``."""
+    """Results in this payload whose ACL allows only ``other``.
 
-    ids = [
-        result.get("node_id") for result in payload.get("results") or [] if result.get("node_id")
-    ]
+    A hit is judged by the artifact whose ACL decided it (``acl_subject``), so
+    a chunk or symbol drawn from ``other``'s file counts as the crossing it is.
+    """
+
+    ids = {
+        acl_subject(str(result["node_id"]), result.get("type"), result.get("artifact_id"))
+        for result in payload.get("results") or []
+        if result.get("node_id")
+    }
     if not ids:
         return []
-    acls = context.state.artifact_acls([str(node) for node in ids])
-    crossings = []
-    for artifact_id, raw in acls.items():
-        if raw and other in str(raw) and '"public": true' not in str(raw):
-            crossings.append(str(artifact_id))
-    return crossings
-
-
-def _private_hits(context: ProbeContext, payload: dict[str, Any], other: str) -> list[str]:
-    """Results in this payload whose ACL allows only ``other``."""
-
-    ids = [
-        result.get("node_id") for result in payload.get("results") or [] if result.get("node_id")
-    ]
-    if not ids:
-        return []
-    acls = context.state.artifact_acls([str(node) for node in ids])
+    acls = context.state.artifact_acls(sorted(ids))
     crossings = []
     for artifact_id, raw in acls.items():
         if raw and other in str(raw) and '"public": true' not in str(raw):

@@ -441,7 +441,7 @@ class HybridSearch:
             _filter_stage("memory_policy")
 
         if enforced:
-            from pheasant.security.acl import expand_principal, is_allowed
+            from pheasant.security.acl import acl_subject, expand_principal, is_allowed
 
             identities = expand_principal(
                 principal, principal_groups, getattr(security, "groups", None)
@@ -455,21 +455,32 @@ class HybridSearch:
                     self.store.state, principal, getattr(security, "idp", None)
                 )
             default_public = getattr(security, "default_visibility", "public") != "private"
-            candidate_ids = [
-                str(item.get("node_id"))
-                for group in (text_results, vector_results, graph_results)
-                for item in group
-                if item.get("node_id")
-            ]
+
+            def subject(item: dict[str, Any]) -> str:
+                # A chunk, heading or symbol hit is judged by the file that
+                # owns it; anything else by its own id (see `acl_subject`).
+                return acl_subject(
+                    str(item.get("node_id") or ""), item.get("type"), item.get("artifact_id")
+                )
+
+            candidate_ids = sorted(
+                {
+                    subject(item)
+                    for group in (text_results, vector_results, graph_results)
+                    for item in group
+                    if item.get("node_id")
+                }
+            )
             acls = self.store.state.artifact_acls(candidate_ids)
 
             def visible(item: dict[str, Any]) -> bool:
-                node_id = str(item.get("node_id") or "")
-                if node_id not in acls:
-                    # Not resolvable to an artifact row (concept/symbol graph
-                    # nodes): conservative deny under enforcement.
+                key = subject(item)
+                if key not in acls:
+                    # Resolves to no artifact row (a directory, a shared
+                    # entity or reference, a relationship): conservative deny
+                    # under enforcement.
                     return False
-                return is_allowed(acls[node_id], identities, default_public=default_public)
+                return is_allowed(acls[key], identities, default_public=default_public)
 
             text_results = [r for r in text_results if visible(r)]
             vector_results = [r for r in vector_results if visible(r)]
