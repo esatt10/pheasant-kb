@@ -184,7 +184,8 @@ def test_nothing_is_joined_beside_the_ordered_scan() -> None:
 def test_widening_the_scan_steps_up_to_its_ceiling() -> None:
     assert pg_textsearch.bm25_scan_limits(10, filtered=False) == [50]
     limits = pg_textsearch.bm25_scan_limits(10, filtered=True)
-    assert limits[0] == 200 and limits[-1] == pg_textsearch._BM25_SCAN_CEILING
+    assert limits[0] == 50 * pg_textsearch._BM25_SCAN_HEADROOM
+    assert limits[-1] == pg_textsearch._BM25_SCAN_CEILING
     assert limits == sorted(set(limits))
 
 

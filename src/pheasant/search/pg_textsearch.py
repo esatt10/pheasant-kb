@@ -32,7 +32,7 @@ _BM25_CANDIDATE_FACTOR = 2
 # outside it will drop rows, how much each retry widens it, and how far it
 # may widen before the search hands the question back to the planner (see
 # `bm25_scan_limits`).
-_BM25_SCAN_HEADROOM = 4
+_BM25_SCAN_HEADROOM = 2
 _BM25_SCAN_WIDEN = 8
 _BM25_SCAN_CEILING = 8192
 
