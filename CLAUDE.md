@@ -2374,6 +2374,23 @@ Each of these cost real time. They are listed because the shape recurs.
   query shapes against a real Postgres; the offline suite has no planner.
   `tests/test_pg_textsearch.py` holds the fence's shape and the equivalence,
   and the counter makes the path visible in production.
+- **A slugged id is an id two names can share.** Symbol ids slug the name
+  (lowercase, leading `_` stripped), so ctypes'
+  `_LARGE_INTEGER = LARGE_INTEGER = c_longlong` minted one id twice, and the
+  second `symbols` insert broke the primary key and aborted the write, on
+  SQLite and Postgres alike. A stdlib-sized source stopped indexing at that
+  file. A colliding name now gets `-{digest}` of its exact spelling and every
+  other id is unchanged; since a colliding id never reached storage, no
+  migration was owed (`docs/graph_model.md` records the decision). Found by
+  indexing the standard library for a performance check, not by any test.
+- **A cache that stops repeats still pays once per distinct key.**
+  `_LazyNodeMap` remembered each endpoint a relationship scan looked up, and
+  every distinct endpoint was still its own query: up to 480 per search,
+  200-420 ms of the graph arm on a 53k-chunk Postgres region. The scan knows
+  its endpoints before it scores, so it `prime`s the map in one query (both
+  the Python and the WASM scan). The same pass found the narrowing's type half
+  scanning all 170k edges for `LOWER(type) LIKE` to test ten words; the
+  vocabulary is read once per published generation and matched in Python.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the

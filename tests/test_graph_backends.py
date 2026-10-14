@@ -586,6 +586,81 @@ def test_the_walk_batches_one_query_per_level(tmp_path: Path) -> None:
     assert calls["nodes"] <= 3, f"one attribute query per level, got {calls['nodes']}"
 
 
+def test_relationship_search_fetches_its_endpoints_in_one_query(tmp_path: Path) -> None:
+    """Both relationship scans read every candidate edge's endpoint labels.
+
+    Caching stopped the repeats, but each *distinct* endpoint was still a
+    query of its own: up to 480 per search on a 53k-chunk Postgres region,
+    200-420 ms of the graph arm. Counted, not timed: a single-node lookup
+    from either scan means someone put the per-endpoint fetch back.
+    """
+
+    from pheasant.sandbox.accel.relationship_search import _edge_rows
+    from pheasant.search.graph_search import _scan_edges
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        stored = SqlGraph(engine.state, KB)
+        calls = {"one": 0, "many": 0}
+        real_one, real_many = stored.rows.get_node, stored.rows.get_nodes
+
+        def one(*args: Any, **kwargs: Any) -> Any:
+            calls["one"] += 1
+            return real_one(*args, **kwargs)
+
+        def many(*args: Any, **kwargs: Any) -> Any:
+            calls["many"] += 1
+            return real_many(*args, **kwargs)
+
+        stored.rows.get_node = one  # type: ignore[method-assign]
+        stored.rows.get_nodes = many  # type: ignore[method-assign]
+        hits = _scan_edges(stored, ["contains"], "contains", None)
+        rows = _edge_rows(stored, None, ["contains"])
+    finally:
+        engine.close()
+
+    assert hits and rows, "the fixture has no contains edges to scan"
+    assert calls["one"] == 0, f"{calls['one']} single-node lookups during relationship scans"
+    assert calls["many"] <= 2, f"one batched lookup per scan, got {calls['many']}"
+    # Labels still resolved: an endpoint's label, not its id, titles the hit.
+    assert any(hit["source_label"] != hit["source"] for _score, hit in hits)
+
+
+def test_the_edge_type_vocabulary_is_read_once_per_generation(tmp_path: Path) -> None:
+    """The type half of the narrowing tests tokens against the graph's types.
+
+    Read once and kept until the published generation moves, which any
+    committed edge does; a query whose words name no type skips that half.
+    """
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        rows = GraphRowStore(engine.state)
+        seen: list[str] = []
+        real = engine.state.rows
+
+        def spy(sql: str, params: Any = ()) -> Any:
+            seen.append(sql)
+            return real(sql, params)
+
+        with mock.patch.object(engine.state, "rows", spy):
+            types = rows.edge_types(KB)
+            assert "contains" in types
+            list(rows.candidate_edges(KB, ["contains"]))
+            list(rows.candidate_edges(KB, ["zzzznotaword"]))
+            distinct = [sql for sql in seen if "DISTINCT type" in sql]
+            assert len(distinct) == 1, "the vocabulary was re-read for one generation"
+            assert not any("LOWER(e.type) LIKE" in sql for sql in seen)
+            published = rows.published_generation(KB)
+            assert published is not None
+            moved = {**published, "generation_id": "moved"}
+            with mock.patch.object(rows, "published_generation", return_value=moved):
+                rows.edge_types(KB)
+            assert len([sql for sql in seen if "DISTINCT type" in sql]) == 2
+    finally:
+        engine.close()
+
+
 def test_the_in_memory_graph_answers_the_same_batch_protocol() -> None:
     """So the traversal has one code path rather than a branch on backend."""
 

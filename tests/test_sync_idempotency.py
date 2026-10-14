@@ -1393,3 +1393,55 @@ def test_a_connector_that_lists_only_changes_never_prunes(tmp_path: Path) -> Non
     finally:
         engine.close()
         connector_registry.reset_connector_registry()
+
+
+def test_two_names_one_symbol_id_index_both_and_resync_unchanged(tmp_path: Path) -> None:
+    """ctypes' own ``_LARGE_INTEGER = LARGE_INTEGER = c_longlong``.
+
+    The symbol id slugs the name, so both targets minted one id and the second
+    insert broke the ``symbols`` primary key, aborting the file's write (and
+    with it the rest of a stdlib-sized source). Both are recorded now, the
+    plain id is the one it always was, and a re-sync changes nothing.
+    """
+
+    code = tmp_path / "workspace" / "lib"
+    code.mkdir(parents=True)
+    (code / "wintypes.py").write_text(
+        "import ctypes\n\n_LARGE_INTEGER = LARGE_INTEGER = ctypes.c_longlong\n\n"
+        "def lookup(name):\n    return name\n\nlookup = lookup\n"
+    )
+    (code / "other.py").write_text("def after():\n    return 1\n")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "symbols",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path / "workspace"),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [{"name": "lib", "type": "repository", "path": str(code)}],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        engine.sync_source("lib", "full")
+
+        def symbols() -> dict[str, str]:
+            return {
+                str(row["id"]): str(row["name"])
+                for row in engine.state.rows("SELECT id, name FROM symbols")
+            }
+
+        first = symbols()
+        names = sorted(first.values())
+        assert names.count("_LARGE_INTEGER") == 1 and names.count("LARGE_INTEGER") == 1
+        assert "after" in names, "the file after the collision was not indexed"
+        assert "symbol:symbols:lib:wintypes.py:large_integer-3" in first
+        assert len(first) == len(set(first))
+        assert engine.sync_source("lib", "incremental").indexed_artifacts == 0
+        engine.sync_source("lib", "full")
+        assert symbols() == first
+        graph = engine.graph_store.load(engine.config.knowledge_base_id)
+        assert set(first) <= {node_id for node_id, _attrs in graph.iter_nodes()}
+    finally:
+        engine.close()

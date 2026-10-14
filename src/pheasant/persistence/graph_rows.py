@@ -49,6 +49,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from pheasant.persistence import graph_candidates
 from pheasant.persistence.graph_codec import (
     _ZERO_FOLD,
     BATCH,
@@ -141,6 +142,8 @@ class GraphRowStore:
 
     def __init__(self, state: Any) -> None:
         self.state = state
+        #: ``(kb_id, generation_id) -> edge types``; see :meth:`edge_types`.
+        self._edge_types: dict[str, tuple[str, tuple[str, ...]]] = {}
         dialect = getattr(state, "dialect", None)
         self._postgres = bool(dialect is not None and dialect.is_postgres)
 
@@ -706,53 +709,14 @@ class GraphRowStore:
         source_name: str | None = None,
         limit: int = 2000,
     ) -> Iterator[tuple[tuple[str, str], dict[int, dict]]]:
-        """Edges that could possibly score, instead of all of them.
+        """Edges that could possibly score; see :mod:`.graph_candidates`."""
 
-        Relationship search scored every edge — O(edges), on the request path,
-        with no index. ``_scan_edges`` matches on the edge's type, its
-        endpoints' labels and its attribute values, so the narrowing here is
-        the part a database can do: edge type, and endpoints whose node row
-        matches. A token that matches nothing returns nothing, which is the
-        common case and the one that used to cost the most.
+        return graph_candidates.candidate_edges(self, kb_id, tokens, source_name, limit)
 
-        Deliberately a *superset* of what will score, never a subset: the
-        scorer is unchanged and still decides. ``limit`` bounds the work rather
-        than the answer — an edge beyond it is one the in-memory scan would
-        also have had to reach past ``max_results`` to return.
-        """
+    def edge_types(self, kb_id: str) -> tuple[str, ...]:
+        """Every edge type, read once per published generation."""
 
-        if not tokens:
-            return
-        like = [f"%{token}%" for token in tokens]
-        type_clause = " OR ".join("LOWER(e.type) LIKE ?" for _ in like)
-        label_clause = " OR ".join("LOWER(n.label) LIKE ?" for _ in like)
-        source_clause = " AND e.source_id=?" if source_name else ""
-        params: list[Any] = [kb_id, *like]
-        if source_name:
-            params.append(source_name)
-        params.extend([kb_id, *like, kb_id])
-        if source_name:
-            params.append(source_name)
-        sql = (
-            "SELECT * FROM graph_edges e WHERE e.kb_id=? AND"
-            f" ({type_clause}){source_clause}"
-            " UNION SELECT e.* FROM graph_edges e JOIN graph_nodes n"
-            " ON n.kb_id=e.kb_id AND (n.node_id=e.source OR n.node_id=e.target)"
-            f" WHERE n.kb_id=? AND ({label_clause}) AND e.kb_id=?{source_clause}"
-            " ORDER BY source, target, type, seq LIMIT ?"
-        )
-        params.append(int(limit))
-        current: tuple[str, str] | None = None
-        parallel: dict[int, dict] = {}
-        for row in self.state.rows(sql, tuple(params)):
-            pair = (str(row["source"]), str(row["target"]))
-            if pair != current:
-                if current is not None:
-                    yield current, parallel
-                current, parallel = pair, {}
-            parallel[len(parallel)] = edge_attrs(row)
-        if current is not None:
-            yield current, parallel
+        return graph_candidates.edge_types(self, kb_id)
 
     #: Rows per page when scanning a whole table. Big enough that a 630k-node
     #: graph is 126 round trips rather than 630, small enough that a page is
