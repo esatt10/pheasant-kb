@@ -8,6 +8,7 @@ behavior is identical to pre-32.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,7 @@ class AclTestConnector(SourceConnector):
         return ConnectorPayload(item=item, content=text.encode(), mime_type="text/plain")
 
 
-def _config(tmp_path: Path, *, enforced: bool) -> Any:
+def _config(tmp_path: Path, *, enforced: bool, storage: str = "") -> Any:
     config_path = tmp_path / "pheasant.yaml"
     config_path.write_text(
         f"""pheasant:
@@ -60,7 +61,7 @@ def _config(tmp_path: Path, *, enforced: bool) -> Any:
   state_path: {tmp_path / "state"}
   exports_path: {tmp_path / "exports"}
   workspace_root: {tmp_path}
-security:
+{storage}security:
   acl_enforced: {str(enforced).lower()}
   groups:
     carol:
@@ -114,7 +115,7 @@ def test_leak_gate_principal_scoping(synced_tools: PheasantTools) -> None:
     seen = _titles(synced_tools, "project handbook", principal="user:carol")
     assert "eng-runbook.txt" in seen
 
-    # Hybrid mode is equally scoped (graph nodes conservatively denied).
+    # Hybrid mode is equally scoped (graph hits judged by the file that owns them).
     payload = synced_tools.search_context(
         "acl-test", "project handbook", mode="hybrid", max_results=10, principal="user:alice"
     )
@@ -306,3 +307,85 @@ def test_enforcement_off_leaves_memory_visible_to_everyone(tmp_path) -> None:
         assert "keeps the calendar" in str(payload.get("results") or []).lower()
     finally:
         tools.engine.close()
+
+
+def test_acl_subject_judges_only_file_owned_nodes_by_their_owner() -> None:
+    from pheasant.security.acl import acl_subject
+
+    owner = "file:docs:alice-notes.txt:branch=none"
+    for node_type in ("chunk", "heading", "symbol"):
+        assert acl_subject(f"{node_type}:x", node_type, owner) == owner
+    # Shared across every file that mentions them: the artifact_id they carry
+    # is the last writer, not an owner, so they are judged by their own id
+    # (which resolves to no artifact row, and is withheld).
+    for node_type in ("entity", "external_reference", "relationship", "directory"):
+        assert acl_subject(f"{node_type}:x", node_type, owner) == f"{node_type}:x"
+    assert acl_subject("symbol:kb:docs:call:open", "symbol", None) == "symbol:kb:docs:call:open"
+    assert acl_subject(owner, "file", None) == owner
+
+
+def _graph_hits(tools: PheasantTools, query: str, principal: str | None) -> list[dict]:
+    payload = tools.search_context(
+        "acl-test", query, mode="graph", max_results=50, principal=principal
+    )
+    return payload["results"]
+
+
+POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def graph_tools(request, tmp_path: Path):
+    """The enforcement corpus on each backend: the filter reads `artifacts` there."""
+
+    storage = ""
+    if request.param == "postgres":
+        if not POSTGRES_DSN:
+            pytest.skip("set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
+        storage = "storage:\n  backend: postgres\n  dsn_env: PHEASANT_TEST_POSTGRES_DSN\n"
+    connector_registry.reset_connector_registry()
+    connector_registry.register_connector_class("acltest", AclTestConnector)
+    tools = PheasantTools(_config(tmp_path, enforced=True, storage=storage))
+    tools.sync_source("acl-test", "docs", "full")
+    yield tools
+    tools.engine.close()
+    connector_registry.reset_connector_registry()
+
+
+def test_graph_hits_are_judged_by_the_file_that_owns_them(
+    graph_tools: PheasantTools,
+) -> None:
+    """A chunk of a file the caller may read is a graph hit; one they may not is not.
+
+    The search filter used to judge a graph hit by its own node id, which is an
+    artifact row only for file nodes -- so under enforcement every chunk,
+    heading and symbol hit was withheld, readable or not, and the graph arm
+    contributed almost nothing (4.6% of its hits on a 60k-chunk region).
+    """
+
+    alice = _graph_hits(graph_tools, "mercury launch codes", "user:alice")
+    owned = [hit for hit in alice if hit.get("type") in {"chunk", "heading", "symbol"}]
+    assert owned, alice
+    assert {hit["artifact_id"] for hit in owned} <= {
+        "file:docs:alice-notes.txt:branch=none",
+        "file:docs:handbook.txt:branch=none",
+    }
+
+    for principal in ("user:bob", None):
+        leaked = [
+            hit
+            for hit in _graph_hits(graph_tools, "mercury launch codes", principal)
+            if "alice-notes" in str(hit.get("artifact_id") or hit.get("node_id"))
+            or "mercury" in str(hit).lower()
+        ]
+        assert not leaked, leaked
+
+    # Shared stubs carry the artifact_id of whichever file wrote them last, so
+    # they are never admitted on its strength.
+    for principal in ("user:alice", "user:bob", None):
+        shared = [
+            hit
+            for hit in _graph_hits(graph_tools, "project mercury gemini apollo", principal)
+            if hit.get("type") in {"entity", "external_reference"}
+        ]
+        assert not shared, shared
