@@ -499,14 +499,16 @@ select.text-input {
      the chat landed in an 8px column and the graph in the chat's. A named
      area cannot be taken by a sibling.
 
-     The three columns hold the Notebook's tiles (`components/Tiles.tsx`).
-     Each side track is computed per render (`--nb-left`, `--nb-right`): the
+     The four columns hold the Notebook's tiles (`components/Tiles.tsx`).
+     Each side track is computed per render (`--nb-left`, `--nb-inner`,
+     `--nb-right`): the
      column's width, a 44px spine when all its tiles are folded, a drop strip
      while a tile is being dragged, or nothing when it is empty. */
   grid-template-columns:
-    var(--nb-left, var(--rail, 280px)) var(--nb-lgrip, 8px) minmax(0, 1fr)
+    var(--nb-left, var(--rail, 280px)) var(--nb-lgrip, 8px)
+    var(--nb-inner, 0px) var(--nb-igrip, 0px) minmax(0, 1fr)
     var(--nb-rgrip, 8px) var(--nb-right, var(--panel, 400px));
-  grid-template-areas: "left lgrip center rgrip right";
+  grid-template-areas: "left lgrip inner igrip center rgrip right";
   height: 100%;
   gap: 6px;
   padding: 12px;
@@ -1559,6 +1561,8 @@ select.text-input {
 
 .notebook > .tile-col--left { grid-area: left; }
 .notebook > .resizer--rail { grid-area: lgrip; }
+.notebook > .tile-col--inner { grid-area: inner; }
+.notebook > .drag-handle--x { grid-area: igrip; align-self: stretch; }
 .notebook > .tile-col--center { grid-area: center; }
 .notebook > .resizer--panel { grid-area: rgrip; }
 .notebook > .tile-col--right { grid-area: right; }
@@ -4592,6 +4596,7 @@ select.text-input {
   writing-mode: horizontal-tb;
 }
 .tile-col--left .tile-col__placeholder,
+.tile-col--inner .tile-col__placeholder,
 .tile-col--right .tile-col__placeholder { writing-mode: vertical-rl; }
 
 /* ------------------------------------------------ source browser (taxonomy) */
@@ -4757,9 +4762,11 @@ select.text-input {
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--border);
 }
-.viewer__title-row { display: flex; align-items: center; gap: 10px; }
+/* Wraps rather than squeezing the name to nothing: the viewer can sit in a
+   column a few hundred pixels wide. */
+.viewer__title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .viewer__icon { font-size: 20px; line-height: 1; }
-.viewer__title { flex: 1; min-width: 0; }
+.viewer__title { flex: 1 1 140px; min-width: 0; }
 .viewer__name {
   font-weight: 650;
   font-size: 14px;

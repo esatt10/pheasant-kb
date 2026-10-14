@@ -38,7 +38,7 @@ export interface PathScope {
 }
 
 /**
- * The source browser above the chat: which folder it shows and which file is
+ * The source browser beside the chat: which folder it shows and which file is
  * open beside it. `source: null` is the level above every source.
  */
 export interface BrowserState {
@@ -49,19 +49,21 @@ export interface BrowserState {
 }
 
 /**
- * The Notebook's sections, arranged as tiles in three columns. A tile can be
+ * The Notebook's sections, arranged as tiles in four columns: sources, the
+ * taxonomy view, the chat and the graph, left to right. A tile can be
  * dragged to another column or to another place in its own, and every tile
- * folds to its header.
+ * folds to its header. A column with nothing in it takes no width.
  */
 export type TileId = "sources" | "taxonomy" | "chat" | "graph";
-export type TileColumn = "left" | "center" | "right";
+export type TileColumn = "left" | "inner" | "center" | "right";
 export type TileLayout = Record<TileColumn, TileId[]>;
 
-export const TILE_COLUMNS: TileColumn[] = ["left", "center", "right"];
+export const TILE_COLUMNS: TileColumn[] = ["left", "inner", "center", "right"];
 
 export const DEFAULT_TILE_LAYOUT: TileLayout = {
   left: ["sources"],
-  center: ["taxonomy", "chat"],
+  inner: ["taxonomy"],
+  center: ["chat"],
   right: ["graph"],
 };
 
@@ -124,7 +126,9 @@ export interface SessionState {
   /** Pane widths in px. The graph pane in particular needs to be growable. */
   railWidth: number;
   panelWidth: number;
-  /** The source browser, shown above the chat when open. */
+  /** Width of the column between the sources and the chat (the taxonomy view's), in px. */
+  innerWidth: number;
+  /** The source browser, shown beside the chat when open. */
   browser: BrowserState;
   /** Browser folded to its header strip, giving the chat the height. */
   browserCollapsed: boolean;
@@ -152,6 +156,7 @@ export interface SessionState {
 
 export const DEFAULT_RAIL_WIDTH = 280;
 export const DEFAULT_PANEL_WIDTH = 400;
+export const DEFAULT_INNER_WIDTH = 560;
 
 export const DEFAULT_BROWSER_HEIGHT = 420;
 export const DEFAULT_TREE_WIDTH = 260;
@@ -186,6 +191,7 @@ const INITIAL: SessionState = {
   answerDepth: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
+  innerWidth: DEFAULT_INNER_WIDTH,
   browser: { open: false, source: null, path: "", file: null },
   browserCollapsed: false,
   chatCollapsed: false,
@@ -221,7 +227,7 @@ export type SessionAction =
   | { type: "new-conversation" }
   | { type: "new-topic" }
   | { type: "set-answer-depth"; depth: AnswerDepth | null }
-  | { type: "set-pane-width"; pane: "rail" | "panel" | "browser" | "tree"; width: number }
+  | { type: "set-pane-width"; pane: "rail" | "panel" | "inner" | "browser" | "tree"; width: number }
   | { type: "open-browser"; source: string | null; path?: string }
   | { type: "open-file"; file: OpenFile }
   | { type: "close-file" }
@@ -360,7 +366,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "answered": {
       const surfaced = surfacedFrom(action.answer);
       // `@taxonomy` answers from the index and, here, also opens the browser
-      // at the folder it listed, above the chat.
+      // at the folder it listed.
       const browsed = browsedFrom(action.answer);
       const opened = browsed ? openBrowser(state, browsed.source, browsed.path) : null;
       // An answer that cites the document open in the viewer re-opens it at
@@ -402,6 +408,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "set-pane-width": {
       const width = Math.round(action.width);
       if (action.pane === "rail") return { ...state, railWidth: width };
+      if (action.pane === "inner") return { ...state, innerWidth: width };
       if (action.pane === "browser") return { ...state, browserHeight: width };
       if (action.pane === "tree") return { ...state, browserTreeWidth: width };
       return { ...state, panelWidth: width };
@@ -572,6 +579,7 @@ const PERSISTED_KEYS = [
   "answerDepth",
   "railWidth",
   "panelWidth",
+  "innerWidth",
   "railCollapsed",
   "panelCollapsed",
   "browser",
@@ -601,6 +609,7 @@ function hydrate(): SessionState {
       answerDepth: saved.answerDepth ?? INITIAL.answerDepth,
       railWidth: Number(saved.railWidth) || DEFAULT_RAIL_WIDTH,
       panelWidth: Number(saved.panelWidth) || DEFAULT_PANEL_WIDTH,
+      innerWidth: Number(saved.innerWidth) || DEFAULT_INNER_WIDTH,
       browser: hydrateBrowser(saved.browser),
       browserCollapsed: saved.browserCollapsed === true,
       chatCollapsed: saved.chatCollapsed === true,

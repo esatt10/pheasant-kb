@@ -11,7 +11,7 @@ import { colorForNode } from "../graph/graphStyles";
  *
  * Selecting a source scopes both retrieval and the graph to it — the same
  * "which of my sources am I asking about" control, applied once. "browse"
- * opens it as folders and files in the taxonomy view above the chat.
+ * opens it as folders and files in the taxonomy view beside the chat.
  */
 export function SourceRail({
   sources,
@@ -56,7 +56,7 @@ export function SourceRail({
             <button
               className="btn btn--small"
               onClick={() => onBrowse(selected)}
-              title="Browse folders and files above the chat (@taxonomy)"
+              title="Browse folders and files beside the chat (@taxonomy)"
             >
               Browse
             </button>
@@ -150,7 +150,7 @@ export function SourceRail({
                   <button
                     className="btn btn--small btn--ghost"
                     onClick={() => onBrowse(source.name)}
-                    title={`Browse ${source.name}'s folders and files above the chat`}
+                    title={`Browse ${source.name}'s folders and files beside the chat`}
                   >
                     browse
                   </button>

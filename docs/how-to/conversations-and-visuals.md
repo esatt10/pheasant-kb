@@ -189,7 +189,7 @@ keywords later in a sentence and email addresses are just text.
 | Keyword | Answers with |
 |---|---|
 | `@source <name>`, `@doc <path>`, `@docs …`, `@links …`, `@more` | Shorthand for `@pheasant source …`, `document …`, `documents …`, `links …`, `more`. From the index, no search, no model. |
-| `@taxonomy [source] [folder]` (`@browse`, `@folders`) | One folder of a source as folders and files, from the index with no model; alone, the sources. In the web UI it also opens the taxonomy view above the chat at that folder, on the source the chat is scoped to when none is named. |
+| `@taxonomy [source] [folder]` (`@browse`, `@folders`) | One folder of a source as folders and files, from the index with no model; alone, the sources. In the web UI it also opens the taxonomy view beside the chat at that folder, on the source the chat is scoped to when none is named. |
 | `@current` (`@this`) | Only the open document: every search the answer runs, and any `@pheasant` lookup (`@current @doc` describes it, `@current @links` lists its links). |
 | `@dir` (`@directory`, `@cwd`) | Only the folder being browsed, or the open document's folder: answers, `@search`, and listings (`@dir @docs`, `@pheasant how many documents @dir`, `@dir @taxonomy`). |
 | `@exclude <name>[,<name>…]` (`@omit`, `@without`) | Leave documents out: a file name, a path, `source/path` or an artifact id; quote a name with spaces. Combines with everything above (`@dir @exclude deploy.md @docs`). A name that matches nothing is said in a note. |

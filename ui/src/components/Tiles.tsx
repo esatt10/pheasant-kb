@@ -6,7 +6,7 @@ import { TILE_COLUMNS } from "../state/session";
 
 /**
  * The Notebook's tiles: sections that can be dragged between and within the
- * three columns, and folded to their header wherever they are.
+ * four columns, and folded to their header wherever they are.
  *
  * Each tile's content is rendered once, through a portal, into a host element
  * that is *moved* to wherever the tile currently sits. Moving a tile therefore
@@ -181,6 +181,7 @@ export function TileColumnView({
   defaultStackHeight,
   onStackHeight,
   spine,
+  columnRef: givenRef,
 }: {
   column: TileColumn;
   tiles: TileSpec[];
@@ -189,9 +190,12 @@ export function TileColumnView({
   onStackHeight: (height: number) => void;
   /** Draw folded tiles as vertical spines (a side column with nothing unfolded). */
   spine: boolean;
+  /** The column element, for a caller that measures it (the inner column's resizer). */
+  columnRef?: RefObject<HTMLDivElement>;
 }) {
   const drag = useContext(TileDragContext);
-  const columnRef = useRef<HTMLDivElement>(null);
+  const ownRef = useRef<HTMLDivElement>(null);
+  const columnRef = givenRef ?? ownRef;
   const firstOpenRef = useRef<HTMLDivElement>(null);
   const [drop, setDrop] = useState<{ before: TileId | null } | null>(null);
   const visible = tiles.filter((tile) => tile.visible);

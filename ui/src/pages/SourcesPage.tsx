@@ -225,7 +225,7 @@ export function SourcesPage() {
                     dispatch({ type: "open-browser", source: source.name, path: "" });
                     navigate("/");
                   }}
-                  title="Browse its folders and files in the workspace, above the chat"
+                  title="Browse its folders and files in the workspace, beside the chat"
                 >
                   browse
                 </button>

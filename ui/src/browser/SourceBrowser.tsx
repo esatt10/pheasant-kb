@@ -13,7 +13,7 @@ import { fileIcon, formatBytes } from "./fileIcons";
 const PAGE_SIZE = 200;
 
 /**
- * The taxonomy view: a source as a file collection, above the chat.
+ * The taxonomy view: a source as a file collection, beside the chat.
  *
  * The left column is one folder at a time — sub-folders with how many
  * documents each holds, then files — walked down by opening a folder and back

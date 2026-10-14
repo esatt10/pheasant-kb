@@ -1027,8 +1027,9 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   mount. A read is the indexed file only while its sha256 still matches,
   otherwise the chunks reassembled with their overlap removed; a workbook is
   re-extracted from its original (the indexed text loses its tabs). The web
-  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) sits above the chat in
-  the main column by default. Every Notebook section is a tile
+  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) has its own column
+  between the sources and the chat by default (above the chat in a narrow
+  window). Every Notebook section is a tile
   (`ui/src/components/Tiles.tsx`): dragged by its grip (or arrow keys) to any
   column, folded to its header anywhere, and portalled so a move never
   remounts it (a streaming answer keeps streaming); placement is deliberately

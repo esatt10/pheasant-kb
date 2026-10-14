@@ -547,7 +547,7 @@ function AnswerTurn({
   // empty one is just its sentence.
   const { state, dispatch } = useSession();
   const browsed = browsedFrom(answer);
-  // A folder listing is its own view (the browser above the chat), so it is
+  // A folder listing is its own view (the browser beside the chat), so it is
   // never drawn as the paged documents table.
   const listing =
     answer.inventory?.page && answer.inventory.page.total > 0 && !browsed
@@ -624,7 +624,7 @@ function AnswerTurn({
             type="button"
             className="btn btn--small"
             onClick={() => dispatch({ type: "open-browser", source: browsed.source, path: browsed.path })}
-            title="Show this folder in the source browser above the chat"
+            title="Show this folder in the source browser beside the chat"
           >
             Open in the taxonomy view
           </button>

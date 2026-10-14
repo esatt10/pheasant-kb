@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DragHandle } from "../browser/DragHandle";
 import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -30,6 +31,7 @@ import type { TileSpec } from "../components/Tiles";
 import {
   DEFAULT_BROWSER_HEIGHT,
   DEFAULT_DEPTH,
+  DEFAULT_INNER_WIDTH,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_RAIL_WIDTH,
   useSession,
@@ -46,8 +48,8 @@ const SourceBrowser = lazy(() =>
 );
 
 /**
- * The workspace: sources on the left, conversation in the middle, knowledge on
- * the right — by default. Each section is a tile (`components/Tiles.tsx`)
+ * The workspace: sources on the left, the taxonomy view beside the chat when
+ * it is open, conversation in the middle, knowledge on the right — by default. Each section is a tile (`components/Tiles.tsx`)
  * that can be dragged to another column or another place in its own, and
  * folds to its header wherever it is; a reload puts every tile back. Asking a
  * question drives the graph — the canvas filters to the nodes the answer
@@ -63,6 +65,7 @@ export function Notebook() {
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [showWorkflowDialog, setShowWorkflowDialog] = useState(false);
   const layoutRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
 
   const overview = useQuery({
     queryKey: ["overview"],
@@ -166,11 +169,13 @@ export function Notebook() {
   const compact = useMediaQuery("(max-width: 860px)");
   const layout = useMemo<TileLayout>(() => {
     if (!narrow) return state.tiles;
+    // The taxonomy view goes back above the chat, where it fits a narrow window.
     const left = state.tiles.left.filter((tile) => tile !== "sources");
     const right = compact ? state.tiles.right.filter((tile) => tile !== "graph") : [];
     return {
       left: [],
-      center: [...left, ...state.tiles.center, ...right],
+      inner: [],
+      center: [...left, ...state.tiles.inner, ...state.tiles.center, ...right],
       right: compact ? [] : state.tiles.right,
     };
   }, [state.tiles, narrow, compact]);
@@ -235,7 +240,12 @@ export function Notebook() {
     },
   };
   const visibleIds = (column: TileColumn) => layout[column].filter((id) => specs[id].visible);
-  const columns = { left: visibleIds("left"), center: visibleIds("center"), right: visibleIds("right") };
+  const columns = {
+    left: visibleIds("left"),
+    inner: visibleIds("inner"),
+    center: visibleIds("center"),
+    right: visibleIds("right"),
+  };
   const sideOpen = (column: TileColumn) => columns[column].some((id) => !specs[id].collapsed);
   /** A side column's track: its width, a spine, a drop strip while dragging, or nothing. */
   const sideTrack = (column: TileColumn, width: string) =>
@@ -260,6 +270,7 @@ export function Notebook() {
           : dispatch({ type: "set-stack-height", column, height })
       }
       spine={column !== "center" && columns[column].length > 0 && !sideOpen(column)}
+      columnRef={column === "inner" ? innerRef : undefined}
     />
   );
 
@@ -280,8 +291,11 @@ export function Notebook() {
         {
           "--rail": `${state.railWidth}px`,
           "--panel": `${state.panelWidth}px`,
+          "--inner": `${state.innerWidth}px`,
           "--nb-left": sideTrack("left", "var(--rail)"),
           "--nb-lgrip": sideOpen("left") ? "8px" : "0px",
+          "--nb-inner": sideTrack("inner", "var(--inner)"),
+          "--nb-igrip": sideOpen("inner") ? "8px" : "0px",
           "--nb-rgrip": sideOpen("right") ? "8px" : "0px",
           "--nb-right": sideTrack("right", "var(--panel)"),
         } as CSSProperties
@@ -298,6 +312,20 @@ export function Notebook() {
           defaultWidth={DEFAULT_RAIL_WIDTH}
           label="Resize the left column"
           onCommit={(width) => dispatch({ type: "set-pane-width", pane: "rail", width })}
+        />
+      ) : null}
+      {columnView("inner")}
+      {sideOpen("inner") ? (
+        <DragHandle
+          axis="x"
+          variable="--inner"
+          containerRef={layoutRef}
+          startRef={innerRef}
+          min={280}
+          max={(box) => box.width - 360}
+          defaultSize={DEFAULT_INNER_WIDTH}
+          label="Resize the column beside the chat"
+          onCommit={(width) => dispatch({ type: "set-pane-width", pane: "inner", width })}
         />
       ) : null}
       {columnView("center")}

@@ -52,7 +52,7 @@ export function SourceStrip({
   onSelect: (citation: Citation) => void;
   /** "Visualize this passage": a diagram grounded in this one source. */
   onVisualize?: (citation: Citation) => void;
-  /** Open the cited file in the viewer above the chat, at the cited passage. */
+  /** Open the cited file in the viewer beside the chat, at the cited passage. */
   onOpen?: (citation: Citation) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
