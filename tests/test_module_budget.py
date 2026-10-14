@@ -60,7 +60,9 @@ CEILINGS: dict[str, int] = {
     "cli.py": 3200,
     # Typed query budgets, admission, and MCP request-size validation belong
     # with their dataclass settings; this explicit raise accounts for that field.
-    "config/schema.py": 2260,
+    # Raised by 14 for the vector store's resident/ANN settings (seven fields,
+    # one comment line each; their rationale lives in search/vector_*.py).
+    "config/schema.py": 2274,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

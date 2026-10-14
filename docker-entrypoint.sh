@@ -101,6 +101,38 @@ index_workspace_if_present() {
     fi
 }
 
+# Size the BLAS thread pools to the container's CPU quota. numpy's OpenBLAS
+# starts one thread per *host* core, and under a quota (compose `cpus:`, a
+# pod's CPU limit) those threads spend the period's quota in a burst and are
+# then throttled for the rest of it: on the 1-CPU api tier a resident vector
+# scan (search.vector_store.resident) measured 9.5 ms p50 but 86 ms p95 with
+# four threads, and 29 ms flat with one. Only when nothing set them already,
+# never above the core count, and nothing at all without a quota.
+cpu_quota_threads() {
+    root="${PHEASANT_CGROUP_ROOT:-/sys/fs/cgroup}"
+    quota=""
+    period=""
+    if [ -r "$root/cpu.max" ]; then
+        read -r quota period < "$root/cpu.max" || true
+    elif [ -r "$root/cpu/cpu.cfs_quota_us" ] && [ -r "$root/cpu/cpu.cfs_period_us" ]; then
+        quota=$(cat "$root/cpu/cpu.cfs_quota_us")
+        period=$(cat "$root/cpu/cpu.cfs_period_us")
+    fi
+    case "$quota" in ""|max|-*) return 1 ;; esac
+    [ "${period:-0}" -gt 0 ] 2>/dev/null || return 1
+    threads=$(( (quota + period - 1) / period ))
+    cores=$(nproc 2>/dev/null || echo "$threads")
+    [ "$threads" -gt "$cores" ] && threads=$cores
+    [ "$threads" -lt 1 ] && threads=1
+    echo "$threads"
+}
+
+if blas_threads=$(cpu_quota_threads); then
+    : "${OPENBLAS_NUM_THREADS:=$blas_threads}" "${OMP_NUM_THREADS:=$blas_threads}"
+    : "${MKL_NUM_THREADS:=$blas_threads}"
+    export OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS
+fi
+
 ensure_config || true
 
 case "${1:-serve}" in

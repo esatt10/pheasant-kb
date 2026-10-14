@@ -476,6 +476,20 @@ class VectorStoreSettings(ModelMixin):
 
     provider: str = "lancedb"
     path: Path | None = None
+    #: Exact search from an in-memory copy, ~8x faster; per replica. vector_resident.py
+    resident: bool = False
+    #: Above this the table is not held and the disk scan answers.
+    resident_max_mb: int = 1024
+    #: none (exact) | ivf_hnsw_sq | ivf_pq: approximate, trades recall. vector_ann.py
+    ann_index: str = "none"
+    #: Rows below which no index is built.
+    ann_min_rows: int = 50_000
+    #: Partitions searched per query: more is slower and closer to exact.
+    ann_nprobes: int = 32
+    #: HNSW candidate list size (raised to k when k is larger).
+    ann_ef: int = 600
+    #: IVF_PQ only: re-rank k x factor candidates on full vectors.
+    ann_refine_factor: int | None = 10
 
 
 @dataclass
