@@ -543,6 +543,18 @@ def register_default_metrics(version: str) -> None:
         "responses and are indistinguishable downstream.",
         ("arm", "outcome"),
     )
+    REGISTRY.counter(
+        "pheasant_retrieval_lexical_total",
+        "Text-arm searches by the mechanism that ranked them. index: "
+        "'pg_textsearch' (BM25 index), 'tsvector', 'fts5' (SQLite) or 'like' "
+        "(the last-resort scan). path, for pg_textsearch: 'index' (one fenced "
+        "scan), 'widened' (a selective filter needed a deeper scan) or "
+        "'unfenced' (too selective for any scan depth; the planner chose). For "
+        "tsvector: 'configured', 'weights_differ' (a tuning bundle moved a "
+        "column weight off the index's), 'no_terms' or 'bm25_failed'. On a "
+        "Postgres region anything but pg_textsearch is the slow path.",
+        ("index", "path"),
+    )
     REGISTRY.histogram(
         "pheasant_retrieval_arm_candidates",
         "Candidates an arm returned before any filter ran.",

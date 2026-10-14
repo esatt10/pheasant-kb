@@ -38,7 +38,15 @@ from pheasant.search.pg_textsearch import bm25_counts_for, bm25_query_text, pg_t
 from pheasant.search.ranking import RankingParameters
 from pheasant.search.sqlite_store import SearchStore
 from pheasant.sync.engine import SyncEngine
+from pheasant.telemetry import metrics
 from tests.test_backend_parity import DSN, GOLD, _config, _corpus, _reset
+
+
+def _lexical(index: str, path: str) -> float:
+    # Registered at server start; idempotent, and keeps recorded values.
+    metrics.register_default_metrics("test")
+    return metrics.REGISTRY.value("pheasant_retrieval_lexical_total", index=index, path=path) or 0.0
+
 
 DEFAULT_COUNTS = (8, 3, 2, 1)
 
@@ -49,6 +57,16 @@ DEFAULT_COUNTS = (8, 3, 2, 1)
 def test_postgres_ranks_with_pg_textsearch_by_default() -> None:
     config = PheasantConfig.model_validate({"pheasant": {"name": "kb"}})
     assert config.storage.lexical_index == "pg_textsearch"
+
+
+def test_sqlite_searches_are_counted_as_fts5(tmp_path: Path) -> None:
+    """The standalone default reports itself, so a dashboard never shows a gap."""
+
+    store = StateStore(tmp_path / "state.db")
+    store.migrate()
+    before = _lexical("fts5", "sqlite")
+    SearchStore(store).search("anything at all")
+    assert _lexical("fts5", "sqlite") == before + 1
 
 
 def test_sqlite_ranks_with_fts5_whatever_the_setting_says(tmp_path: Path) -> None:
@@ -125,7 +143,49 @@ def test_the_index_and_the_query_spell_one_expression() -> None:
     # merges them and the score is recomputed per row — see the docstring.
     assert "to_bm25query('gateway restarts', 'idx_chunks_fts_bm25_w8_3_2_1')" in sql
     assert "'idx_chunks_fts_bm25_w8_3_2_1:gateway restarts'::bm25query" in sql
-    assert params == ["docs", 50, 10]
+    # Placeholder order is textual: the filters judged outside the scan come
+    # before the scan's own limit, then the candidate depth and the cut.
+    assert params == ["docs", 50, 50, 10]
+
+
+def test_nothing_is_joined_beside_the_ordered_scan() -> None:
+    """The BM25 scan is fenced off from every join, which is what keeps its index.
+
+    With the memory policy's ``LEFT JOIN`` (or any filter needing a join) in
+    the same query as ``ORDER BY … <@>``, the planner was free to read every
+    passing row and sort them by ``<@>``, scoring each chunk standalone: 9 s
+    a search on a 53k-chunk region, the index never touched, while the SQL
+    still said BM25. So the subquery holding the ordered scan must name
+    ``chunks_fts`` alone, with only the scan's own filter, and the joined
+    filters must sit outside it.
+    """
+
+    sql, params = pg_textsearch_sql(
+        "gateway",
+        DEFAULT_COUNTS,
+        prior_sql="1.0",
+        prior_params=[],
+        memory_join="LEFT JOIN memory_records ON memory_records.artifact_id = chunks.artifact_id",
+        filter_where=" AND memory_records.record_id IS NULL AND artifacts.relative_path <> ?",
+        filter_params=["notes.md"],
+        max_results=10,
+        scan_where=" AND chunks_fts.source_id = ?",
+        scan_params=["docs"],
+        scan_limit=200,
+    )
+    order_by = sql.index("::bm25query")
+    scan = sql[sql.rindex("FROM chunks_fts", 0, order_by) : order_by]
+    assert "JOIN" not in scan and "memory_records" not in scan and "artifacts" not in scan
+    assert "chunks_fts.source_id = ?" in scan
+    assert "WITH" not in sql  # a CTE fence loses the score reuse; see the docstring
+    assert params == ["notes.md", "docs", 200, 50, 10]
+
+
+def test_widening_the_scan_steps_up_to_its_ceiling() -> None:
+    assert pg_textsearch.bm25_scan_limits(10, filtered=False) == [50]
+    limits = pg_textsearch.bm25_scan_limits(10, filtered=True)
+    assert limits[0] == 200 and limits[-1] == pg_textsearch._BM25_SCAN_CEILING
+    assert limits == sorted(set(limits))
 
 
 def test_a_zero_weight_column_is_left_out_of_the_document() -> None:
@@ -256,7 +316,9 @@ def test_the_gold_set_ranks_correctly_including_the_tsvector_residual(indexed) -
 
 def test_the_bm25_index_is_what_answers(indexed, monkeypatch) -> None:
     seen = _capture_lexical_sql(monkeypatch, indexed.state)
+    before = _lexical("pg_textsearch", "index")
     assert _ranked(indexed, "invoices generated monthly")[:1] == ["billing.md"]
+    assert _lexical("pg_textsearch", "index") == before + 1
     assert any("<@>" in sql for sql in seen)
     # And not the tsvector path's document-frequency round trip.
     assert not any("to_tsquery" in sql for sql in seen)
@@ -362,7 +424,9 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
                 for row in conn.execute("EXPLAIN (VERBOSE) " + statement, params).fetchall()
             )
             rows = conn.execute(statement, params).fetchall()
-        return plan, [(str(row[0]), float(row[10])) for row in rows]
+        # Column 11 is `admits`: the statement keeps rows that did not match
+        # (sorted last, for its counts) and the caller drops them, as here.
+        return plan, [(str(row[0]), float(row[10])) for row in rows if row[11]]
 
     reused_plan, reused = run("SET enable_seqscan = off")
     standalone_plan, standalone = run("SET enable_indexscan = off")
@@ -377,10 +441,93 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
     assert len({round(score, 6) for _, score in reused}) > 1
 
 
+def _unfenced(state, query: str, **kwargs) -> list[str]:
+    """What the statement before the fence returned, for the same search."""
+
+    from pheasant.search import sqlite_store
+
+    def unfenced(state, text, counts, **parts):
+        sql, params = pg_textsearch.pg_textsearch_unfenced_sql(
+            text,
+            counts,
+            prior_sql=parts["prior_sql"],
+            prior_params=parts["prior_params"],
+            memory_join=parts["memory_join"],
+            filter_where=parts["source_where"] + parts["joined_where"],
+            filter_params=[*parts["source_params"], *parts["joined_params"]],
+            max_results=parts["max_results"],
+        )
+        return state.rows(sql, tuple(params)), "unfenced"
+
+    fenced = sqlite_store.bm25_rows
+    sqlite_store.bm25_rows = unfenced
+    try:
+        return [hit["relative_path"] for hit in SearchStore(state).search(query, **kwargs)]
+    finally:
+        sqlite_store.bm25_rows = fenced
+
+
+def test_the_fenced_scan_returns_what_the_unfenced_statement_did(indexed, monkeypatch) -> None:
+    """Widening and the fallback change how the rows are found, not which.
+
+    The depths are shrunk so this corpus exercises every branch: a filter
+    the first read satisfies, one that needs the scan widened, and one so
+    selective that the widest scan still falls short and the unfenced
+    statement answers.
+    """
+
+    from pheasant.memory.policy import MemoryPolicy
+
+    monkeypatch.setattr(pg_textsearch, "_BM25_CANDIDATE_FLOOR", 1)
+    monkeypatch.setattr(pg_textsearch, "_BM25_CANDIDATE_FACTOR", 1)
+    monkeypatch.setattr(pg_textsearch, "_BM25_SCAN_HEADROOM", 1)
+    monkeypatch.setattr(pg_textsearch, "_BM25_SCAN_WIDEN", 2)
+    monkeypatch.setattr(pg_textsearch, "_BM25_SCAN_CEILING", 2)
+    steering = SimpleNamespace(
+        exclusions=["notes.md"], prefers=lambda tokens: [], expand=lambda tokens: tokens
+    )
+    cases = [
+        {"max_results": 2},
+        {"max_results": 2, "source_name": "docs"},
+        {"max_results": 1, "steering": steering},
+        {"max_results": 1, "path_prefix": "runbook.md"},
+        {"max_results": 1, "path_prefix": "billing.md"},
+        {
+            "max_results": 3,
+            "memory_policy": MemoryPolicy.parse("prefer"),
+            "memory_now": "2026-10-14T00:00:00Z",
+        },
+    ]
+    store = SearchStore(indexed.state)
+    # The document BM25 ranks second: scoped to it, a one-row first read
+    # misses and the widened second read is what finds it.
+    second = [hit["relative_path"] for hit in store.search("gateway", max_results=4)][1]
+    cases.append({"max_results": 1, "path_prefix": second})
+    seen = _capture_lexical_sql(monkeypatch, indexed.state)
+    widened, unfenced = _lexical("pg_textsearch", "widened"), _lexical("pg_textsearch", "unfenced")
+    statements: list[list[str]] = []
+    for kwargs in cases:
+        seen.clear()
+        fenced = [hit["relative_path"] for hit in store.search("gateway", **kwargs)]
+        statements.append([sql for sql in seen if "<@>" in sql])
+        assert fenced == _unfenced(indexed.state, "gateway", **kwargs), kwargs
+        assert not any("ts_rank_cd" in sql for sql in seen)
+    # Every branch ran: answered by the first read, widened, and fell back to
+    # the unfenced statement (the one without `admits`) — and said so.
+    assert _lexical("pg_textsearch", "widened") > widened
+    assert _lexical("pg_textsearch", "unfenced") > unfenced
+    assert any(len(run) == 1 for run in statements)
+    assert any(len(run) >= 2 for run in statements)
+    assert any("admits" not in run[-1] for run in statements)
+
+
 def test_a_changed_column_weight_ranks_with_tsvector(indexed, monkeypatch) -> None:
     seen = _capture_lexical_sql(monkeypatch, indexed.state)
     store = SearchStore(indexed.state, ranking=RankingParameters(title_weight=4.0))
+    before = _lexical("tsvector", "weights_differ")
     assert store.search("invoices generated monthly")[0]["relative_path"] == "billing.md"
+    # The slow path a tuning bundle can put a whole region on, made visible.
+    assert _lexical("tsvector", "weights_differ") == before + 1
     assert not any("<@>" in sql for sql in seen)
     assert any("ts_rank_cd" in sql for sql in seen)
 

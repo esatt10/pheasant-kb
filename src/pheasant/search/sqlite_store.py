@@ -10,10 +10,11 @@ from pheasant.persistence.state_store import StateStore
 
 # The section predicates live with the other criteria; re-exported for importers.
 from pheasant.search.criteria import path_scope_sql, section_matches, section_needle  # noqa: F401
+from pheasant.search.observability import count_lexical
 from pheasant.search.pg_textsearch import (
     bm25_counts_for,
     bm25_query_text,
-    pg_textsearch_sql,
+    bm25_rows,
     warn_bm25_unavailable,
 )
 from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
@@ -404,14 +405,15 @@ class SearchStore:
         )
         # The filters every lexical query shape applies, as an `AND …` suffix
         # and its params in placeholder order.
-        filter_where = ""
-        filter_params: list[object] = []
-        if source_name:
-            # All three joined Postgres tables carry source_id. Leaving this
-            # unqualified makes the primary query fail as ambiguous and used
-            # to send every scoped search down the corpus-wide LIKE fallback.
-            filter_where += " AND chunks_fts.source_id = ?"
-            filter_params.append(source_name)
+        # All three joined Postgres tables carry source_id. Leaving this
+        # unqualified makes the primary query fail as ambiguous and used to
+        # send every scoped search down the corpus-wide LIKE fallback. It is
+        # the one filter on `chunks_fts`'s own columns, so the BM25 statement
+        # applies it inside its index scan and every other filter outside.
+        source_where = " AND chunks_fts.source_id = ?" if source_name else ""
+        source_params: list[object] = [source_name] if source_name else []
+        filter_where = source_where
+        filter_params: list[object] = list(source_params)
         # Restrict to one section of a document's taxonomy. Pushed into SQL
         # rather than filtered afterwards: a section is a narrow slice, and
         # post-filtering a globally-ranked page of hits can return nothing from
@@ -436,31 +438,42 @@ class SearchStore:
         filter_where += exclusion_where
         filter_params.extend(exclusion_params)
 
+        joined_where = filter_where[len(source_where) :]
+        joined_params = filter_params[len(source_params) :]
         rows: list[Any] | None = None
+        # Which mechanism ranked this search, for `pheasant_retrieval_lexical_total`.
+        lexical: tuple[str, str] = ("fts5", "sqlite")
         bm25_counts = bm25_counts_for(self.state, ranking) if postgres else None
+        if postgres:
+            configured = getattr(self.state, "lexical_index", None) == "pg_textsearch"
+            lexical = ("tsvector", "weights_differ" if configured else "configured")
         bm25_text = bm25_query_text(tokens) if bm25_counts else ""
         # No searchable term at all: the tsvector path below handles that
         # shape already (its LIKE fallback), so there is nothing to win here.
         if bm25_counts and bm25_text:
-            sql, params = pg_textsearch_sql(
-                bm25_text,
-                bm25_counts,
-                prior_sql=prior_sql,
-                prior_params=prior_params,
-                memory_join=memory_join,
-                filter_where=filter_where,
-                filter_params=filter_params,
-                max_results=max_results,
-            )
             started = time.perf_counter()
             try:
-                rows = self.state.rows(sql, tuple(params))
+                rows, path = bm25_rows(
+                    self.state,
+                    bm25_text,
+                    bm25_counts,
+                    prior_sql=prior_sql,
+                    prior_params=prior_params,
+                    memory_join=memory_join,
+                    source_where=source_where,
+                    source_params=source_params,
+                    joined_where=joined_where,
+                    joined_params=joined_params,
+                    max_results=max_results,
+                )
+                lexical = ("pg_textsearch", path)
             except Exception:
                 # Migration refused to start without the extension, so this
                 # is an index dropped or broken since boot. The tsvector
                 # column and its GIN index are always there; rank with them
                 # rather than with the LIKE scan below.
                 warn_bm25_unavailable()
+                lexical = ("tsvector", "bm25_failed")
             finally:
                 from pheasant.request_budget import record_active_timing
 
@@ -470,6 +483,8 @@ class SearchStore:
                     query_terms=len(tokens),
                     lexical_index="pg_textsearch",
                 )
+        elif bm25_counts:
+            lexical = ("tsvector", "no_terms")
         if rows is None:
             rank_sql, rank_params = "", []
             if postgres:
@@ -549,6 +564,7 @@ class SearchStore:
                             query_terms=len(tokens),
                         )
             except Exception:
+                lexical = ("like", "query_failed")
                 fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
                 fallback_params: list[object] = [f"%{query}%", f"%{query}%"]
                 if source_name:
@@ -588,6 +604,7 @@ class SearchStore:
         # nodes are kept — they still back the graph-facts panel and
         # `similar_to` edges, which is what they are actually good at — but
         # they are no longer a retrieval path.
+        count_lexical(*lexical)
         results = []
         for i, row in enumerate(rows, start=1):
             # FTS5 bm25() is a cost: more negative = better. Map it to a

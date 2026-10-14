@@ -398,6 +398,30 @@ counts for more but not eightfold more. Two consequences:
   wrong, and it is logged once. The structural priors, fusion and over-fetch
   parameters apply as usual.
 
+**When the index is not what answers.** `pheasant_retrieval_lexical_total{index,path}`
+on `/metrics` counts every text-arm search by the mechanism that ranked it, so
+this is a number rather than a suspicion. On a Postgres region you want
+`index="pg_textsearch"`. The other rows and what each means:
+
+| `index` | `path` | Why |
+|---|---|---|
+| `pg_textsearch` | `index` | One read of the BM25 index. The normal case. |
+| `pg_textsearch` | `widened` | A selective filter (a folder scope, a section) left too few rows, so the scan was read deeper. Still the index. |
+| `pg_textsearch` | `unfenced` | A filter so selective that the widest scan (8,192 rows) still fell short. Postgres picks the plan, which scores the few passing rows directly. Cheap because so few rows pass. |
+| `tsvector` | `weights_differ` | An applied tuning bundle moved a column weight off the index's. **Every search on the region takes this path** until the config's `search.ranking` matches or the bundle is rolled back (`pheasant tune show`, `pheasant tune rollback`). |
+| `tsvector` | `configured` | `storage.lexical_index: tsvector`. |
+| `tsvector` | `no_terms` | The query had no plain letters or digits for BM25 to read. |
+| `tsvector` | `bm25_failed` | The BM25 query raised (the index dropped or broken since boot); logged once at WARNING. A restart rebuilds it. |
+
+The BM25 index scan runs in a subquery over `chunks_fts` alone, and every
+filter that needs a join (the memory policy, a folder scope, a section, a
+steering exclusion) is applied outside it. Before that, any of those joins in
+the same statement let Postgres drop the index and score every passing chunk
+standalone. The SQL still said BM25, and on a 53k-chunk region the memory
+policy's join cost **9.0 s per search against 32 ms**, a folder scope 640 ms
+against 8 ms. The memory policy applies to every search on a region holding
+one memory record, so that region was on the slow plan all the time.
+
 Source-scoped searches rank with the whole region's corpus statistics rather
 than the source's own, because the index keeps one set per table.
 

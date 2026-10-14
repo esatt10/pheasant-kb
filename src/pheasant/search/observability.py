@@ -217,3 +217,20 @@ def should_sample(rate: float, trace_id: str) -> bool:
     # 400 was sampled.
     digest = hashlib.blake2b(trace_id.encode("utf-8"), digest_size=8).digest()
     return (int.from_bytes(digest, "big") / float(1 << 64)) < rate
+
+
+def count_lexical(index: str, path: str) -> None:
+    """Which lexical mechanism ranked a search. Never raises.
+
+    The text arm has seven ways to answer and they return the same shape, so
+    a region quietly ranking on ``tsvector`` (a bundle moved a column weight)
+    or reaching the unfenced statement on every search looks, from outside,
+    exactly like one on the BM25 index — until somebody times it.
+    """
+
+    try:
+        from pheasant.telemetry import metrics
+
+        metrics.REGISTRY.inc("pheasant_retrieval_lexical_total", index=index, path=path)
+    except Exception:  # noqa: BLE001 - telemetry must never fail a search
+        logger.debug("lexical telemetry failed", exc_info=True)

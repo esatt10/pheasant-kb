@@ -645,7 +645,12 @@ weighting (weight as term frequency, then saturation), and one Block-Max WAND
 top-k scan per search: 3.6 ms against `tsvector`'s 75.5 ms at 20k chunks, 4.7
 against 330.7 at 102k, and the gold set ranks as SQLite does. The weights live
 in the index, so column weights must be integers on Postgres and a bundle that
-moves one is served by `tsvector` until the config matches. The index is built
+moves one is served by `tsvector` until the config matches. The scan runs in a
+subquery over `chunks_fts` alone (the source filter inside it) and every
+filter needing a join is applied outside, widened while too few rows pass and
+handed to an unfenced statement past 8,192; a join beside `ORDER BY <@>` let
+the planner drop the index (see the traps). `pheasant_retrieval_lexical_total
+{index,path}` says which mechanism answered each search. The index is built
 (or dropped, under `tsvector`) at boot, and costs ~1.3-1.5x on chunk writes. A
 server without the extension is a startup refusal; `tsvector` is the stock-
 Postgres way out. SQLite ignores the setting (rule 7). `docs/configuration.md`,
@@ -1133,7 +1138,8 @@ histogram and a counter, neither able to name a stage.
 - **Always on: counters.** `pheasant_retrieval_arm_total{arm,outcome}`,
   `_arm_candidates`, `_filtered_total{filter,arm}`,
   `_fusion_contributions_total{arms}`, `_fusion_depth`, `_truncated_total`,
-  and `_empty_total{stage}` — the live version of the stage histogram. An
+  and `_empty_total{stage}` — the live version of the stage histogram — and
+  `_lexical_total{index,path}`, which mechanism ranked the text arm. An
   in-memory increment per search; **no database write reaches the request
   path**, which is the rule the observation plane's hot tier exists to keep.
   `empty` and `failed` are separate arm outcomes because "the vector index is
@@ -2349,6 +2355,25 @@ Each of these cost real time. They are listed because the shape recurs.
   mutant that dropped its `WHERE`: the statement errored, the `tsvector`
   fallback answered correctly, and every assertion held. A test of a path
   behind a fallback has to assert that the path answered.
+- **A query that says `<@>` is not a query that uses the BM25 index.** The
+  pg_textsearch statement carried every filter beside its `ORDER BY … <@>`,
+  including the memory policy's `LEFT JOIN memory_records`, which applies to
+  every search on a region holding one memory record. With a join there the
+  planner was free to fetch every passing row and sort by `<@>`, which scores
+  each chunk standalone (re-tokenizing it, ~170µs a row): **9.0 s** per search
+  on a 53k-chunk region, against 12 ms on the index, with the SQL still
+  plainly BM25. A folder scope did the same at 640 ms. `<@>` already declares
+  cost 1000, and no setting forces the index, so the scan is fenced: a
+  `FROM (… ORDER BY … LIMIT ?)` subquery over `chunks_fts` alone, joined
+  filters outside, widened while too few rows pass. Not a `MATERIALIZED` CTE,
+  which kept the index but lost the score reuse and re-scored all 800 rows
+  (274 ms). The fenced rows equal the unfenced statement's on every shape
+  tried; the memory case's order changed, because the old plan's standalone
+  scores carry exact lengths and the index's are quantized, so it now ranks
+  exactly as a search without memory does. Found by timing the lab's own
+  query shapes against a real Postgres; the offline suite has no planner.
+  `tests/test_pg_textsearch.py` holds the fence's shape and the equivalence,
+  and the counter makes the path visible in production.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the
