@@ -491,6 +491,13 @@ where it does.
 | `embeddings.query_rate_limit_max_wait_seconds` | number \| null | `null` | Query-only rate-limit wait budget. `null` inherits the indexing value; set `0` to avoid query-time throttling sleeps. |
 | `vector_store.provider` | string | `lancedb` | `lancedb` (optional `[vector]` extra) or `numpy` (always-available flat file). |
 | `vector_store.path` | absolute path | `<state>/vectors` | Vector index root; vectors live under `<path>/<kb_id>/`. Created only when embeddings are enabled. |
+| `vector_store.resident` | bool | `false` | LanceDB only. Hold the table in memory and answer by one matrix product: the **same** top-k, about 8× faster (34 ms against 280 ms for 60k 1,536-d vectors on one core). Costs 4 bytes × dimensions per vector in every process that serves search (372 MB at that size), which is why it is opt-in. A write is picked up by a background reload; until it lands, answers come from the previous version. |
+| `vector_store.resident_max_mb` | int | `1024` | A table larger than this is not held; the disk scan answers. |
+| `vector_store.ann_index` | `none` \| `ivf_hnsw_sq` \| `ivf_pq` | `none` | An approximate index, built and kept current by the indexer at the end of a sync. **Trades recall for latency:** on the pheasant-lab corpus `ivf_hnsw_sq` answered in 41–54 ms against a 245 ms exact scan, keeping 81% of the exact top-40 and 68% of the top-300 for short questions (92% for queries drawn from the corpus) — on offline hashed vectors, which cluster far less than a real model's, so measure your own with `python -m pheasant.search.vector_ann_benchmark`, which reports the in-distribution case. Setting it back to `none` takes effect on the next query (the index is bypassed) and the indexer drops it on its next sync. Prefer `resident` while the vectors fit in memory. |
+| `vector_store.ann_min_rows` | int | `50000` | No index below this many vectors. |
+| `vector_store.ann_nprobes` | int | `32` | Partitions searched per query: more is slower and closer to exact. |
+| `vector_store.ann_ef` | int | `600` | `ivf_hnsw_sq` candidate list size, raised to k when k is larger. |
+| `vector_store.ann_refine_factor` | int \| null | `10` | `ivf_pq` only: re-rank k × factor candidates on full vectors. |
 | `ranking.prefer_exact_path_matches` | bool | `true` (example) | Boost exact path matches. |
 | `ranking.prefer_recent_commits` | bool | `true` (example) | Boost content tied to recent commits. |
 | `ranking.graph_neighbor_boost` | bool | `true` (example) | Boost graph-adjacent matches. |

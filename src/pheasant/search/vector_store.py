@@ -896,8 +896,24 @@ class LanceDBVectorStore:
     #: rather than never.
     CLEANUP_OLDER_THAN = timedelta(hours=1)
 
-    def __init__(self, directory: str | Path):
+    def __init__(self, directory: str | Path, settings: Any = None):
+        from pheasant.config.schema import VectorStoreSettings
+        from pheasant.search.vector_resident import ResidentVectors
+
         self.directory = Path(directory)
+        self.settings = settings if settings is not None else VectorStoreSettings()
+        # Validate the ANN setting at construction, where a typo is a startup
+        # refusal rather than a warning on the first sync.
+        from pheasant.search import vector_ann
+
+        vector_ann.configured(self.settings.ann_index)
+        self._resident = (
+            ResidentVectors(int(self.settings.resident_max_mb) * 1024 * 1024)
+            if self.settings.resident
+            else None
+        )
+        #: Whether this process has matched the index to the config yet.
+        self._reconciled = False
         self._db = None
         # Membership is queried once per artifact by ``VectorIndexer``.  A
         # Lance table scan there makes a full index O(files * vectors), which
@@ -1027,12 +1043,13 @@ class LanceDBVectorStore:
         table = self._table()
         if table is None or k < 1:
             return []
-        hits = (
-            table.search([float(value) for value in query_vec])
-            .distance_type("cosine")
-            .limit(k)
-            .to_list()
-        )
+        if self._resident is not None:
+            held = self._resident.search(table, query_vec, k)
+            if held is not None:
+                return held
+        from pheasant.search import vector_ann
+
+        hits = vector_ann.query_table(table, query_vec, k, self.settings)
         return [
             (
                 hit["chunk_id"],
@@ -1110,18 +1127,27 @@ class LanceDBVectorStore:
     def flush(self) -> None:
         """`upsert`/`delete` already write through, so nothing is buffered.
 
-        This is the end-of-sync hook, and the one place compaction can run
-        without costing a request or a commit: see
-        `COMPACT_AT_SMALL_FRAGMENTS`. Maintenance, never correctness -- a
-        failure is logged and the sync carries on.
+        This is the end-of-sync hook, and the one place compaction and the
+        optional ANN index (`vector_ann.reconcile`, once per process even with
+        no writes, so a config change lands) can run without costing a
+        request or a commit. Maintenance, never correctness -- a failure is
+        logged and the sync carries on.
         """
 
-        if not self._mutated:
+        mutated, self._mutated = self._mutated, False
+        if not mutated and self._reconciled:
             return
-        self._mutated = False
         table = self._table()
         if table is None:
             return
+        if mutated:
+            self._compact(table)
+        from pheasant.search import vector_ann
+
+        vector_ann.reconcile(table, self.settings)
+        self._reconciled = True
+
+    def _compact(self, table: Any) -> None:
         try:
             stats = table.stats()
             fragments = (stats.get("fragment_stats") or {}) if isinstance(stats, dict) else {}
@@ -1367,7 +1393,7 @@ def build_vector_store(config: PheasantConfig) -> VectorStore:
     if provider == "numpy":
         return NumpyVectorStore(directory)
     if provider == "lancedb":
-        return LanceDBVectorStore(directory)
+        return LanceDBVectorStore(directory, settings)
     raise ValueError(
         f"Unsupported search.vector_store.provider {settings.provider!r}; "
         "expected 'lancedb' or 'numpy'"

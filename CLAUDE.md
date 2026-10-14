@@ -182,7 +182,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 164 pytest modules, offline by design
+└── tests/                     ← 166 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -671,6 +671,19 @@ the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
 spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
 does not; the answering retriever holds it for every search and evidence read.
+
+**The vector arm has two opt-in speed paths**, both measured on the
+pheasant-lab stack (60k x 1536-d, the api tier's one core, where LanceDB's
+exact scan was the floor of every hybrid search at ~280 ms).
+`search.vector_store.resident` holds the table as one unit-norm matrix and
+answers by a matrix-vector product: the *same* top-k, the vector arm 61 ms
+instead of ~290, at 4 bytes x dimensions per vector in every serving process
+(`search/vector_resident.py`, capped by `resident_max_mb`).
+`search.vector_store.ann_index` is an HNSW or PQ index the writer reconciles
+at the end of a sync and `none` bypasses at once (`search/vector_ann.py`); it
+trades recall, so `python -m pheasant.search.vector_ann_benchmark` measures a
+region's own first. The disk query is always projected, so hits no longer
+carry their vectors into Python.
 
 **One over-fetch.** When a post-filter will drop rows the arms fetch further,
 so `max_results` keeps meaning "give me this many" — and that is
@@ -2394,6 +2407,14 @@ Each of these cost real time. They are listed because the shape recurs.
   the Python and the WASM scan). The same pass found the narrowing's type half
   scanning all 170k edges for `LOWER(type) LIKE` to test ten words; the
   vocabulary is read once per published generation and matched in Python.
+- **numpy under a CPU quota bursts, then waits.** OpenBLAS starts one thread
+  per *host* core, and a container limited to `cpus: 1.0` spends its period's
+  quota in a burst and is throttled for the rest: the resident vector scan
+  measured 9.5 ms p50 and **86 ms p95** with four threads, 29 ms flat with
+  one, and under concurrent requests the tail is what everybody gets. The
+  entrypoint now sizes `OPENBLAS/OMP/MKL_NUM_THREADS` to the cgroup quota (v1
+  and v2) unless something set them. Found because the server-side vector
+  time was three times the matmul it was made of.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the
