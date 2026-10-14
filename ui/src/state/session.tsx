@@ -48,6 +48,29 @@ export interface BrowserState {
   file: OpenFile | null;
 }
 
+/**
+ * The Notebook's sections, arranged as tiles in three columns. A tile can be
+ * dragged to another column or to another place in its own, and every tile
+ * folds to its header.
+ */
+export type TileId = "sources" | "taxonomy" | "chat" | "graph";
+export type TileColumn = "left" | "center" | "right";
+export type TileLayout = Record<TileColumn, TileId[]>;
+
+export const TILE_COLUMNS: TileColumn[] = ["left", "center", "right"];
+
+export const DEFAULT_TILE_LAYOUT: TileLayout = {
+  left: ["sources"],
+  center: ["taxonomy", "chat"],
+  right: ["graph"],
+};
+
+export function isDefaultTileLayout(layout: TileLayout): boolean {
+  return TILE_COLUMNS.every(
+    (column) => layout[column].join(",") === DEFAULT_TILE_LAYOUT[column].join(","),
+  );
+}
+
 export interface ChatTurn {
   id: string;
   question: string;
@@ -112,6 +135,14 @@ export interface SessionState {
   /** Width of the folder list beside the file viewer, in px. */
   browserTreeWidth: number;
   /**
+   * Where each tile sits. Deliberately not persisted: a reload puts every
+   * tile back where it starts, so a layout that went wrong is one refresh
+   * from fixed.
+   */
+  tiles: TileLayout;
+  /** Height of the first unfolded tile of a side column holding two, in px; not persisted. */
+  stackHeights: Partial<Record<TileColumn, number>>;
+  /**
    * Documents left out of every answer, as `source/path`. Sent as
    * `exclude_documents` for the source in scope; the omit toggle on an open
    * file adds and removes them, and the composer clears them.
@@ -160,6 +191,8 @@ const INITIAL: SessionState = {
   chatCollapsed: false,
   browserHeight: DEFAULT_BROWSER_HEIGHT,
   browserTreeWidth: DEFAULT_TREE_WIDTH,
+  tiles: DEFAULT_TILE_LAYOUT,
+  stackHeights: {},
   excluded: [],
 };
 
@@ -194,7 +227,10 @@ export type SessionAction =
   | { type: "close-file" }
   | { type: "close-browser" }
   | { type: "toggle-browser-collapsed" }
-  | { type: "toggle-chat-collapsed" };
+  | { type: "toggle-chat-collapsed" }
+  | { type: "move-tile"; tile: TileId; column: TileColumn; before: TileId | null }
+  | { type: "reset-tiles" }
+  | { type: "set-stack-height"; column: TileColumn; height: number };
 
 /**
  * Canvas layout algorithms.
@@ -326,9 +362,20 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       // `@taxonomy` answers from the index and, here, also opens the browser
       // at the folder it listed, above the chat.
       const browsed = browsedFrom(action.answer);
+      const opened = browsed ? openBrowser(state, browsed.source, browsed.path) : null;
+      // An answer that cites the document open in the viewer re-opens it at
+      // the cited passage, so the passage is highlighted where the reader is
+      // already looking. Only on the turn's first answer: the streamed second
+      // dispatch must not undo a citation the reader picked in between.
+      const firstAnswer = !state.turns.find((turn) => turn.id === action.id)?.answer;
+      const viewing = (opened?.browser ?? state.browser).file;
+      const chunkId = firstAnswer && viewing ? citedChunkIn(viewing, action.answer) : null;
       return {
         ...state,
-        ...(browsed ? openBrowser(state, browsed.source, browsed.path) : {}),
+        ...(opened ?? {}),
+        ...(chunkId && viewing
+          ? { browser: { ...(opened?.browser ?? state.browser), file: { ...viewing, chunkId, anchor: null } } }
+          : {}),
         // Streaming chat first dispatches the text with visual.status=pending,
         // then dispatches the same turn again when its visual is ready. Replace
         // that turn by id so the completed MCP App result reaches the UI.
@@ -377,21 +424,23 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "close-file":
       return { ...state, browser: { ...state.browser, file: null } };
     case "close-browser":
-      // The chat must not stay folded behind a browser that is gone.
-      return { ...state, browser: { ...state.browser, open: false }, chatCollapsed: false };
+      return { ...state, browser: { ...state.browser, open: false } };
+    // Every tile folds on its own. The browser and the chat used to unfold
+    // each other, which made sense while they were always stacked together;
+    // as tiles they may sit in different columns, and a fold the reader
+    // asked for should stay folded.
     case "toggle-browser-collapsed":
-      return {
-        ...state,
-        browserCollapsed: !state.browserCollapsed,
-        // Folding one pane unfolds the other: two header strips and nothing
-        // else is a layout nobody asked for.
-        chatCollapsed: state.browserCollapsed ? state.chatCollapsed : false,
-      };
+      return { ...state, browserCollapsed: !state.browserCollapsed };
     case "toggle-chat-collapsed":
+      return { ...state, chatCollapsed: !state.chatCollapsed };
+    case "move-tile":
+      return { ...state, tiles: moveTile(state.tiles, action.tile, action.column, action.before) };
+    case "reset-tiles":
+      return { ...state, tiles: DEFAULT_TILE_LAYOUT, stackHeights: {} };
+    case "set-stack-height":
       return {
         ...state,
-        chatCollapsed: !state.chatCollapsed,
-        browserCollapsed: state.chatCollapsed ? state.browserCollapsed : false,
+        stackHeights: { ...state.stackHeights, [action.column]: Math.round(action.height) },
       };
     case "clear-view":
       // Back to the plain view: nothing selected, nothing focused, no answer
@@ -433,6 +482,22 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
   }
 }
 
+/** `tile` taken out of wherever it is and put in `column`, before `before` (or last). */
+export function moveTile(
+  layout: TileLayout,
+  tile: TileId,
+  column: TileColumn,
+  before: TileId | null,
+): TileLayout {
+  if (tile === before) return layout;
+  const next = {} as TileLayout;
+  for (const key of TILE_COLUMNS) next[key] = layout[key].filter((id) => id !== tile);
+  const target = next[column];
+  const at = before ? target.indexOf(before) : -1;
+  next[column] = at >= 0 ? [...target.slice(0, at), tile, ...target.slice(at)] : [...target, tile];
+  return next;
+}
+
 /** Open the browser, unfolded, at a folder. The open file stays if it is in the same source. */
 function openBrowser(
   state: SessionState,
@@ -449,6 +514,20 @@ export function browsedFrom(answer: ChatAnswer): { source: string | null; path: 
   if (!inventory || inventory.action !== "taxonomy") return null;
   const result = inventory.result as { source?: string | null; path?: string };
   return { source: result.source ?? null, path: result.path ?? "" };
+}
+
+/** The strongest citation of `answer` that is a passage of `file`: used first, then by number. */
+export function citedChunkIn(file: OpenFile, answer: ChatAnswer): string | null {
+  const inFile = answer.citations
+    .filter(
+      (citation) =>
+        citation.chunk_id &&
+        !citation.memory &&
+        citation.source_id === file.source &&
+        citation.relative_path === file.path,
+    )
+    .sort((a, b) => Number(b.used) - Number(a.used) || a.index - b.index);
+  return inFile[0]?.chunk_id ?? null;
 }
 
 /** Turns sent with a question: answered ones since the last "new topic". */
@@ -524,7 +603,7 @@ function hydrate(): SessionState {
       panelWidth: Number(saved.panelWidth) || DEFAULT_PANEL_WIDTH,
       browser: hydrateBrowser(saved.browser),
       browserCollapsed: saved.browserCollapsed === true,
-      chatCollapsed: saved.chatCollapsed === true && saved.browser?.open === true,
+      chatCollapsed: saved.chatCollapsed === true,
       browserHeight: Number(saved.browserHeight) || DEFAULT_BROWSER_HEIGHT,
       browserTreeWidth: Number(saved.browserTreeWidth) || DEFAULT_TREE_WIDTH,
       excluded: Array.isArray(saved.excluded)

@@ -88,7 +88,7 @@ export function CodeView({
             .join(" ");
           return (
             <div className={classes} key={number} data-line={number} role="row">
-              <span className="src-line__no" role="cell" aria-hidden>
+              <span className="src-line__no" role="cell" aria-hidden data-passage-skip>
                 {number}
               </span>
               <span

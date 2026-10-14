@@ -4,6 +4,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { BrowseFile, BrowseFolder, BrowseResponse } from "../api/types";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
+import { TileFold, TileGrip } from "../components/Tiles";
 import { DragHandle } from "./DragHandle";
 import { ScopeToggle } from "./ScopeToggle";
 import { FileViewer } from "./FileViewer";
@@ -21,8 +22,8 @@ const PAGE_SIZE = 200;
  * format (`FileViewer`). Everything listed is what the index holds
  * (`GET /documents/tree`), so it reads the same on a replica with no mount.
  *
- * Folded, it is a header strip that keeps the place; the chat below takes the
- * height. The chat can fold the same way to give this the height.
+ * It is one of the Notebook's tiles: folded, the tile shows a header strip
+ * that keeps the place, and the tile can be dragged to another column.
  */
 export function SourceBrowser({
   onAsk,
@@ -77,40 +78,6 @@ export function SourceBrowser({
 
   const title = browser.source ? [browser.source, ...browser.path.split("/").filter(Boolean)].join(" / ") : "All sources";
 
-  if (browserCollapsed) {
-    return (
-      <section className="pane browser browser--collapsed" aria-label="Source browser">
-        <header className="pane__header browser__header">
-          <button
-            type="button"
-            className="btn btn--small btn--icon"
-            onClick={() => dispatch({ type: "toggle-browser-collapsed" })}
-            aria-label="Expand the source browser"
-            title="Expand the source browser"
-          >
-            ▸
-          </button>
-          <span className="pane__title">Taxonomy</span>
-          <span className="browser__where muted small">
-            {title}
-            {browser.file ? ` · ${browser.file.path.split("/").pop()}` : ""}
-          </span>
-          <div className="pane__actions">
-            <button
-              type="button"
-              className="btn btn--small btn--icon btn--ghost"
-              onClick={() => dispatch({ type: "close-browser" })}
-              aria-label="Close the source browser"
-              title="Close"
-            >
-              ✕
-            </button>
-          </div>
-        </header>
-      </section>
-    );
-  }
-
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>(".browser-row"));
     const index = rows.findIndex((row) => row === document.activeElement);
@@ -130,15 +97,7 @@ export function SourceBrowser({
   return (
     <section className="pane browser" aria-label="Source browser">
       <header className="pane__header browser__header">
-        <button
-          type="button"
-          className="btn btn--small btn--icon"
-          onClick={() => dispatch({ type: "toggle-browser-collapsed" })}
-          aria-label="Fold the source browser"
-          title="Fold the source browser to give the chat the height"
-        >
-          ▾
-        </button>
+        <TileGrip />
         <span className="pane__title">Taxonomy</span>
         <nav className="browser__crumbs" aria-label="Folder">
           <button type="button" className="link-button" onClick={() => go(null, "")}>
@@ -166,6 +125,7 @@ export function SourceBrowser({
           >
             ✕
           </button>
+          <TileFold />
         </div>
       </header>
       <div

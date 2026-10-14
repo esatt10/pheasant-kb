@@ -1028,7 +1028,17 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   otherwise the chunks reassembled with their overlap removed; a workbook is
   re-extracted from its original (the indexed text loses its tabs). The web
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) sits above the chat in
-  the main column, each foldable; `@taxonomy [source] [folder]` answers the
+  the main column by default. Every Notebook section is a tile
+  (`ui/src/components/Tiles.tsx`): dragged by its grip (or arrow keys) to any
+  column, folded to its header anywhere, and portalled so a move never
+  remounts it (a streaming answer keeps streaming); placement is deliberately
+  not persisted, so a reload restores the default. A cited passage opened in
+  the viewer is highlighted in every rendering with text, not only the source
+  view (`browser/passage.ts`: letters-and-digits matching with anchor voting,
+  drawn with the CSS Custom Highlight API so no view's DOM is rewritten) — a
+  PDF through pdf.js's text layer (`browser/views/PdfView.tsx`, the browser's
+  own viewer one click away). Selecting a citation while the browser is open,
+  or an answer citing the open document, re-aims the viewer at the passage; `@taxonomy [source] [folder]` answers the
   listing from the index and opens the view there, honouring the chat's
   source scope. A "Search this folder/file" toggle (`browser/ScopeToggle.tsx`)
   sets `pathScope`, sent as `path_prefix` with every question; at a source's

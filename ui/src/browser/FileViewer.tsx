@@ -1,15 +1,17 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { DocumentContent, DocumentViewer } from "../api/types";
 import { CodeView } from "./views/CodeView";
 import { DataTable, SpreadsheetView, StructuredTree, parseDelimited, parseStructured } from "./views/DataViews";
 import { MarkdownView, splitSections } from "./views/MarkdownView";
-import { AudioView, HtmlView, ImageView, PdfView, SvgView, ViewerLoading } from "./views/MediaViews";
+import { AudioView, HtmlView, ImageView, SvgView, ViewerLoading } from "./views/MediaViews";
+import { PdfView } from "./views/PdfView";
 import { NotebookView, parseNotebook } from "./views/NotebookView";
 import { ProseView, SlidesView } from "./views/ProseViews";
 import { fileIcon, formatBytes } from "./fileIcons";
 import { OmitToggle } from "./OmitToggle";
+import { passageText, usePassageHighlight } from "./passage";
 import { ScopeToggle } from "./ScopeToggle";
 
 /** The two ways most formats can be shown: as they render, or as their text. */
@@ -29,6 +31,13 @@ const RENDERED_LABEL: Partial<Record<DocumentViewer, string>> = {
   slides: "Slides",
   document: "Reading",
 };
+
+/**
+ * Views whose cited passage is highlighted by matching it in their rendered
+ * text. The source view bands the cited lines itself, the PDF view finds the
+ * page first and highlights within it, and a frame (HTML) is out of reach.
+ */
+const NO_PASSAGE_HIGHLIGHT = new Set<string>(["source", "pdf", "html", "svg", "image"]);
 
 /** Views that can mark matches for the find box. */
 const FINDABLE = new Set<string>(["source", "json", "yaml", "table", "spreadsheet", "slides", "document", "pdf-text"]);
@@ -136,6 +145,10 @@ function LoadedViewer({
   const [copied, setCopied] = useState(false);
   const [focusCleared, setFocusCleared] = useState(false);
   const focus = focusCleared ? null : data.focus;
+  // The cited passage itself — its whole line span, not the 400-character
+  // excerpt — so a rendered view can highlight what was cited.
+  const passage = useMemo(() => passageText(text, focus), [text, focus]);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const outline = useMemo<OutlineItem[]>(() => {
     if (viewer === "markdown" && text) {
@@ -163,6 +176,7 @@ function LoadedViewer({
     focus?.start_line && focus.end_line ? { start: focus.start_line, end: focus.end_line } : null;
 
   const onFindCount = useCallback((count: number) => setFindCount(count), []);
+  usePassageHighlight(contentRef, NO_PASSAGE_HIGHLIGHT.has(view) ? null : passage, view);
 
   const copy = async () => {
     try {
@@ -357,7 +371,7 @@ function LoadedViewer({
             ))}
           </nav>
         ) : null}
-        <div className="viewer__content">
+        <div className="viewer__content" ref={contentRef}>
           {renderView({
             view,
             data,
@@ -368,6 +382,7 @@ function LoadedViewer({
             onFindCount,
             lineFocus,
             focusExcerpt: focus?.excerpt ?? null,
+            passage,
             jump,
             anchor,
             onOpenPath,
@@ -389,6 +404,7 @@ function renderView({
   onFindCount,
   lineFocus,
   focusExcerpt,
+  passage,
   jump,
   anchor,
   onOpenPath,
@@ -403,6 +419,7 @@ function renderView({
   onFindCount: (count: number) => void;
   lineFocus: { start: number; end: number } | null;
   focusExcerpt: string | null;
+  passage: string | null;
   jump: { item: OutlineItem; nonce: number } | null;
   anchor: string | null;
   onOpenPath: (path: string, anchor?: string) => void;
@@ -456,9 +473,9 @@ function renderView({
       return <StructuredTree value={parsed.value} find={find} />;
     }
     case "table":
-      return <DataTable rows={parseDelimited(text, doc.extension === ".tsv" ? "\t" : ",")} find={find} />;
+      return <DataTable rows={parseDelimited(text, doc.extension === ".tsv" ? "\t" : ",")} find={find} passage={passage} />;
     case "spreadsheet":
-      return <SpreadsheetView text={text} find={find} />;
+      return <SpreadsheetView text={text} find={find} passage={passage} />;
     case "slides":
       return <SlidesView text={text} find={find} />;
     case "notebook":
@@ -468,7 +485,7 @@ function renderView({
     case "svg":
       return <SvgView text={text} />;
     case "pdf":
-      return <PdfView source={doc.source} path={doc.path} />;
+      return <PdfView source={doc.source} path={doc.path} passage={passage} />;
     case "pdf-text":
     case "document":
       return (

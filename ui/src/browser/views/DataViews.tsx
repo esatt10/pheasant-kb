@@ -1,5 +1,6 @@
 import yaml from "js-yaml";
 import { useMemo, useState } from "react";
+import { locatePassage, normalizeForMatch } from "../passage";
 
 /* ------------------------------------------------------------- JSON / YAML */
 
@@ -195,9 +196,13 @@ const ROW_WINDOW = 1000;
  * A table with a sticky header, click-to-sort columns (numbers sort as
  * numbers), and a row filter. The first row is the header.
  */
-export function DataTable({ rows, find }: { rows: string[][]; find?: string }) {
+export function DataTable({ rows, find, passage }: { rows: string[][]; find?: string; passage?: string | null }) {
   const [sort, setSort] = useState<{ column: number; descending: boolean } | null>(null);
-  const [limit, setLimit] = useState(ROW_WINDOW);
+  // A cited passage further down than the first window opens with its row drawn.
+  const [limit, setLimit] = useState(() => {
+    const row = passageRow(rows, passage ?? null);
+    return row === null ? ROW_WINDOW : Math.max(ROW_WINDOW, row + 50);
+  });
   const header = rows[0] ?? [];
   const width = Math.max(header.length, ...rows.slice(1, 200).map((r) => r.length));
   const needle = (find ?? "").trim().toLowerCase();
@@ -220,14 +225,14 @@ export function DataTable({ rows, find }: { rows: string[][]; find?: string }) {
   if (!rows.length) return <p className="muted small viewer-pad">This table is empty.</p>;
   return (
     <div className="grid-table">
-      <div className="grid-table__meta muted small">
+      <div className="grid-table__meta muted small" data-passage-skip>
         {body.length.toLocaleString()} {needle ? "matching " : ""}rows · {width} columns
       </div>
       <div className="grid-table__scroll">
         <table>
           <thead>
             <tr>
-              <th className="grid-table__index">#</th>
+              <th className="grid-table__index" data-passage-skip>#</th>
               {Array.from({ length: width }, (_, column) => (
                 <th key={column}>
                   <button
@@ -255,7 +260,7 @@ export function DataTable({ rows, find }: { rows: string[][]; find?: string }) {
           <tbody>
             {body.slice(0, limit).map((row, index) => (
               <tr key={index}>
-                <td className="grid-table__index">{index + 1}</td>
+                <td className="grid-table__index" data-passage-skip>{index + 1}</td>
                 {Array.from({ length: width }, (_, column) => (
                   <td key={column} className={isNumber(row[column] ?? "") ? "grid-table__number" : undefined}>
                     {row[column] ?? ""}
@@ -273,6 +278,22 @@ export function DataTable({ rows, find }: { rows: string[][]; find?: string }) {
       ) : null}
     </div>
   );
+}
+
+/** The row a cited passage starts in, or null when it is not in this table. */
+function passageRow(rows: string[][], passage: string | null): number | null {
+  if (!passage) return null;
+  const starts: number[] = [];
+  let joined = "";
+  for (const row of rows) {
+    starts.push(joined.length);
+    joined += normalizeForMatch(row.join(" "));
+  }
+  const span = locatePassage(joined, normalizeForMatch(passage));
+  if (!span) return null;
+  let index = 0;
+  while (index + 1 < starts.length && starts[index + 1] <= span[0]) index += 1;
+  return index;
 }
 
 function isNumber(value: string): boolean {
@@ -315,15 +336,23 @@ function splitOnSpaces(lines: string[]): string[][] {
   return width > 1 && regular >= split.length * 0.8 ? split : lines.map((line) => [line]);
 }
 
-export function SpreadsheetView({ text, find }: { text: string; find?: string }) {
+export function SpreadsheetView({ text, find, passage }: { text: string; find?: string; passage?: string | null }) {
   const sheets = useMemo(() => parseSheets(text), [text]);
-  const [active, setActive] = useState(0);
+  // Open on the sheet the cited passage is in.
+  const [active, setActive] = useState(() => {
+    if (!passage) return 0;
+    const needle = normalizeForMatch(passage);
+    const index = sheets.findIndex((sheet) =>
+      locatePassage(normalizeForMatch(sheet.rows.map((row) => row.join(" ")).join(" ")), needle),
+    );
+    return Math.max(0, index);
+  });
   if (!sheets.length) return <p className="muted small viewer-pad">No cells were extracted.</p>;
   const sheet = sheets[Math.min(active, sheets.length - 1)];
   return (
     <div className="sheet-view">
       {sheets.length > 1 ? (
-        <div className="sheet-view__tabs" role="tablist">
+        <div className="sheet-view__tabs" role="tablist" data-passage-skip>
           {sheets.map((candidate, index) => (
             <button
               type="button"
@@ -338,7 +367,7 @@ export function SpreadsheetView({ text, find }: { text: string; find?: string })
           ))}
         </div>
       ) : null}
-      <DataTable key={active} rows={sheet.rows} find={find} />
+      <DataTable key={active} rows={sheet.rows} find={find} passage={passage} />
       <p className="muted small viewer-pad">
         Cell values as extracted for indexing: empty cells are dropped, so a sparse row can shift
         left.
