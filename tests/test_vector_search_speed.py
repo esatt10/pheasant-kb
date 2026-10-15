@@ -156,3 +156,23 @@ def test_a_current_index_is_left_alone_and_a_stale_one_rebuilt(tmp_path: Path) -
 def test_an_unknown_index_kind_is_refused_at_construction(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="ann_index"):
         LanceDBVectorStore(tmp_path / "v", VectorStoreSettings(ann_index="hnsw"))
+
+
+def test_hnsw_is_one_graph_until_training_it_would_not_fit() -> None:
+    # Each partition is a separate graph a query walks; below the per-partition
+    # ceiling one graph was both faster and as accurate (vector_ann's table).
+    per = vector_ann.HNSW_ROWS_PER_PARTITION
+    for rows, partitions in [(600, 1), (60_000, 1), (per, 1), (per + 1, 2), (10 * per, 10)]:
+        options = vector_ann._build_options("ivf_hnsw_sq", rows, 1536)
+        assert options == {"index_type": "IVF_HNSW_SQ", "num_partitions": partitions}
+
+
+def test_the_index_is_built_without_the_deprecated_keywords(tmp_path: Path) -> None:
+    import warnings
+
+    store = _store(tmp_path, ann_index="ivf_hnsw_sq", ann_min_rows=0)
+    table = store._table()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert vector_ann.reconcile(table, store.settings) == "built"
+    assert not [w for w in caught if "create_index" in str(w.message)]
