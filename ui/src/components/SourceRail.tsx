@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SourceRecord } from "../api/types";
 import { QuickAdd } from "./QuickAdd";
+import { TileFold, TileGrip } from "./Tiles";
 import { colorForNode } from "../graph/graphStyles";
 
 /**
@@ -10,7 +11,7 @@ import { colorForNode } from "../graph/graphStyles";
  *
  * Selecting a source scopes both retrieval and the graph to it — the same
  * "which of my sources am I asking about" control, applied once. "browse"
- * opens it as folders and files in the taxonomy view above the chat.
+ * opens it as folders and files in the taxonomy view beside the chat.
  */
 export function SourceRail({
   sources,
@@ -19,7 +20,6 @@ export function SourceRail({
   onSelect,
   onSelectType,
   onChanged,
-  onCollapse,
   onBrowse,
 }: {
   sources: SourceRecord[];
@@ -28,7 +28,6 @@ export function SourceRail({
   onSelect: (name: string | null) => void;
   onSelectType: (type: string | null) => void;
   onChanged: () => void;
-  onCollapse?: () => void;
   /** Open a source (or, with null, every source) in the taxonomy view. */
   onBrowse?: (name: string | null) => void;
 }) {
@@ -50,23 +49,14 @@ export function SourceRail({
   return (
     <>
       <header className="pane__header">
+        <TileGrip />
         <span className="pane__title">Sources</span>
         <div className="pane__actions">
-          {onCollapse ? (
-            <button
-              className="btn btn--small btn--icon"
-              onClick={onCollapse}
-              title="Collapse sources to give the graph and chat more room"
-              aria-label="Collapse sources"
-            >
-              ‹
-            </button>
-          ) : null}
           {onBrowse ? (
             <button
               className="btn btn--small"
               onClick={() => onBrowse(selected)}
-              title="Browse folders and files above the chat (@taxonomy)"
+              title="Browse folders and files beside the chat (@taxonomy)"
             >
               Browse
             </button>
@@ -78,6 +68,7 @@ export function SourceRail({
           >
             + Add
           </button>
+          <TileFold />
         </div>
       </header>
       <div className="pane__body">
@@ -159,7 +150,7 @@ export function SourceRail({
                   <button
                     className="btn btn--small btn--ghost"
                     onClick={() => onBrowse(source.name)}
-                    title={`Browse ${source.name}'s folders and files above the chat`}
+                    title={`Browse ${source.name}'s folders and files beside the chat`}
                   >
                     browse
                   </button>

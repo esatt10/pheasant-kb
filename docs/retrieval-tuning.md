@@ -186,6 +186,7 @@ counters exposed on `/metrics`:
 | `pheasant_retrieval_fusion_depth` | much larger than `max_results` means the merge is discarding a lot; roughly equal means the arms are not over-fetching enough to rank anything |
 | `pheasant_retrieval_truncated_total` | how often the fused list was longer than what was returned |
 | `pheasant_retrieval_empty_total{stage}` | the live stage histogram: empties attributed to the last stage that still had candidates |
+| `pheasant_retrieval_lexical_total{index,path}` | which mechanism ranked the text arm: the BM25 index (`pg_textsearch`), `tsvector` and why (a bundle that moved a column weight puts the whole region there), `fts5` or the `like` last resort; see `docs/configuration.md` |
 
 These cost an integer add per search. **No database write reaches the request
 path** — that is the same rule the observation plane's hot tier exists to keep,

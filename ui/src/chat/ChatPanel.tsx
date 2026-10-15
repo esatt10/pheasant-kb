@@ -21,7 +21,7 @@ import {
   useKeywordReference,
 } from "./KeywordReference";
 import { McpAppFrame } from "./McpAppFrame";
-import { SourceStrip } from "./SourceStrip";
+import { SourceStrip, openable } from "./SourceStrip";
 
 export type { ChatTurn } from "../state/session";
 
@@ -545,9 +545,9 @@ function AnswerTurn({
   const visualCitations = drawn ? drawn.citations : answer.citations;
   // A paged listing with rows is drawn as a table that grows in place; an
   // empty one is just its sentence.
-  const { dispatch } = useSession();
+  const { state, dispatch } = useSession();
   const browsed = browsedFrom(answer);
-  // A folder listing is its own view (the browser above the chat), so it is
+  // A folder listing is its own view (the browser beside the chat), so it is
   // never drawn as the paged documents table.
   const listing =
     answer.inventory?.page && answer.inventory.page.total > 0 && !browsed
@@ -555,7 +555,22 @@ function AnswerTurn({
       : null;
   const openFile = (file: { source: string; path: string; chunkId?: string | null }) =>
     dispatch({ type: "open-file", file });
-  const onCite = (index: number) => onCitationClick(byIndex.get(index)?.node_id);
+  /**
+   * Selecting a citation aims the graph at it and, while the source browser
+   * is open, opens the cited document there at the passage — which the
+   * viewer highlights in whichever rendering is showing.
+   */
+  const selectCitation = (citation: Citation | undefined) => {
+    onCitationClick(citation?.node_id);
+    if (citation && state.browser.open && openable(citation)) {
+      openFile({
+        source: citation.source_id as string,
+        path: citation.relative_path as string,
+        chunkId: citation.chunk_id ?? null,
+      });
+    }
+  };
+  const onCite = (index: number) => selectCitation(byIndex.get(index));
   return (
     <div className="msg">
       <div className="msg__answer">
@@ -591,7 +606,8 @@ function AnswerTurn({
       {answer.citations.length > 0 ? (
         <SourceStrip
           citations={answer.citations}
-          onSelect={onCitationClick}
+          activeChunkId={state.browser.open ? (state.browser.file?.chunkId ?? null) : null}
+          onSelect={selectCitation}
           onVisualize={(citation) => draw.mutate([citation])}
           onOpen={(citation) =>
             openFile({
@@ -608,7 +624,7 @@ function AnswerTurn({
             type="button"
             className="btn btn--small"
             onClick={() => dispatch({ type: "open-browser", source: browsed.source, path: browsed.path })}
-            title="Show this folder in the source browser above the chat"
+            title="Show this folder in the source browser beside the chat"
           >
             Open in the taxonomy view
           </button>

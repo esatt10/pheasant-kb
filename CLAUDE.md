@@ -182,7 +182,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 164 pytest modules, offline by design
+└── tests/                     ← 166 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -645,7 +645,12 @@ weighting (weight as term frequency, then saturation), and one Block-Max WAND
 top-k scan per search: 3.6 ms against `tsvector`'s 75.5 ms at 20k chunks, 4.7
 against 330.7 at 102k, and the gold set ranks as SQLite does. The weights live
 in the index, so column weights must be integers on Postgres and a bundle that
-moves one is served by `tsvector` until the config matches. The index is built
+moves one is served by `tsvector` until the config matches. The scan runs in a
+subquery over `chunks_fts` alone (the source filter inside it) and every
+filter needing a join is applied outside, widened while too few rows pass and
+handed to an unfenced statement past 8,192; a join beside `ORDER BY <@>` let
+the planner drop the index (see the traps). `pheasant_retrieval_lexical_total
+{index,path}` says which mechanism answered each search. The index is built
 (or dropped, under `tsvector`) at boot, and costs ~1.3-1.5x on chunk writes. A
 server without the extension is a startup refusal; `tsvector` is the stock-
 Postgres way out. SQLite ignores the setting (rule 7). `docs/configuration.md`,
@@ -667,6 +672,19 @@ text arm's SQL and applied to vector and graph hits with the shared over-fetch,
 spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
 does not; the answering retriever holds it for every search and evidence read.
 
+**The vector arm has two opt-in speed paths**, both measured on the
+pheasant-lab stack (60k x 1536-d, the api tier's one core, where LanceDB's
+exact scan was the floor of every hybrid search at ~280 ms).
+`search.vector_store.resident` holds the table as one unit-norm matrix and
+answers by a matrix-vector product: the *same* top-k, the vector arm 61 ms
+instead of ~290, at 4 bytes x dimensions per vector in every serving process
+(`search/vector_resident.py`, capped by `resident_max_mb`).
+`search.vector_store.ann_index` is an HNSW or PQ index the writer reconciles
+at the end of a sync and `none` bypasses at once (`search/vector_ann.py`); it
+trades recall, so `python -m pheasant.search.vector_ann_benchmark` measures a
+region's own first. The disk query is always projected, so hits no longer
+carry their vectors into Python.
+
 **One over-fetch.** When a post-filter will drop rows the arms fetch further,
 so `max_results` keeps meaning "give me this many" — and that is
 `ranking.filter_overfetch`, computed in `RankingParameters.overfetch` and
@@ -683,9 +701,12 @@ the first plus structure, so `expand` walks each hit's `node_id` with the one
 ≤25 seeds, ≤3 hops, ≤50 neighbours) and attaches a compact `graph` block.
 It runs after truncation and lineage, so hits and `query_id` are unchanged;
 a batch expands its merged results once. Under ACL enforcement
-`services.graph.neighbor_filter` applies the hits' artifact rule to
-neighbours (chunk nodes carry text) and drops anything reached *through* a
-withheld node, since `via` would name it. `include_graph_neighbors` was
+`services.graph.neighbor_filter` applies the hits' rule to neighbours
+(chunk nodes carry text) and drops anything reached *through* a withheld
+node, since `via` would name it. That rule is `security.acl.acl_subject`: a
+chunk, heading or symbol definition is judged by the file that owns it, and a
+shared entity or reference -- whose `artifact_id` is only its last writer --
+is withheld. `include_graph_neighbors` was
 accepted and never read; it stays inert (turning it on would change every
 caller passing its `True` default) and `expand` is the switch. The standalone
 walk tools (`get_graph_neighbors`, `get_graph_slice`, `/graph/*`) still apply
@@ -1027,8 +1048,19 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   mount. A read is the indexed file only while its sha256 still matches,
   otherwise the chunks reassembled with their overlap removed; a workbook is
   re-extracted from its original (the indexed text loses its tabs). The web
-  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) sits above the chat in
-  the main column, each foldable; `@taxonomy [source] [folder]` answers the
+  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) has its own column
+  between the sources and the chat by default (above the chat in a narrow
+  window). Every Notebook section is a tile
+  (`ui/src/components/Tiles.tsx`): dragged by its grip (or arrow keys) to any
+  column, folded to its header anywhere, and portalled so a move never
+  remounts it (a streaming answer keeps streaming); placement is deliberately
+  not persisted, so a reload restores the default. A cited passage opened in
+  the viewer is highlighted in every rendering with text, not only the source
+  view (`browser/passage.ts`: letters-and-digits matching with anchor voting,
+  drawn with the CSS Custom Highlight API so no view's DOM is rewritten) — a
+  PDF through pdf.js's text layer (`browser/views/PdfView.tsx`, the browser's
+  own viewer one click away). Selecting a citation while the browser is open,
+  or an answer citing the open document, re-aims the viewer at the passage; `@taxonomy [source] [folder]` answers the
   listing from the index and opens the view there, honouring the chat's
   source scope. A "Search this folder/file" toggle (`browser/ScopeToggle.tsx`)
   sets `pathScope`, sent as `path_prefix` with every question; at a source's
@@ -1122,7 +1154,8 @@ histogram and a counter, neither able to name a stage.
 - **Always on: counters.** `pheasant_retrieval_arm_total{arm,outcome}`,
   `_arm_candidates`, `_filtered_total{filter,arm}`,
   `_fusion_contributions_total{arms}`, `_fusion_depth`, `_truncated_total`,
-  and `_empty_total{stage}` — the live version of the stage histogram. An
+  and `_empty_total{stage}` — the live version of the stage histogram — and
+  `_lexical_total{index,path}`, which mechanism ranked the text arm. An
   in-memory increment per search; **no database write reaches the request
   path**, which is the rule the observation plane's hot tier exists to keep.
   `empty` and `failed` are separate arm outcomes because "the vector index is
@@ -2338,6 +2371,50 @@ Each of these cost real time. They are listed because the shape recurs.
   mutant that dropped its `WHERE`: the statement errored, the `tsvector`
   fallback answered correctly, and every assertion held. A test of a path
   behind a fallback has to assert that the path answered.
+- **A query that says `<@>` is not a query that uses the BM25 index.** The
+  pg_textsearch statement carried every filter beside its `ORDER BY … <@>`,
+  including the memory policy's `LEFT JOIN memory_records`, which applies to
+  every search on a region holding one memory record. With a join there the
+  planner was free to fetch every passing row and sort by `<@>`, which scores
+  each chunk standalone (re-tokenizing it, ~170µs a row): **9.0 s** per search
+  on a 53k-chunk region, against 12 ms on the index, with the SQL still
+  plainly BM25. A folder scope did the same at 640 ms. `<@>` already declares
+  cost 1000, and no setting forces the index, so the scan is fenced: a
+  `FROM (… ORDER BY … LIMIT ?)` subquery over `chunks_fts` alone, joined
+  filters outside, widened while too few rows pass. Not a `MATERIALIZED` CTE,
+  which kept the index but lost the score reuse and re-scored all 800 rows
+  (274 ms). The fenced rows equal the unfenced statement's on every shape
+  tried; the memory case's order changed, because the old plan's standalone
+  scores carry exact lengths and the index's are quantized, so it now ranks
+  exactly as a search without memory does. Found by timing the lab's own
+  query shapes against a real Postgres; the offline suite has no planner.
+  `tests/test_pg_textsearch.py` holds the fence's shape and the equivalence,
+  and the counter makes the path visible in production.
+- **A slugged id is an id two names can share.** Symbol ids slug the name
+  (lowercase, leading `_` stripped), so ctypes'
+  `_LARGE_INTEGER = LARGE_INTEGER = c_longlong` minted one id twice, and the
+  second `symbols` insert broke the primary key and aborted the write, on
+  SQLite and Postgres alike. A stdlib-sized source stopped indexing at that
+  file. A colliding name now gets `-{digest}` of its exact spelling and every
+  other id is unchanged; since a colliding id never reached storage, no
+  migration was owed (`docs/graph_model.md` records the decision). Found by
+  indexing the standard library for a performance check, not by any test.
+- **A cache that stops repeats still pays once per distinct key.**
+  `_LazyNodeMap` remembered each endpoint a relationship scan looked up, and
+  every distinct endpoint was still its own query: up to 480 per search,
+  200-420 ms of the graph arm on a 53k-chunk Postgres region. The scan knows
+  its endpoints before it scores, so it `prime`s the map in one query (both
+  the Python and the WASM scan). The same pass found the narrowing's type half
+  scanning all 170k edges for `LOWER(type) LIKE` to test ten words; the
+  vocabulary is read once per published generation and matched in Python.
+- **numpy under a CPU quota bursts, then waits.** OpenBLAS starts one thread
+  per *host* core, and a container limited to `cpus: 1.0` spends its period's
+  quota in a burst and is throttled for the rest: the resident vector scan
+  measured 9.5 ms p50 and **86 ms p95** with four threads, 29 ms flat with
+  one, and under concurrent requests the tail is what everybody gets. The
+  entrypoint now sizes `OPENBLAS/OMP/MKL_NUM_THREADS` to the cgroup quota (v1
+  and v2) unless something set them. Found because the server-side vector
+  time was three times the matmul it was made of.
 - **`classes: undefined` adds and never removes.** react-cytoscapejs patches
   an element it keeps with `ele.json({ classes })`, and Cytoscape ignores an
   undefined there. So an element that once had a class kept it after the

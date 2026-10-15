@@ -19,7 +19,7 @@ question so a rule notices. A keyword says it directly:
   ``@doc``, ``@docs``, ``@links``, ``@taxonomy`` and ``@more``, which are
   shorthand for ``@pheasant source …``, ``@pheasant document …`` and so on.
   ``@taxonomy`` lists one folder of a source; the web UI also opens its
-  source browser there, above the chat.
+  source browser there, beside the chat.
 * **Scope**, anywhere in the message like ``@pheasant``: ``@current`` (the
   open document), ``@dir`` (its folder, or the folder being browsed) and
   ``@exclude <names>`` (documents to leave out: ``@exclude deploy.md`` or
@@ -116,7 +116,7 @@ KEYWORDS: tuple[Keyword, ...] = (
         "inventory",
         "taxonomy",
         "Browse a source as folders and files, one level at a time. The web UI opens "
-        "its source browser above the chat.",
+        "its source browser beside the chat.",
         "@taxonomy notes guides/",
         ("browse", "folders"),
         group="Answered without a model",

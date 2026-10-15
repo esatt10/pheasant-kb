@@ -82,6 +82,18 @@ pheasant runs deterministic enrichment during sync:
   (`symbol:{kb}:{source}:call:{language}:{name}`), so a Go `Open` and a Rust
   `open` stay apart. Python's call-target ID is unchanged.
 
+  A defined symbol's ID is `symbol:{kb}:{source}:{path}:{name}-{line}`, with
+  the name slugged (lowercased, leading `_` stripped). Two *different* names on
+  one line can therefore slug alike: ctypes' `_LARGE_INTEGER = LARGE_INTEGER`.
+  The first keeps the plain ID and each later one ends `-{line}-{digest}`,
+  the digest being the first 8 hex characters of the sha256 of its exact
+  name. Decision note: this is an addition to the grammar, not a change.
+  Every ID that does not collide is exactly what it was, and an ID that
+  collides was never stored, because the second insert broke the `symbols`
+  primary key and aborted the file on both backends. So no persisted graph
+  needs a migration (rule 3). A repeat of the same name on the same line is
+  one symbol.
+
   | Language | Imports recorded as | Resolves to a file |
   |---|---|---|
   | JavaScript / TypeScript (incl. `.vue`, `.svelte`) | `js_import` | Relative specifiers, with implied suffixes, `index.*` and TypeScript's `./x.js` → `x.ts`. Packages do not. |

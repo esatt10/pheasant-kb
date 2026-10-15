@@ -13,6 +13,7 @@ from pheasant.config.schema import SourceConfig
 from pheasant.graph.code_analysis import analyze as analyze_code
 from pheasant.graph.code_imports import CODE_REFERENCE_TYPES, resolve_code_import
 from pheasant.graph.media_links import image_links
+from pheasant.graph.symbol_ids import unique_symbol_id
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact
 
@@ -120,12 +121,17 @@ class ArtifactEnrichment:
     terms: list[dict[str, Any]] = field(default_factory=list)
     symbols: list[dict[str, Any]] = field(default_factory=list)
     concept_terms: set[str] = field(default_factory=set)
+    #: Symbol id -> the exact name it was minted for; see `symbol_ids`.
+    symbol_names: dict[str, str] = field(default_factory=dict, repr=False)
 
     def extend(self, other: ArtifactEnrichment) -> None:
         self.nodes.extend(other.nodes)
         self.edges.extend(other.edges)
         self.terms.extend(other.terms)
-        self.symbols.extend(other.symbols)
+        for symbol in other.symbols:
+            if symbol["id"] not in self.symbol_names:
+                self.symbol_names[symbol["id"]] = symbol["name"]
+                self.symbols.append(symbol)
         self.concept_terms.update(other.concept_terms)
 
 
@@ -594,13 +600,14 @@ def _add_symbol(
     end_line: int,
     language: str = "python",
 ) -> None:
-    symbol_id = _node_id(
-        "symbol",
-        kb_id,
-        source.name,
-        artifact.relative_path,
-        f"{name}-{start_line}",
-    )
+    def mint(suffix: str) -> str:
+        line = f"{name}-{start_line}{suffix}"
+        return _node_id("symbol", kb_id, source.name, artifact.relative_path, line)
+
+    symbol_id = unique_symbol_id(mint, enrichment.symbol_names, name)
+    if symbol_id is None:
+        return
+    enrichment.symbol_names[symbol_id] = name
     attrs = {
         "source_id": source.name,
         "artifact_id": artifact.id,

@@ -13,7 +13,7 @@ interface NodeInspectorProps {
   onExpand: (nodeId: string, depth?: number) => void;
   onShowChunks: (nodeId: string) => void;
   onPivot: (nodeId: string) => void;
-  /** Open a document node's file in the viewer above the chat. */
+  /** Open a document node's file in the viewer beside the chat. */
   onOpenFile?: (source: string, path: string) => void;
 }
 
@@ -122,7 +122,7 @@ export function NodeInspector({
           <button
             className="btn btn--small"
             onClick={() => onOpenFile(String(node.source_id), String(node.relative_path))}
-            title="Open this file, rendered, above the chat"
+            title="Open this file, rendered, beside the chat"
           >
             Open file
           </button>

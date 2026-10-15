@@ -18,6 +18,7 @@ export function DragHandle({
   defaultSize,
   label,
   onCommit,
+  startRef,
 }: {
   /** `y` sizes a height (a horizontal bar); `x` a width (a vertical bar). */
   axis: "x" | "y";
@@ -28,6 +29,11 @@ export function DragHandle({
   defaultSize: number;
   label: string;
   onCommit: (size: number) => void;
+  /**
+   * Where the sized pane begins, when that is not the container's edge — a
+   * tile below folded strips in its column. The size is measured from here.
+   */
+  startRef?: RefObject<HTMLElement>;
 }) {
   const sizeRef = useRef<number | null>(null);
 
@@ -45,7 +51,7 @@ export function DragHandle({
     handle.setPointerCapture(event.pointerId);
     handle.classList.add("drag-handle--active");
     const move = (moveEvent: PointerEvent) => {
-      const box = containerRef.current?.getBoundingClientRect();
+      const box = (startRef?.current ?? containerRef.current)?.getBoundingClientRect();
       if (!box) return;
       apply(axis === "y" ? moveEvent.clientY - box.top : moveEvent.clientX - box.left);
     };

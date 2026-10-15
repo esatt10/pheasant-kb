@@ -14,7 +14,7 @@ the source's root with a note, since the reader asked for the index explicitly
 and the root is the nearest thing to what they named.
 
 The web UI reads the answer's ``inventory.result`` (``source`` and ``path``)
-and opens its source browser at that folder, above the chat. Every other
+and opens its source browser at that folder, beside the chat. Every other
 client gets the listing.
 """
 

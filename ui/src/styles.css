@@ -497,9 +497,18 @@ select.text-input {
      next free track, so a collapsed pane (whose resizer is not rendered) or a
      breakpoint that hid the rail shifted every later pane one track left:
      the chat landed in an 8px column and the graph in the chat's. A named
-     area cannot be taken by a sibling. */
-  grid-template-columns: var(--rail, 280px) 8px minmax(0, 1fr) 8px var(--panel, 400px);
-  grid-template-areas: "rail rgrip main pgrip panel";
+     area cannot be taken by a sibling.
+
+     The four columns hold the Notebook's tiles (`components/Tiles.tsx`).
+     Each side track is computed per render (`--nb-left`, `--nb-inner`,
+     `--nb-right`): the
+     column's width, a 44px spine when all its tiles are folded, a drop strip
+     while a tile is being dragged, or nothing when it is empty. */
+  grid-template-columns:
+    var(--nb-left, var(--rail, 280px)) var(--nb-lgrip, 8px)
+    var(--nb-inner, 0px) var(--nb-igrip, 0px) minmax(0, 1fr)
+    var(--nb-rgrip, 8px) var(--nb-right, var(--panel, 400px));
+  grid-template-areas: "left lgrip inner igrip center rgrip right";
   height: 100%;
   gap: 6px;
   padding: 12px;
@@ -537,18 +546,6 @@ select.text-input {
 .resizer:hover .resizer__grip,
 .resizer--active .resizer__grip {
   background: var(--accent, #5f6b45);
-}
-
-.notebook--no-rail {
-  grid-template-columns: minmax(0, 1fr) var(--panel, 400px);
-}
-
-.notebook--no-panel {
-  grid-template-columns: var(--rail, 280px) minmax(0, 1fr);
-}
-
-.notebook--solo {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .pane {
@@ -1562,23 +1559,13 @@ select.text-input {
 
 /* --------------------------------------------------- collapsible rail */
 
-.notebook > .pane--rail { grid-area: rail; }
-.notebook > .resizer--rail { grid-area: rgrip; }
-.notebook > .pane--main { grid-area: main; }
-.notebook > .resizer--panel { grid-area: pgrip; }
-.notebook > .pane--panel { grid-area: panel; }
-
-.notebook--rail-collapsed {
-  grid-template-columns: 44px 0 minmax(0, 1fr) 8px var(--panel, 400px);
-}
-
-.notebook--panel-collapsed {
-  grid-template-columns: var(--rail, 280px) 8px minmax(0, 1fr) 0 44px;
-}
-
-.notebook--rail-collapsed.notebook--panel-collapsed {
-  grid-template-columns: 44px 0 minmax(0, 1fr) 0 44px;
-}
+.notebook > .tile-col--left { grid-area: left; }
+.notebook > .resizer--rail { grid-area: lgrip; }
+.notebook > .tile-col--inner { grid-area: inner; }
+.notebook > .drag-handle--x { grid-area: igrip; align-self: stretch; }
+.notebook > .tile-col--center { grid-area: center; }
+.notebook > .resizer--panel { grid-area: rgrip; }
+.notebook > .tile-col--right { grid-area: right; }
 
 .rail-collapsed__body {
   display: flex;
@@ -2131,37 +2118,9 @@ select.text-input {
 
 /* ------------------------------------------------------------ responsive */
 
-@media (max-width: 1180px) {
-  .notebook,
-  .notebook--rail-collapsed {
-    grid-template-columns: minmax(0, 1fr) 8px var(--panel, 380px);
-    grid-template-areas: "main pgrip panel";
-  }
-  .notebook--panel-collapsed,
-  .notebook--rail-collapsed.notebook--panel-collapsed {
-    grid-template-columns: minmax(0, 1fr) 0 44px;
-    grid-template-areas: "main pgrip panel";
-  }
-  .notebook .pane--rail,
-  .notebook .resizer--rail {
-    display: none;
-  }
-}
-
+/* Narrow windows: the Notebook moves tiles into its middle column itself
+   (`pages/Notebook.tsx`), so its side tracks are already empty here. */
 @media (max-width: 860px) {
-  .notebook,
-  .notebook--rail-collapsed,
-  .notebook--panel-collapsed,
-  .notebook--rail-collapsed.notebook--panel-collapsed,
-  .notebook--no-rail,
-  .notebook--no-panel {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "main";
-  }
-  .notebook .pane--panel,
-  .notebook .resizer--panel {
-    display: none;
-  }
   .topbar__kb {
     display: none;
   }
@@ -4533,28 +4492,114 @@ select.text-input {
   color: var(--accent-text);
 }
 
-/* ------------------------------------------------ source browser (taxonomy)
+/* ------------------------------------------------------------------ tiles
 
-   The main column is a stack: the source browser above, the chat below, a
-   drag handle between them while both are unfolded. Folding either leaves its
-   header strip and gives the other the height. */
+   Each Notebook column is a stack of tiles. Unfolded tiles share the height;
+   while two or more are unfolded the first is sized by a drag handle
+   (`--stack`). A folded tile is its header strip, or — in a side column with
+   nothing unfolded — a vertical spine. */
 
-.notebook > .main-stack { grid-area: main; }
+.tile-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+}
 
-.main-stack {
+.tile {
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
 }
+.tile--open { flex: 1 1 0; }
+.tile--sized { flex: 0 0 var(--stack, 420px); }
+.tile--strip,
+.tile--spine { flex: none; }
+.tile--spine:last-child { flex: 1 1 auto; }
+.tile--spine > .tile-spine { flex: 1; }
+.tile--dragging { opacity: 0.45; }
 
-.main-stack--browser:not(.main-stack--split) { gap: 6px; }
-.main-stack > .pane--main { flex: 1 1 auto; min-height: 0; }
-.main-stack > .browser { flex: 0 0 var(--browser, 420px); min-height: 0; }
-.main-stack--chat-folded > .browser { flex: 1 1 auto; }
-.main-stack--chat-folded > .pane--main { flex: 0 0 auto; }
-.main-stack--browser-folded > .browser { flex: 0 0 auto; }
-.pane--folded > .pane__header { border-bottom: none; }
+.tile__slot,
+.tile__host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.tile__host > .pane { flex: 1; }
+/* A tile can land in a narrow column; its header actions wrap rather than clip. */
+.tile__host > .pane > .pane__header { flex-wrap: wrap; row-gap: 6px; }
+.tile-col > .drag-handle { margin: -4px 0; }
+
+.tile-strip > .pane__header { border-bottom: none; }
+.tile-strip__subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-spine {
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+}
+.tile-spine .rail-collapsed__label { margin-top: 0; }
+
+.tile-grip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 22px;
+  margin-left: -4px;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--muted);
+  cursor: grab;
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+}
+.tile-grip:hover { background: var(--bg-hover); color: var(--text); }
+.tile-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tile-grip:active { cursor: grabbing; }
+
+/* Where a dragged tile will land: a bar above the tile it goes before, or at
+   the foot of the column. An empty column offers itself as a dashed strip. */
+.tile--drop-before { box-shadow: 0 -4px 0 -1px var(--accent); }
+.tile-col--drop-end::after {
+  content: "";
+  flex: none;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.tile-col--dragging.tile-col--empty {
+  border: 1px dashed var(--border);
+}
+.tile-col--drop.tile-col--empty {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.tile-col__placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  writing-mode: horizontal-tb;
+}
+.tile-col--left .tile-col__placeholder,
+.tile-col--inner .tile-col__placeholder,
+.tile-col--right .tile-col__placeholder { writing-mode: vertical-rl; }
+
+/* ------------------------------------------------ source browser (taxonomy) */
 
 .drag-handle {
   flex: none;
@@ -4717,9 +4762,11 @@ select.text-input {
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--border);
 }
-.viewer__title-row { display: flex; align-items: center; gap: 10px; }
+/* Wraps rather than squeezing the name to nothing: the viewer can sit in a
+   column a few hundred pixels wide. */
+.viewer__title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .viewer__icon { font-size: 20px; line-height: 1; }
-.viewer__title { flex: 1; min-width: 0; }
+.viewer__title { flex: 1 1 140px; min-width: 0; }
 .viewer__name {
   font-weight: 650;
   font-size: 14px;
@@ -5189,3 +5236,101 @@ select.text-input {
   opacity: 0.75;
 }
 .scope-pill__clear:hover { opacity: 1; }
+
+/* --------------------------------------------------------- cited passages
+
+   A cited passage in a rendered document, drawn with the CSS Custom
+   Highlight API (`browser/passage.ts`), so no view's DOM is rewritten. */
+
+::highlight(pheasant-cite) {
+  background-color: color-mix(in srgb, var(--warn) 32%, transparent);
+}
+
+.source-chip--active {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1px var(--warn);
+}
+
+/* ------------------------------------------------------------- PDF pages */
+
+.pdf-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pdf-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.pdf-shell > .pdf-view { flex: 1; min-height: 0; }
+
+.pdf-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-sunken);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.pdf-page {
+  position: relative;
+  flex: none;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.18);
+}
+.pdf-page canvas { display: block; }
+
+/* pdf.js's text layer, from its viewer stylesheet: transparent glyphs laid
+   over the canvas, which is what selection and the cited-passage highlight
+   attach to. */
+.pdf-page .textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+}
+.pdf-page .textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdf-page .textLayer > :not(.markedContent),
+.pdf-page .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
+.pdf-page .textLayer span.markedContent { top: 0; height: 0; }
+.pdf-page .textLayer ::selection { background: color-mix(in srgb, AccentColor, transparent 75%); }
+.pdf-page .textLayer br::selection { background: transparent; }
+.pdf-page .textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+/* Over a page the glyphs are the canvas's: the layer's own text stays
+   invisible and only the band is drawn. */
+.pdf-page .textLayer ::highlight(pheasant-cite) {
+  background-color: rgb(255 196 0 / 0.42);
+  color: transparent;
+}

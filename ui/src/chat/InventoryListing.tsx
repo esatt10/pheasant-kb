@@ -32,7 +32,7 @@ export function InventoryListing({
   inventory: Inventory;
   lead: string;
   onSelect: (nodeId: string | undefined) => void;
-  /** Open a listed document in the viewer above the chat. */
+  /** Open a listed document in the viewer beside the chat. */
   onOpen?: (doc: { source: string; path: string }) => void;
 }) {
   const page = inventory.page as InventoryPage;
@@ -183,7 +183,7 @@ function PathButton({
           type="button"
           className="source-chip__visualize inv__open"
           onClick={() => onOpen({ source: doc.source, path: doc.path })}
-          title="Open this file above the chat"
+          title="Open this file beside the chat"
           aria-label={`Open ${doc.path}`}
         >
           ↗

@@ -1,4 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { DragHandle } from "../browser/DragHandle";
 import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -15,15 +17,29 @@ import { EmptyState } from "../components/EmptyState";
 import { PaneResizer } from "../components/PaneResizer";
 import { WorkflowPanel } from "../components/WorkflowPanel";
 import { colorForNode } from "../graph/graphStyles";
-import { DragHandle } from "../browser/DragHandle";
 import { useSessionId } from "../hooks/useSessionId";
+import {
+  TileColumnView,
+  TileDragProvider,
+  TileFold,
+  TileGrip,
+  TileScope,
+  useMediaQuery,
+  useTileHosts,
+} from "../components/Tiles";
+import type { TileSpec } from "../components/Tiles";
 import {
   DEFAULT_BROWSER_HEIGHT,
   DEFAULT_DEPTH,
+  DEFAULT_INNER_WIDTH,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_RAIL_WIDTH,
   useSession,
 } from "../state/session";
+import type { BrowserState, TileColumn, TileId, TileLayout } from "../state/session";
+
+/** Height of the first of two unfolded tiles stacked in a side column, before it is dragged. */
+const DEFAULT_SIDE_STACK = 360;
 
 // The browser and its renderers (syntax highlighting included) load the first
 // time it opens, so a workspace that never browses never pays for them.
@@ -32,14 +48,16 @@ const SourceBrowser = lazy(() =>
 );
 
 /**
- * The workspace: sources on the left, conversation in the middle, knowledge on
- * the right. Asking a question drives the graph — the canvas filters to the
- * nodes the answer surfaced — so the answer and the structure behind it stay
- * side by side.
+ * The workspace: sources on the left, the taxonomy view beside the chat when
+ * it is open, conversation in the middle, knowledge on the right — by default. Each section is a tile (`components/Tiles.tsx`)
+ * that can be dragged to another column or another place in its own, and
+ * folds to its header wherever it is; a reload puts every tile back. Asking a
+ * question drives the graph — the canvas filters to the nodes the answer
+ * surfaced — so the answer and the structure behind it stay side by side.
  *
- * No state lives in this component. It reads the session store and dispatches
- * actions, which is what lets you walk to Sources or Settings and come back to
- * exactly the view you left.
+ * No view state lives in this component (a drag in progress aside). It reads
+ * the session store and dispatches actions, which is what lets you walk to
+ * Sources or Settings and come back to exactly the view you left.
  */
 export function Notebook() {
   const [sessionId, setSessionId] = useSessionId();
@@ -47,7 +65,7 @@ export function Notebook() {
   const [showModelDialog, setShowModelDialog] = useState(false);
   const [showWorkflowDialog, setShowWorkflowDialog] = useState(false);
   const layoutRef = useRef<HTMLDivElement>(null);
-  const stackRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
 
   const overview = useQuery({
     queryKey: ["overview"],
@@ -141,7 +159,26 @@ export function Notebook() {
 
   const hasContent = overview.data?.has_content ?? false;
   const browserOpen = state.browser.open;
-  const split = browserOpen && !state.browserCollapsed && !state.chatCollapsed;
+
+  const hosts = useTileHosts();
+  const [dragging, setDragging] = useState<TileId | null>(null);
+  // Narrow windows keep the old behaviour for the tiles that had it — no
+  // sources rail below 1180px, no graph below 860px — and fold every other
+  // tile into the middle column rather than hiding wherever it was dragged.
+  const narrow = useMediaQuery("(max-width: 1180px)");
+  const compact = useMediaQuery("(max-width: 860px)");
+  const layout = useMemo<TileLayout>(() => {
+    if (!narrow) return state.tiles;
+    // The taxonomy view goes back above the chat, where it fits a narrow window.
+    const left = state.tiles.left.filter((tile) => tile !== "sources");
+    const right = compact ? state.tiles.right.filter((tile) => tile !== "graph") : [];
+    return {
+      left: [],
+      inner: [],
+      center: [...left, ...state.tiles.inner, ...state.tiles.center, ...right],
+      right: compact ? [] : state.tiles.right,
+    };
+  }, [state.tiles, narrow, compact]);
 
   if (overview.isSuccess && !hasContent) {
     return (
@@ -154,191 +191,260 @@ export function Notebook() {
     );
   }
 
+  const specs: Record<TileId, TileSpec> = {
+    sources: {
+      id: "sources",
+      title: "Sources",
+      visible: true,
+      collapsed: state.railCollapsed,
+      onToggle: () => dispatch({ type: "toggle-rail" }),
+      host: hosts.sources,
+      subtitle: state.sourceFilter ?? undefined,
+    },
+    taxonomy: {
+      id: "taxonomy",
+      title: "Taxonomy",
+      visible: browserOpen,
+      collapsed: state.browserCollapsed,
+      onToggle: () => dispatch({ type: "toggle-browser-collapsed" }),
+      host: hosts.taxonomy,
+      subtitle: browserLocation(state.browser),
+      stripActions: (
+        <button
+          type="button"
+          className="btn btn--small btn--icon btn--ghost"
+          onClick={() => dispatch({ type: "close-browser" })}
+          aria-label="Close the source browser"
+          title="Close"
+        >
+          ✕
+        </button>
+      ),
+    },
+    chat: {
+      id: "chat",
+      title: "Chat",
+      visible: true,
+      collapsed: state.chatCollapsed,
+      onToggle: () => dispatch({ type: "toggle-chat-collapsed" }),
+      host: hosts.chat,
+    },
+    graph: {
+      id: "graph",
+      title: "Graph",
+      visible: true,
+      collapsed: state.panelCollapsed,
+      onToggle: () => dispatch({ type: "toggle-panel" }),
+      host: hosts.graph,
+      subtitle: "Graph · Facts · Node",
+    },
+  };
+  const visibleIds = (column: TileColumn) => layout[column].filter((id) => specs[id].visible);
+  const columns = {
+    left: visibleIds("left"),
+    inner: visibleIds("inner"),
+    center: visibleIds("center"),
+    right: visibleIds("right"),
+  };
+  const sideOpen = (column: TileColumn) => columns[column].some((id) => !specs[id].collapsed);
+  /** A side column's track: its width, a spine, a drop strip while dragging, or nothing. */
+  const sideTrack = (column: TileColumn, width: string) =>
+    columns[column].length === 0
+      ? dragging && !narrow
+        ? "44px"
+        : "0px"
+      : sideOpen(column)
+        ? width
+        : "44px";
+  const stackHeight = (column: TileColumn) =>
+    column === "center" ? state.browserHeight : (state.stackHeights[column] ?? DEFAULT_SIDE_STACK);
+  const columnView = (column: TileColumn) => (
+    <TileColumnView
+      column={column}
+      tiles={layout[column].map((id) => specs[id])}
+      stackHeight={stackHeight(column)}
+      defaultStackHeight={column === "center" ? DEFAULT_BROWSER_HEIGHT : DEFAULT_SIDE_STACK}
+      onStackHeight={(height) =>
+        column === "center"
+          ? dispatch({ type: "set-pane-width", pane: "browser", width: height })
+          : dispatch({ type: "set-stack-height", column, height })
+      }
+      spine={column !== "center" && columns[column].length > 0 && !sideOpen(column)}
+      columnRef={column === "inner" ? innerRef : undefined}
+    />
+  );
+
   return (
+    <TileDragProvider
+      value={{
+        dragging,
+        setDragging,
+        move: (tile, column, before) => dispatch({ type: "move-tile", tile, column, before }),
+        reset: () => dispatch({ type: "reset-tiles" }),
+        columns,
+      }}
+    >
     <div
-      className={`notebook${state.railCollapsed ? " notebook--rail-collapsed" : ""}${
-        state.panelCollapsed ? " notebook--panel-collapsed" : ""
-      }`}
+      className={`notebook${dragging ? " notebook--dragging" : ""}`}
       ref={layoutRef}
       style={
         {
           "--rail": `${state.railWidth}px`,
           "--panel": `${state.panelWidth}px`,
+          "--inner": `${state.innerWidth}px`,
+          "--nb-left": sideTrack("left", "var(--rail)"),
+          "--nb-lgrip": sideOpen("left") ? "8px" : "0px",
+          "--nb-inner": sideTrack("inner", "var(--inner)"),
+          "--nb-igrip": sideOpen("inner") ? "8px" : "0px",
+          "--nb-rgrip": sideOpen("right") ? "8px" : "0px",
+          "--nb-right": sideTrack("right", "var(--panel)"),
         } as CSSProperties
       }
     >
-      <aside className="pane pane--rail">
-        {state.railCollapsed ? (
-          <div className="rail-collapsed__body">
-            <button
-              className="btn btn--small btn--icon"
-              onClick={() => dispatch({ type: "toggle-rail" })}
-              title="Show sources"
-              aria-label="Show sources"
-            >
-              ›
-            </button>
-            <span className="rail-collapsed__label">Sources</span>
-          </div>
-        ) : (
-        <SourceRail
-          onCollapse={() => dispatch({ type: "toggle-rail" })}
-          sources={overview.data?.sources ?? []}
-          selected={state.sourceFilter}
-          selectedType={state.sourceTypeFilter}
-          onSelect={(source) => dispatch({ type: "filter-source", source })}
-          onSelectType={(sourceType) => dispatch({ type: "filter-source-type", sourceType })}
-          onChanged={() => overview.refetch()}
-          onBrowse={(source) => dispatch({ type: "open-browser", source, path: "" })}
+      {columnView("left")}
+      {sideOpen("left") ? (
+        <PaneResizer
+          variable="--rail"
+          edge="left"
+          containerRef={layoutRef}
+          min={200}
+          max={1200}
+          defaultWidth={DEFAULT_RAIL_WIDTH}
+          label="Resize the left column"
+          onCommit={(width) => dispatch({ type: "set-pane-width", pane: "rail", width })}
         />
-        )}
-      </aside>
+      ) : null}
+      {columnView("inner")}
+      {sideOpen("inner") ? (
+        <DragHandle
+          axis="x"
+          variable="--inner"
+          containerRef={layoutRef}
+          startRef={innerRef}
+          min={280}
+          max={(box) => box.width - 360}
+          defaultSize={DEFAULT_INNER_WIDTH}
+          label="Resize the column beside the chat"
+          onCommit={(width) => dispatch({ type: "set-pane-width", pane: "inner", width })}
+        />
+      ) : null}
+      {columnView("center")}
+      {sideOpen("right") ? (
+        <PaneResizer
+          variable="--panel"
+          edge="right"
+          containerRef={layoutRef}
+          min={320}
+          max={2400}
+          defaultWidth={DEFAULT_PANEL_WIDTH}
+          label="Resize the right column"
+          onCommit={(width) => dispatch({ type: "set-pane-width", pane: "panel", width })}
+        />
+      ) : null}
+      {columnView("right")}
 
-      {state.railCollapsed ? null : (
-      <PaneResizer
-        variable="--rail"
-        edge="left"
-        containerRef={layoutRef}
-        min={200}
-        max={560}
-        defaultWidth={DEFAULT_RAIL_WIDTH}
-        label="Resize sources"
-        onCommit={(width) => dispatch({ type: "set-pane-width", pane: "rail", width })}
-      />
-      )}
+      {/* Each tile's content, rendered once and portalled into the host its
+          tile shows (`components/Tiles.tsx`), so moving a tile never remounts
+          it. A folded tile's content is dropped, except the chat's: an answer
+          being written must still land in the thread when it is unfolded. */}
+      {!state.railCollapsed
+        ? createPortal(
+            <TileScope spec={specs.sources}>
+              <aside className="pane pane--rail">
+                <SourceRail
+                  sources={overview.data?.sources ?? []}
+                  selected={state.sourceFilter}
+                  selectedType={state.sourceTypeFilter}
+                  onSelect={(source) => dispatch({ type: "filter-source", source })}
+                  onSelectType={(sourceType) => dispatch({ type: "filter-source-type", sourceType })}
+                  onChanged={() => overview.refetch()}
+                  onBrowse={(source) => dispatch({ type: "open-browser", source, path: "" })}
+                />
+              </aside>
+            </TileScope>,
+            hosts.sources,
+          )
+        : null}
 
-      <div
-        className={`main-stack${browserOpen ? " main-stack--browser" : ""}${
-          split ? " main-stack--split" : ""
-        }${browserOpen && state.chatCollapsed ? " main-stack--chat-folded" : ""}${
-          browserOpen && state.browserCollapsed ? " main-stack--browser-folded" : ""
-        }`}
-        ref={stackRef}
-        style={{ "--browser": `${state.browserHeight}px` } as CSSProperties}
-      >
-        {browserOpen ? (
-          <Suspense
-            fallback={
-              <section className="pane browser centered muted small">
-                <span className="spinner" />
-              </section>
-            }
-          >
-            <SourceBrowser onAsk={askInChat} onShowInGraph={showInGraph} />
-          </Suspense>
-        ) : null}
-        {split ? (
-          <DragHandle
-            axis="y"
-            variable="--browser"
-            containerRef={stackRef}
-            min={160}
-            max={(box) => box.height - 180}
-            defaultSize={DEFAULT_BROWSER_HEIGHT}
-            label="Resize the source browser and the chat"
-            onCommit={(height) => dispatch({ type: "set-pane-width", pane: "browser", width: height })}
-          />
-        ) : null}
-        <section className={`pane pane--main${browserOpen && state.chatCollapsed ? " pane--folded" : ""}`}>
-          <header className="pane__header">
-            {browserOpen ? (
-              <button
-                className="btn btn--small btn--icon"
-                onClick={() => dispatch({ type: "toggle-chat-collapsed" })}
-                aria-label={state.chatCollapsed ? "Expand the chat" : "Fold the chat"}
-                title={
-                  state.chatCollapsed
-                    ? "Expand the chat"
-                    : "Fold the chat to give the source browser the height"
+      {browserOpen && !state.browserCollapsed
+        ? createPortal(
+            <TileScope spec={specs.taxonomy}>
+              <Suspense
+                fallback={
+                  <section className="pane browser centered muted small">
+                    <span className="spinner" />
+                  </section>
                 }
               >
-                {state.chatCollapsed ? "▴" : "▾"}
-              </button>
-            ) : null}
-            <span className="pane__title">Chat</span>
-            <div className="pane__actions">
-              {browserOpen ? null : (
-                <button
-                  className="btn btn--small"
-                  onClick={() => dispatch({ type: "open-browser", source: state.sourceFilter, path: "" })}
-                  title="Browse a source's folders and files above the chat (or type @taxonomy)"
-                >
-                  Taxonomy
-                </button>
-              )}
-              {state.turns.length > 0 ? (
-                <button
-                  className="btn btn--small"
-                  onClick={() => dispatch({ type: "new-conversation" })}
-                  title="Clear this thread and start fresh"
-                >
-                  New conversation
-                </button>
-              ) : null}
-              <button
-                className="btn btn--small"
-                onClick={() => setShowWorkflowDialog(true)}
-                title="Choose how questions are answered"
-              >
-                {state.workflow ?? "Workflow"}
-              </button>
-              <button
-                className="btn btn--small"
-                onClick={() => setShowModelDialog(true)}
-                title="Connect an LLM to synthesize answers"
-              >
-                {status.data?.ready ? "Model connected" : "Connect model"}
-              </button>
-            </div>
-          </header>
-          {/* Folded, the chat is hidden rather than unmounted: an answer being
-              written must still land in the thread when it is unfolded. */}
-          <div
-            className="pane__body"
-            style={{ overflow: "hidden" }}
-            hidden={browserOpen && state.chatCollapsed}
-          >
-            <ChatPanel
-              status={status.data}
-              sessionId={sessionId}
-              hasContent={hasContent}
-              onCitationClick={focusNode}
-              onConnectModel={() => setShowModelDialog(true)}
-            />
-          </div>
-        </section>
-      </div>
+                <SourceBrowser onAsk={askInChat} onShowInGraph={showInGraph} />
+              </Suspense>
+            </TileScope>,
+            hosts.taxonomy,
+          )
+        : null}
 
-      {state.panelCollapsed ? null : (
-      <PaneResizer
-        variable="--panel"
-        edge="right"
-        containerRef={layoutRef}
-        min={320}
-        max={2400}
-        defaultWidth={DEFAULT_PANEL_WIDTH}
-        label="Resize graph panel"
-        onCommit={(width) => dispatch({ type: "set-pane-width", pane: "panel", width })}
-      />
+      {createPortal(
+        <TileScope spec={specs.chat}>
+          <section className="pane pane--main">
+            <header className="pane__header">
+              <TileGrip />
+              <span className="pane__title">Chat</span>
+              <div className="pane__actions">
+                {browserOpen ? null : (
+                  <button
+                    className="btn btn--small"
+                    onClick={() => dispatch({ type: "open-browser", source: state.sourceFilter, path: "" })}
+                    title="Browse a source's folders and files (or type @taxonomy)"
+                  >
+                    Taxonomy
+                  </button>
+                )}
+                {state.turns.length > 0 ? (
+                  <button
+                    className="btn btn--small"
+                    onClick={() => dispatch({ type: "new-conversation" })}
+                    title="Clear this thread and start fresh"
+                  >
+                    New conversation
+                  </button>
+                ) : null}
+                <button
+                  className="btn btn--small"
+                  onClick={() => setShowWorkflowDialog(true)}
+                  title="Choose how questions are answered"
+                >
+                  {state.workflow ?? "Workflow"}
+                </button>
+                <button
+                  className="btn btn--small"
+                  onClick={() => setShowModelDialog(true)}
+                  title="Connect an LLM to synthesize answers"
+                >
+                  {status.data?.ready ? "Model connected" : "Connect model"}
+                </button>
+                <TileFold />
+              </div>
+            </header>
+            <div className="pane__body" style={{ overflow: "hidden" }}>
+              <ChatPanel
+                status={status.data}
+                sessionId={sessionId}
+                hasContent={hasContent}
+                onCitationClick={focusNode}
+                onConnectModel={() => setShowModelDialog(true)}
+              />
+            </div>
+          </section>
+        </TileScope>,
+        hosts.chat,
       )}
 
-      {state.panelCollapsed ? (
-        <aside className="pane pane--panel">
-          <div className="rail-collapsed__body">
-            <button
-              className="btn btn--small btn--icon"
-              onClick={() => dispatch({ type: "toggle-panel" })}
-              title="Show the graph"
-              aria-label="Show graph panel"
-            >
-              ‹
-            </button>
-            <span className="rail-collapsed__label">Graph · Facts · Node</span>
-          </div>
-        </aside>
-      ) : (
+      {!state.panelCollapsed
+        ? createPortal(
+            <TileScope spec={specs.graph}>
       <aside className="pane pane--panel">
         <header className="pane__header">
+          <TileGrip />
           <div className="tabs" style={{ flex: 1 }}>
             <button
               className={state.panelTab === "graph" ? "tab active" : "tab"}
@@ -359,16 +465,8 @@ export function Notebook() {
               Node
             </button>
           </div>
-          <button
-            className="btn btn--small btn--icon"
-            onClick={() => dispatch({ type: "toggle-panel" })}
-            title="Collapse the graph panel to give the chat more room"
-            aria-label="Collapse graph panel"
-          >
-            ›
-          </button>
+          <TileFold />
         </header>
-
         {state.panelTab === "graph" ? (
           <>
             <div className="graph-pane__body">
@@ -460,7 +558,10 @@ export function Notebook() {
           </div>
         ) : null}
       </aside>
-      )}
+            </TileScope>,
+            hosts.graph,
+          )
+        : null}
 
       {showWorkflowDialog ? (
         <div className="modal-scrim" onClick={() => setShowWorkflowDialog(false)}>
@@ -500,7 +601,14 @@ export function Notebook() {
         />
       ) : null}
     </div>
+    </TileDragProvider>
   );
+}
+
+/** Where the taxonomy view is, for its folded strip. */
+function browserLocation(browser: BrowserState): string {
+  const where = browser.source ? [browser.source, ...browser.path.split("/").filter(Boolean)].join(" / ") : "All sources";
+  return browser.file ? `${where} · ${browser.file.path.split("/").pop()}` : where;
 }
 
 function labelOf(node: GraphNode | undefined, fallback: string): string {

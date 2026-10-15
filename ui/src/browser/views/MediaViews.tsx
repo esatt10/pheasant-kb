@@ -5,7 +5,7 @@ import { api } from "../../api/client";
  * Fetch something the region serves (with the API token) as an object URL,
  * revoked when the view unmounts or asks for something else.
  */
-function useObjectUrl(load: (() => Promise<string>) | null, key: string) {
+export function useObjectUrl(load: (() => Promise<string>) | null, key: string) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -30,21 +30,6 @@ function useObjectUrl(load: (() => Promise<string>) | null, key: string) {
     // `key` names what `load` fetches; the closure itself changes every render.
   }, [key]);
   return { url, error };
-}
-
-/**
- * The original PDF in the browser's own viewer: pages, zoom, search and
- * print as the reader already knows them. The bytes are fetched and handed
- * over as a typed blob, so the frame never navigates to the API.
- */
-export function PdfView({ source, path }: { source: string; path: string }) {
-  const { url, error } = useObjectUrl(
-    () => api.documentRawObjectUrl({ source, path, mimeType: "application/pdf" }),
-    `${source}/${path}`,
-  );
-  if (error) return <p className="error small viewer-pad">The PDF could not be loaded: {error}</p>;
-  if (!url) return <ViewerLoading label="Loading the PDF…" />;
-  return <iframe className="pdf-view" src={url} title={path} />;
 }
 
 /** An indexed image, from the media store, with fit / actual-size / zoom. */

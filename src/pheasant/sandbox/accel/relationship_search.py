@@ -70,6 +70,13 @@ def _edge_rows(
     rows = []
     narrow = getattr(graph, "candidate_edges", None)
     edges = narrow(tokens, source_name) if (callable(narrow) and tokens) else graph.iter_edges()
+    # A store-backed node_map() fetches every endpoint in one query, as the
+    # Python scan does (`graph_search._primed_candidates`); one query per
+    # endpoint was up to 480 a search. The resident graph's map is a dict.
+    prime = getattr(nodes, "prime", None)
+    if callable(prime):
+        edges = list(edges)
+        prime(endpoint for pair, _edges in edges for endpoint in pair)
     for (source, target), edge_map in edges:
         source_label = str((nodes.get(source) or {}).get("label") or source)
         target_label = str((nodes.get(target) or {}).get("label") or target)

@@ -29,7 +29,7 @@ traversal has one code path rather than a branch.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import nullcontext
 from typing import Any
 
@@ -117,6 +117,23 @@ class _LazyNodeMap:
             self._seen[key] = self.graph.rows.get_node(self.graph.kb_id, key)
         found = self._seen[key]
         return default if found is None else found
+
+    def prime(self, keys: Iterable[str]) -> None:
+        """Fetch every not-yet-seen key in one query, before the lookups.
+
+        A relationship scan reads both endpoints' labels of each candidate
+        edge, and caching alone only stops the *repeats*: every distinct
+        endpoint was still its own query, up to 480 per search on a real
+        region. The scan knows its endpoints before it scores, so it asks
+        for them all at once. Absent ids are remembered as absent.
+        """
+
+        missing = list(dict.fromkeys(key for key in keys if key not in self._seen))
+        if not missing:
+            return
+        found = self.graph.rows.get_nodes(self.graph.kb_id, missing)
+        for key in missing:
+            self._seen[key] = found.get(key)
 
     def __iter__(self) -> Any:
         raise TypeError(self._WHOLE_GRAPH_HINT)

@@ -62,6 +62,7 @@
   "search.embeddings.rate_limit_max_wait_seconds": 900.0,
   "search.vector_store.provider": "lancedb",
   "search.vector_store.path": "/state/vectors",
+  "search.vector_store.resident": true,
   "search.wasm_relationship_search": true,
   "ingestion.captioner.provider": "openai-spec",
   "ingestion.captioner.model": "gpt-6-luna",

@@ -41,15 +41,18 @@ function chipTooltip(citation: Citation): string {
  */
 export function SourceStrip({
   citations,
+  activeChunkId,
   onSelect,
   onVisualize,
   onOpen,
 }: {
   citations: Citation[];
-  onSelect: (nodeId: string | undefined) => void;
+  /** The passage open in the viewer, whose chip is marked as the selected one. */
+  activeChunkId?: string | null;
+  onSelect: (citation: Citation) => void;
   /** "Visualize this passage": a diagram grounded in this one source. */
   onVisualize?: (citation: Citation) => void;
-  /** Open the cited file in the viewer above the chat, at the cited passage. */
+  /** Open the cited file in the viewer beside the chat, at the cited passage. */
   onOpen?: (citation: Citation) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -63,8 +66,11 @@ export function SourceStrip({
         return (
           <span key={citation.index} className="source-chip-wrap">
           <button
-            className={`source-chip${citation.used ? "" : " source-chip--unused"}`}
-            onClick={() => onSelect(citation.node_id)}
+            className={`source-chip${citation.used ? "" : " source-chip--unused"}${
+              activeChunkId && citation.chunk_id === activeChunkId ? " source-chip--active" : ""
+            }`}
+            aria-pressed={activeChunkId ? citation.chunk_id === activeChunkId : undefined}
+            onClick={() => onSelect(citation)}
             title={chipTooltip(citation)}
           >
             <span className="source-chip__n">{citation.index}</span>
