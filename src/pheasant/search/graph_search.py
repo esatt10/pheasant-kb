@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from pheasant.graph.simple import SimpleMultiDiGraph
+from pheasant.search.sqlite_store import _STOPWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,11 @@ def search_graph(
     if not q and not tokens:
         return []
 
-    node_hits: list[tuple[float, dict[str, Any]]] = []
+    # (score, title, node_id, attrs, field): the result dict is built for the
+    # hits returned, not for every candidate that scored -- up to 2,000 a
+    # query, of which ten survive. The sort key is the one the built result
+    # would give, so the order is unchanged.
+    node_hits: list[tuple[float, str, str, dict[str, Any], str | None]] = []
     # One lock hold for the whole scan, iterating live: the previous snapshot
     # copied every node and edge before scoring a single one, which on a
     # 240k-node graph was most of the query's latency.
@@ -105,10 +110,13 @@ def search_graph(
             score, field = _node_score(attrs, tokens, q)
             if score <= 0:
                 continue
-            node_hits.append((score, _node_result(node_id, attrs, score, field)))
+            node_hits.append((score, str(attrs.get("label") or node_id), node_id, attrs, field))
 
-    node_hits.sort(key=lambda item: (-item[0], str(item[1].get("title") or "")))
-    results = [hit for _, hit in node_hits[:max_results]]
+    node_hits.sort(key=lambda item: (-item[0], item[1]))
+    results = [
+        _node_result(node_id, attrs, score, field)
+        for score, _title, node_id, attrs, field in node_hits[:max_results]
+    ]
 
     if include_relationships and len(results) < max_results:
         rel_hits = _relationship_hits(graph, tokens, q, source_name, wasm_relationship_search)
@@ -447,10 +455,25 @@ def _stringify(value: Any) -> str:
 
 
 def _tokens(query: str) -> list[str]:
+    """The query's terms, without the framing words the text arm also drops.
+
+    Every token is an OR'd prefix term for the candidate index and an
+    any-token match for the scorer, so "how does the vector index get
+    rebuilt" matched any node containing "the" or "how": 9,013 of the lab's
+    33,557 nodes, cut to an arbitrary ``LIMIT 2000`` in heap order and ranked
+    by a tie at the any-token tier -- so every natural question returned the
+    same headings ("sign-the-contract"). Without them it is 1,032. Measured on the lab
+    region: "what is OKF" went from 2,000 candidates and 122 ms to 49 and
+    4 ms, with ``OKF`` first instead of an unrelated heading. Same list and
+    same yield rule as ``sqlite_store._query_tokens``: a query made only of
+    framing words keeps them rather than matching nothing.
+    """
+
     tokens: set[str] = set()
     for raw in re.findall(r"[A-Za-z0-9_]{2,}", query.lower()):
         tokens.add(raw)
         for part in re.split(r"[_\W]+", raw):
             if len(part) > 1:
                 tokens.add(part)
-    return sorted(tokens)
+    content = {token for token in tokens if token not in _STOPWORDS}
+    return sorted(content or tokens)

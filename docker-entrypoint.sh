@@ -106,8 +106,11 @@ index_workspace_if_present() {
 # pod's CPU limit) those threads spend the period's quota in a burst and are
 # then throttled for the rest of it: on the 1-CPU api tier a resident vector
 # scan (search.vector_store.resident) measured 9.5 ms p50 but 86 ms p95 with
-# four threads, and 29 ms flat with one. Only when nothing set them already,
-# never above the core count, and nothing at all without a quota.
+# four threads, and 29 ms flat with one. LanceDB's Rust pool has the same
+# habit (LANCE_CPU_THREADS): its exact scan of 14k x 1536-d vectors on that
+# tier went 147 ms p50 / 266 ms p95 with eight threads to 79 / 114 with one.
+# Only when nothing set them already, never above the core count, and nothing
+# at all without a quota.
 cpu_quota_threads() {
     root="${PHEASANT_CGROUP_ROOT:-/sys/fs/cgroup}"
     quota=""
@@ -129,8 +132,8 @@ cpu_quota_threads() {
 
 if blas_threads=$(cpu_quota_threads); then
     : "${OPENBLAS_NUM_THREADS:=$blas_threads}" "${OMP_NUM_THREADS:=$blas_threads}"
-    : "${MKL_NUM_THREADS:=$blas_threads}"
-    export OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS
+    : "${MKL_NUM_THREADS:=$blas_threads}" "${LANCE_CPU_THREADS:=$blas_threads}"
+    export OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS LANCE_CPU_THREADS
 fi
 
 ensure_config || true

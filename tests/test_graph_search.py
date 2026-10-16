@@ -171,3 +171,24 @@ def test_search_blob_tracks_node_updates() -> None:
 
     graph.remove_nodes_from(["n1"])
     assert search_graph(graph, "beta") == []
+
+
+def test_framing_words_are_not_search_terms() -> None:
+    from pheasant.search.graph_search import _tokens
+
+    assert _tokens("how does the vector index get rebuilt") == ["index", "rebuilt", "vector"]
+    # A question made only of framing words keeps them rather than matching nothing.
+    assert _tokens("what is it") == ["is", "it", "what"]
+
+
+def test_a_question_ranks_its_subject_above_headings_sharing_a_framing_word() -> None:
+    graph = _sample_graph()
+    graph.add_node(
+        "heading:docs:sign",
+        type="heading",
+        label="Sign the contract",
+        source_id="docs",
+    )
+    hits = search_graph(graph, "what does the debounce window do", max_results=5)
+    assert hits[0]["node_id"] == "concept:repo:debounce"
+    assert "heading:docs:sign" not in {hit["node_id"] for hit in hits}

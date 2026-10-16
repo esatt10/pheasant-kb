@@ -482,12 +482,12 @@ class VectorStoreSettings(ModelMixin):
     resident_max_mb: int = 1024
     #: none (exact) | ivf_hnsw_sq | ivf_pq: approximate, trades recall. vector_ann.py
     ann_index: str = "none"
-    #: Rows below which no index is built.
-    ann_min_rows: int = 50_000
+    #: Rows below which no index is built (an exact scan is already ~30 ms).
+    ann_min_rows: int = 5_000
     #: Partitions searched per query: more is slower and closer to exact.
     ann_nprobes: int = 32
     #: HNSW candidate list size (raised to k when k is larger).
-    ann_ef: int = 600
+    ann_ef: int = 300
     #: IVF_PQ only: re-rank k x factor candidates on full vectors.
     ann_refine_factor: int | None = 10
 
