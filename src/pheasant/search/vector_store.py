@@ -49,7 +49,9 @@ from __future__ import annotations
 import base64
 import email.utils
 import hashlib
+import http.client
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -68,6 +70,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import numpy as np
@@ -279,11 +282,93 @@ _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 #: Transport-level failures. `ssl.SSLError` is first because it is the one a
 #: real 12k-file index actually died on.
-_TRANSIENT_ERRORS = (ssl.SSLError, URLError, TimeoutError, ConnectionError, socket.timeout)
+_TRANSIENT_ERRORS = (
+    ssl.SSLError,
+    URLError,
+    TimeoutError,
+    ConnectionError,
+    socket.timeout,
+    http.client.HTTPException,
+)
 
 #: Ceiling on locally invented backoff. A provider's explicit Retry-After is
 #: intentionally not capped: waking before its quota resets causes another 429.
 _MAX_BACKOFF_SECONDS = 30.0
+
+#: Kept-alive provider connections, one per thread per origin.
+_CONNECTIONS = threading.local()
+
+
+def _transport(request: Request, timeout: float) -> bytes:
+    """Send ``request`` on a kept-alive connection; the response body.
+
+    ``urlopen`` opened a new TCP and TLS session for every call, and a query
+    embedding is one call per question: measured from the lab api tier to
+    api.openai.com, 325 ms p50 per query against 263 ms on a connection kept
+    open between calls. One connection per thread, because an
+    ``HTTPConnection`` serves one request at a time and indexing embeds from
+    several threads. A status of 400 or above raises ``HTTPError`` exactly as
+    ``urlopen`` does, so the retry policy reads the same either way. A proxied
+    origin keeps ``urlopen``, which is what honours the proxy settings.
+    """
+
+    from urllib.request import getproxies, proxy_bypass
+
+    parts = urlsplit(request.full_url)
+    host = parts.hostname or ""
+    if parts.scheme in getproxies() and not proxy_bypass(host):
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+    key = (parts.scheme, host, parts.port)
+    pool: dict[tuple, http.client.HTTPConnection] = _CONNECTIONS.__dict__.setdefault("pool", {})
+    target = parts.path + (f"?{parts.query}" if parts.query else "")
+    headers = dict(request.header_items())
+    for attempt in range(2):
+        connection = pool.get(key)
+        reused = connection is not None
+        if connection is None:
+            https = parts.scheme == "https"
+            factory = http.client.HTTPSConnection if https else http.client.HTTPConnection
+            connection = factory(host, parts.port, timeout=timeout)
+            pool[key] = connection
+        else:
+            connection.timeout = timeout
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout)
+        try:
+            connection.request(request.get_method(), target, body=request.data, headers=headers)
+            response = connection.getresponse()
+            body = response.read()
+        except (http.client.RemoteDisconnected, ConnectionError):
+            # Reset, aborted (Windows) or a broken pipe: what writing to a
+            # socket the server already closed looks like on each platform.
+            connection.close()
+            pool.pop(key, None)
+            if reused and attempt == 0:
+                continue  # the server closed an idle connection: once more, on a new one
+            raise
+        except BaseException:
+            connection.close()
+            pool.pop(key, None)
+            raise
+        if response.will_close:
+            connection.close()
+            pool.pop(key, None)
+        if response.status >= 400:
+            fp = io.BytesIO(body)
+            url, status, reason = request.full_url, response.status, response.reason
+            raise HTTPError(url, status, reason, response.headers, fp)
+        return body
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _embedding_values(item: dict[str, Any]) -> list[float]:
+    """One embedding, sent as a float list or as base64 little-endian float32."""
+
+    value = item["embedding"]
+    if isinstance(value, str):
+        return np.frombuffer(base64.b64decode(value), dtype="<f4").astype(float).tolist()
+    return [float(v) for v in value]
 
 
 def _retry_after_seconds(header: str | None, fallback: float) -> float:
@@ -415,6 +500,7 @@ class OpenAISpecEmbedder:
         rate_limit_max_wait_seconds: float = 300.0,
     ):
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self._base64 = urlsplit(self.base_url).hostname == "api.openai.com"
         self.model = model
         self.api_key_env = api_key_env
         self.dimensions = int(dimensions) if dimensions else None
@@ -494,8 +580,7 @@ class OpenAISpecEmbedder:
                     raise DeadlineExceeded("assistant request deadline exceeded")
                 timeout = self.timeout if remaining is None else min(self.timeout, remaining)
                 _record_embedding_provider_request()
-                with urlopen(request, timeout=timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                payload = json.loads(_transport(request, timeout).decode("utf-8"))
                 if remaining_seconds() is not None and (remaining_seconds() or 0) <= 0:
                     raise DeadlineExceeded("assistant request deadline exceeded")
             except HTTPError as exc:  # noqa: PERF203 - retry loop
@@ -584,6 +669,11 @@ class OpenAISpecEmbedder:
         body: dict[str, Any] = {"model": self.model, "input": list(batch)}
         if self.dimensions:
             body["dimensions"] = self.dimensions
+        if self._base64:
+            # A quarter of the bytes and no float parsing: 263 -> 208 ms p50 for
+            # one query from the lab. Only where the provider is known to take it;
+            # a compatible server that rejects an unknown field would 400 forever.
+            body["encoding_format"] = "base64"
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
         if api_key:
@@ -603,7 +693,7 @@ class OpenAISpecEmbedder:
             raise ValueError(
                 f"Embedding endpoint returned {len(data)} embeddings for {len(batch)} inputs"
             )
-        return [[float(value) for value in item["embedding"]] for item in data]
+        return [_embedding_values(item) for item in data]
 
 
 class NumpyVectorStore:
@@ -889,7 +979,7 @@ class LanceDBVectorStore:
     WARMUP_MAX_VECTORS = 10_000
 
     #: Version manifests older than this are dropped when compacting. Nothing
-    #: here reads an old version: every call re-opens the table at its latest.
+    #: here reads an old version: every call reads the table at its latest.
     #: Data files keep Lance's own rule -- not deleted while younger than
     #: seven days, since they could belong to another writer's uncommitted
     #: transaction -- so the space a compaction frees comes back a week later
@@ -915,6 +1005,10 @@ class LanceDBVectorStore:
         #: Whether this process has matched the index to the config yet.
         self._reconciled = False
         self._db = None
+        #: The open table, held between calls (see `_database`), and whether
+        #: this LanceDB can keep one current.
+        self._handle: Any = None
+        self._hold = True
         # Membership is queried once per artifact by ``VectorIndexer``.  A
         # Lance table scan there makes a full index O(files * vectors), which
         # becomes the dominant cost long before embedding does.  One
@@ -936,15 +1030,30 @@ class LanceDBVectorStore:
                     "extra: pip install 'pheasant-kb[vector]'"
                 ) from exc
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._db = lancedb.connect(str(self.directory))
+            try:
+                # Zero: every read of a held handle checks for a newer version,
+                # so another process's commit is seen exactly as a re-open
+                # would see it -- for 0.9ms rather than 10ms (measured on the
+                # lab api tier, where opening was a tenth of the vector arm).
+                self._db = lancedb.connect(
+                    str(self.directory), read_consistency_interval=timedelta(0)
+                )
+            except TypeError:  # a LanceDB too old to take it re-opens per call
+                self._db = lancedb.connect(str(self.directory))
+                self._hold = False
         return self._db
 
     def _table(self):
+        """The table, opened once and held; ``None`` while it does not exist."""
+
+        held = self._handle
+        if held is not None:
+            return held
         db = self._database()
         if self.TABLE not in db.table_names():
             return None
         try:
-            return db.open_table(self.TABLE)
+            table = db.open_table(self.TABLE)
         except Exception:
             if not self._park_torn_manifests():
                 raise
@@ -955,7 +1064,10 @@ class LanceDBVectorStore:
                 "next sync.",
                 self.TABLE,
             )
-            return db.open_table(self.TABLE)
+            table = db.open_table(self.TABLE)
+        if self._hold:
+            self._handle = table
+        return table
 
     def _park_torn_manifests(self) -> bool:
         """Move empty version manifests aside so the table opens at the last good one.
@@ -1036,7 +1148,8 @@ class LanceDBVectorStore:
         self._mutated = True
         table = self._table()
         if table is None:
-            self._database().create_table(self.TABLE, data=rows)
+            created = self._database().create_table(self.TABLE, data=rows)
+            self._handle = created if self._hold else None
             with self._id_cache_lock:
                 self._id_cache = set(chunk_ids)
             return
@@ -1080,8 +1193,23 @@ class LanceDBVectorStore:
         return removed
 
     def search(self, query_vec: list[float], k: int) -> list[tuple[str, float, dict[str, Any]]]:
-        table = self._table()
-        if table is None or k < 1:
+        if k < 1:
+            return []
+        held = self._handle
+        try:
+            return self._search(self._table(), query_vec, k)
+        except Exception:
+            if held is None:
+                raise
+            # A held handle outlived its table: the writer dropped and re-created
+            # it (`reset`, a model change). Open the current one, once.
+            self._handle = None
+            return self._search(self._table(), query_vec, k)
+
+    def _search(
+        self, table: Any, query_vec: list[float], k: int
+    ) -> list[tuple[str, float, dict[str, Any]]]:
+        if table is None:
             return []
         if self._resident is not None:
             held = self._resident.search(table, query_vec, k)
@@ -1159,6 +1287,7 @@ class LanceDBVectorStore:
         if table is None:
             return 0
         removed = table.count_rows()
+        self._handle = None
         self._database().drop_table(self.TABLE)
         with self._id_cache_lock:
             self._id_cache = set()
