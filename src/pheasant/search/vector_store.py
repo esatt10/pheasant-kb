@@ -943,7 +943,47 @@ class LanceDBVectorStore:
         db = self._database()
         if self.TABLE not in db.table_names():
             return None
-        return db.open_table(self.TABLE)
+        try:
+            return db.open_table(self.TABLE)
+        except Exception:
+            if not self._park_torn_manifests():
+                raise
+            logger.warning(
+                "LanceDB table %r had a torn (empty) version manifest; it was "
+                "parked as *.torn and the table opened at its last complete "
+                "version. Vectors that version lacks are re-embedded by the "
+                "next sync.",
+                self.TABLE,
+            )
+            return db.open_table(self.TABLE)
+
+    def _park_torn_manifests(self) -> bool:
+        """Move empty version manifests aside so the table opens at the last good one.
+
+        A commit interrupted by the host -- Docker Desktop or WSL stopped, a
+        laptop sleeping mid-sync -- can leave the newest manifest journaled
+        but never written: a 0-byte file Lance takes for the latest version
+        and cannot read. Every open then fails, which fails every source's
+        sync, because they share this one table, and nothing heals it. An
+        empty manifest describes no version, so setting it aside loses
+        nothing the table still had. Lance resolves "latest" by listing
+        ``*.manifest``, so the previous version is what opens next, and the
+        next commit takes the parked version's number. Parked rather than
+        deleted (rule 2). Returns whether anything was parked; a read-only
+        mount (an api replica) parks nothing and keeps the original error
+        until the writer has opened the table.
+        """
+
+        versions = self.directory / f"{self.TABLE}.lance" / "_versions"
+        parked = False
+        try:
+            torn = [path for path in versions.glob("*.manifest") if path.stat().st_size == 0]
+            for path in torn:
+                path.rename(path.with_name(path.name + ".torn"))
+                parked = True
+        except OSError:
+            logger.debug("Could not park torn LanceDB manifests in %s", versions, exc_info=True)
+        return parked
 
     @staticmethod
     def _quote(value: str) -> str:

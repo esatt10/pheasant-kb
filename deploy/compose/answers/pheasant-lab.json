@@ -63,6 +63,7 @@
   "search.vector_store.provider": "lancedb",
   "search.vector_store.path": "/state/vectors",
   "search.vector_store.resident": true,
+  "search.vector_store.ann_index": "ivf_hnsw_sq",
   "search.wasm_relationship_search": true,
   "ingestion.captioner.provider": "openai-spec",
   "ingestion.captioner.model": "gpt-6-luna",
@@ -100,7 +101,7 @@
   "sync.concurrency.remote_worker_urls": [
     "grpc://worker:8766"
   ],
-  "sync.concurrency.remote_worker_enabled": false,
+  "sync.concurrency.remote_worker_enabled": true,
   "sync.concurrency.remote_worker_token_env": "PHEASANT_INDEX_WORKER_TOKEN",
   "sync.concurrency.remote_worker_timeout_seconds": 120,
   "sync.concurrency.remote_worker_batch_size": 16,

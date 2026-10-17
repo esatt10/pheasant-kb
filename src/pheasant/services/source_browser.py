@@ -329,19 +329,21 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
         "outline": _outline(context, artifact_id),
         "focus": _focus(context, artifact_id, request.chunk_id),
         "raw": {
-            "available": bool(raw_type) and _raw_path(row) is not None,
+            "available": bool(raw_type) and _raw_available(row),
             "mime_type": raw_type,
         },
     }
 
 
 def raw_document(context: ServiceContext, request: ReadRequest) -> dict[str, Any]:
-    """``{path, mime_type, sha256, size_bytes, name}`` for a binary document.
+    """``{path, content, mime_type, sha256, size_bytes, name}`` for a binary document.
 
     The path comes from the region's own artifact row, never from the caller,
     and is served only while it still holds the bytes that were indexed: a
     file edited since would show something no chunk, citation or caption
-    describes.
+    describes. A file is handed over as ``path`` (``content`` is ``None``) so
+    it streams; a member of a ZIP archive has no file of its own, so its
+    inflated bytes are ``content`` and ``path`` is ``None``.
     """
 
     context.knowledge_base(request.knowledge_base)
@@ -350,11 +352,18 @@ def raw_document(context: ServiceContext, request: ReadRequest) -> dict[str, Any
     mime = RAW_TYPES.get(PurePosixPath(relative).suffix.lower())
     if mime is None:
         raise InvalidRequest(f"{relative} is read as text; use read_document")
-    path = _raw_path(row)
-    if path is None or _sha256_file(path) != row["sha256"]:
+    original = _original(row) if _raw_available(row) else None
+    content: bytes | None = None
+    if original is not None and original.member is not None:
+        content = _indexed_bytes(row, limit=MAX_RAW_BYTES)
+        readable = content is not None
+    else:
+        readable = original is not None and _sha256_file(original.path) == row["sha256"]
+    if original is None or not readable:
         raise DocumentNotFound(f"{relative} (its original file is not readable here)")
     return {
-        "path": path,
+        "path": original.path if content is None else None,
+        "content": content,
         "name": PurePosixPath(relative).name,
         "mime_type": mime,
         "sha256": row["sha256"],
@@ -564,55 +573,106 @@ def _resolve(
 def _indexed_text(row: Any) -> str | None:
     """The indexed file's text, if this process can read the bytes that were indexed."""
 
-    path = _local_path(row)
-    if path is None:
-        return None
-    try:
-        content = path.read_bytes()
-    except OSError:
-        return None
-    if hashlib.sha256(content).hexdigest() != row["sha256"]:
-        return None
-    return content.decode("utf-8", errors="replace")
+    content = _indexed_bytes(row, limit=None)
+    return None if content is None else content.decode("utf-8", errors="replace")
 
 
 def _spreadsheet_text(row: Any) -> str | None:
-    path = _raw_path(row)
-    if path is None:
-        return None
-    try:
-        content = path.read_bytes()
-    except OSError:
-        return None
-    if hashlib.sha256(content).hexdigest() != row["sha256"]:
+    content = _indexed_bytes(row, limit=MAX_RAW_BYTES)
+    if content is None:
         return None
     from pheasant.ingestion.office import extract_xlsx_text
 
     return extract_xlsx_text(content) or None
 
 
-def _raw_path(row: Any) -> Path | None:
-    path = _local_path(row)
-    if path is None:
-        return None
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None
-    if size > MAX_RAW_BYTES or (row["size_bytes"] is not None and size != row["size_bytes"]):
-        return None
-    return path
+@dataclass(frozen=True)
+class _Original:
+    """Where an indexed document's bytes are on this process: a file, or one
+    member of a ZIP archive the folder connector indexed without extracting.
+
+    A member's artifact ``path`` is ``file:///…/a.zip#member``, which is no
+    file at all; reading it as one is what left every PDF, image and recording
+    from an uploaded archive with no raw bytes and its text read from chunks.
+    """
+
+    path: Path
+    #: The member's name as its artifact carries it; ``None`` for a file.
+    member: str | None = None
+
+    def size(self) -> int | None:
+        if self.member is None:
+            try:
+                return self.path.stat().st_size
+            except OSError:
+                return None
+        info = self._info()
+        return None if info is None else info.file_size
+
+    def read(self, limit: int | None) -> bytes | None:
+        """The bytes, or ``None`` when unreadable here or larger than ``limit``."""
+
+        size = self.size()
+        if size is None or (limit is not None and size > limit):
+            return None
+        if self.member is None:
+            try:
+                return self.path.read_bytes()
+            except OSError:
+                return None
+        from pheasant.sync.zip_archive import ArchiveError, read_member
+
+        info = self._info()
+        if info is None:
+            return None
+        try:
+            return read_member(self.path, info.filename, info.file_size)
+        except ArchiveError:
+            return None
+
+    def _info(self) -> Any:
+        from pheasant.sync.zip_archive import find_member
+
+        assert self.member is not None
+        return find_member(self.path, self.member)
 
 
-def _local_path(row: Any) -> Path | None:
+def _original(row: Any) -> _Original | None:
     raw = str(row["path"] or "")
     if not raw:
         return None
-    path = Path(raw)
+    if raw.startswith("file:") and "#" in raw:
+        from urllib.parse import unquote, urlsplit
+        from urllib.request import url2pathname
+
+        parts = urlsplit(raw)
+        found = _Original(Path(url2pathname(parts.path)), unquote(parts.fragment))
+    else:
+        found = _Original(Path(raw))
     try:
-        return path if path.is_file() else None
+        return found if found.path.is_file() else None
     except OSError:
         return None
+
+
+def _indexed_bytes(row: Any, limit: int | None) -> bytes | None:
+    """The original bytes, only while they are still the ones that were indexed."""
+
+    original = _original(row)
+    content = None if original is None else original.read(limit)
+    if content is None or hashlib.sha256(content).hexdigest() != row["sha256"]:
+        return None
+    return content
+
+
+def _raw_available(row: Any) -> bool:
+    """Whether :func:`raw_document` can serve this row here, without reading it."""
+
+    original = _original(row)
+    size = None if original is None else original.size()
+    if size is None or size > MAX_RAW_BYTES:
+        return False
+    return row["size_bytes"] is None or size == row["size_bytes"]
 
 
 def _sha256_file(path: Path) -> str | None:

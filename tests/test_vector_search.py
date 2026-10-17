@@ -402,6 +402,36 @@ def test_lancedb_membership_is_cached_and_new_ids_skip_delete(
     assert deleted == [["c1"]]
 
 
+def test_lancedb_opens_at_the_last_complete_version_after_a_torn_commit(
+    tmp_path: Path,
+) -> None:
+    """An empty newest manifest must not make every sync fail.
+
+    A host stopped mid-commit leaves the newest version manifest journaled but
+    unwritten: 0 bytes, which Lance reads as the latest version and cannot
+    open. The store parks it (never deletes it) and opens the version before.
+    """
+    pytest.importorskip(
+        "lancedb", reason="lancedb not installed (pip install 'pheasant-kb[vector]')"
+    )
+    from pheasant.search.vector_store import LanceDBVectorStore
+
+    store = LanceDBVectorStore(tmp_path / "vectors")
+    store.upsert(["c1"], [[1.0, 0.0]], [{"source_id": "s1", "artifact_id": "a1"}])
+    store.upsert(["c2"], [[0.0, 1.0]], [{"source_id": "s1", "artifact_id": "a2"}])
+    versions = tmp_path / "vectors" / f"{store.TABLE}.lance" / "_versions"
+    manifests = sorted(versions.glob("*.manifest"), key=lambda path: path.stat().st_mtime_ns)
+    newest = manifests[-1]
+    newest.write_bytes(b"")
+
+    fresh = LanceDBVectorStore(tmp_path / "vectors")
+    assert fresh.count() == 1, "the version before the torn commit holds c1 only"
+    assert newest.with_name(newest.name + ".torn").exists(), "parked, not deleted"
+
+    fresh.upsert(["c3"], [[0.5, 0.5]], [{"source_id": "s1", "artifact_id": "a3"}])
+    assert LanceDBVectorStore(tmp_path / "vectors").existing_ids(["c1", "c3"]) == {"c1", "c3"}
+
+
 def test_numpy_store_caches_the_decoded_matrix(tmp_path: Path) -> None:
     """Regression test: search() must not re-decode the whole index every call.
 
