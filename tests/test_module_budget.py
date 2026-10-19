@@ -86,7 +86,8 @@ CEILINGS: dict[str, int] = {
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.
-    "search/vector_store.py": 1500,
+    # The OpenAI-spec HTTP client moved to `search/embedding_client.py`.
+    "search/vector_store.py": 1300,
     "setup_wizard.py": 2200,
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`. Raised from 2780 for the

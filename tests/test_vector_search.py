@@ -254,7 +254,7 @@ def test_openai_spec_embedder_wire_format(monkeypatch: pytest.MonkeyPatch) -> No
             {"data": [{"index": i, "embedding": [float(i), 1.0]} for i in reversed(range(count))]}
         ).encode("utf-8")
 
-    monkeypatch.setattr("pheasant.search.vector_store._transport", fake_transport)
+    monkeypatch.setattr("pheasant.search.embedding_client._transport", fake_transport)
     monkeypatch.setenv("PHEASANT_TEST_EMBED_KEY", "sekrit")
     embedder = OpenAISpecEmbedder(
         "http://localhost:9/v1/",
@@ -639,7 +639,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
     """
     import ssl
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client
 
     calls = {"n": 0}
 
@@ -649,7 +649,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
             raise ssl.SSLError("SSLV3_ALERT_BAD_RECORD_MAC")
         return _ok_response(1)
 
-    monkeypatch.setattr(vector_store, "_transport", flaky)
+    monkeypatch.setattr(embedding_client, "_transport", flaky)
     vectors = _embedder().embed(["hello"])
     assert calls["n"] == 2
     assert vectors == [[0.1, 0.2]]
@@ -658,7 +658,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
 def test_a_rate_limit_is_retried_and_honours_retry_after(monkeypatch) -> None:
     from urllib.error import HTTPError
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client, vector_store
 
     calls = {"n": 0}
     slept: list[float] = []
@@ -669,7 +669,7 @@ def test_a_rate_limit_is_retried_and_honours_retry_after(monkeypatch) -> None:
             raise HTTPError("u", 429, "Too Many Requests", {"Retry-After": "2"}, None)
         return _ok_response(1)
 
-    monkeypatch.setattr(vector_store, "_transport", limited)
+    monkeypatch.setattr(embedding_client, "_transport", limited)
     monkeypatch.setattr(vector_store.time, "sleep", lambda s: slept.append(s))
     _embedder().embed(["hello"])
     assert calls["n"] == 2
@@ -683,7 +683,7 @@ def test_a_bad_key_is_not_retried(monkeypatch) -> None:
 
     import pytest as _pytest
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client
 
     calls = {"n": 0}
 
@@ -691,7 +691,7 @@ def test_a_bad_key_is_not_retried(monkeypatch) -> None:
         calls["n"] += 1
         raise HTTPError("u", 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(vector_store, "_transport", unauthorized)
+    monkeypatch.setattr(embedding_client, "_transport", unauthorized)
     with _pytest.raises(HTTPError):
         _embedder().embed(["hello"])
     assert calls["n"] == 1, "a wrong key must surface immediately"
@@ -702,7 +702,7 @@ def test_retries_are_bounded(monkeypatch) -> None:
 
     import pytest as _pytest
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client, vector_store
 
     calls = {"n": 0}
 
@@ -710,7 +710,7 @@ def test_retries_are_bounded(monkeypatch) -> None:
         calls["n"] += 1
         raise ssl.SSLError("still broken")
 
-    monkeypatch.setattr(vector_store, "_transport", always_broken)
+    monkeypatch.setattr(embedding_client, "_transport", always_broken)
     monkeypatch.setattr(vector_store.time, "sleep", lambda s: None)
     with _pytest.raises(ssl.SSLError):
         _embedder(max_retries=3).embed(["hello"])
@@ -794,7 +794,7 @@ def test_openai_itself_is_asked_for_base64_and_others_are_not(monkeypatch) -> No
 
     import numpy as np
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client, vector_store
 
     sent: list[dict[str, Any]] = []
     vector = np.array([0.25, -0.5, 1.0], dtype="<f4")
@@ -807,7 +807,7 @@ def test_openai_itself_is_asked_for_base64_and_others_are_not(monkeypatch) -> No
             value = base64.b64encode(vector.tobytes()).decode()
         return json.dumps({"data": [{"index": 0, "embedding": value}]}).encode()
 
-    monkeypatch.setattr(vector_store, "_transport", fake)
+    monkeypatch.setattr(embedding_client, "_transport", fake)
     openai = vector_store.OpenAISpecEmbedder("https://api.openai.com/v1", "m")
     other = vector_store.OpenAISpecEmbedder("http://localhost:11434/v1", "m")
 
