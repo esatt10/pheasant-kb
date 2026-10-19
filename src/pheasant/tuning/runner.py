@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -315,7 +316,7 @@ def _run(
     # `__tuning__` lease does not separate them either, because `SourceLease`
     # grants a lease its current holder already owns. Found by running three
     # batches from three threads and getting two completed experiments.
-    owner = f"{kb_id}:{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
+    owner = f"{kb_id}:{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
     if not tuning_store.open_experiment(state, experiment, owner=owner, stale_before=stale_before):
         return TuningOutcome(
             experiment_id=experiment.experiment_id,

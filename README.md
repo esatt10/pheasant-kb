@@ -86,6 +86,30 @@ Behind it are three retrieval arms—full-text, vector and graph—merged by
 reciprocal rank fusion, so a query matches on wording, on meaning and on how
 documents relate to each other.
 
+### Browse it like a file collection
+
+<p align="center">
+  <img src="docs/assets/ui/taxonomy.png" alt="The Notebook in four tiles: the sources rail, the taxonomy view open on handbook › runbooks with kestrel.md rendered in its viewer, the chat answering a question that cites that runbook, and the graph's facts for it" width="900">
+</p>
+
+**Taxonomy** (or `@taxonomy` in the chat) opens a source as folders and
+files in its own column, read from what was indexed, so it looks the same on a
+replica with no source mount. Open a file and it renders as itself: Markdown,
+code, tables, notebooks, and PDFs, images and recordings in the browser's own
+viewer, including documents that arrived inside a ZIP. Selecting a citation
+re-aims the viewer at the cited passage. **Search this folder** scopes every
+question to where you are, and **Omit from answers** leaves a document out of
+them.
+
+<p align="center">
+  <img src="docs/assets/ui/taxonomy-tiles.png" alt="The same session rearranged: the sources folded to a spine at the left, the chat widened, and the taxonomy view moved into the right column above the graph" width="900">
+</p>
+
+Every section of the Notebook is a tile. Drag one by its grip (or use the
+arrow keys on it) to any column, fold it to its header, or double-click a grip
+to put everything back. A moved tile is never reloaded, so an answer that is
+still streaming keeps streaming.
+
 ### Draw it, then rearrange it
 
 <p align="center">
