@@ -22,6 +22,25 @@ benchmark as the in-distribution case. Where the vectors fit in memory,
 ``search.vector_store.resident`` is exact and, on the lab, faster too: 61 ms
 for the vector arm against 91 ms with this index.
 
+Re-measured on the same tier with real embeddings (14,174 x 1536-d,
+``text-embedding-3-small``, LANCE_CPU_THREADS=1), against the exact scan's
+98 ms, recall against the exact top-40 for off-corpus queries:
+
+=================================  =====  =========  ======
+IVF_HNSW_SQ, partitions, ef        build  k=40 p50   recall
+=================================  =====  =========  ======
+14 partitions (rows // 1000), 600  12 s   31.0 ms    0.995
+4 partitions, 300                  15 s   16.1 ms    0.995
+1 partition, 300                   18 s   12.5 ms    0.993
+1 partition, 100                   18 s   10.7 ms    0.977
+=================================  =====  =========  ======
+
+Every partition is its own HNSW graph and a query walks ``nprobes`` of them,
+so more partitions is more graphs to walk for no recall: LanceDB's own advice
+is one partition, adding more only to bound the memory of training a graph.
+Hence one per :data:`HNSW_ROWS_PER_PARTITION` rows -- one, below that -- and
+``ann_ef`` 300. The 0.81 above is the hashed embedder, not the index.
+
 The writer owns the index: :func:`reconcile` runs at the end of a sync, on the
 one process that writes the table, and builds, refreshes, replaces or drops
 the index to match the config. Readers only shape their query
@@ -45,6 +64,10 @@ INDEX_TYPES = {"ivf_hnsw_sq": "IVF_HNSW_SQ", "ivf_pq": "IVF_PQ"}
 #: then LanceDB scans the unindexed rows exactly and merges them in, which is
 #: correct and only slower.
 REFRESH_UNINDEXED_SHARE = 0.10
+#: Rows per IVF_HNSW_SQ partition. A partition is one graph trained in memory
+#: (~1.5 GB of float32 at 250k x 1536-d), and below this a single graph is
+#: both the fastest and the most accurate shape (table above).
+HNSW_ROWS_PER_PARTITION = 250_000
 
 
 def configured(kind: str | None) -> str | None:
@@ -77,8 +100,42 @@ def _build_options(kind: str, rows: int, width: int) -> dict[str, Any]:
             "num_partitions": max(1, round(math.sqrt(rows))),
             "num_sub_vectors": max(1, width // 16),
         }
-    # About a thousand rows per partition, each an HNSW graph.
-    return {"index_type": "IVF_HNSW_SQ", "num_partitions": max(1, rows // 1000)}
+    return {
+        "index_type": "IVF_HNSW_SQ",
+        "num_partitions": max(1, math.ceil(rows / HNSW_ROWS_PER_PARTITION)),
+    }
+
+
+def _create(table: Any, options: dict[str, Any]) -> None:
+    """Build through LanceDB's index-config API, or its older keywords.
+
+    The keyword form (``metric=``, ``num_partitions=``) is deprecated with a
+    warning on every build; the ``[vector]`` extra still allows a LanceDB
+    old enough to have nothing else.
+    """
+
+    options = dict(options)
+    index_type = options.pop("index_type")
+    try:
+        from lancedb.index import HnswSq, IvfPq
+
+        config_type = {"IVF_HNSW_SQ": HnswSq, "IVF_PQ": IvfPq}[index_type]
+        config = config_type(distance_type="cosine", **options)
+    except (ImportError, TypeError):
+        config = None
+    if config is not None:
+        try:
+            table.create_index("vector", replace=True, config=config)
+            return
+        except TypeError:
+            pass  # a create_index that predates ``config=``
+    table.create_index(
+        metric="cosine",
+        vector_column_name="vector",
+        replace=True,
+        index_type=index_type,
+        **options,
+    )
 
 
 def reconcile(table: Any, settings: Any) -> str:
@@ -111,12 +168,7 @@ def reconcile(table: Any, settings: Any) -> str:
                 return "current"
         width = int(getattr(table.schema.field("vector").type, "list_size", 0) or 0)
         started = time.monotonic()
-        table.create_index(
-            metric="cosine",
-            vector_column_name="vector",
-            replace=True,
-            **_build_options(kind, rows, width),
-        )
+        _create(table, _build_options(kind, rows, width))
         logger.info(
             "Built the %s vector index over %d rows in %.1fs",
             wanted,
@@ -157,6 +209,6 @@ def shape_query(query: Any, settings: Any, k: int) -> Any:
         return query.bypass_vector_index()
     query = query.nprobes(int(getattr(settings, "ann_nprobes", 32) or 32))
     if kind == "ivf_hnsw_sq":
-        return query.ef(max(int(getattr(settings, "ann_ef", 600) or 600), k))
+        return query.ef(max(int(getattr(settings, "ann_ef", 300) or 300), k))
     refine = getattr(settings, "ann_refine_factor", None)
     return query.refine_factor(int(refine)) if refine else query

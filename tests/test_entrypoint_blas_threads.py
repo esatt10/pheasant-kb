@@ -78,3 +78,7 @@ def test_no_cgroup_files_means_no_change(tmp_path: Path) -> None:
 def test_an_operator_setting_wins() -> None:
     # `: "${VAR:=value}"` assigns only when unset or empty.
     assert ': "${OPENBLAS_NUM_THREADS:=$blas_threads}"' in ENTRYPOINT
+    assert '"${LANCE_CPU_THREADS:=$blas_threads}"' in ENTRYPOINT
+    assert "export OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS LANCE_CPU_THREADS" in (
+        ENTRYPOINT
+    )

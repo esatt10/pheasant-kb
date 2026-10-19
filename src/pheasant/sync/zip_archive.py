@@ -69,6 +69,22 @@ def members(path: Path) -> list[tuple[str, zipfile.ZipInfo]]:
     return sorted(found.items())
 
 
+def find_member(path: Path, name: str) -> zipfile.ZipInfo | None:
+    """The entry ``members`` lists as ``name``, or ``None``.
+
+    ``name`` is the safe spelling an artifact's path carries, which can differ
+    from the entry's own (``./a.pdf``, ``dir\\a.pdf``), so the lookup applies
+    the rule that produced it rather than ``getinfo``.
+    """
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile):
+        return None
+    return next((info for info in infos if safe_member_name(info) == name), None)
+
+
 def read_member(path: Path, name: str, max_bytes: int) -> bytes:
     """Inflate one member within its declared and actual size bound."""
 

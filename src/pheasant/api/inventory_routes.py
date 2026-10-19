@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from pheasant.services import inventory, inventory_detail, source_browser
 
@@ -171,7 +171,7 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = Query(default=None),
-    ) -> FileResponse:
+    ) -> Response:
         """A binary document's original bytes, for a browser's own viewer.
 
         HTTP only, on purpose: a PDF viewer, an ``<img>`` and an ``<audio>``
@@ -190,13 +190,13 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
                 principal_groups=principal_groups,
             ),
         )
-        return FileResponse(
-            found["path"],
-            media_type=found["mime_type"],
-            headers={
-                "Content-Disposition": "inline",
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "private, max-age=3600",
-                "ETag": f'"{found["sha256"]}"',
-            },
-        )
+        headers = {
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"{found["sha256"]}"',
+        }
+        if found["content"] is not None:
+            # A member of an indexed ZIP archive: inflated, not a file to stream.
+            return Response(found["content"], media_type=found["mime_type"], headers=headers)
+        return FileResponse(found["path"], media_type=found["mime_type"], headers=headers)

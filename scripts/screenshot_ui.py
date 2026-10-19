@@ -32,6 +32,9 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 TARGET = REPO / "docs" / "assets" / "ui"
 VIEWPORT = {"width": 1440, "height": 900}
+#: The Notebook with four tiles open needs a desktop-width window; at 1440 the
+#: chat column narrows to a word a line, which is not what anyone works in.
+WIDE_VIEWPORT = {"width": 1920, "height": 1080}
 #: Below this the Graph shot is a subselection rather than a network.
 MIN_GRAPH_NODES = 50
 
@@ -460,7 +463,7 @@ def _shoot(port: int, shots: dict[str, str]) -> None:
 
         # Ask something, so the notebook shows an answer rather than an empty
         # composer. A demo that demos.
-        composer = page.get_by_placeholder("Ask anything about your sources")
+        composer = page.locator(".composer textarea")
         composer.click()
         composer.fill("What restarts nightly, and who should be paged if it fails?")
         composer.press("Enter")
@@ -652,6 +655,75 @@ def _shoot_tuning(port: int) -> None:
         browser.close()
 
 
+def _shoot_taxonomy(port: int) -> None:
+    """The Notebook's tiles with the taxonomy view open, then rearranged.
+
+    The first frame is the default layout -- sources, the taxonomy view in its
+    own column, the chat, the graph -- with the runbook the answer cites open
+    in the viewer, which is what the view is for: the passage and the file it
+    lives in side by side. The second is the same session after a person has
+    folded the sources to their spine and moved the taxonomy view above the
+    graph, by keyboard on its grip, which is the same move a drag makes.
+    """
+
+    from playwright.sync_api import sync_playwright
+
+    provisioned = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
+    launch: dict[str, object] = {}
+    if provisioned.exists():
+        launch["executable_path"] = str(provisioned)
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch(**launch)
+        page = browser.new_page(viewport=WIDE_VIEWPORT, device_scale_factor=2)
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.goto(f"http://127.0.0.1:{port}/", wait_until="networkidle")
+        page.wait_for_timeout(1200)
+
+        composer = page.locator(".composer textarea")
+        composer.click()
+        composer.fill("What restarts nightly, and who should be paged if it fails?")
+        composer.press("Enter")
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(3000)
+
+        page.get_by_role("button", name="Taxonomy", exact=True).click()
+        # The view loads lazily and lists the sources before it is clickable:
+        # a row found mid-hydration is replaced under the click.
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(1500)
+        rows = page.locator(".browser__rows")
+        for name in ("handbook", "runbooks", "kestrel.md"):
+            rows.locator(".browser-row", has_text=name).first.click()
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(700)
+        if not page.locator(".browser__viewer").filter(has_text="Kestrel Runbook").count():
+            raise SystemExit("the taxonomy view did not open the runbook in its viewer")
+        page.wait_for_timeout(800)
+        out = TARGET / "taxonomy.png"
+        page.screenshot(path=str(out))
+        print(f"  {out.relative_to(REPO)}  ({out.stat().st_size // 1024} KiB)")
+
+        page.get_by_role("button", name="Collapse Sources", exact=True).click()
+        page.wait_for_timeout(400)
+        grip = page.locator('[data-tile-grip="taxonomy"]')
+        grip.focus()
+        # inner -> center -> right (appended below the graph), then up above it.
+        for key in ("ArrowRight", "ArrowRight", "ArrowUp"):
+            page.keyboard.press(key)
+            page.wait_for_timeout(300)
+        if not page.locator('[data-column="right"] > [data-tile="taxonomy"]').count():
+            raise SystemExit("the taxonomy tile did not reach the right column")
+        page.wait_for_timeout(800)
+        out = TARGET / "taxonomy-tiles.png"
+        page.screenshot(path=str(out))
+        print(f"  {out.relative_to(REPO)}  ({out.stat().st_size // 1024} KiB)")
+        if errors:
+            raise SystemExit(f"the Notebook raised: {errors}")
+        browser.close()
+
+
 def _shoot_run_states(port: int, config) -> None:
     """Photograph the two states a batch reaches when a process goes away.
 
@@ -768,6 +840,12 @@ def main() -> int:
             "and not what should be published."
         ),
     )
+    parser.add_argument(
+        "--only",
+        choices=["all", "taxonomy"],
+        default="all",
+        help="Regenerate one group of screenshots; the region is seeded the same either way.",
+    )
     args = parser.parse_args()
 
     dist = REPO / "ui" / "dist"
@@ -810,19 +888,22 @@ def main() -> int:
             raise SystemExit("the server did not start")
 
         print(f"Serving the seeded region on 127.0.0.1:{port}")
-        _shoot(
-            port,
-            {
-                "notebook": "Notebook",
-                "memory": "Memory",
-                "evaluation": "Effectiveness",
-                "tuning": "Tuning",
-                "sources": "Sources",
-                "graph": "Graph",
-            },
-        )
-        _shoot_tuning(port)
-        _shoot_run_states(port, config)
+        if args.only == "all":
+            _shoot(
+                port,
+                {
+                    "notebook": "Notebook",
+                    "memory": "Memory",
+                    "evaluation": "Effectiveness",
+                    "tuning": "Tuning",
+                    "sources": "Sources",
+                    "graph": "Graph",
+                },
+            )
+            _shoot_tuning(port)
+        _shoot_taxonomy(port)
+        if args.only == "all":
+            _shoot_run_states(port, config)
         server.should_exit = True
         thread.join(timeout=10)
         print(json.dumps({"screenshots": sorted(p.name for p in TARGET.glob("*.png"))}))

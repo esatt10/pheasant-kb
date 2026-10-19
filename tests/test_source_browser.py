@@ -19,6 +19,7 @@ Four things are held here:
 from __future__ import annotations
 
 import base64
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,9 @@ CORPUS: dict[str, str | bytes] = {
 }
 
 
-def _region(root: Path, **overrides: Any) -> dict[str, Any]:
+def _region(
+    root: Path, *, archive: dict[str, bytes] | None = None, **overrides: Any
+) -> dict[str, Any]:
     workspace = root / "workspace"
     for relative, body in CORPUS.items():
         path = workspace / relative
@@ -64,6 +67,10 @@ def _region(root: Path, **overrides: Any) -> dict[str, Any]:
             path.write_bytes(body)
         else:
             path.write_text(body, encoding="utf-8")
+    if archive is not None:
+        with zipfile.ZipFile(workspace / "bundle.zip", "w") as bundle:
+            for name, body in archive.items():
+                bundle.writestr(name, body)
     raw: dict[str, Any] = {
         "pheasant": {
             "name": "browser",
@@ -283,6 +290,50 @@ def test_raw_bytes_are_only_for_binary_formats_and_only_as_indexed(tmp_path: Pat
     (mine["workspace"] / "img" / "logo.png").write_bytes(PNG + b"tampered")
     changed = mine["client"].get("/documents/raw", params={"path": "img/logo.png"})
     assert changed.status_code == 404
+
+
+PDF = (Path(__file__).parent / "fixtures/sample_workspace/documents/handbook.pdf").read_bytes()
+#: Spaces and a folder, because a member's artifact path is a URI that quotes them.
+ARCHIVE = {
+    "papers/Graph Algorithms.pdf": PDF,
+    "papers/figure one.png": PNG,
+    "notes/read me.md": "# Notes\n\nFrom inside the archive.\n",
+}
+
+
+def test_a_zip_member_serves_its_bytes_like_a_file(tmp_path: Path) -> None:
+    """A document indexed from inside a ZIP has no file of its own: its path is
+    ``file:///…/bundle.zip#member``. The viewer still gets its original bytes,
+    and a text member reads as itself rather than as reassembled chunks."""
+
+    mine = _region(tmp_path, archive=ARCHIVE)
+    tools, kb = mine["tools"], mine["kb"]
+    for member, mime in (
+        ("papers/Graph Algorithms.pdf", "application/pdf"),
+        ("papers/figure one.png", "image/png"),
+    ):
+        path = f"bundle.zip/{member}"
+        read = tools.read_document(kb, path, "docs")
+        assert read["raw"] == {"available": True, "mime_type": mime}, path
+
+        response = mine["client"].get("/documents/raw", params={"path": path})
+        assert response.status_code == 200, response.text
+        assert response.content == ARCHIVE[member]
+        assert response.headers["content-type"] == mime
+
+    text = tools.read_document(kb, "bundle.zip/notes/read me.md", "docs")
+    assert text["content_origin"] == "file"
+    assert text["content"] == ARCHIVE["notes/read me.md"]
+
+
+def test_an_edited_archive_serves_nothing_it_did_not_index(tmp_path: Path) -> None:
+    mine = _region(tmp_path, archive=ARCHIVE)
+    with zipfile.ZipFile(mine["workspace"] / "bundle.zip", "w") as bundle:
+        for name, body in ARCHIVE.items():
+            bundle.writestr(name, body + b"tampered" if isinstance(body, bytes) else body)
+
+    path = "bundle.zip/papers/figure one.png"
+    assert mine["client"].get("/documents/raw", params={"path": path}).status_code == 404
 
 
 def test_what_a_read_refuses(region: dict[str, Any]) -> None:

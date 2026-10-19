@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
 import time
 import uuid
@@ -75,7 +76,7 @@ def _owner() -> str:
     shape: a scheduled batch and a hand-started one live in the same process.
     """
 
-    return f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
 
 
 @dataclass

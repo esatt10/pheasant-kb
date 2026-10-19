@@ -244,30 +244,17 @@ def test_openai_spec_embedder_wire_format(monkeypatch: pytest.MonkeyPatch) -> No
 
     captured: dict[str, Any] = {}
 
-    class _FakeResponse:
-        def __init__(self, payload: dict):
-            self._payload = payload
-
-        def read(self) -> bytes:
-            return json.dumps(self._payload).encode("utf-8")
-
-        def __enter__(self) -> _FakeResponse:
-            return self
-
-        def __exit__(self, *exc: object) -> bool:
-            return False
-
-    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+    def fake_transport(request: Any, timeout: float = 0) -> bytes:
         captured["url"] = request.full_url
         captured["body"] = json.loads(request.data.decode("utf-8"))
         captured["auth"] = request.get_header("Authorization")
         count = len(captured["body"]["input"])
         # Deliberately out of order: the client must sort by data[i].index.
-        return _FakeResponse(
+        return json.dumps(
             {"data": [{"index": i, "embedding": [float(i), 1.0]} for i in reversed(range(count))]}
-        )
+        ).encode("utf-8")
 
-    monkeypatch.setattr("pheasant.search.vector_store.urlopen", fake_urlopen)
+    monkeypatch.setattr("pheasant.search.embedding_client._transport", fake_transport)
     monkeypatch.setenv("PHEASANT_TEST_EMBED_KEY", "sekrit")
     embedder = OpenAISpecEmbedder(
         "http://localhost:9/v1/",
@@ -400,6 +387,36 @@ def test_lancedb_membership_is_cached_and_new_ids_skip_delete(
     assert deleted == [], "a never-seen id does not need a Lance delete version"
     store.upsert(["c1"], [[0.5, 0.5]], [{"source_id": "s1", "artifact_id": "a1"}])
     assert deleted == [["c1"]]
+
+
+def test_lancedb_opens_at_the_last_complete_version_after_a_torn_commit(
+    tmp_path: Path,
+) -> None:
+    """An empty newest manifest must not make every sync fail.
+
+    A host stopped mid-commit leaves the newest version manifest journaled but
+    unwritten: 0 bytes, which Lance reads as the latest version and cannot
+    open. The store parks it (never deletes it) and opens the version before.
+    """
+    pytest.importorskip(
+        "lancedb", reason="lancedb not installed (pip install 'pheasant-kb[vector]')"
+    )
+    from pheasant.search.vector_store import LanceDBVectorStore
+
+    store = LanceDBVectorStore(tmp_path / "vectors")
+    store.upsert(["c1"], [[1.0, 0.0]], [{"source_id": "s1", "artifact_id": "a1"}])
+    store.upsert(["c2"], [[0.0, 1.0]], [{"source_id": "s1", "artifact_id": "a2"}])
+    versions = tmp_path / "vectors" / f"{store.TABLE}.lance" / "_versions"
+    manifests = sorted(versions.glob("*.manifest"), key=lambda path: path.stat().st_mtime_ns)
+    newest = manifests[-1]
+    newest.write_bytes(b"")
+
+    fresh = LanceDBVectorStore(tmp_path / "vectors")
+    assert fresh.count() == 1, "the version before the torn commit holds c1 only"
+    assert newest.with_name(newest.name + ".torn").exists(), "parked, not deleted"
+
+    fresh.upsert(["c3"], [[0.5, 0.5]], [{"source_id": "s1", "artifact_id": "a3"}])
+    assert LanceDBVectorStore(tmp_path / "vectors").existing_ids(["c1", "c3"]) == {"c1", "c3"}
 
 
 def test_numpy_store_caches_the_decoded_matrix(tmp_path: Path) -> None:
@@ -605,22 +622,12 @@ def _embedder(**kwargs):
     )
 
 
-def _ok_response(count: int):
-    import io
+def _ok_response(count: int) -> bytes:
     import json as _json
 
-    body = _json.dumps(
+    return _json.dumps(
         {"data": [{"index": i, "embedding": [0.1, 0.2]} for i in range(count)]}
     ).encode()
-
-    class _Resp(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    return _Resp(body)
 
 
 def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
@@ -632,7 +639,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
     """
     import ssl
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client
 
     calls = {"n": 0}
 
@@ -642,7 +649,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
             raise ssl.SSLError("SSLV3_ALERT_BAD_RECORD_MAC")
         return _ok_response(1)
 
-    monkeypatch.setattr(vector_store, "urlopen", flaky)
+    monkeypatch.setattr(embedding_client, "_transport", flaky)
     vectors = _embedder().embed(["hello"])
     assert calls["n"] == 2
     assert vectors == [[0.1, 0.2]]
@@ -651,7 +658,7 @@ def test_a_transient_tls_error_is_retried(monkeypatch) -> None:
 def test_a_rate_limit_is_retried_and_honours_retry_after(monkeypatch) -> None:
     from urllib.error import HTTPError
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client, vector_store
 
     calls = {"n": 0}
     slept: list[float] = []
@@ -662,7 +669,7 @@ def test_a_rate_limit_is_retried_and_honours_retry_after(monkeypatch) -> None:
             raise HTTPError("u", 429, "Too Many Requests", {"Retry-After": "2"}, None)
         return _ok_response(1)
 
-    monkeypatch.setattr(vector_store, "urlopen", limited)
+    monkeypatch.setattr(embedding_client, "_transport", limited)
     monkeypatch.setattr(vector_store.time, "sleep", lambda s: slept.append(s))
     _embedder().embed(["hello"])
     assert calls["n"] == 2
@@ -676,7 +683,7 @@ def test_a_bad_key_is_not_retried(monkeypatch) -> None:
 
     import pytest as _pytest
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client
 
     calls = {"n": 0}
 
@@ -684,7 +691,7 @@ def test_a_bad_key_is_not_retried(monkeypatch) -> None:
         calls["n"] += 1
         raise HTTPError("u", 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(vector_store, "urlopen", unauthorized)
+    monkeypatch.setattr(embedding_client, "_transport", unauthorized)
     with _pytest.raises(HTTPError):
         _embedder().embed(["hello"])
     assert calls["n"] == 1, "a wrong key must surface immediately"
@@ -695,7 +702,7 @@ def test_retries_are_bounded(monkeypatch) -> None:
 
     import pytest as _pytest
 
-    from pheasant.search import vector_store
+    from pheasant.search import embedding_client, vector_store
 
     calls = {"n": 0}
 
@@ -703,8 +710,143 @@ def test_retries_are_bounded(monkeypatch) -> None:
         calls["n"] += 1
         raise ssl.SSLError("still broken")
 
-    monkeypatch.setattr(vector_store, "urlopen", always_broken)
+    monkeypatch.setattr(embedding_client, "_transport", always_broken)
     monkeypatch.setattr(vector_store.time, "sleep", lambda s: None)
     with _pytest.raises(ssl.SSLError):
         _embedder(max_retries=3).embed(["hello"])
     assert calls["n"] == 4, "initial attempt plus exactly max_retries"
+
+
+# ---------------------------------------------------------------------------
+# Query latency: the provider connection and the held table
+# ---------------------------------------------------------------------------
+
+
+def _embedding_server(close_after: int | None = None):
+    """A local OpenAI-spec endpoint that counts the connections it accepts."""
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen = {"connections": 0, "requests": 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def setup(self) -> None:
+            super().setup()
+            seen["connections"] += 1
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen["requests"] += 1
+            data = [{"index": i, "embedding": [1.0, 0.0]} for i in range(len(body["input"]))]
+            payload = json.dumps({"data": data}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            if close_after is not None and seen["requests"] % close_after == 0:
+                self.close_connection = True  # an idle timeout, from the client's side
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_query_embeddings_reuse_one_connection() -> None:
+    """A new TCP+TLS session per query was most of a vector search's time."""
+
+    from pheasant.search.vector_store import OpenAISpecEmbedder
+
+    server, seen = _embedding_server()
+    try:
+        embedder = OpenAISpecEmbedder(f"http://127.0.0.1:{server.server_port}/v1", "m")
+        for word in ("alpha", "beta", "gamma", "delta"):
+            assert embedder.embed([word]) == [[1.0, 0.0]]
+    finally:
+        server.shutdown()
+    assert seen["requests"] == 4
+    assert seen["connections"] == 1
+
+
+def test_a_connection_the_server_closed_is_replaced_without_a_retry() -> None:
+    from pheasant.search.vector_store import OpenAISpecEmbedder
+
+    server, seen = _embedding_server(close_after=1)
+    try:
+        embedder = OpenAISpecEmbedder(
+            f"http://127.0.0.1:{server.server_port}/v1", "m", max_retries=0
+        )
+        for word in ("alpha", "beta", "gamma"):
+            assert embedder.embed([word]) == [[1.0, 0.0]]
+    finally:
+        server.shutdown()
+    assert seen["requests"] == 3
+
+
+def test_openai_itself_is_asked_for_base64_and_others_are_not(monkeypatch) -> None:
+    import base64
+
+    import numpy as np
+
+    from pheasant.search import embedding_client, vector_store
+
+    sent: list[dict[str, Any]] = []
+    vector = np.array([0.25, -0.5, 1.0], dtype="<f4")
+
+    def fake(request: Any, timeout: float = 0) -> bytes:
+        body = json.loads(request.data)
+        sent.append(body)
+        value: Any = [0.25, -0.5, 1.0]
+        if body.get("encoding_format") == "base64":
+            value = base64.b64encode(vector.tobytes()).decode()
+        return json.dumps({"data": [{"index": 0, "embedding": value}]}).encode()
+
+    monkeypatch.setattr(embedding_client, "_transport", fake)
+    openai = vector_store.OpenAISpecEmbedder("https://api.openai.com/v1", "m")
+    other = vector_store.OpenAISpecEmbedder("http://localhost:11434/v1", "m")
+
+    assert openai.embed(["q"]) == [[0.25, -0.5, 1.0]]
+    assert other.embed(["q"]) == [[0.25, -0.5, 1.0]]
+    assert sent[0]["encoding_format"] == "base64"
+    assert "encoding_format" not in sent[1]
+
+
+def test_lancedb_holds_its_table_and_still_sees_other_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-opening per query cost a tenth of the vector arm; holding the handle
+    must not cost freshness -- a serving replica reads what the indexer wrote,
+    including a table the indexer dropped and re-created."""
+
+    pytest.importorskip(
+        "lancedb", reason="lancedb not installed (pip install 'pheasant-kb[vector]')"
+    )
+    from pheasant.search.vector_store import LanceDBVectorStore
+
+    writer = LanceDBVectorStore(tmp_path / "vectors")
+    writer.upsert(["c1"], [[1.0, 0.0]], [{"source_id": "s1", "artifact_id": "a1"}])
+    reader = LanceDBVectorStore(tmp_path / "vectors")
+    assert [hit[0] for hit in reader.search([1.0, 0.0], 5)] == ["c1"]
+
+    opened = {"n": 0}
+    database = reader._database()
+    original = database.open_table
+
+    def counted(name: str, *args: Any, **kwargs: Any) -> Any:
+        opened["n"] += 1
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(database, "open_table", counted)
+    writer.upsert(["c2"], [[0.0, 1.0]], [{"source_id": "s1", "artifact_id": "a2"}])
+    assert {hit[0] for hit in reader.search([0.0, 1.0], 5)} == {"c1", "c2"}
+    assert opened["n"] == 0, "the held handle answered, and saw the other writer's commit"
+
+    writer.reset()
+    writer.upsert(["c3"], [[0.0, 1.0]], [{"source_id": "s1", "artifact_id": "a3"}])
+    assert [hit[0] for hit in reader.search([0.0, 1.0], 5)] == ["c3"]
