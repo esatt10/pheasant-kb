@@ -35,6 +35,7 @@ incremental runs deterministic.
 | Vector store | Optional semantic vectors; NumPy and LanceDB are supported. |
 | Log tier | Optional. Persists the interaction ledger, rolls expired rows to Parquet, and drops expired partitions. Exists so none of that runs on a process serving requests or holding the indexer's sync lock. |
 | NATS JetStream | Durable source-task transport between API and indexer in the fleet. Carries the log tier's batches on a separate stream when observation is enabled. |
+| Decisions API (optional) | OpenAI's typed-judgement endpoint, asked by the answering loop at question time only (`assistant.decisions`): is the evidence sufficient, which follow-up search, is the answer acceptable. Never on the indexing path. |
 
 ## Layering
 
@@ -94,6 +95,32 @@ The explicit vector and graph modes remain in the scalable assistant fanout.
 They are comparatively cheap on the measured corpus and preserve their
 arm-specific top results when hybrid's fused result limit would otherwise
 truncate them. Local-small and local-advanced defaults are unchanged.
+
+## Answering loop
+
+The agentic workflow (`assistant/workflows/agentic.py`) is a LangGraph state
+graph: classify → retrieve or plan → expand → grade → (loop) → synthesize →
+verify → accept. Measured on the lab region, writing the answer was 94% of an
+answer's time, and the earlier combined path wrote a whole answer in order to
+learn whether the evidence was sufficient.
+
+With an OpenAI key the loop's *judgements* go to the Decisions API instead of
+a model-written grade (`assistant/workflows/decision_gates.py`, default
+`assistant.decisions.mode: beta`):
+
+| Gate | Replaces | Effect |
+|---|---|---|
+| `sufficiency` | the model grader / combined grade-and-answer | Nothing is written until the evidence is judged sufficient; a thin round costs a ~0.3 s judgement and a search. |
+| `followup` | the grader's written `next_query` | A follow-up search is *chosen* from candidates the evidence names; "none" falls back to the model planner. |
+| `accept` | nothing (new) | Judges the written answer against its cited passages, which lets the first draft be written at low reasoning effort and rewritten once at full effort only when rejected. |
+| `prune` (opt-in) | nothing (new) | Leaves passages judged irrelevant out of the answer's context. |
+
+Every judgement that cannot be had falls back to the model-written path, and
+the step says so; `mode: off` is the loop exactly as before. The same
+judgements are exposed to agents doing their own retrieval as
+`assess_evidence` (MCP) / `POST /assistant/assess` (HTTP). Thresholds are set
+from labelled examples with `scripts/calibrate_decisions.py`. See
+[configuration](configuration.md) for the measured effect.
 
 ## Persistence and consistency boundaries
 

@@ -81,6 +81,11 @@ pheasant answers extractively from the index; connect an API key and the same
 retrieval gets synthesized into prose instead. The answer's trace shows what
 each search stage did and how long it took, and while a short answer is being
 checked its draft streams in, marked as a draft until the citations verify.
+With an OpenAI key, the answering loop asks OpenAI's Decisions API whether the
+evidence is enough before writing anything, and whether the finished answer is
+supported by what it cites—so a thin search costs a quick judgement rather than
+a discarded answer (`assistant.decisions`, beta; `mode: off` restores the
+model-written grade).
 
 Behind it are three retrieval arms—full-text, vector and graph—merged by
 reciprocal rank fusion, so a query matches on wording, on meaning and on how
@@ -289,7 +294,7 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 | **Ingest** | Git repositories, folders, single files, web pages and APIs. Every text format a codebase carries is read by default — source in ~40 languages, config, IaC, build files, Dockerfiles, notebooks, CSVs and logs — and 23 languages become graph structure: symbols, calls, and imports resolved to the files they name. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
 | **Connectors** | Google Drive ships first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
-| **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. |
+| **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. With an OpenAI key, evidence sufficiency, the next search and answer acceptance are typed judgements through the Decisions API (beta): the lab's median answer went from 8.7 s to 5.7 s at the same fact coverage. Agents doing their own retrieval can ask the same judgements with `assess_evidence`. |
 | **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
 | **Measurement** | Effectiveness evaluation and per-stage retrieval tuning, both off by default and read-only when on. |
 | **Readiness** | A machine-readable capability contract and executable go/no-go gates for using this region as an experiment's substrate: ingestion receipts, sealed snapshots, per-result lineage, isolation proofs and structured refusal codes. |

@@ -1560,7 +1560,9 @@ writes the cited answer in one validated call. Long-form, visual, custom-node
 and explicitly ungraded requests keep their existing flow. Malformed or
 insufficient replies remain incomplete and may trigger at most two bounded
 follow-up searches. Pheasant-lab enables this option for measurement; it is not
-a global default.
+a global default. When `assistant.decisions` is in `beta` with an OpenAI key,
+the Decisions API's sufficiency judgement replaces this path, which remains the
+fallback whenever a judgement cannot be had.
 
 ### `assistant.inventory` — questions about the knowledge base itself
 
