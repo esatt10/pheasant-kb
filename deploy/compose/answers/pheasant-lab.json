@@ -184,6 +184,7 @@
   "assistant.retrieval.grade_evidence": true,
   "assistant.retrieval.grader_model": "gpt-6-luna",
   "assistant.retrieval.verify_citations": true,
+  "assistant.decisions.mode": "beta",
   "assistant.retrieval.max_facts": 16,
   "evaluation.enabled": true,
   "evaluation.on_material_snapshot": false,

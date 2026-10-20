@@ -90,7 +90,7 @@ candidates participate in the same fused result without separate duplicate calls
 ```
                 ┌──────────────────── retry while evidence is thin
                 ▼                                                │
-START → classify → plan → retrieve → expand → grade ─ sufficient ─→ synthesize → verify → END
+START → classify → plan → retrieve → expand → grade ─ sufficient ─→ synthesize → verify → accept → END
 ```
 
 | Node | What it does |
@@ -103,6 +103,32 @@ START → classify → plan → retrieve → expand → grade ─ sufficient ─
 | `read` | Rebuilds each cited **file** from its chunks — in order, with line spans, headings and artifact metadata. Search scores chunks and the SQL layer caps a preview at 500 characters; answering from those windows is how you get an answer that names exactly the right files and says nothing about them. |
 | `synthesize` | Writes the answer from the selected passages only, in the shape the intent calls for, citing `[1]`, `[2]`, … |
 | `verify` | Drops `[n]` markers that do not resolve to a real passage, so a hallucinated citation cannot reach the UI. |
+| `accept` | With the Decisions API (below): judges whether the answer is supported by the passages it cites and answers the question; a rejected draft goes back to `synthesize` once. Without it, a no-op. |
+
+### Judgements through the Decisions API (beta)
+
+With an OpenAI key, `grade` and `accept` are typed questions to the
+[Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+rather than model-written JSON (`assistant.decisions`, default `beta`;
+[configuration](../configuration.md)). The trace shows them as `decide` and
+`accept`:
+
+- `decide` asks whether the evidence is sufficient and, if not, what kind of
+  miss it is (content, location, file kind, absent) and which follow-up search
+  — chosen from candidates the evidence names — to run next. Nothing is
+  written until the evidence is sufficient, so a thin round costs a ~0.3 s
+  judgement rather than a discarded answer.
+- `synthesize` then writes once, at `draft_reasoning_effort` (`low`), because
+  `accept` checks it afterwards and sends a rejected draft back for one rewrite
+  at full effort.
+
+Measured on the lab region, this cut the median answer from 8.7 s to 5.7 s with
+the same fact coverage. `assistant.decisions.mode: off` (or `"options":
+{"decisions": "off"}` on one request) restores the model-written grade, and any
+judgement that cannot be had falls back to it and says so in the step.
+`shadow` asks the same questions beside the model's grade, acts on none of
+them, and records whether they agreed — the way to check the thresholds on
+your corpus before acting on them.
 
 Every step is recorded. The answer carries a `steps[]` trace (name, detail,
 passage count), which the chat panel renders under the answer — so "why did it
@@ -147,6 +173,8 @@ curl -X POST http://localhost:8765/assistant/chat \
 | `max_context_passages` | `10` | Passages offered to the answering step. |
 | `grade_evidence` | `true` | Ask the model whether its evidence is sufficient. |
 | `verify_citations` | `true` | Drop `[n]` markers with no matching passage. |
+| `decisions` | config (`beta`) | `beta` \| `shadow` \| `off` for this request (`assistant.decisions.mode`). |
+| `decision_gates` | config | Which judgements run: any of `sufficiency`, `followup`, `prune`, `accept`. |
 | `max_facts` | `12` | Graph facts surfaced alongside the answer. |
 
 `intent` sets `max_context_passages`, `per_query_results`, `expand_per_node`

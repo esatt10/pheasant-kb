@@ -564,6 +564,20 @@ export interface ChatAnswer {
   visual?: AnswerVisual | null;
   /** What was searched when the question was a follow-up. */
   search_question?: string;
+  /** The Decisions API gates' judgements (`assistant.decisions`); absent
+   * when none were asked. `accepted: false` means the answer was returned
+   * after the acceptance check rejected it. */
+  decisions?: {
+    mode: "beta" | "shadow";
+    model: string;
+    gates: string[];
+    available: boolean;
+    unavailable_reason?: string;
+    accepted: boolean | null;
+    repairs: number;
+    draft_effort_used: string | null;
+    calls: Record<string, unknown>[];
+  };
   /** The tool result behind an `inventory` answer. */
   inventory?: {
     action: string;

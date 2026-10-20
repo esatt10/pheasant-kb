@@ -1,7 +1,7 @@
 """The assistant's half of the MCP facade, and pheasant's MCP App view.
 
 A mixin, like ``readiness_tools.py`` and for the same reason: `tools.py` sits at
-its size ceiling and the ratchet asks for a split by bounded context. Three
+its size ceiling and the ratchet asks for a split by bounded context. Four
 tools, all adapters over `services.assistant` / `services.media`:
 
 * ``ask_knowledge_base`` — a grounded answer, now with the conversation so
@@ -10,6 +10,9 @@ tools, all adapters over `services.assistant` / `services.media`:
   or the images those passages hold.
 * ``get_image`` — an indexed image's bytes as MCP image content, so a
   vision-capable agent can look at what a document shows.
+* ``assess_evidence`` — the agent loop's own judgements (is this evidence
+  enough, is this answer supported) over passages the caller supplies. No
+  view: it returns probabilities, not something to look at.
 
 **MCP Apps.** Each of the three declares ``_meta.ui.resourceUri`` pointing at
 one view, ``ui://pheasant/knowledge-view.html``, served as
@@ -149,6 +152,32 @@ class AssistantTools:
                 principal=principal,
                 principal_groups=principal_groups,
                 source_name=source_name,
+            ),
+        )
+
+    def assess_evidence(
+        self,
+        knowledge_base: str,
+        question: str,
+        passages: list[Any],
+        intent: str | None = None,
+        answer: str | None = None,
+        relevance: bool = True,
+    ) -> dict:
+        """Judge your own evidence for a question (`services.assistant.assess_evidence`)."""
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import assistant as assistant_service
+
+        return assistant_service.assess_evidence(
+            self.services,
+            assistant_service.AssessRequest(
+                question=question,
+                # As sent, for the service's own refusal.
+                passages=passages,
+                knowledge_base=knowledge_base,
+                intent=intent,
+                answer=answer,
+                relevance=relevance,
             ),
         )
 
@@ -361,6 +390,52 @@ def register_assistant_tools(
             principal=principal,
             principal_groups=principal_groups,
             source_name=source_name,
+        )
+
+    @mcp.tool()
+    @anticipated
+    def assess_evidence(
+        knowledge_base: str,
+        question: str,
+        passages: list[dict],
+        intent: str | None = None,
+        answer: str | None = None,
+        relevance: bool = True,
+    ) -> dict:
+        """Judge whether YOUR evidence answers a question, and whether an answer is supported.
+
+        For an agent doing its own retrieval (search_context) that wants to
+        know whether to stop searching: pass the question and the passages you
+        hold, as [{"text": ..., "title": ...}] (up to 24, each read up to 4,000
+        characters). The region asks the same typed questions its own agent
+        loop asks, through the OpenAI Decisions API, and returns probabilities
+        with the thresholds it reads them against:
+
+        - sufficient: {verdict, probability, threshold} — enough to answer?
+        - missing: {kind, description} when it is not — "content" (right
+          place, facts absent), "location" (right kind of file, wrong
+          package), "kind" (docs where code is needed, or tests instead of the
+          implementation) or "absent" (nothing bears on it).
+        - passages: [{index, probability, relevant}] unless relevance=false.
+        - answer: {accepted, grounded, responsive, threshold} when you pass
+          answer — is it supported by the passages it cites with [n] markers
+          (numbered as you sent them), and does it answer the question?
+
+        intent is "knowledge" (understand it) or "procedural" (do it: needs a
+        real example); unset reads it off the question. Nothing is read from
+        the index — the text you send is what is judged. Refused with
+        DECISIONS_NOT_CONFIGURED when this region has no OpenAI key for the
+        Decisions API (or assistant.decisions.mode is off), and with the
+        retryable DECISIONS_UNAVAILABLE when the endpoint did not answer.
+        """
+
+        return tools.assess_evidence(
+            knowledge_base,
+            question,
+            passages,
+            intent=intent,
+            answer=answer,
+            relevance=relevance,
         )
 
     @mcp.tool(meta=app_meta())

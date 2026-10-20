@@ -77,6 +77,10 @@ class WorkflowRequest:
     #: retrieved on its own. ``None`` means search for the question as asked.
     #: The question *answered* is always ``question``.
     search_question: str | None = None
+    #: The Decisions API handle (``assistant.decisions.Decider``) for the
+    #: loop's judgements, or ``None``. A workflow that does not know about it
+    #: ignores it; ``None`` is the workflow as it was before it existed.
+    decider: Any = None
 
     def report(self, step: WorkflowStep) -> None:
         """Publish one completed step. Never raises."""
@@ -130,6 +134,9 @@ class WorkflowResult:
     figures: list[dict] = field(default_factory=list)
     #: How the question was read (``assistant.routing.Route.as_dict``).
     route: dict[str, Any] = field(default_factory=dict)
+    #: What the Decisions gates judged (mode, each call, acceptance). Empty
+    #: when no judgement was asked for.
+    decisions: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -235,7 +242,9 @@ def list_workflows() -> list[dict[str, Any]]:
             "Agentic (LangGraph)",
             "Reads each question as a knowledge summary or a how-to and plans "
             "accordingly, searches every mode, walks the graph for related material, "
-            "grades its own evidence and retries when it is thin, then verifies citations.",
+            "grades its own evidence and retries when it is thin, then verifies citations. "
+            "With an OpenAI key, grading and answer acceptance run through the Decisions "
+            "API (beta; assistant.decisions.mode: off restores the model-written grade).",
         ),
         "simple": (
             "Single pass",

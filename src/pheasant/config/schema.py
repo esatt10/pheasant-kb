@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
-from enum import Enum, StrEnum
+from enum import StrEnum
 from functools import cache
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
+from pheasant.config.assistant_decisions import AssistantDecisionsSettings
 from pheasant.config.exclusions import (
     DEFAULT_EXCLUDES as DEFAULT_EXCLUDES,
 )
@@ -16,6 +17,7 @@ from pheasant.config.exclusions import (
 from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
+from pheasant.config.model import ModelMixin
 from pheasant.config.retired import resolve_source_type
 from pheasant.ingestion.content_types import default_include_globs
 
@@ -199,36 +201,6 @@ def _coerce_scalar_fields(dc: type, raw: dict[str, Any]) -> None:
                     raise ValueError(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{dc.__name__}.{f.name} expects {base}, got {value!r}") from exc
-
-
-@dataclass
-class ModelMixin:
-    def model_dump(self, mode: str = "python") -> dict[str, Any]:
-        def conv(v: Any) -> Any:
-            if isinstance(v, Path):
-                return str(v) if mode == "json" else v
-            if isinstance(v, Enum):
-                return v.value
-            if isinstance(v, str) and type(v) is not str:
-                # A *subclass* of str — `PluginSourceType` is the one that
-                # occurs — is not plain data, and consumers that dispatch on
-                # the exact type refuse it. PyYAML's representer is one:
-                # `yaml.safe_dump` raises `RepresenterError("cannot represent
-                # an object")` for it, so `config_hash` crashed for any config
-                # using a connector plugin — which is every third-party
-                # connector and all five first-party SaaS ones. A dump is
-                # plain data in both modes; the loader re-creates the rich
-                # type on the way back in.
-                return str(v)
-            if isinstance(v, ModelMixin):
-                return v.model_dump(mode=mode)
-            if isinstance(v, list):
-                return [conv(i) for i in v]
-            if isinstance(v, dict):
-                return {k: conv(val) for k, val in v.items()}
-            return v
-
-        return {k: conv(v) for k, v in asdict(self).items()}
 
 
 @dataclass
@@ -1033,6 +1005,9 @@ class AssistantSettings(ModelMixin):
     workflow_options: dict[str, Any] = field(default_factory=dict)
     # Typed retrieval criteria (rounds, depth, breadth). See RetrievalSettings.
     retrieval: RetrievalSettings = field(default_factory=RetrievalSettings)
+    # The agent loop's judgements through the Decisions API (beta by default;
+    # `mode: off` keeps the loop exactly as it was).
+    decisions: AssistantDecisionsSettings = field(default_factory=AssistantDecisionsSettings)
 
     def __post_init__(self) -> None:
         if self.reasoning_effort is not None and self.reasoning_effort not in {"none", "low"}:

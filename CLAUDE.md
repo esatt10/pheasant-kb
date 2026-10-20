@@ -88,7 +88,8 @@ pheasant-kb/
 │   ├── decision.py            ← the gate vocabulary both planes share: a
 │   │                            GateSet that cannot be constructed empty
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
-│   ├── config/                ← schema.py (dataclasses), loader, profiles
+│   ├── config/                ← schema.py (dataclasses), loader, profiles,
+│   │                            model (ModelMixin), assistant_decisions
 │   ├── sync/                  ← engine, connectors, vanished (deleted files
 │   │                            leave on any sync), archived (removed
 │   │                            documents are never read), web_connector (listed
@@ -173,7 +174,9 @@ pheasant-kb/
 │   │                            (@taxonomy), inventory_scope (@current /
 │   │                            @dir / @exclude on a lookup), keywords (first-word
 │   │                            @table, @doc, @search …), search_answer,
-│   │                            conversation, longform,
+│   │                            conversation, longform, decisions (the
+│   │                            Decisions API client), workflows/
+│   │                            decision_gates (the loop's judgements),
 │   │                            visuals, visual_specs (the shape grammar),
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
@@ -186,7 +189,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 168 pytest modules, offline by design
+└── tests/                     ← 169 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1143,6 +1146,27 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   (`assistant.replies`) and ask for JSON mode; a best-effort call that fell
   back names why in its step (`LLM.last_failure`). Do not "fix" a small cap
   at a call site. `tests/test_reasoning_models.py`.
+- **Judgements are asked, not written** (`assistant.decisions`, default
+  `beta`; `assistant/decisions.py` is the client, `workflows/decision_gates.py`
+  the policy). With an OpenAI key the agentic loop's sufficiency grade, its
+  follow-up choice and an answer-acceptance check go to the Decisions API
+  (`POST /v1/decisions`, typed questions, probabilities back, input tokens
+  only): 0.24 s p50 against 1.20 s for the same grade through chat. Nothing is
+  written until evidence is judged sufficient, so a thin round costs a
+  judgement, not a discarded answer; the answer is then written once at
+  `draft_reasoning_effort` (`low`, zero reasoning tokens on `gpt-6-luna`) and
+  a rejected draft is rewritten once at full effort. The API writes nothing,
+  so a follow-up query is *chosen* from candidates the evidence names, and
+  "none" hands the round to the model planner. Any unusable judgement falls
+  back to the model-written path and the step says so; a 401/403/404 opens a
+  per-process circuit; a refusal is never read as "sufficient". `shadow` asks
+  beside the old path and acts on nothing; `off` (config or per-request
+  `options.decisions`) is the loop as it was. Thresholds come from SciFact's
+  expert labels via `scripts/calibrate_decisions.py`, which asks the exact
+  runtime questions. Lab A/B, same code: p50 8.71 → 5.70 s, p90 10.30 → 7.02 s,
+  fact coverage unchanged. `prune` (per-passage relevance) exists and is off:
+  it saved no time and, with the cheap draft, cost a detail.
+  `tests/test_decisions_api.py`.
 - **Latency is bounded, not promised.** `assistant.latency` (all off by
   default) gives short/medium/long answers an end-to-end deadline that starts
   before history rewriting (`request_budget.py`) and a per-process cap on
@@ -2460,6 +2484,38 @@ Each of these cost real time. They are listed because the shape recurs.
   on Concentric. Found by driving the real browser through Columns and back,
   then counting classes on the live canvas. `toElements` always emits a
   string now, and `""` clears.
+
+- **A judge that reads less than the writer read calls the rest unsupported.**
+  The acceptance gate first saw each cited document cut to 4,000 characters
+  while the answer had been written from whole documents, so a correct answer
+  scored grounded 0.34 and was sent to a 7.98 s rewrite on the first live run.
+  The gate reads what the writer read now (`ACCEPT_DOCUMENT_CHARS`). The same
+  shape as visuals reading 500-character previews: a second consumer of
+  evidence must get the evidence the first one got.
+- **An optimization that saves nothing can still cost something.** Relevance
+  pruning looked free — one more question in a request already being made —
+  and dropped 6–13 of 16 passages per answer. Measured, it changed answer time
+  by nothing (the cost is output tokens, not input), and together with the
+  low-effort draft it lost the one passage that named the mechanism a question
+  asked about; either change alone kept it. Isolating the two took four arms
+  of one question. It ships off.
+- **A calibration set measures the labels you built, so check how you built
+  them.** The first SciFact run showed "sufficient" evidence as passages cut
+  at 700 characters — usually before the rationale an expert marked — and
+  "accepted" answers that never said yes or no. Both lowered the probabilities
+  of true positives and pushed the thresholds toward rejecting good work.
+  Anchoring passages at the rationale, as retrieval would, and answering the
+  question asked, moved them. A threshold optimizer is exactly as right as its
+  cost model too: the label set had two negatives per positive, so equal costs
+  picked 0.90 for acceptance, a rewrite for a third of good answers.
+- **A beta endpoint fails like a beta endpoint.** The calibration run met a
+  `503 Decision inference is unavailable` mid-batch. It is why a 5xx does not
+  open the circuit (only 401/403/404 do) and why every gate's fallback is the
+  path the loop had before the gate existed.
+- **A test file name is a namespace too.** `tests/test_decision_gates.py`
+  already held the `pheasant.decision` GateSet invariant, and writing the
+  Decisions API tests to the same name replaced it; the new suite is
+  `tests/test_decisions_api.py`. Check for the file before creating it.
 
 ---
 

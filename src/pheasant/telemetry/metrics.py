@@ -519,6 +519,29 @@ def register_default_metrics(version: str) -> None:
         "(drawn / repaired / ungrounded / unreadable / no_reply / fallback).",
         ("provider", "outcome"),
     )
+    # The agent loop's Decisions API gates (`assistant.decisions`). `outcome`
+    # separates acting on a judgement from falling back without one:
+    # `unavailable` rising is the endpoint, not the corpus, and the loop is
+    # then running exactly as it did before the gates existed.
+    REGISTRY.counter(
+        "pheasant_assistant_decision_total",
+        "Decisions API judgements, by gate (sufficiency / followup / prune / accept) and "
+        "outcome (sufficient / insufficient / chosen / none / pruned / kept / accepted / "
+        "rejected / repaired / unavailable).",
+        ("gate", "outcome"),
+    )
+    REGISTRY.histogram(
+        "pheasant_assistant_decision_seconds",
+        "Decisions API request latency, by gate.",
+        ("gate",),
+    )
+    # Shadow mode's whole purpose: how often the judgement agrees with the
+    # model-written grade it would replace, before anything acts on it.
+    REGISTRY.counter(
+        "pheasant_assistant_decision_shadow_total",
+        "Shadowed judgements compared with the decision that was acted on.",
+        ("gate", "agreement"),
+    )
 
     # Retrieval, per pipeline stage.
     #

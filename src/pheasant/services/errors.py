@@ -264,6 +264,39 @@ class AssistantDeadline(ServiceError):
         super().__init__("Assistant request deadline exceeded")
 
 
+class DecisionsNotConfigured(ServiceError):
+    """``assess_evidence`` has no Decisions API to ask in this deployment.
+
+    Not retryable: no OpenAI key reaches ``assistant.decisions`` or its mode is
+    ``off``, and asking again changes neither. Split from
+    `DecisionsUnavailable` for the reason `LandingZoneUnwritable` is split from
+    `LandingServiceUnavailable`: one is a setting to change, the other a
+    service that was down.
+    """
+
+    status = 503
+    code = "DECISIONS_NOT_CONFIGURED"
+
+    def __init__(self, detail: object = "") -> None:
+        super().__init__(
+            "No Decisions API is configured for this region: set OPENAI_API_KEY (or "
+            "assistant.decisions.api_key_env) and leave assistant.decisions.mode on beta or shadow"
+            + (f" ({detail})" if detail else "")
+        )
+
+
+class DecisionsUnavailable(ServiceError):
+    """The Decisions API was asked and did not answer usably (beta endpoint)."""
+
+    status = 503
+    code = "DECISIONS_UNAVAILABLE"
+    retryable = True
+
+    def __init__(self, reason: object) -> None:
+        super().__init__(f"The Decisions API did not answer: {reason}")
+        self.reason = str(reason)
+
+
 class LandingZoneUnwritable(ServiceError):
     """Submitted bytes have nowhere to land in this deployment.
 

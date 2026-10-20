@@ -182,7 +182,11 @@ def test_each_provider_is_called_with_its_own_wire_shape(
     seen: dict = {}
 
     def fake_http(url, payload, headers, timeout):
-        seen.update(url=url, payload=payload, headers=headers)
+        # With an OpenAI key the default `assistant.decisions` mode also asks
+        # `/decisions` (its own wire is held by test_decisions_api.py); this
+        # test is about the chat call, so that is the one it keeps.
+        if not url.endswith("/decisions"):
+            seen.update(url=url, payload=payload, headers=headers)
         return response
 
     monkeypatch.setattr(providers_module, "_http_json", fake_http)

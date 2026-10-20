@@ -98,6 +98,16 @@ class VisualRequest(BaseModel):
     principal_groups: list[str] = []
 
 
+class AssessRequest(BaseModel):
+    """Judge `passages` (and optionally `answer`) for `question` — your own evidence."""
+
+    question: str
+    passages: list[Any]
+    intent: str | None = None
+    answer: str | None = None
+    relevance: bool = True
+
+
 def register_assistant_routes(
     app: FastAPI,
     *,
@@ -328,6 +338,22 @@ def register_assistant_routes(
                 principal_groups=req.principal_groups,
             ),
             credential=session_keys().get(req.session_id),
+            env=dict(os.environ),
+        )
+
+    @app.post("/assistant/assess")
+    def assistant_assess(req: AssessRequest) -> dict:
+        """Transport adapter. The operation is `services.assistant.assess_evidence`."""
+
+        return assistant_service.assess_evidence(
+            services,
+            assistant_service.AssessRequest(
+                question=req.question,
+                passages=req.passages,
+                intent=req.intent,
+                answer=req.answer,
+                relevance=req.relevance,
+            ),
             env=dict(os.environ),
         )
 
