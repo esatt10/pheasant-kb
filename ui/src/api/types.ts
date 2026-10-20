@@ -264,7 +264,7 @@ export interface AssistantStatus {
 export interface AnswerKeyword {
   keyword: string;
   aliases: string[];
-  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope";
+  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope" | "remove";
   group: string;
   summary: string;
   example: string;
@@ -542,7 +542,7 @@ export interface ChatAnswer {
   answer: string;
   /** `inventory`: a question about the knowledge base itself, answered from
    * the index (`describe_knowledge_base` / `list_documents`), not a search. */
-  mode: "llm" | "extractive" | "inventory" | "search";
+  mode: "llm" | "extractive" | "inventory" | "search" | "remove";
   provider: string | null;
   model: string | null;
   credential_source: "session" | "environment" | null;
@@ -590,6 +590,40 @@ export interface ChatAnswer {
   /** Where the answer was allowed to look, when a folder, a file, an
    * exclusion or `@current` / `@dir` / `@exclude` narrowed it. */
   scope?: AnswerScope;
+  /** What `@remove` removed (`POST /documents/archive`'s answer). */
+  archive?: ArchiveResult;
+}
+
+/** One document `services.archive` removed, reinstated, or holds out. */
+export interface ArchivedDocument {
+  source_name: string;
+  path: string;
+  name: string;
+  id: string | null;
+  /** `archived` (reinstatable), `removed` (an upload, deleted) or `reinstated`. */
+  disposition: "archived" | "removed" | "reinstated";
+  reinstatable: boolean;
+  archived_at?: string | null;
+  archived_by?: string | null;
+}
+
+/** `POST /documents/archive` and `POST /documents/reinstate`. */
+export interface ArchiveResult {
+  knowledge_base: string;
+  /** `removed` / `reinstated` here; `queued` for an indexer; `pending` behind a running sync. */
+  status: string;
+  documents: ArchivedDocument[];
+  sources: Record<string, { status: string; job_id?: string | null; queued_tasks?: string[] }>;
+}
+
+/** `GET /documents/archived`. */
+export interface ArchivedListing {
+  knowledge_base: string;
+  source_name: string | null;
+  path_prefix: string | null;
+  documents: ArchivedDocument[];
+  total: number;
+  page: { offset: number; limit: number; returned: number; has_more: boolean };
 }
 
 /** The scope an answer was read under (`services.scope`). */
@@ -1696,4 +1730,9 @@ export interface DocumentContent {
     excerpt?: string;
   } | null;
   raw: { available: boolean; mime_type: string | null };
+  /**
+   * A fetched web page: its URL, and whether the HTML its text was extracted
+   * from is held to be shown (`/documents/page`). `null` for anything else.
+   */
+  page?: { url: string; available: boolean } | null;
 }

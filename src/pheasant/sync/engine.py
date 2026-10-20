@@ -25,7 +25,7 @@ from pheasant.ingestion.captioner import captioner_from_config, source_includes_
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
 from pheasant.ingestion.landing import owned_upload_directory
-from pheasant.ingestion.media import media_store_for_config
+from pheasant.ingestion.media import media_store_for_config, stored_suffix
 from pheasant.ingestion.pipeline import (
     git_state,
     parse_connector_payload,
@@ -53,6 +53,7 @@ from pheasant.search.vector_store import (
 from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
+from pheasant.sync import archived
 from pheasant.sync.checkpoint_interval import (
     optimal_checkpoint_interval as optimal_checkpoint_interval,
 )
@@ -2020,6 +2021,9 @@ class SyncEngine:
                     self.state.set_fingerprint(resume_scope, "cleared", utc_now())
                 manifest = {"source_id": source.name, "artifacts": {}}
                 artifacts = manifest["artifacts"]
+            # Archived documents are never read, on any mode (`sync/archived.py`).
+            items, held = archived.admit(self.state, source.name, items)
+            details_extra.update({"archived_documents": len(held)} if held else {})
             indexed = 0
             skipped = 0
             fetched = 0
@@ -2140,9 +2144,7 @@ class SyncEngine:
                     # Before the commit, and outside the mutex: content-addressed
                     # and atomic, so a sync that fails after this leaves an
                     # unreferenced file rather than a referenced missing one.
-                    self.media_store.put(
-                        parsed.sha256, Path(parsed.relative_path).suffix, prepared.media
-                    )
+                    self.media_store.put(parsed.sha256, stored_suffix(parsed) or "", prepared.media)
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)
@@ -2207,7 +2209,8 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
-            if removed := prune_vanished(self, source.name, connector, items, artifacts):
+            removed = archived.prune(self, source.name, artifacts)
+            if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed
             pruned_vectors = self._finalize_index_state(
                 source=source,

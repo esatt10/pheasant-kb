@@ -193,6 +193,7 @@ keywords later in a sentence and email addresses are just text.
 | `@current` (`@this`) | Only the open document: every search the answer runs, and any `@pheasant` lookup (`@current @doc` describes it, `@current @links` lists its links). |
 | `@dir` (`@directory`, `@cwd`) | Only the folder being browsed, or the open document's folder: answers, `@search`, and listings (`@dir @docs`, `@pheasant how many documents @dir`, `@dir @taxonomy`). |
 | `@exclude <name>[,<name>…]` (`@omit`, `@without`) | Leave documents out: a file name, a path, `source/path` or an artifact id; quote a name with spaces. Combines with everything above (`@dir @exclude deploy.md @docs`). A name that matches nothing is said in a note. |
+| `@remove <name>[,<name>…]` (`@archive`) | Remove documents from the index and keep them out of every later sync, by a name that matches one document (a file name, path, `source/path` or id; quote one with spaces). `@current @remove` removes the open document. A folder or connector document is archived and can be reinstated; an upload is deleted. No search, no model; the payload's `archive` is `POST /documents/archive`'s answer. A name matching several documents removes nothing and lists them. |
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
 | `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
@@ -216,6 +217,17 @@ web UI's **Omit from answers** toggle on an open file sends the same
 `exclude_documents` `@exclude` does, the composer shows how many are omitted
 (✕ clears them), and an answer read under a narrowed scope shows where it
 looked under the text.
+
+**Remove** on an open file takes it out of the index for good, not just out of
+answers: click it, then **Confirm remove**. It leaves search, the graph and the
+embeddings, and every later sync, incremental or full, skips it. A file from a
+folder, repository or connector source is listed under **Removed here** at the
+bottom of its folder in the taxonomy view, where **Reinstate** syncs its source
+and indexes it again with its embeddings and graph nodes. A file from an upload
+source is deleted from the region's landing zone, so there is nothing to
+reinstate. `@remove`, MCP `archive_documents` / `reinstate_documents` /
+`list_archived_documents` and `POST /documents/archive` /
+`POST /documents/reinstate` / `GET /documents/archived` are the same operation.
 
 In the web UI, **@ keywords** under the chat box (or **Ctrl+/**) opens a quick
 reference: a floating card with every keyword, its example, and the

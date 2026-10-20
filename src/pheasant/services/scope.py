@@ -243,6 +243,31 @@ def locate(
     return (head, path) if rows else None
 
 
+def named(
+    context: ServiceContext,
+    name: str,
+    *,
+    source_name: str | None = None,
+    principal: str | None = None,
+    principal_groups: list[str] | None = None,
+) -> list[Any]:
+    """The documents ``name`` names, under the inventory ACL rule.
+
+    The resolution ``exclude_documents`` uses — an id, a path, ``source/path``
+    or a path tail — for an operation that acts on what a name resolves to.
+    Rows carry ``id``, ``source_id``, ``relative_path`` (and ``acl`` when ACLs
+    are enforced).
+    """
+
+    return _matches(context, name, source_name, None, reader(context, principal, principal_groups))
+
+
+def names(raw: Any) -> list[str]:
+    """A list of document names from a list, or one comma-separated string."""
+
+    return _names(raw)
+
+
 def _names(raw: Any) -> list[str]:
     if raw is None:
         return []

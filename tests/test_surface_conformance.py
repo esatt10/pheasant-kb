@@ -741,6 +741,11 @@ CONFORMED = {
     # chunks the two operations exist for.
     "browse": ("GET /documents/tree", "browse_source"),
     "read_document": ("GET /documents/content", "read_document"),
+    # Driven through both surfaces in tests/test_document_archive.py, refusal
+    # text included: removing a document needs a corpus of its own to remove.
+    "archive_documents": ("POST /documents/archive", "archive_documents"),
+    "reinstate_documents": ("POST /documents/reinstate", "reinstate_documents"),
+    "archived_documents": ("GET /documents/archived", "list_archived_documents"),
 }
 
 
@@ -751,6 +756,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
 
     import inspect
 
+    from pheasant.services import archive as archive_service
     from pheasant.services import assistant as assistant_service
     from pheasant.services import graph as graph_service
     from pheasant.services import index_queue as index_queue_service
@@ -759,6 +765,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
     from pheasant.services import source_browser as source_browser_service
+    from pheasant.services import web_pages as web_pages_service
 
     public: set[str] = set()
     for module in (
@@ -770,6 +777,8 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         inventory_service,
         inventory_detail_service,
         source_browser_service,
+        web_pages_service,
+        archive_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
@@ -819,6 +828,12 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # `clean_directory` are the browser's helpers, called inside both
     # operations and by nothing that exposes them.
     public.discard("raw_document")
+    # `page_snapshot` is `raw_document`'s twin for a fetched web page: the HTML
+    # its text was extracted from, for a person's viewer to draw beside that
+    # text. An agent reads the text itself through `read_document`.
+    # `snapshot_path` is the predicate `read_document` reports `page` with.
+    public.discard("page_snapshot")
+    public.discard("snapshot_path")
     public.discard("classify")
     public.discard("clean_directory")
 

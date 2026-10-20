@@ -19,6 +19,9 @@ operations do:
   through :func:`read_document`'s extracted text, and bytes in an MCP result
   are a payload nobody can read.
 
+A fetched web page has no file; ``services.web_pages`` serves the HTML its
+text was extracted from, and :func:`read_document` says whether it is held.
+
 The tree is the directory structure of what was *indexed*, read from the
 ``artifacts`` rows rather than from the filesystem: it is the same on a
 replica with no source mount, it never shows a file the index does not hold,
@@ -47,9 +50,11 @@ from pheasant.ingestion.content_types import (
     IMAGE_EXTENSIONS,
     MEMORY_ARTIFACT_TYPE,
 )
+from pheasant.ingestion.media import is_fetched_page
 from pheasant.services import ServiceContext
 from pheasant.services.errors import DocumentNotFound, InvalidRequest
 from pheasant.services.inventory import ARTIFACT_SCOPE, extension_of, reader
+from pheasant.services.web_pages import snapshot_path
 
 #: Files one call lists at a level. Folders are always listed whole: there are
 #: few of them per level, and a folder that is paged away is a subtree nobody
@@ -267,11 +272,13 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
     ``document`` is the row (as ``list_documents`` spells it); ``viewer`` and
     ``language`` say how to render it; ``content`` is its text (or ``None``
     for an image with no caption) and ``content_origin`` where that came from
-    (``file``, ``extracted`` for a binary format's indexed text, or
-    ``chunks`` when a text file was not readable here as indexed);
+    (``file``, ``extracted`` for a binary format's or a web page's indexed
+    text, or ``chunks`` when a text file was not readable here as indexed);
     ``outline`` its section headings with the
     line each starts on; ``focus`` the line span of ``chunk_id``, when given;
-    ``raw`` whether :func:`raw_document` can serve the original bytes here.
+    ``raw`` whether :func:`raw_document` can serve the original bytes here;
+    ``page``, for a fetched web page, its URL and whether
+    ``web_pages.page_snapshot`` holds the HTML it was extracted from.
     """
 
     kb_id = context.knowledge_base(request.knowledge_base)
@@ -281,9 +288,16 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
     suffix = PurePosixPath(relative).suffix.lower()
     viewer, language = classify(relative)
 
+    fetched = is_fetched_page(row["path"], relative, row["mime_type"])
     content: str | None = None
     origin: str | None = None
-    if viewer not in EXTRACTED_VIEWERS:
+    if fetched:
+        # There is no file: what the index holds is the text extracted from
+        # the page, which is exactly what a reader comparing it to the page
+        # wants, and not a fallback.
+        content = _chunk_text(context, artifact_id)
+        origin = "extracted" if content else None
+    elif viewer not in EXTRACTED_VIEWERS:
         content = _indexed_text(row)
         origin = "file" if content is not None else None
     elif viewer == "spreadsheet":
@@ -293,7 +307,7 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
         # that was indexed.
         content = _spreadsheet_text(row)
         origin = "file" if content is not None else None
-    if content is None:
+    if content is None and not fetched:
         content = _chunk_text(context, artifact_id)
         # For a binary format the extracted text *is* its text; for a text
         # file it means the file was not readable here, or changed.
@@ -301,6 +315,10 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
         if viewer == "notebook":
             # Chunks hold a notebook's cells as text, not its JSON.
             viewer, language = "code", "python"
+    if fetched and viewer == "html":
+        # Extracted text drawn as markup would be a preview of nothing; the
+        # page itself is `page`.
+        viewer, language = "text", None
     truncated = bool(content and len(content) > MAX_CONTENT_CHARS)
     if truncated and content is not None:
         content = content[:MAX_CONTENT_CHARS]
@@ -332,6 +350,13 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
             "available": bool(raw_type) and _raw_available(row),
             "mime_type": raw_type,
         },
+        # A fetched web page: its URL, and whether the HTML the parser read is
+        # held here to be shown beside the text (`web_pages.page_snapshot`).
+        "page": (
+            {"url": str(row["path"]), "available": snapshot_path(context, row) is not None}
+            if fetched
+            else None
+        ),
     }
 
 

@@ -39,6 +39,9 @@ TABLE_ORDER = (
     # A UI removal's tombstone. Dropping it would bring every source the user
     # removed back on the new backend whenever the YAML still names it.
     "removed_sources",
+    # The per-document tombstone, for the same reason: dropping it would bring
+    # every document the user removed back with the next sync.
+    "archived_documents",
     "artifacts",
     "chunks",
     "symbols",

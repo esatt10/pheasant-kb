@@ -68,7 +68,8 @@ CEILINGS: dict[str, int] = {
     "evaluation/store.py": 950,
     "graph/enrichment.py": 1000,
     "ingestion/taxonomy.py": 1100,
-    "jobs.py": 950,
+    # Lowered from 950 when the shared snapshot store moved to `job_snapshots.py`.
+    "jobs.py": 800,
     "mcp_server/server.py": 1300,
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,
@@ -81,7 +82,9 @@ CEILINGS: dict[str, int] = {
     # `columns_of`, not to where a table is declared. The receipt ledger's
     # *code* did move out of `state_store.py` in the same change, which is
     # the split this test is actually asking for.
-    "persistence/schema.py": 1100,
+    # Raised to 1115 for `archived_documents`, the per-document tombstone, on
+    # the same grounds: a table's DDL belongs in the file that declares tables.
+    "persistence/schema.py": 1115,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
@@ -92,7 +95,9 @@ CEILINGS: dict[str, int] = {
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`. Raised from 2780 for the
     # removed-source tombstone guard in `_source`/the enabled-source walk.
-    "sync/engine.py": 2790,
+    # Raised to 2795 for the archived-document step's two call sites; the step
+    # itself lives in `sync/archived.py`, beside `sync/vanished.py`.
+    "sync/engine.py": 2795,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

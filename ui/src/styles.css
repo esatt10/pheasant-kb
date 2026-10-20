@@ -5134,6 +5134,10 @@ select.text-input {
 .pdf-view, .html-view { display: block; width: 100%; height: 100%; border: 0; }
 .pdf-view { background: var(--bg-sunken); }
 .html-view { background: #fff; }
+.page-view { display: flex; flex-direction: column; height: 100%; }
+.page-view__frame { flex: 1; min-height: 0; height: auto; }
+.page-view > .image-view__bar { flex-wrap: wrap; row-gap: 4px; }
+.page-view__note { white-space: nowrap; }
 .image-view { display: flex; flex-direction: column; height: 100%; }
 .image-view__bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .image-view__stage { flex: 1; min-height: 0; overflow: auto; padding: 16px; background: var(--bg-sunken); }
@@ -5333,4 +5337,26 @@ select.text-input {
 .pdf-page .textLayer ::highlight(pheasant-cite) {
   background-color: rgb(255 196 0 / 0.42);
   color: transparent;
+}
+
+/* "Remove from the index" and the folder's Removed list (`browser/RemoveButton`, `ArchivedList`). */
+.scope-toggle--remove:hover { border-color: var(--danger); color: var(--danger); }
+.scope-toggle--armed {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 600;
+}
+.archived-list { margin: 6px 8px; font-size: 12px; }
+.archived-list__toggle { color: var(--text-soft); }
+.archived-list__rows { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.archived-list__row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.archived-list__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+  text-decoration: line-through;
 }

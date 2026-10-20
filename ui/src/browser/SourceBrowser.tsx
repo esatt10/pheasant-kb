@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { BrowseFile, BrowseFolder, BrowseResponse } from "../api/types";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileFold, TileGrip } from "../components/Tiles";
+import { ArchivedList } from "./ArchivedList";
 import { DragHandle } from "./DragHandle";
 import { ScopeToggle } from "./ScopeToggle";
 import { FileViewer } from "./FileViewer";
@@ -229,6 +230,7 @@ export function SourceBrowser({
                   {needle ? "Nothing here matches the filter." : browser.source ? "This folder holds nothing indexed." : "No sources yet."}
                 </p>
               ) : null}
+              {browser.source ? <ArchivedList source={browser.source} path={browser.path} /> : null}
               {listing.hasNextPage ? (
                 <button
                   type="button"

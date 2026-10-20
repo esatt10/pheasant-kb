@@ -5,12 +5,13 @@ import type { DocumentContent, DocumentViewer } from "../api/types";
 import { CodeView } from "./views/CodeView";
 import { DataTable, SpreadsheetView, StructuredTree, parseDelimited, parseStructured } from "./views/DataViews";
 import { MarkdownView, splitSections } from "./views/MarkdownView";
-import { AudioView, HtmlView, ImageView, SvgView, ViewerLoading } from "./views/MediaViews";
+import { AudioView, HtmlView, ImageView, PageView, SvgView, ViewerLoading } from "./views/MediaViews";
 import { PdfView } from "./views/PdfView";
 import { NotebookView, parseNotebook } from "./views/NotebookView";
 import { ProseView, SlidesView } from "./views/ProseViews";
 import { fileIcon, formatBytes } from "./fileIcons";
 import { OmitToggle } from "./OmitToggle";
+import { RemoveButton } from "./RemoveButton";
 import { passageText, usePassageHighlight } from "./passage";
 import { ScopeToggle } from "./ScopeToggle";
 
@@ -37,7 +38,7 @@ const RENDERED_LABEL: Partial<Record<DocumentViewer, string>> = {
  * text. The source view bands the cited lines itself, the PDF view finds the
  * page first and highlights within it, and a frame (HTML) is out of reach.
  */
-const NO_PASSAGE_HIGHLIGHT = new Set<string>(["source", "pdf", "html", "svg", "image"]);
+const NO_PASSAGE_HIGHLIGHT = new Set<string>(["source", "pdf", "html", "page", "svg", "image"]);
 
 /** Views that can mark matches for the find box. */
 const FINDABLE = new Set<string>(["source", "json", "yaml", "table", "spreadsheet", "slides", "document", "pdf-text"]);
@@ -132,10 +133,21 @@ function LoadedViewer({
   // Images and recordings have only their rendered view; everything else with
   // a renderer also has its text one click away.
   const mediaOnly = viewer === "image" || viewer === "audio";
-  const renderable = Boolean(RENDERED_LABEL[viewer]);
-  const renderedLabel =
-    viewer === "pdf" && !data.raw.available ? "Reading" : (RENDERED_LABEL[viewer] ?? "Rendered");
-  const [mode, setMode] = useState<Mode>(renderable || mediaOnly ? "rendered" : "source");
+  // A fetched web page whose HTML is held: the page as the parser read it,
+  // with the text extracted from it one click away, so the two can be held
+  // against each other.
+  const page = data.page?.available ? data.page : null;
+  const renderable = Boolean(page) || Boolean(RENDERED_LABEL[viewer]);
+  const renderedLabel = page
+    ? "Page"
+    : viewer === "pdf" && !data.raw.available
+      ? "Reading"
+      : (RENDERED_LABEL[viewer] ?? "Rendered");
+  // Opened at a cited passage, a page starts on its text, where the cited
+  // lines are banded; a frame cannot show them.
+  const [mode, setMode] = useState<Mode>(
+    (renderable || mediaOnly) && !(page && data.focus) ? "rendered" : "source",
+  );
   const [wrap, setWrap] = useState(viewer === "text" || viewer === "document");
   const [find, setFind] = useState("");
   const [findIndex, setFindIndex] = useState(0);
@@ -170,7 +182,8 @@ function LoadedViewer({
     }));
   }, [viewer, text, data.outline]);
 
-  const view = mode === "source" ? "source" : viewer === "pdf" && !data.raw.available ? "pdf-text" : viewer;
+  const view =
+    mode === "source" ? "source" : page ? "page" : viewer === "pdf" && !data.raw.available ? "pdf-text" : viewer;
   const findable = FINDABLE.has(view) || (mode === "source" && Boolean(text));
   const lineFocus =
     focus?.start_line && focus.end_line ? { start: focus.start_line, end: focus.end_line } : null;
@@ -224,6 +237,7 @@ function LoadedViewer({
           </div>
           <ScopeToggle source={doc.source} path={doc.path} kind="file" />
           <OmitToggle source={doc.source} path={doc.path} />
+          <RemoveButton source={doc.source} path={doc.path} onRemoved={onClose} />
           <button type="button" className="btn btn--small btn--icon btn--ghost" onClick={onClose} aria-label="Close file" title="Close file">
             ✕
           </button>
@@ -241,6 +255,19 @@ function LoadedViewer({
               reassembled from the index
             </span>
           ) : null}
+          {data.page ? (
+            <a className="pill" href={data.page.url} target="_blank" rel="noopener noreferrer" title={data.page.url}>
+              web page ↗
+            </a>
+          ) : null}
+          {data.page && !data.page.available ? (
+            <span
+              className="pill pill--warn"
+              title="This page was indexed before page snapshots were kept, or it is larger than the store holds. A full sync of its source, or the page changing, stores one."
+            >
+              no page snapshot
+            </span>
+          ) : null}
           {data.content_origin === "extracted" && text ? (
             <span className="pill" title="The text extracted from this file when it was indexed">
               extracted text
@@ -249,7 +276,7 @@ function LoadedViewer({
           {data.truncated ? <span className="pill pill--warn">truncated</span> : null}
         </div>
         <div className="viewer__toolbar">
-          {renderable && text !== "" ? (
+          {renderable && (text !== "" || page) ? (
             <div className="segmented" role="group" aria-label="View">
               <button
                 type="button"
@@ -263,7 +290,7 @@ function LoadedViewer({
                 className={mode === "source" ? "active" : undefined}
                 onClick={() => setMode("source")}
               >
-                {viewer === "pdf" || viewer === "spreadsheet" || viewer === "slides" || viewer === "document"
+                {page || viewer === "pdf" || viewer === "spreadsheet" || viewer === "slides" || viewer === "document"
                   ? "Text"
                   : "Source"}
               </button>
@@ -482,6 +509,8 @@ function renderView({
       return parseNotebook(text) ? <NotebookView text={text} /> : source();
     case "html":
       return <HtmlView html={text} />;
+    case "page":
+      return data.page ? <PageView source={doc.source} path={doc.path} url={data.page.url} /> : source();
     case "svg":
       return <SvgView text={text} />;
     case "pdf":

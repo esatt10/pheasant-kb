@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api/client";
 
 /**
@@ -131,6 +131,97 @@ export function HtmlView({ html }: { html: string }) {
     `<base target="_blank">` +
     html;
   return <iframe className="html-view" sandbox="" srcDoc={guarded} title="HTML preview" referrerPolicy="no-referrer" />;
+}
+
+/**
+ * A fetched web page as the parser read it: the HTML held at indexing time,
+ * drawn in a frame that runs nothing (an empty `sandbox`, and a CSP with no
+ * `script-src`). No scripts is not only the safe choice, it is the faithful
+ * one — the extractor never ran them either, so a page that only appears
+ * once its JavaScript runs looks here exactly as empty as it was to the index.
+ *
+ * Relative links, styles and images resolve against the page's own URL.
+ * Loading its stylesheets, images and fonts asks the site for them from this
+ * browser, so it is a switch: off, the page is drawn from the snapshot alone.
+ */
+export function PageView({ source, path, url }: { source: string; path: string; url: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [assets, setAssets] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setHtml(null);
+    setError(null);
+    api
+      .documentPageHtml({ source, path })
+      .then((text) => {
+        if (!cancelled) setHtml(text);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, path]);
+  const srcDoc = useMemo(() => (html === null ? null : guardPage(html, url, assets)), [html, url, assets]);
+  if (error) return <p className="error small viewer-pad">The page snapshot could not be loaded: {error}</p>;
+  if (srcDoc === null) return <ViewerLoading label="Loading the page…" />;
+  return (
+    <div className="page-view">
+      <div className="image-view__bar">
+        <button
+          type="button"
+          className={`btn btn--small${assets ? " btn--active" : ""}`}
+          aria-pressed={assets}
+          onClick={() => setAssets((value) => !value)}
+          title="Fetch the page's stylesheets, images and fonts from its site. Scripts never run."
+        >
+          Styles &amp; images
+        </button>
+        <span className="muted small page-view__note">As indexed · scripts off</span>
+        <span className="viewer__spacer" />
+        <a className="btn btn--small btn--ghost" href={url} target="_blank" rel="noopener noreferrer" title={url}>
+          Open live page ↗
+        </a>
+      </div>
+      <iframe
+        key={assets ? "assets" : "offline"}
+        className="html-view page-view__frame"
+        sandbox=""
+        srcDoc={srcDoc}
+        title="Web page as indexed"
+        referrerPolicy="no-referrer"
+      />
+    </div>
+  );
+}
+
+const DOCTYPE = /^\s*(<!doctype[^>]*>)/i;
+const META_REFRESH = /<meta[^>]+http-equiv\s*=\s*["']?refresh[^>]*>/gi;
+
+/**
+ * The snapshot with a policy and a base URL in front of everything it says.
+ * The doctype stays first (anything before it is quirks mode), and the page's
+ * own `<base>` loses to ours because the first one wins.
+ */
+export function guardPage(html: string, url: string, assets: boolean): string {
+  const remote = assets ? " https: http:" : "";
+  const policy =
+    `default-src 'none'; style-src 'unsafe-inline'${remote}; img-src data:${remote}; ` +
+    `font-src data:${remote}; media-src${remote || " 'none'"}`;
+  const doctype = html.match(DOCTYPE)?.[1] ?? "<!doctype html>";
+  const body = html.replace(DOCTYPE, "").replace(META_REFRESH, "");
+  return (
+    doctype +
+    `<meta http-equiv="Content-Security-Policy" content="${policy}">` +
+    `<base href="${escapeAttribute(url)}" target="_blank">` +
+    body
+  );
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 /** An SVG drawn as an image, which is the one context where its scripts never run. */

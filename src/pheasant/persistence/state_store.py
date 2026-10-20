@@ -379,6 +379,8 @@ class StateStore:
                 # skip the DDL and leave every progress write failing.
                 "evaluation_runs": "heartbeat_at",
                 "evaluation_replays": "id",
+                # A table added after the marker: absent, it must force the DDL.
+                "archived_documents": "acl",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()
@@ -1574,6 +1576,8 @@ class StateStore:
             self.conn.execute("DELETE FROM memory_records WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM artifacts WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM source_checkpoints WHERE source_id=?", (source_id,))
+            # A source registered later under this name starts with nothing held out.
+            self.conn.execute("DELETE FROM archived_documents WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
 
     def append_sync_event(

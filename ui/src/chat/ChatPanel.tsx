@@ -10,6 +10,7 @@ import type {
   VisualResponse,
   WorkflowStep,
 } from "../api/types";
+import { useArchiveRefresh } from "../browser/archive";
 import { browsedFrom, excludedInScope, historyFor, useSession } from "../state/session";
 import { AnswerScope } from "./AnswerScope";
 import { AnswerBody } from "./AnswerBody";
@@ -102,6 +103,8 @@ export function ChatPanel({
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
   const [useMemory, setUseMemory] = useState(true);
+  // `@remove` changed the index: the taxonomy view's listings are stale.
+  const refreshArchive = useArchiveRefresh();
 
   const ask = useMutation({
     mutationFn: ({ id, question }: { id: string; question: string }) => {
@@ -141,6 +144,7 @@ export function ChatPanel({
       setProgress([]);
       setAnswerPreview("");
       dispatch({ type: "answered", id, answer });
+      if (answer.archive) refreshArchive();
     },
     onError: (error: Error, { id }) => {
       setProgress([]);

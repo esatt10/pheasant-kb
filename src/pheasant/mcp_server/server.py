@@ -7,6 +7,7 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
+from pheasant.mcp_server.archive_tools import register_archive_tools
 from pheasant.mcp_server.assistant_tools import register_assistant_tools
 from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.inventory_tools import register_inventory_tools
@@ -932,6 +933,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
 
     register_graph_tools(mcp, tools, anticipated)
     register_inventory_tools(mcp, tools, anticipated)
+    register_archive_tools(mcp, tools, anticipated)
 
     return mcp
 

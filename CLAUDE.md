@@ -90,7 +90,8 @@ pheasant-kb/
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
 │   ├── sync/                  ← engine, connectors, vanished (deleted files
-│   │                            leave on any sync), web_connector (listed
+│   │                            leave on any sync), archived (removed
+│   │                            documents are never read), web_connector (listed
 │   │                            URLs, per-page revalidation), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
@@ -152,9 +153,12 @@ pheasant-kb/
 │   │                            inventory_detail (one source, one document,
 │   │                            the links between documents), source_browser
 │   │                            (a source as folders and files, one file
-│   │                            read for a viewer), scope (a folder, a
+│   │                            read for a viewer), web_pages (a fetched
+│   │                            page's HTML as indexed), scope (a folder, a
 │   │                            file, minus excluded documents; @current
-│   │                            and @dir resolved)
+│   │                            and @dir resolved), archive (remove a
+│   │                            document, keep it out of every sync,
+│   │                            reinstate it; + @remove)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -182,7 +186,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 166 pytest modules, offline by design
+└── tests/                     ← 168 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -436,6 +440,21 @@ what a complete listing no longer contains (`sync/vanished.py`, opt-in per
 connector through `complete_listing`), and re-indexing an edited file retracts
 the imports, calls and symbols its new text dropped (`graph/retraction.py`).
 After either, incremental equals a full sync of what is there now.
+
+**A document can be removed on purpose and stay removed**
+(`services/archive.py`, `sync/archived.py`, table `archived_documents`). The
+taxonomy view's Remove, `@remove`, MCP `archive_documents` and `POST
+/documents/archive` take its rows, vectors and graph nodes out the way
+`vanished.py` does, and every sync drops an archived path from the listing
+before any executor sees it, so neither incremental nor full brings it back.
+Reinstating deletes the row and runs an incremental sync, which reads the file
+as new; because the checkpoint was built from the admitted listing too, a
+connector that remembers "unchanged" (Drive, web validators) re-reads it. An
+upload is `removed`, not `archived`: the indexer deletes its bytes from the
+landing zone and drops the row, and reinstating it is refused. A name must
+match one document (`AMBIGUOUS_DOCUMENT`). An api replica writes the row and
+publishes an incremental sync; the indexer's sync prunes it
+(`ServiceContext.indexing` says which).
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. One ships first-party: Google
@@ -1047,7 +1066,16 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   the inventory scope and ACL rule, so it is the same on a replica with no
   mount. A read is the indexed file only while its sha256 still matches,
   otherwise the chunks reassembled with their overlap removed; a workbook is
-  re-extracted from its original (the indexed text loses its tabs). The web
+  re-extracted from its original (the indexed text loses its tabs). A
+  fetched web page has no file, so the indexer keeps the HTML its text was
+  extracted from in the media store under the artifact's sha256
+  (`ingestion.media.stored_suffix`); `read_document` reports it as `page`,
+  `GET /documents/page` serves it (`services/web_pages.py`, HTTP only, sent
+  `attachment` with `CSP: sandbox` because it is foreign markup on this
+  origin), and the viewer draws it as **Page** beside **Text** in a frame that
+  runs no scripts — which is also what the extractor saw. A page indexed
+  before this has none until it changes or a `full` sync re-reads it;
+  `tests/test_web_page_snapshot.py`. The web
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) has its own column
   between the sources and the chat by default (above the chat in a narrow
   window). Every Notebook section is a tile
@@ -1319,6 +1347,15 @@ never a correctness dependency.
 
 Each of these cost real time. They are listed because the shape recurs.
 
+- **A new table reaches an existing Postgres region only through
+  `_migrate_postgres`'s `required` map.** On Postgres the DDL is skipped
+  whenever the schema-version marker matches and every table in `required`
+  is present, so `CREATE TABLE IF NOT EXISTS` in `CORE_SCHEMA` never runs on
+  an upgraded region. `archived_documents` shipped without its entry: every
+  test passed (SQLite always replays the schema, and a fresh Postgres has no
+  marker), and the lab fleet answered `/documents/archived` with
+  `UndefinedTable` until it was added. Add a new table, or a newest column,
+  to `required` in the same change.
 - **An UNINDEXED FTS5 column in a `WHERE` clause is a full table scan.** A
   per-artifact `DELETE FROM chunks_fts WHERE artifact_id=?` made indexing
   O(N²); 8,000 files got 6.3× faster once it was skipped on full syncs. Treat

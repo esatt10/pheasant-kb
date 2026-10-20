@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from pheasant.config.schema import SourceConfig
 from pheasant.ingestion.content_types import is_text_file
-from pheasant.ingestion.media import MAX_MEDIA_BYTES
+from pheasant.ingestion.media import MAX_MEDIA_BYTES, stored_suffix
 from pheasant.ingestion.pipeline import ParsedArtifact, parse_connector_payload, sha256_bytes
 from pheasant.sync.connectors import ConnectorItem, ConnectorPayload
 
@@ -43,14 +43,15 @@ class _PreparedItem:
     #: indexed" and nothing like each other — a control folded into a routine
     #: counter is one nobody can see working.
     refused_by: str | None = None
-    #: An image's bytes, carried to the single writer so it can store them in
-    #: the media store (`ingestion.media`). Only images, only under the store's
-    #: size cap: everything else is text the chunks already hold.
+    #: An image's bytes, or a fetched web page's HTML, carried to the single
+    #: writer so it can store them in the media store (`ingestion.media`), under
+    #: the store's size cap. Everything else is text the chunks already hold,
+    #: or a file the viewer can read where it lies.
     media: bytes | None = None
 
 
 def _media_bytes(parsed: ParsedArtifact | None, content: bytes) -> bytes | None:
-    if parsed is None or parsed.type != "image" or len(content) > MAX_MEDIA_BYTES:
+    if stored_suffix(parsed) is None or len(content) > MAX_MEDIA_BYTES:
         return None
     return content
 
