@@ -167,7 +167,9 @@ def test_no_module_imports_a_layer_above_its_own() -> None:
 
     offenders: list[str] = []
     for path in _module_files():
-        relative = str(path.relative_to(SOURCE_ROOT))
+        # POSIX form: `_layer_of` splits on "/", so a backslashed Windows path
+        # matched no declared layer and the whole rule passed vacuously there.
+        relative = path.relative_to(SOURCE_ROOT).as_posix()
         if relative in COMPOSITION_ROOTS:
             continue
         own = _layer_of(relative)

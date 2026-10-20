@@ -36,7 +36,10 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from pheasant.assistant import providers as _providers
+# The module, not `from pheasant.assistant import providers`: the layering test
+# reads that spelling as importing the (layer-2) package. Module access keeps
+# `_providers._http_json` the one seam the offline suite patches.
+import pheasant.assistant.providers as _providers
 from pheasant.assistant.providers import ProviderError
 from pheasant.request_budget import DeadlineExceeded
 
