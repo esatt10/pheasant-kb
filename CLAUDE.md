@@ -90,7 +90,8 @@ pheasant-kb/
 │   ├── jobs.py                ← per-source progress: phase, rate, ETA, stalled
 │   ├── config/                ← schema.py (dataclasses), loader, profiles
 │   ├── sync/                  ← engine, connectors, vanished (deleted files
-│   │                            leave on any sync), web_connector (listed
+│   │                            leave on any sync), archived (removed
+│   │                            documents are never read), web_connector (listed
 │   │                            URLs, per-page revalidation), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
@@ -154,7 +155,9 @@ pheasant-kb/
 │   │                            (a source as folders and files, one file
 │   │                            read for a viewer), scope (a folder, a
 │   │                            file, minus excluded documents; @current
-│   │                            and @dir resolved)
+│   │                            and @dir resolved), archive (remove a
+│   │                            document, keep it out of every sync,
+│   │                            reinstate it; + @remove)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -436,6 +439,21 @@ what a complete listing no longer contains (`sync/vanished.py`, opt-in per
 connector through `complete_listing`), and re-indexing an edited file retracts
 the imports, calls and symbols its new text dropped (`graph/retraction.py`).
 After either, incremental equals a full sync of what is there now.
+
+**A document can be removed on purpose and stay removed**
+(`services/archive.py`, `sync/archived.py`, table `archived_documents`). The
+taxonomy view's Remove, `@remove`, MCP `archive_documents` and `POST
+/documents/archive` take its rows, vectors and graph nodes out the way
+`vanished.py` does, and every sync drops an archived path from the listing
+before any executor sees it, so neither incremental nor full brings it back.
+Reinstating deletes the row and runs an incremental sync, which reads the file
+as new; because the checkpoint was built from the admitted listing too, a
+connector that remembers "unchanged" (Drive, web validators) re-reads it. An
+upload is `removed`, not `archived`: the indexer deletes its bytes from the
+landing zone and drops the row, and reinstating it is refused. A name must
+match one document (`AMBIGUOUS_DOCUMENT`). An api replica writes the row and
+publishes an incremental sync; the indexer's sync prunes it
+(`ServiceContext.indexing` says which).
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. One ships first-party: Google

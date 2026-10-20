@@ -1301,6 +1301,64 @@ def test_a_deleted_file_leaves_exactly_what_a_full_sync_of_the_remaining_tree_ho
     assert any("call:typescript:shared" in node for node in nodes)  # keep.ts still calls it
 
 
+def test_archiving_files_equals_a_full_sync_without_them_and_reinstating_undoes_it(
+    tmp_path: Path,
+) -> None:
+    """An archived document (`services.archive`) must leave exactly what
+    deleting its file would, stay out through incremental and full syncs, and
+    cost an unchanged re-sync nothing; reinstating must restore exactly what a
+    full sync of the untouched tree holds."""
+
+    from pheasant.services import ServiceContext, archive
+
+    workspace = tmp_path / "ws"
+    _deletion_corpus(workspace)
+    pristine = _deletion_engine(tmp_path, "pristine", workspace)
+    try:
+        pristine.sync_source("docs", "full")
+        original = (_state_shape(pristine), _graph_shape(pristine))
+        member = next(
+            str(row["relative_path"])
+            for row in pristine.state.rows("SELECT relative_path FROM artifacts")
+            if str(row["relative_path"]).endswith("b.md")
+        )
+    finally:
+        pristine.close()
+
+    engine = _deletion_engine(tmp_path, "archived", workspace)
+    try:
+        engine.sync_source("docs", "full")
+        context = ServiceContext(
+            config=engine.config, state=engine.state, searcher=None, engine=engine
+        )
+        names = ["gone.ts", "notes.md", "pkg/lib.py", member]
+        assert (
+            archive.archive_documents(context, archive.ArchiveRequest(documents=names))["status"]
+            == "removed"
+        )
+        archived = (_state_shape(engine), _graph_shape(engine))
+        generation = engine.loaded_graph_generation
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+        assert engine.loaded_graph_generation == generation
+        engine.sync_source("docs", "full")
+        assert (_state_shape(engine), _graph_shape(engine)) == archived
+
+        archive.reinstate_documents(context, archive.ArchiveRequest(documents=names))
+        assert (_state_shape(engine), _graph_shape(engine)) == original
+    finally:
+        engine.close()
+
+    deleted = tmp_path / "deleted"
+    _deletion_corpus(deleted)
+    _delete_from(deleted)
+    reference = _deletion_engine(tmp_path, "reference", deleted)
+    try:
+        reference.sync_source("docs", "full")
+        assert archived == (_state_shape(reference), _graph_shape(reference))
+    finally:
+        reference.close()
+
+
 def test_a_file_deleted_and_restored_is_indexed_again(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     _deletion_corpus(workspace)

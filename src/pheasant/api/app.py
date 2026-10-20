@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.archive_routes import register_archive_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
@@ -63,6 +64,7 @@ from pheasant.services import ServiceContext, ServiceError
 from pheasant.services import assistant as assistant_service
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
+from pheasant.services.archive import Indexing
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
@@ -1055,6 +1057,12 @@ def create_app(
         # like the drop zone does, and a surface that got one and not the other
         # is the divergence `tests/test_surface_conformance.py` exists to catch.
         landing=landing,
+        # Removing a document is applied here where this process indexes, and
+        # published to an indexer where it does not (`services.archive`).
+        indexing=Indexing(
+            local=role_policy.indexes_locally,
+            start_sync=lambda name: _sync_started(*_start_background_sync(name, "incremental")),
+        ),
     )
 
     # Built before the lifespan so the lifespan closure can start its session
@@ -2018,6 +2026,7 @@ def create_app(
     # rather than adding to the pile.
     register_readiness_routes(app, config=config, services=services, engine=engine)
     register_inventory_routes(app, services=services)
+    register_archive_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2464,6 +2473,10 @@ def create_app(
             daemon=True,
         ).start()
         return job.id, []
+
+    def _sync_started(job_id: str | None, queued: list[str]) -> dict[str, Any]:
+        status = "queued" if queued else "syncing" if job_id else "already_syncing"
+        return {"status": status, "job_id": job_id, "queued_tasks": queued}
 
     def _publish_background_sync(
         names: list[str],

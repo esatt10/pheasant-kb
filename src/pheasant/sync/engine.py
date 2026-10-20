@@ -53,6 +53,7 @@ from pheasant.search.vector_store import (
 from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
+from pheasant.sync import archived
 from pheasant.sync.checkpoint_interval import (
     optimal_checkpoint_interval as optimal_checkpoint_interval,
 )
@@ -2020,6 +2021,9 @@ class SyncEngine:
                     self.state.set_fingerprint(resume_scope, "cleared", utc_now())
                 manifest = {"source_id": source.name, "artifacts": {}}
                 artifacts = manifest["artifacts"]
+            # Archived documents are never read, on any mode (`sync/archived.py`).
+            items, held = archived.admit(self.state, source.name, items)
+            details_extra.update({"archived_documents": len(held)} if held else {})
             indexed = 0
             skipped = 0
             fetched = 0
@@ -2207,7 +2211,8 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
-            if removed := prune_vanished(self, source.name, connector, items, artifacts):
+            removed = archived.prune(self, source.name, artifacts)
+            if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed
             pruned_vectors = self._finalize_index_state(
                 source=source,

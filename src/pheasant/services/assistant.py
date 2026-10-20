@@ -221,6 +221,7 @@ def answer(
                 exclude_documents=request.exclude_documents,
                 current_document=request.current_document,
                 current_directory=request.current_directory,
+                remove_documents=_remover(context, request),
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["admission_ms"] = admission_ms
@@ -236,6 +237,26 @@ def answer(
     finally:
         if owns_permit:
             owned_permit.release()
+
+
+def _remover(context: ServiceContext, request: AnswerRequest) -> Callable[[list[str]], dict]:
+    """``@remove``'s operation: `services.archive`, as the asker, on this context."""
+
+    from pheasant.services import archive
+
+    def remove(names: list[str]) -> dict[str, Any]:
+        return archive.archive_documents(
+            context,
+            archive.ArchiveRequest(
+                documents=names,
+                knowledge_base=request.knowledge_base,
+                principal=request.principal,
+                principal_groups=request.principal_groups,
+                actor=request.principal or "assistant",
+            ),
+        )
+
+    return remove
 
 
 #: Passages one visual may be drawn from. A diagram of thirty sources is a

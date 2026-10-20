@@ -91,6 +91,10 @@ class ServiceContext:
     graph: Any = None
     engine: Any = None
     landing: Any = None
+    #: How this process changes a source's index: `services.archive.Indexing`,
+    #: built by the adapter, which knows whether it indexes here or publishes to
+    #: an indexer. ``None`` means here, synchronously (a test, the CLI).
+    indexing: Any = None
 
     def landing_zone(self) -> Any:
         """The landing zone, derived from config when an adapter did not pass one.

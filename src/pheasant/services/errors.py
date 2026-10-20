@@ -341,3 +341,34 @@ class ContaminationRefused(InvalidRequest):
         )
         self.relative_path = relative
         self.pattern = pattern
+
+
+class AmbiguousDocument(InvalidRequest):
+    """A name that matches several documents, given to an operation that changes one.
+
+    A search may leave out every ``deploy.md`` a name matches; removing them
+    all because a name was short is not a reading anybody intended.
+    """
+
+    status = 409
+    code = "AMBIGUOUS_DOCUMENT"
+
+    def __init__(self, name: str, candidates: list[str]) -> None:
+        shown = ", ".join(candidates[:5]) + (" …" if len(candidates) > 5 else "")
+        super().__init__(
+            f"{name} names {len(candidates)} documents ({shown}); name one by its source/path or id"
+        )
+        self.candidates = candidates
+
+
+class NotReinstatable(InvalidRequest):
+    """An archived document that cannot come back: an upload, whose bytes were deleted."""
+
+    status = 409
+    code = "DOCUMENT_NOT_REINSTATABLE"
+
+    def __init__(self, document: str) -> None:
+        super().__init__(
+            f"{document} was an uploaded file and removing it deleted it; upload it again"
+        )
+        self.document = document

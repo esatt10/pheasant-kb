@@ -274,6 +274,7 @@ def answer_question(
     exclude_documents: list[str] | None = None,
     current_document: str | None = None,
     current_directory: str | None = None,
+    remove_documents: Any = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -292,6 +293,7 @@ def answer_question(
     """
     from pheasant.assistant import conversation, inventory, inventory_answer, routing, search_answer
     from pheasant.assistant import keywords as first_words
+    from pheasant.assistant.remove_answer import answer as answer_removal
     from pheasant.assistant.retrieval import PheasantRetriever
     from pheasant.assistant.workflows import (
         WorkflowRequest,
@@ -420,10 +422,12 @@ def answer_question(
     asked = inventory.route(
         routed_question, mode=inventory_mode, state=state, visual=visual_route, history=turns
     )
+    if removing := directives.remove is not None:  # `@remove` is answered by `remove_answer`
+        asked = None
     if (
         asked is None
         and directives.used
-        and not (directives.search or directives.inventory)
+        and not (directives.search or directives.inventory or removing)
         and not question.strip()
     ):
         asked = inventory.InventoryQuestion(
@@ -432,7 +436,7 @@ def answer_question(
             why=f"{directives.used[-1]} with no question after it",
             notes=(f"add a question after {directives.used[-1]}",),
         )
-    if scope is not None and scope.missing:
+    if scope is not None and scope.missing and not removing:
         # `@current` with nothing open is said, never answered from everywhere;
         # `inventory_scope.apply` carries the scope's note onto it.
         asked = inventory.InventoryQuestion(
@@ -447,7 +451,7 @@ def answer_question(
     if asked is not None and asked.action == "taxonomy" and source_name and not asked.source_name:
         # `@taxonomy` with no source browses the one the request is scoped to.
         asked = replace(asked, source_name=source_name)
-    deterministic = asked is not None or directives.search
+    deterministic = asked is not None or directives.search or removing
     rewrite_started = time.perf_counter()
     from pheasant.assistant.providers import collect_token_usage
 
@@ -510,7 +514,7 @@ def answer_question(
     )
 
     result = None
-    inventory_data = None
+    inventory_data = removal = None
     if asked is not None:
         result, inventory_data = inventory_answer.answer(
             asked,
@@ -554,6 +558,14 @@ def answer_question(
             None,
             "",
         )
+    if result is None and removing:
+        result, removal = answer_removal(
+            directives.remove or (),
+            current_document=current_document if directives.scope == "document" else None,
+            remove=remove_documents,
+            report=lambda step: _report(on_step, step),
+        )
+        visual_route, shape = "none", None
     try:
         budget.check()
         if result is None:
@@ -696,6 +708,8 @@ def answer_question(
         payload["scope"] = scope.as_dict()
         if scope.notes and inventory_data is None:
             payload["answer"] += "".join(f"\n\n_Note: {note}._" for note in scope.notes)
+    if removal is not None:
+        payload["archive"] = removal
     if inventory_data is not None:
         payload["inventory"] = inventory_data
     elif inventory_mode != "off" and not directives.used and inventory.looks_close(question):

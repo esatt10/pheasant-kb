@@ -63,6 +63,22 @@ CREATE TABLE IF NOT EXISTS removed_sources (
   source_id TEXT PRIMARY KEY,
   removed_at TEXT NOT NULL
 );
+-- The same tombstone for one document (`persistence/archive.py`). Every sync
+-- skips a path held here before reading it, so the removal survives
+-- incremental and full syncs. `kind` is `archived` (reinstatable) or
+-- `removed` (an upload whose bytes the indexer deletes, then drops the row).
+CREATE TABLE IF NOT EXISTS archived_documents (
+  source_id TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  artifact_id TEXT,
+  kind TEXT NOT NULL,
+  archived_at TEXT NOT NULL,
+  archived_by TEXT,
+  -- The artifact's ACL when it was archived: the artifact row is gone, and the
+  -- archived list is still read under `security.acl_enforced`.
+  acl TEXT,
+  PRIMARY KEY (source_id, relative_path)
+);
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,

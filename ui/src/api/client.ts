@@ -34,6 +34,8 @@ import type {
   InventoryListingPage,
   BrowseResponse,
   DocumentContent,
+  ArchiveResult,
+  ArchivedListing,
 } from "./types";
 import type {
   ConfigSection,
@@ -597,6 +599,20 @@ export const api = {
         path: options.path || undefined,
         offset: options.offset || undefined,
         limit: options.limit,
+      })}`,
+    ),
+  /** Remove documents from the index; they stay out of every sync until reinstated. */
+  archiveDocuments: (documents: string[]) =>
+    request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ documents }) }),
+  /** Let archived documents back in; their sources sync to index them again. */
+  reinstateDocuments: (documents: string[]) =>
+    request<ArchiveResult>("/documents/reinstate", { method: "POST", body: JSON.stringify({ documents }) }),
+  /** The documents held out of the index, of one source (and folder). */
+  archivedDocuments: (options: { source?: string | null; pathPrefix?: string | null }) =>
+    request<ArchivedListing>(
+      `/documents/archived${qs({
+        source_name: options.source ?? undefined,
+        path_prefix: options.pathPrefix || undefined,
       })}`,
     ),
   /** One document's content, classified for the viewer. */

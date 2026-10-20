@@ -5334,3 +5334,25 @@ select.text-input {
   background-color: rgb(255 196 0 / 0.42);
   color: transparent;
 }
+
+/* "Remove from the index" and the folder's Removed list (`browser/RemoveButton`, `ArchivedList`). */
+.scope-toggle--remove:hover { border-color: var(--danger); color: var(--danger); }
+.scope-toggle--armed {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 600;
+}
+.archived-list { margin: 6px 8px; font-size: 12px; }
+.archived-list__toggle { color: var(--text-soft); }
+.archived-list__rows { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.archived-list__row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.archived-list__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+  text-decoration: line-through;
+}

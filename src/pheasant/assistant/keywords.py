@@ -27,6 +27,11 @@ question so a rule notices. A keyword says it directly:
   asks for — an answer, ``@search``, ``@docs``, ``@doc``, ``@links``,
   ``@taxonomy`` — and are resolved by ``services.scope`` against the
   ``current_document`` / ``current_directory`` the caller sends.
+* **Changing the index**: ``@remove <names>`` removes documents from the index
+  and holds them out of every later sync (``services.archive``), and
+  ``@current @remove`` removes the open document. A name must name one
+  document; a folder or connector document can be reinstated, an upload is
+  deleted. Nothing is searched and no model is called.
 
 A keyword counts only as the **first word** of the message (several may lead
 it: ``@detailed @table …``), so a question that merely mentions one, or an
@@ -157,6 +162,16 @@ KEYWORDS: tuple[Keyword, ...] = (
         "@dir @exclude README.md how is it deployed",
         ("omit", "without"),
         group="Where to look",
+    ),
+    Keyword(
+        "remove",
+        "remove",
+        "",
+        "Remove documents from the index and keep them out of later syncs, by name, path "
+        "or id; `@current @remove` removes the open document. Uploads are deleted.",
+        "@remove notes/old-runbook.md",
+        ("archive",),
+        group="Change the index",
     ),
     Keyword(
         "search",
@@ -332,6 +347,8 @@ class Directives:
     scope: str | None = None
     #: Names ``@exclude`` gave, unresolved (``services.scope`` resolves them).
     exclude: tuple[str, ...] = ()
+    #: Names ``@remove`` gave (empty for ``@current @remove``); ``None`` without it.
+    remove: tuple[str, ...] | None = None
 
     @property
     def any(self) -> bool:
@@ -348,6 +365,7 @@ class Directives:
             # Only when a scope keyword was read: the payload is unchanged otherwise.
             **({"scope": self.scope} if self.scope else {}),
             **({"exclude": list(self.exclude)} if self.exclude else {}),
+            **({"remove": list(self.remove)} if self.remove is not None else {}),
         }
 
 
@@ -378,6 +396,9 @@ def read(question: str) -> Directives:
         if keyword.kind == "search":
             found["search"] = True
             break
+        if keyword.kind == "remove":
+            found["remove"] = removal_names(text)
+            break
         if keyword.kind == "form":
             found["form"] = keyword.value
             if keyword.value == "brief":
@@ -397,7 +418,28 @@ def read(question: str) -> Directives:
         visual=found.get("visual"),  # type: ignore[arg-type]
         scope=scope,
         exclude=exclude,
+        remove=found.get("remove"),  # type: ignore[arg-type]
     )
+
+
+def removal_names(text: str) -> tuple[str, ...]:
+    """The documents ``@remove`` names: comma-separated, quoted when they hold
+    a comma or a space; ``a.md b.md`` is two names when every word looks like a
+    file (a dot or a slash), and one name otherwise."""
+
+    raw = (text or "").strip()
+    if not raw:
+        return ()
+    parts = [
+        part.strip().strip("\"'“”").strip()
+        for part in re.findall(r"\"[^\"]*\"|'[^']*'|“[^”]*”|[^,]+", raw)
+    ]
+    names = [part for part in parts if part]
+    if len(names) == 1 and not re.search(r"[\"'“]", raw):
+        words = names[0].split()
+        if len(words) > 1 and all(re.search(r"[./]", word) for word in words):
+            names = words
+    return tuple(dict.fromkeys(names))
 
 
 def _read_scope(text: str) -> tuple[str, list[str], str | None, tuple[str, ...]]:

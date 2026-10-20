@@ -11,6 +11,7 @@ import { NotebookView, parseNotebook } from "./views/NotebookView";
 import { ProseView, SlidesView } from "./views/ProseViews";
 import { fileIcon, formatBytes } from "./fileIcons";
 import { OmitToggle } from "./OmitToggle";
+import { RemoveButton } from "./RemoveButton";
 import { passageText, usePassageHighlight } from "./passage";
 import { ScopeToggle } from "./ScopeToggle";
 
@@ -224,6 +225,7 @@ function LoadedViewer({
           </div>
           <ScopeToggle source={doc.source} path={doc.path} kind="file" />
           <OmitToggle source={doc.source} path={doc.path} />
+          <RemoveButton source={doc.source} path={doc.path} onRemoved={onClose} />
           <button type="button" className="btn btn--small btn--icon btn--ghost" onClick={onClose} aria-label="Close file" title="Close file">
             ✕
           </button>

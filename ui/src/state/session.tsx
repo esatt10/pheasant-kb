@@ -374,14 +374,18 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       // already looking. Only on the turn's first answer: the streamed second
       // dispatch must not undo a citation the reader picked in between.
       const firstAnswer = !state.turns.find((turn) => turn.id === action.id)?.answer;
-      const viewing = (opened?.browser ?? state.browser).file;
+      const open = (opened?.browser ?? state.browser).file;
+      // `@remove` of the open document closes it: there is nothing left to show.
+      const viewing = open && removedBy(action.answer, open) ? null : open;
       const chunkId = firstAnswer && viewing ? citedChunkIn(viewing, action.answer) : null;
       return {
         ...state,
         ...(opened ?? {}),
         ...(chunkId && viewing
           ? { browser: { ...(opened?.browser ?? state.browser), file: { ...viewing, chunkId, anchor: null } } }
-          : {}),
+          : open && !viewing
+            ? { browser: { ...(opened?.browser ?? state.browser), file: null } }
+            : {}),
         // Streaming chat first dispatches the text with visual.status=pending,
         // then dispatches the same turn again when its visual is ready. Replace
         // that turn by id so the completed MCP App result reaches the UI.
@@ -521,6 +525,13 @@ export function browsedFrom(answer: ChatAnswer): { source: string | null; path: 
   if (!inventory || inventory.action !== "taxonomy") return null;
   const result = inventory.result as { source?: string | null; path?: string };
   return { source: result.source ?? null, path: result.path ?? "" };
+}
+
+/** Whether `answer` is an `@remove` that removed `file`. */
+function removedBy(answer: ChatAnswer, file: OpenFile): boolean {
+  return Boolean(
+    answer.archive?.documents.some((document) => document.source_name === file.source && document.path === file.path),
+  );
 }
 
 /** The strongest citation of `answer` that is a passage of `file`: used first, then by number. */

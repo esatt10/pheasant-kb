@@ -741,6 +741,11 @@ CONFORMED = {
     # chunks the two operations exist for.
     "browse": ("GET /documents/tree", "browse_source"),
     "read_document": ("GET /documents/content", "read_document"),
+    # Driven through both surfaces in tests/test_document_archive.py, refusal
+    # text included: removing a document needs a corpus of its own to remove.
+    "archive_documents": ("POST /documents/archive", "archive_documents"),
+    "reinstate_documents": ("POST /documents/reinstate", "reinstate_documents"),
+    "archived_documents": ("GET /documents/archived", "list_archived_documents"),
 }
 
 
@@ -751,6 +756,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
 
     import inspect
 
+    from pheasant.services import archive as archive_service
     from pheasant.services import assistant as assistant_service
     from pheasant.services import graph as graph_service
     from pheasant.services import index_queue as index_queue_service
@@ -770,6 +776,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         inventory_service,
         inventory_detail_service,
         source_browser_service,
+        archive_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):

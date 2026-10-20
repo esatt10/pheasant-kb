@@ -1574,6 +1574,8 @@ class StateStore:
             self.conn.execute("DELETE FROM memory_records WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM artifacts WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM source_checkpoints WHERE source_id=?", (source_id,))
+            # A source registered later under this name starts with nothing held out.
+            self.conn.execute("DELETE FROM archived_documents WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
 
     def append_sync_event(

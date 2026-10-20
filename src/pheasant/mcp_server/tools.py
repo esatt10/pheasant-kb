@@ -21,6 +21,7 @@ from pheasant.config.schema import (
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.jobs import JobRegistry
+from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
@@ -39,6 +40,7 @@ from pheasant.security.path_policy import resolve_config_write_target, resolve_u
 from pheasant.services import ServiceContext
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
+from pheasant.services.archive import Indexing
 from pheasant.services.errors import SourceNotFound
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.web_connector import web_source_for_agent
@@ -74,7 +76,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools(ReadinessTools, AssistantTools, InventoryTools):
+class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)
@@ -114,6 +116,8 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools):
             searcher=self.searcher,
             graph=self.graph,
             engine=self.engine,
+            # A remote graph means another process indexes: publish, as HTTP does.
+            indexing=Indexing(local=not self._remote_graph, start_sync=self._sync_for_archive),
             # Left to the context's config-derived fallback on purpose. The MCP
             # server has no role of its own — it is mounted inside whatever
             # process serves it, and the `--role api` that makes that process a
@@ -125,6 +129,12 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools):
             # forwards, and an indexer forwards to an endpoint that always
             # writes locally, which costs a hop and cannot loop.
         )
+
+    def _sync_for_archive(self, source_name: str) -> dict:
+        job = self.start_sync_source(self.config.knowledge_base_id, source_name, "incremental")
+        task = (job.get("result") or {}).get("task_id")
+        status = "queued" if self._remote_graph else "syncing"
+        return {"status": status, "job_id": job.get("id"), "queued_tasks": [task] if task else []}
 
     def _publish_sync(
         self,
