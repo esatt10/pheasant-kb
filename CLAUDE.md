@@ -1337,6 +1337,15 @@ never a correctness dependency.
 
 Each of these cost real time. They are listed because the shape recurs.
 
+- **A new table reaches an existing Postgres region only through
+  `_migrate_postgres`'s `required` map.** On Postgres the DDL is skipped
+  whenever the schema-version marker matches and every table in `required`
+  is present, so `CREATE TABLE IF NOT EXISTS` in `CORE_SCHEMA` never runs on
+  an upgraded region. `archived_documents` shipped without its entry: every
+  test passed (SQLite always replays the schema, and a fresh Postgres has no
+  marker), and the lab fleet answered `/documents/archived` with
+  `UndefinedTable` until it was added. Add a new table, or a newest column,
+  to `required` in the same change.
 - **An UNINDEXED FTS5 column in a `WHERE` clause is a full table scan.** A
   per-artifact `DELETE FROM chunks_fts WHERE artifact_id=?` made indexing
   O(N²); 8,000 files got 6.3× faster once it was skipped on full syncs. Treat
