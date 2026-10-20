@@ -25,7 +25,7 @@ from pheasant.ingestion.captioner import captioner_from_config, source_includes_
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
 from pheasant.ingestion.landing import owned_upload_directory
-from pheasant.ingestion.media import media_store_for_config
+from pheasant.ingestion.media import media_store_for_config, stored_suffix
 from pheasant.ingestion.pipeline import (
     git_state,
     parse_connector_payload,
@@ -2144,9 +2144,7 @@ class SyncEngine:
                     # Before the commit, and outside the mutex: content-addressed
                     # and atomic, so a sync that fails after this leaves an
                     # unreferenced file rather than a referenced missing one.
-                    self.media_store.put(
-                        parsed.sha256, Path(parsed.relative_path).suffix, prepared.media
-                    )
+                    self.media_store.put(parsed.sha256, stored_suffix(parsed) or "", prepared.media)
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)

@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, Response
 
-from pheasant.services import inventory, inventory_detail, source_browser
+from pheasant.services import inventory, inventory_detail, source_browser, web_pages
 
 
 def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
@@ -200,3 +200,41 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
             # A member of an indexed ZIP archive: inflated, not a file to stream.
             return Response(found["content"], media_type=found["mime_type"], headers=headers)
         return FileResponse(found["path"], media_type=found["mime_type"], headers=headers)
+
+    @app.get("/documents/page")
+    def page_snapshot(
+        path: str,
+        source_name: str | None = None,
+        principal: str | None = None,
+        principal_groups: list[str] | None = Query(default=None),
+    ) -> Response:
+        """A fetched web page's HTML as it was indexed, for the viewer's frame.
+
+        HTTP only, like ``/documents/raw``: it exists so a person can set the
+        page beside the text extracted from it, and an agent reads that text
+        through ``read_document``. It is somebody else's markup served from
+        this origin, so it can never run here: ``Content-Security-Policy:
+        sandbox`` gives a direct navigation an opaque origin with no scripts,
+        and ``attachment`` makes that navigation a download in the first place.
+        The UI fetches the text and draws it in a frame that runs nothing.
+        """
+
+        found = web_pages.page_snapshot(
+            services,
+            source_browser.ReadRequest(
+                path=path,
+                source_name=source_name,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
+        )
+        headers = {
+            "Content-Disposition": "attachment",
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"{found["sha256"]}"',
+        }
+        # UTF-8 whatever the page declares, because that is how the extractor
+        # decoded it: the view should show what the parser read.
+        return Response(found["content"], media_type="text/html; charset=utf-8", headers=headers)

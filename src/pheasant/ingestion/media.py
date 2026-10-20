@@ -19,6 +19,13 @@ artifact, writes them here, and every tier reads them back.
 
 Deliberately limited to raster formats pheasant already ingests. SVG is not
 one of them and is not served: it is a document that can carry script.
+
+One exception, kept apart from the images: the HTML of a *fetched* web page
+(``PAGE_TYPES``). A web collection's artifact path is a URL, so once its text
+is extracted there is no copy of what the parser read, and a reader checking
+an extraction has nothing to check it against. The snapshot is that copy. It
+is never served as an image (``mime_for`` does not know it) and is served as a
+page only into a frame that runs nothing (``services.source_browser``).
 """
 
 from __future__ import annotations
@@ -40,6 +47,13 @@ MIME_TYPES = {
     ".gif": "image/gif",
 }
 
+#: A fetched web page's HTML, as it was when it was indexed. Never an image.
+PAGE_TYPES = {".html": "text/html"}
+PAGE_SUFFIX = ".html"
+
+_HTML_MIMES = frozenset({"text/html", "application/xhtml+xml"})
+_HTML_SUFFIXES = frozenset({".html", ".htm", ".xhtml"})
+
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -51,7 +65,8 @@ class MediaStore:
 
     def path_for(self, sha256: str, suffix: str) -> Path | None:
         suffix = suffix.lower()
-        if not _SHA_RE.match(sha256 or "") or suffix not in MIME_TYPES:
+        known = suffix in MIME_TYPES or suffix in PAGE_TYPES
+        if not _SHA_RE.match(sha256 or "") or not known:
             return None
         return self.root / sha256[:2] / f"{sha256}{suffix}"
 
@@ -102,3 +117,34 @@ def media_store_for_config(config: Any) -> MediaStore:
 
 def mime_for(relative_path: str) -> str | None:
     return MIME_TYPES.get(Path(relative_path or "").suffix.lower())
+
+
+def is_fetched_page(path: Any, relative_path: Any, mime_type: Any) -> bool:
+    """Whether an artifact is an HTML page read from a URL rather than a file.
+
+    The artifact path is the URL for a web collection; a local ``.html`` file
+    has a file to show and needs no snapshot.
+    """
+
+    location = str(path or "").lower()
+    if not location.startswith(("http://", "https://")):
+        return False
+    mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    return mime in _HTML_MIMES or Path(str(relative_path or "")).suffix.lower() in _HTML_SUFFIXES
+
+
+def stored_suffix(artifact: Any) -> str | None:
+    """The suffix ``artifact``'s bytes are stored under, or ``None`` if they are not kept.
+
+    An image under its own suffix; a fetched page under ``.html`` whatever its
+    relative path says (an extensionless URL is indexed as ``….txt``).
+    """
+
+    if artifact is None:
+        return None
+    if artifact.type == "image":
+        suffix = Path(artifact.relative_path).suffix.lower()
+        return suffix if suffix in MIME_TYPES else None
+    if is_fetched_page(artifact.path, artifact.relative_path, artifact.mime_type):
+        return PAGE_SUFFIX
+    return None

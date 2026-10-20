@@ -153,7 +153,8 @@ pheasant-kb/
 │   │                            inventory_detail (one source, one document,
 │   │                            the links between documents), source_browser
 │   │                            (a source as folders and files, one file
-│   │                            read for a viewer), scope (a folder, a
+│   │                            read for a viewer), web_pages (a fetched
+│   │                            page's HTML as indexed), scope (a folder, a
 │   │                            file, minus excluded documents; @current
 │   │                            and @dir resolved), archive (remove a
 │   │                            document, keep it out of every sync,
@@ -1065,7 +1066,16 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   the inventory scope and ACL rule, so it is the same on a replica with no
   mount. A read is the indexed file only while its sha256 still matches,
   otherwise the chunks reassembled with their overlap removed; a workbook is
-  re-extracted from its original (the indexed text loses its tabs). The web
+  re-extracted from its original (the indexed text loses its tabs). A
+  fetched web page has no file, so the indexer keeps the HTML its text was
+  extracted from in the media store under the artifact's sha256
+  (`ingestion.media.stored_suffix`); `read_document` reports it as `page`,
+  `GET /documents/page` serves it (`services/web_pages.py`, HTTP only, sent
+  `attachment` with `CSP: sandbox` because it is foreign markup on this
+  origin), and the viewer draws it as **Page** beside **Text** in a frame that
+  runs no scripts — which is also what the extractor saw. A page indexed
+  before this has none until it changes or a `full` sync re-reads it;
+  `tests/test_web_page_snapshot.py`. The web
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) has its own column
   between the sources and the chat by default (above the chat in a narrow
   window). Every Notebook section is a tile

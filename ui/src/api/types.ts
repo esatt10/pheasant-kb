@@ -1730,4 +1730,9 @@ export interface DocumentContent {
     excerpt?: string;
   } | null;
   raw: { available: boolean; mime_type: string | null };
+  /**
+   * A fetched web page: its URL, and whether the HTML its text was extracted
+   * from is held to be shown (`/documents/page`). `null` for anything else.
+   */
+  page?: { url: string; available: boolean } | null;
 }

@@ -645,6 +645,19 @@ export const api = {
     const bytes = await response.arrayBuffer();
     return URL.createObjectURL(new Blob([bytes], { type: options.mimeType }));
   },
+  /**
+   * A fetched web page's HTML as it was indexed, as text for a sandboxed
+   * frame's `srcDoc`. Decoded as UTF-8, which is how the extractor read it.
+   */
+  documentPageHtml: async (options: { source?: string | null; path: string }): Promise<string> => {
+    const response = await fetch(
+      `${API_BASE}/documents/page${qs({ path: options.path, source_name: options.source ?? undefined })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    return new TextDecoder("utf-8").decode(await response.arrayBuffer());
+  },
   /** The MCP App view, to host in a sandboxed frame exactly as an MCP host would. */
   knowledgeView: async (): Promise<string> => {
     const response = await fetch(`${API_BASE}/assistant/apps/knowledge-view`, {
