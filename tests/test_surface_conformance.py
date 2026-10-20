@@ -727,6 +727,9 @@ CONFORMED = {
     # test_conversation.py, over corpora that hold images and turns.
     "answer": ("POST /assistant/chat", "ask_knowledge_base"),
     "visualize": ("POST /assistant/visual", "create_visual"),
+    # Driven through both surfaces in tests/test_decisions_api.py, refusal text
+    # included: it needs a fake Decisions API wire, which this corpus does not.
+    "assess_evidence": ("POST /assistant/assess", "assess_evidence"),
     "get_media": ("GET /media", "get_image"),
     # Driven through both surfaces in tests/test_index_queue_status.py, refusal
     # text included: its fixture needs a queue-enabled region this one is not.

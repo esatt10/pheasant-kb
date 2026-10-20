@@ -68,6 +68,10 @@ LAYERS: dict[str, int] = {
     "assistant/providers": 1,
     "assistant/llm": 1,
     "assistant/credentials": 1,
+    # The Decisions API client is the same kind of adapter as `providers` and
+    # `llm`: a model handle, nothing about answering. Its *policy* — which
+    # gate acts on which judgement — is `assistant/workflows/decision_gates`.
+    "assistant/decisions": 1,
     # Domain and below. Listed explicitly rather than defaulted so a new
     # package has to say where it belongs.
     "search": 1,

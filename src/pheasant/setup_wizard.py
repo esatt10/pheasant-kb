@@ -454,6 +454,22 @@ def build_sections() -> list[Section]:
                     "automatically when no vector index exists.",
                     advanced=True,
                 ),
+                Question(
+                    key="assistant.decisions.mode",
+                    prompt="Judge evidence and answers with the OpenAI Decisions API?",
+                    kind="choice",
+                    choices=[
+                        Choice(
+                            "beta",
+                            "beta",
+                            "Typed judgements decide sufficiency and accept the answer; "
+                            "faster. Needs an OpenAI key, else behaves as off.",
+                        ),
+                        Choice("shadow", "shadow", "Ask beside the model grade; act on nothing."),
+                        Choice("off", "off", "The model grades its own evidence, as before."),
+                    ],
+                    advanced=True,
+                ),
             ],
         ),
         Section(

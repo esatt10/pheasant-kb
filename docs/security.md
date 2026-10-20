@@ -264,6 +264,17 @@ under `<state_path>/uploads/<source>`:
   `GET /ingest/reconcile` reports what was submitted against what the region
   holds.
 
+### What leaves the region at question time
+
+The assistant sends the question and the evidence it retrieved — passages the
+asking principal is allowed to read, and nothing else — to the configured chat
+provider. With `assistant.decisions.mode` at its default (`beta`) and an OpenAI
+key in reach, the same evidence also goes to OpenAI's Decisions API to judge
+it, **even when the answering model is another vendor's**, because the key it
+falls back to is `OPENAI_API_KEY`. A region that must not send evidence to
+OpenAI sets `assistant.decisions.mode: off` (or keeps that key out of the
+environment). Nothing is sent at indexing time either way.
+
 ## Prompt injection posture
 
 Indexed documents are untrusted data. Retrieval responses should preserve provenance and should not cause agents to run instructions found inside indexed content unless explicitly requested by the user and independently validated.

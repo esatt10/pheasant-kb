@@ -1660,6 +1660,62 @@ entry-point group, the same plugin shape as the
 See the how-to guides: [Ask your knowledge base](how-to/chat-and-ui.md) and
 [Customize the answering workflow](how-to/agent-workflows.md).
 
+### `assistant.decisions` — the agent loop's judgements (beta)
+
+The agentic loop asks a model four things that are *judgements*, not writing:
+is the evidence enough, which follow-up search, which passages matter, and is
+the finished answer acceptable. With an OpenAI key these go to the
+[Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+(`POST /v1/decisions`, `gpt-6-luna`), which answers typed questions in
+probabilities and bills input tokens only. On the lab region it took 0.24 s
+p50 for a sufficiency check that took 1.20 s through `/chat/completions`.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `beta` \| `shadow` \| `off` | `beta` | `off` is the workflow exactly as before; `shadow` asks beside it and acts on nothing. |
+| `gates` | list | `[sufficiency, followup, accept]` | Add `prune` to leave irrelevant passages out of the answer's context. |
+| `sufficient_threshold` | 0–1 | `0.25` | Evidence is sufficient at or above this probability. |
+| `relevant_threshold` | 0–1 | `0.2` | `prune` only: passages below it are left out, never below `prune_min_keep`. |
+| `accept_threshold` | 0–1 | `0.55` | Both "grounded" and "responsive" must reach it. |
+| `draft_reasoning_effort` | `none` \| `low` \| null | `low` | Effort for the first draft (`gpt-6-luna` only). |
+| `max_repairs` | integer | `1` | Rewrites at the assistant's own effort after a rejected draft. |
+| `model`, `base_url`, `api_key_env`, `timeout_seconds` | | `gpt-6-luna`, inherited, inherited, `10` | The key is `api_key_env` if named, else the answering model's own OpenAI credential, else `OPENAI_API_KEY`. |
+
+In `beta`, nothing is written until the evidence is judged sufficient, so a
+thin round costs a judgement and a search instead of a discarded answer. A
+follow-up search is *chosen* from candidates built from the evidence (the hits'
+directories and symbols, the question's terms); "none of these" hands the round
+to the model planner. The answer is written once at `draft_reasoning_effort`,
+then judged; a rejected draft is rewritten once at full effort. Every
+judgement that cannot be had — no key, a refusal, a 503, a timeout — falls back
+to the model-written grade and the trace says so; a 401/403/404 stops further
+calls for the life of the process.
+
+Measured on the lab region (the 8 questions in
+`benchmarks/assistant-latency-pheasant-kb.jsonl` × 3, through
+`scripts/benchmark_assistant_latency.py`, same code, `off` vs `beta` per
+request via `options.decisions`): p50 8.71 s → 5.70 s, p90 10.30 s → 7.02 s, unchanged fact coverage,
+and a question the corpus cannot answer 9.39 s → 3.68 s. `prune` is off by
+default because the same benchmark showed it saved no time and, with the cheap
+draft, cost an answer a detail.
+
+The thresholds were set from SciFact's expert annotations with
+`scripts/calibrate_decisions.py`, which asks the exact questions the workflow
+asks. Run it on your own labelled examples (`--labels`) before trusting them on
+a different corpus. A request can override `decisions` (`beta` / `shadow` /
+`off`) and `decision_gates` in `options`. Answers carry a `decisions` block
+with every judgement, and `degraded: true` when the acceptance check rejected
+the answer that was returned. Metrics: `pheasant_assistant_decision_total
+{gate,outcome}`, `pheasant_assistant_decision_seconds{gate}` and
+`pheasant_assistant_decision_shadow_total{gate,agreement}`.
+
+```yaml
+assistant:
+  decisions:
+    mode: beta              # off keeps the model-written grade
+    gates: [sufficiency, followup, accept]
+```
+
 ---
 
 ## `sources` (per-source configuration)

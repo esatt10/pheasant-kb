@@ -69,3 +69,37 @@ class JsonAnswerPreview:
         if increment:
             self._sent = decoded
             self._emit(increment)
+
+
+class TextPreview:
+    """Emit a plain-text reply's increments, for a draft written without JSON.
+
+    The Decisions-gated loop decides sufficiency before it writes, so the
+    answer is plain text rather than a field inside a JSON object, and every
+    delta is answer text. ``restart`` has :class:`JsonAnswerPreview`'s
+    contract: a retried reply is emitted only past what was already shown,
+    and not at all once it diverges from it.
+    """
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self._emit = emit
+        self._raw = ""
+        self._sent = ""
+
+    def __call__(self, delta: str) -> None:
+        self.feed(delta)
+
+    def restart(self) -> None:
+        self._raw = ""
+
+    def feed(self, delta: str) -> None:
+        if not delta:
+            return
+        self._raw += delta
+        if len(self._raw) <= len(self._sent):
+            return
+        if not self._raw.startswith(self._sent):
+            return
+        increment = self._raw[len(self._sent) :]
+        self._sent = self._raw
+        self._emit(increment)

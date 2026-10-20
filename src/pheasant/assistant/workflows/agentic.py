@@ -17,9 +17,9 @@
        │ grade │─────────────────┘
        └───┬───┘
            ▼ sufficient / out of budget
-     ┌─────────────┐     ┌────────┐
-     │ synthesize  │────►│ verify │
-     └─────────────┘     └────────┘
+     ┌─────────────┐     ┌────────┐     ┌────────┐
+     │ synthesize  │────►│ verify │────►│ accept │ (one rewrite if rejected)
+     └─────────────┘     └────────┘     └────────┘
 ```
 
 Why a graph and not a chain: the `grade → plan` edge is conditional. A
@@ -51,7 +51,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any, TypedDict
+from typing import Any
 
 from pheasant.assistant import conversation, longform, routing
 from pheasant.assistant.chat import (
@@ -68,7 +68,12 @@ from pheasant.assistant.chat import (
 )
 from pheasant.assistant.providers import ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
-from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep
+from pheasant.assistant.workflows import (
+    WorkflowRequest,
+    WorkflowResult,
+    WorkflowStep,
+    decision_gates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +244,7 @@ are NOT sufficient — say false and ask for the usage or example directly \
 }
 
 
-class AgentState(TypedDict, total=False):
+class AgentState(decision_gates.DecisionState, total=False):
     """The state LangGraph threads through the nodes."""
 
     question: str
@@ -308,7 +313,7 @@ def _defer_graph_for_request(state: AgentState, ctx: dict, options: dict) -> boo
     return bool(
         options.get("defer_graph_until_insufficient")
         and options.get("staged_retrieval")
-        and options.get("combine_grade_and_answer")
+        and (options.get("combine_grade_and_answer") or decision_gates.active(ctx, "sufficiency"))
         and options.get("grade_evidence")
         and int(options.get("max_rounds") or 0) >= 2
         and "hybrid" in (options.get("retrieval_modes") or [])
@@ -721,7 +726,14 @@ def _expansion_result(
 
 
 def grade_node(state: AgentState, ctx: dict) -> dict:
-    """Decide whether the evidence answers the question."""
+    """Decide whether the evidence answers the question: judged, else model-graded."""
+    gated = decision_gates.grade(state, ctx, resolve_options(state))
+    if gated.update is not None:
+        return gated.update
+    return decision_gates.after_classic(gated, state, ctx, _grade_classic(state, ctx))
+
+
+def _grade_classic(state: AgentState, ctx: dict) -> dict:
     options = resolve_options(state)
     if (
         options.get("combine_grade_and_answer")
@@ -1021,6 +1033,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     intent = str(state.get("intent") or "knowledge")
     depth = str(state.get("depth") or "short")
     passages = state.get("passages", [])[: int(options["max_context_passages"])]
+    draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
+    passages, llm = draft.passages, draft.llm
     citations = passages_to_citations(passages, int(options["max_context_passages"]))
     node_ids = [c["node_id"] for c in citations if c.get("node_id")]
     facts = retriever.facts(node_ids, int(options["max_facts"]))
@@ -1038,7 +1052,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     read_started = time.perf_counter()
     documents = hydrate_citations(retriever, citations, options)
     read_seconds = time.perf_counter() - read_started
-    steps = list(state.get("steps", []))
+    steps = [*state.get("steps", []), *draft.steps]
     if documents:
         whole = sum(1 for doc in documents.values() if not doc.truncated)
         steps.append(
@@ -1062,7 +1076,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             steps.extend(long_steps)
         else:
             answer = llm.complete(
-                system_prompt_for(intent, depth, figures=bool(figures), form=options.get("form")),
+                system_prompt_for(intent, depth, figures=bool(figures), form=options.get("form"))
+                + draft.system_suffix,
                 build_prompt(
                     state["question"],
                     citations,
@@ -1072,16 +1087,19 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                     figures=figures,
                 ),
                 max_output_tokens=options.get("max_output_tokens"),
+                **({"on_delta": draft.on_delta} if draft.on_delta else {}),
             )
             steps.append(
                 WorkflowStep(
                     name="synthesize",
                     detail=f"wrote a {INTENT_LABELS[intent]} answer from {len(citations)} passages"
-                    + ("" if depth == "short" else f" ({depth})"),
+                    + ("" if depth == "short" else f" ({depth})")
+                    + (f" at {draft.effort} effort" if draft.effort else ""),
                     passages=len(citations),
                 )
             )
-        return {**evidence, "answer": answer, "answer_mode": "llm", "steps": steps}
+        finished = decision_gates.finish_synthesis(state, ctx, answer, citations, documents, draft)
+        return {**evidence, "answer_mode": "llm", "steps": steps, **finished}
     except ProviderError as exc:
         return {
             **evidence,
@@ -1158,6 +1176,8 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
 def should_retry(state: AgentState, ctx: dict) -> str:
     """Choose broadening, a replan, or synthesis from the current grade."""
     options = resolve_options(state)
+    if decided := decision_gates.route_after_grade(state, ctx, options):
+        return decided
     grade = state.get("grade") or {}
     if options.get("combine_grade_and_answer") and (
         state.get("combined_error") or state.get("combined_answer")
@@ -1201,6 +1221,7 @@ NODES = {
     "grade": grade_node,
     "synthesize": synthesize_node,
     "verify": verify_node,
+    "accept": decision_gates.accept_node,
 }
 
 
@@ -1263,12 +1284,13 @@ def build_graph(options: dict[str, Any], nodes: dict[str, Any] | None = None):
         "grade",
         "synthesize",
         "verify",
+        "accept",
     ):
         # LangGraph calls node(state, config); ctx rides on the config so the
         # nodes stay plain, testable functions of (state, ctx).
         builder.add_node(
             name,
-            _bind(nodes[name]),
+            _bind(nodes.get(name, NODES[name])),
         )
     builder.add_edge(START, "classify")
     # classify runs once. Most configured flows plan next; staged retrieval
@@ -1288,7 +1310,12 @@ def build_graph(options: dict[str, Any], nodes: dict[str, Any] | None = None):
     )
     builder.add_edge("broaden", "expand")
     builder.add_edge("synthesize", "verify")
-    builder.add_edge("verify", END)
+    builder.add_edge("verify", "accept")
+    builder.add_conditional_edges(
+        "accept",
+        _bind_router(decision_gates.route_after_accept),
+        {"synthesize": "synthesize", "end": END},
+    )
     compiled = builder.compile()
     if is_default:
         _DEFAULT_GRAPH = compiled
@@ -1398,6 +1425,7 @@ class AgenticWorkflow:
             "grader_llm": grader_llm,
             "custom_nodes": bool(self._nodes or overrides),
             "request": request,
+            "decider": decision_gates.for_request(request.decider, options),
         }
         initial: AgentState = {
             "question": request.question,
@@ -1416,7 +1444,7 @@ class AgenticWorkflow:
             initial,
             config={
                 "configurable": {"ctx": ctx},
-                "recursion_limit": 6 * max(1, int(options["max_rounds"])) + 8,
+                "recursion_limit": 6 * max(1, int(options["max_rounds"])) + 12,
             },
         )
 
@@ -1463,6 +1491,7 @@ class AgenticWorkflow:
             workflow=self.name,
             figures=final.get("figures", []),
             route=route,
+            decisions=decision_gates.summary(final, ctx),
         )
 
 

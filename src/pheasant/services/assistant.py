@@ -33,6 +33,8 @@ from pheasant.services.errors import (
     AssistantBusy,
     AssistantDeadline,
     AssistantDisabled,
+    DecisionsNotConfigured,
+    DecisionsUnavailable,
     EmptyQuestion,
     InvalidRequest,
 )
@@ -481,3 +483,150 @@ RETRIEVAL_FIELD_HELP: dict[str, str] = {
     "verify_citations": "drop [n] markers that do not resolve to a real citation.",
     "max_facts": "graph facts surfaced alongside the answer.",
 }
+
+
+#: How many passages one ``assess_evidence`` call judges, and how much of each.
+MAX_ASSESS_PASSAGES = 24
+ASSESS_PASSAGE_CHARS = 4000
+
+
+@dataclass
+class AssessRequest:
+    """Judge a caller's own evidence (and optionally its answer) for a question."""
+
+    question: str
+    #: ``[{"text": ..., "title": ...}]`` — typically ``search_context`` hits the
+    #: caller already holds. Their text is judged as sent; nothing is read
+    #: from the index, so there is no ACL to apply and none to bypass.
+    passages: list[Any]
+    knowledge_base: str | None = None
+    #: ``knowledge`` or ``procedural``; unset reads it off the question.
+    intent: str | None = None
+    answer: str | None = None
+    relevance: bool = True
+
+
+def assess_evidence(
+    context: ServiceContext, request: AssessRequest, *, env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Is this evidence enough to answer the question — and is this answer supported?
+
+    The same typed judgements the agentic workflow's gates ask
+    (``assistant.workflows.decision_gates``), at the same thresholds, over
+    passages the caller supplies: for an agent doing its own retrieval with
+    ``search_context`` that wants the region's "is this enough?" without
+    handing the question over. A probability per judgement, the threshold it
+    was read against, and the verdict.
+    """
+
+    from pheasant.assistant import chat, decisions
+    from pheasant.assistant.answering import resolve_llm
+    from pheasant.assistant.workflows import decision_gates as gates
+
+    kb_id = context.knowledge_base(request.knowledge_base)
+    settings = getattr(context.config, "assistant", None)
+    if settings is not None and not getattr(settings, "enabled", True):
+        raise AssistantDisabled()
+    question = (request.question or "").strip()
+    if not question:
+        raise EmptyQuestion()
+    if not isinstance(request.passages, list) or not request.passages:
+        raise InvalidRequest("passages must be a non-empty list of {text, title}")
+    if len(request.passages) > MAX_ASSESS_PASSAGES:
+        raise InvalidRequest(
+            f"at most {MAX_ASSESS_PASSAGES} passages are judged at once; "
+            f"this request sends {len(request.passages)}"
+        )
+    items: list[tuple[str, str]] = []
+    for index, passage in enumerate(request.passages, start=1):
+        text = passage.get("text") if isinstance(passage, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise InvalidRequest(f"passage {index} has no text")
+        title = passage.get("title") or passage.get("relative_path") or f"passage {index}"
+        items.append((str(title), text[:ASSESS_PASSAGE_CHARS]))
+    intent = str(request.intent or "").strip().lower()
+    if intent not in chat.INTENTS:
+        intent = chat.classify_intent(question)[0]
+
+    env = env if env is not None else dict(os.environ)
+    decider = decisions.resolve_decider(settings, resolve_llm(context.config, None, env), env)
+    if decider is None:
+        raise DecisionsNotConfigured()
+    shown = [gates.Shown(title=title, snippet=text) for title, text in items]
+    questions = [
+        decisions.predicate("sufficient", gates.SUFFICIENCY + gates.CRITERIA.get(intent, "")),
+        decisions.choice(
+            "miss",
+            "What, if anything, is the main gap between the passages and what the question needs?",
+            list(gates.MISS_KINDS.items()),
+        ),
+    ]
+    if request.relevance:
+        questions += gates._relevance_questions(len(shown))
+    answer_text = (request.answer or "").strip()
+    try:
+        judged = decider.decide(
+            gates.evidence_input(question, intent, shown, {}, chars=ASSESS_PASSAGE_CHARS),
+            questions,
+        )
+        accepted = None
+        if answer_text:
+            lines = [f"QUESTION: {question}", "", "ANSWER:", answer_text, "", "PASSAGES:"]
+            for index, (title, text) in enumerate(items, start=1):
+                lines += [f"[{index}] {title}", text, ""]
+            accepted = decider.decide(
+                "\n".join(lines),
+                [
+                    decisions.predicate("grounded", gates.GROUNDED),
+                    decisions.predicate("responsive", gates.RESPONSIVE),
+                ],
+            )
+    except decisions.DecisionUnavailable as exc:
+        decisions.record("assess", "unavailable")
+        if decider.unavailable_reason:
+            raise DecisionsNotConfigured(decider.unavailable_reason) from exc
+        raise DecisionsUnavailable(exc) from exc
+    probability = judged.probability("sufficient")
+    if probability is None:
+        decisions.record("assess", "unavailable")
+        raise DecisionsUnavailable("the sufficiency question was refused")
+    sufficient = probability >= decider.sufficient_threshold
+    decisions.record("assess", "sufficient" if sufficient else "insufficient", judged.seconds)
+    miss = judged.choice("miss")
+    kind = gates.miss_of(miss, sufficient)
+    result: dict[str, Any] = {
+        "knowledge_base": kb_id,
+        "model": decider.model,
+        "intent": intent,
+        "sufficient": {
+            "verdict": sufficient,
+            "probability": probability,
+            "threshold": decider.sufficient_threshold,
+        },
+        "missing": {
+            "kind": None if sufficient else kind,
+            "description": None if sufficient else gates.miss_description(kind),
+            "probabilities": miss.probabilities if miss else {},
+        },
+    }
+    if request.relevance:
+        result["passages"] = [
+            {
+                "index": index,
+                "probability": judged.probability(f"relevant_{index}"),
+                "relevant": (judged.probability(f"relevant_{index}") or 0.0)
+                >= decider.relevant_threshold,
+            }
+            for index in range(1, len(shown) + 1)
+        ]
+    if accepted is not None:
+        grounded, responsive = accepted.probability("grounded"), accepted.probability("responsive")
+        result["answer"] = {
+            "accepted": None
+            if grounded is None or responsive is None
+            else grounded >= decider.accept_threshold and responsive >= decider.accept_threshold,
+            "grounded": grounded,
+            "responsive": responsive,
+            "threshold": decider.accept_threshold,
+        }
+    return result
