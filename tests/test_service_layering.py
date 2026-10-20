@@ -94,6 +94,7 @@ LAYERS: dict[str, int] = {
     # no transport concerns and imports no higher-level pheasant package.
     "git_auth": 1,
     "jobs": 1,
+    "job_snapshots": 1,
     # Stdlib-only request deadlines and stage timings. Persistence, search and
     # the graph client read the active budget, so it sits with them.
     "request_budget": 1,

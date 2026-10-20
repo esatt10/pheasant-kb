@@ -68,7 +68,8 @@ CEILINGS: dict[str, int] = {
     "evaluation/store.py": 950,
     "graph/enrichment.py": 1000,
     "ingestion/taxonomy.py": 1100,
-    "jobs.py": 950,
+    # Lowered from 950 when the shared snapshot store moved to `job_snapshots.py`.
+    "jobs.py": 800,
     "mcp_server/server.py": 1300,
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,

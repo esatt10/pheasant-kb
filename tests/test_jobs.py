@@ -552,3 +552,77 @@ def test_mcp_registration_can_acknowledge_and_start_sync(loaded_config, tmp_path
         assert job["status"] == "succeeded", job
     finally:
         tools.engine.close()
+
+
+def _age(path, seconds: float) -> None:
+    import os
+    import time
+
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+def test_a_running_snapshot_whose_process_died_reads_as_failed_and_can_be_cleared(tmp_path):
+    """An indexer killed mid-sync left its snapshot saying "running" forever,
+    and `/jobs` refuses to clear a running job. Silence past the staleness
+    window is the evidence the process is gone."""
+
+    from pheasant import job_snapshots
+    from pheasant.jobs import JobRegistry
+
+    writer = JobRegistry(shared_path=tmp_path / "jobs")
+    job = writer.create("sync", "Indexing notes", ["notes"], job_id="idx-dead")
+    writer.progress(job.id, phase="listing", source="notes", detail="listing notes")
+    snapshot = tmp_path / "jobs" / "idx-dead.json"
+
+    reader = JobRegistry(shared_path=tmp_path / "jobs")
+    assert reader.get("idx-dead")["active"] is True  # fresh: a live job
+
+    _age(snapshot, job_snapshots.SNAPSHOT_STALE_SECONDS + 5)
+    seen = reader.get("idx-dead")
+    assert seen["active"] is False and seen["status"] == "failed"
+    assert seen["error"].startswith("interrupted:")
+    assert all(not source["active"] for source in seen["sources"])
+    assert not reader.list(active_only=True)
+
+    # The writable side rewrites it, so it can be cleared like any finished job.
+    reader._shared.reap_stale(keep=set())
+    assert json.loads(snapshot.read_text())["active"] is False
+    assert reader._shared.clear_finished("idx-dead") == {"idx-dead"}
+
+
+def test_a_live_jobs_heartbeat_keeps_its_snapshot_fresh(tmp_path, monkeypatch):
+    from pheasant import job_snapshots, jobs
+
+    monkeypatch.setattr(jobs, "SNAPSHOT_HEARTBEAT_SECONDS", 0.05)
+    registry = jobs.JobRegistry(shared_path=tmp_path / "jobs")
+    job = registry.create("sync", "Indexing notes", ["notes"], job_id="idx-live")
+    snapshot = tmp_path / "jobs" / "idx-live.json"
+    _age(snapshot, job_snapshots.SNAPSHOT_STALE_SECONDS + 5)
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if time.time() - snapshot.stat().st_mtime < job_snapshots.SNAPSHOT_STALE_SECONDS:
+            break
+        time.sleep(0.05)
+    assert jobs.JobRegistry(shared_path=tmp_path / "jobs").get(job.id)["active"] is True
+
+
+def test_the_heartbeat_reaps_an_orphan_but_never_its_own_job(tmp_path, monkeypatch):
+    from pheasant import job_snapshots, jobs
+
+    orphaned = jobs.JobRegistry(shared_path=tmp_path / "jobs")
+    orphaned.create("sync", "Indexing gone", ["gone"], job_id="idx-orphan")
+    _age(tmp_path / "jobs" / "idx-orphan.json", job_snapshots.SNAPSHOT_STALE_SECONDS + 5)
+
+    monkeypatch.setattr(jobs, "SNAPSHOT_HEARTBEAT_SECONDS", 0.05)
+    indexer = jobs.JobRegistry(shared_path=tmp_path / "jobs")
+    indexer.create("sync", "Indexing notes", ["notes"], job_id="idx-mine")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        raw = json.loads((tmp_path / "jobs" / "idx-orphan.json").read_text())
+        if raw["active"] is False:
+            break
+        time.sleep(0.05)
+    assert raw["status"] == "failed"
+    assert json.loads((tmp_path / "jobs" / "idx-mine.json").read_text())["active"] is True
