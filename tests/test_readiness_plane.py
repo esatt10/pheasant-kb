@@ -155,6 +155,66 @@ def test_crossing_the_index_barrier_is_not_a_submission(region: dict[str, Any]) 
     assert after["submissions"] == before["submissions"]
 
 
+def _mark_indexed(region: dict[str, Any], receipt: dict[str, Any]) -> None:
+    """The barrier's own write, without needing the scratch source indexed."""
+
+    receipt_ledger.record(
+        region["services"].state,
+        kb_id=region["kb"],
+        idempotency_key=receipt["idempotency_key"],
+        submission_id=receipt["submission_id"],
+        source_name=receipt["source_name"],
+        now="2026-01-01T00:00:00Z",
+        disposition="indexed",
+        indexed_at="2026-01-01T00:00:00Z",
+        artifact_id=receipt["artifact_id"],
+        chunk_count=1,
+        counts_as_submission=False,
+    )
+
+
+def test_a_known_key_landing_in_another_source_does_not_inherit_indexed(
+    region: dict[str, Any],
+) -> None:
+    """`indexed` is a fact about one artifact, not about a key.
+
+    Regression for a real defect, found by pheasant-swarm-search: a second run
+    on a reused region submitted known keys into a new source. The bytes were
+    written there and the fold kept `indexed`, so the harness's barrier
+    crossed while the new source held nothing and every search came back
+    empty. A retry into the *same* place still keeps `indexed`.
+    """
+
+    first = _submit(region, _item("moved.md", "moved bytes", key="k-moved"))["accepted"][0]
+    _mark_indexed(region, first)
+    again = _submit(region, _item("moved.md", "moved bytes", key="k-moved"))["accepted"][0]
+    assert again["disposition"] == "indexed", "a retry into the same place un-crossed"
+
+    moved = ingestion_service.submit(
+        region["services"],
+        ingestion_service.SubmissionRequest(
+            items=[_item("moved.md", "moved bytes", key="k-moved")], source_name="probe-two"
+        ),
+    )["accepted"][0]
+    assert moved["artifact_id"] != first["artifact_id"]
+    assert moved["disposition"] == "accepted"
+    assert moved["indexed_at"] is None and moved["chunk_count"] is None
+    ingestion_service.acknowledge_indexed(region["services"], None, None)
+    status = ingestion_service.ingest_status(region["services"], None, idempotency_key="k-moved")
+    assert status["receipts"][0]["disposition"] == "accepted", "nothing in probe-two is indexed"
+
+
+def test_new_bytes_under_a_known_key_are_not_indexed_yet(region: dict[str, Any]) -> None:
+    """Same path, other content: the file was rewritten and no sync has read it."""
+
+    first = _submit(region, _item("rewritten.md", "old bytes", key="k-rewritten"))["accepted"][0]
+    _mark_indexed(region, first)
+    rewritten = _submit(region, _item("rewritten.md", "new bytes", key="k-rewritten"))
+    receipt = rewritten["accepted"][0]
+    assert receipt["artifact_id"] == first["artifact_id"]
+    assert receipt["disposition"] == "accepted"
+
+
 def test_a_bad_item_rejects_itself_and_nothing_beside_it(region: dict[str, Any]) -> None:
     """One malformed item must not cost the good items in the same batch.
 

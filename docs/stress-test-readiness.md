@@ -143,7 +143,10 @@ Three properties, each a gate:
 - **Acceptance and indexing are different facts.** `accepted` means the bytes
   are persisted; `indexed` means a search can return them. Collapsing them is
   how a harness queries for content the region holds and has not yet indexed,
-  then records the empty result as a retrieval failure.
+  then records the empty result as a retrieval failure. `indexed` belongs to
+  one artifact and one set of bytes: a retry into the same place keeps it, but
+  a known key resubmitted into another source, or with other bytes, goes back
+  to `accepted` until `acknowledge_ingest` sees the new artifact indexed.
 - **Partial failure is per item**, with an error code and a retryability flag.
 
 `reconcile_ingest` reports `silent_loss`: receipts claiming an artifact the

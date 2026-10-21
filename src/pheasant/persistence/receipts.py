@@ -18,6 +18,15 @@ import hashlib
 import json
 from typing import Any
 
+#: Whether a write folding onto a receipt still describes the object the
+#: receipt was about: the same artifact and the same bytes. A write that names
+#: neither (a failure, a status note) is about the same object by default.
+_SAME_OBJECT = (
+    "((excluded.artifact_id IS NULL OR excluded.artifact_id = ingest_receipts.artifact_id)"
+    " AND (excluded.content_sha256 IS NULL"
+    " OR excluded.content_sha256 = ingest_receipts.content_sha256))"
+)
+
 
 def receipt_id(kb_id: str, idempotency_key: str) -> str:
     """The receipt's identity, derived rather than minted.
@@ -62,11 +71,18 @@ def record(
     point: a caller needs to know its retry was a retry, and a reconciliation
     needs the count of logical objects to be one.
 
-    ``disposition`` only ever moves forward. A receipt that reached ``indexed``
-    is not walked back to ``accepted`` by a retry that stopped at the
-    transport, because a barrier a caller waits on must not un-cross itself; a
-    retry that *fails* does record the failure, since that is new information
-    rather than a stale earlier state.
+    ``disposition`` only ever moves forward *for the same object*. A receipt
+    that reached ``indexed`` is not walked back to ``accepted`` by a retry that
+    stopped at the transport, because a barrier a caller waits on must not
+    un-cross itself; a retry that *fails* does record the failure, since that
+    is new information rather than a stale earlier state. But a resubmission
+    under a known key that lands somewhere else - another source, so another
+    artifact - or carries other bytes is not that retry: its file was just
+    written and nothing has indexed it. Keeping ``indexed`` there crossed a
+    harness's barrier before the new source held a document (pheasant-swarm-
+    search, a second run into a new source on a reused region), so the receipt
+    goes back to ``accepted`` and ``acknowledge_indexed`` crosses it again once
+    the artifact exists.
 
     ``counts_as_submission`` is what keeps ``submissions`` meaning what its
     name says. Crossing the index barrier writes this row too, and the first
@@ -79,7 +95,7 @@ def record(
 
     key = receipt_id(kb_id, idempotency_key)
     state.execute(
-        """INSERT INTO ingest_receipts(
+        f"""INSERT INTO ingest_receipts(
             receipt_id,kb_id,idempotency_key,submission_id,source_name,
             submitted_at,updated_at,disposition,indexed_at,artifact_id,
             content_sha256,chunk_count,submissions,error_code,retryable,detail_json
@@ -91,13 +107,17 @@ def record(
             source_name=COALESCE(excluded.source_name, ingest_receipts.source_name),
             disposition=CASE
                 WHEN excluded.disposition IN ('rejected','failed') THEN excluded.disposition
-                WHEN ingest_receipts.disposition = 'indexed' THEN 'indexed'
+                WHEN ingest_receipts.disposition = 'indexed' AND {_SAME_OBJECT} THEN 'indexed'
                 ELSE excluded.disposition
             END,
-            indexed_at=COALESCE(excluded.indexed_at, ingest_receipts.indexed_at),
+            indexed_at=CASE WHEN {_SAME_OBJECT}
+                THEN COALESCE(excluded.indexed_at, ingest_receipts.indexed_at)
+                ELSE excluded.indexed_at END,
             artifact_id=COALESCE(excluded.artifact_id, ingest_receipts.artifact_id),
             content_sha256=COALESCE(excluded.content_sha256, ingest_receipts.content_sha256),
-            chunk_count=COALESCE(excluded.chunk_count, ingest_receipts.chunk_count),
+            chunk_count=CASE WHEN {_SAME_OBJECT}
+                THEN COALESCE(excluded.chunk_count, ingest_receipts.chunk_count)
+                ELSE excluded.chunk_count END,
             submissions=ingest_receipts.submissions + ?,
             error_code=excluded.error_code,
             retryable=excluded.retryable,
