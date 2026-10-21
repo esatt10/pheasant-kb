@@ -1,11 +1,20 @@
 # Pheasant configuration profiles
 
+**pheasant-kb is the default deployment.** It is [`compose.yaml`](../../compose.yaml)
+at the repository root, started with `docker compose up -d`, and its
+configuration is `pheasant-kb.yaml` in this directory. Its guide is
+[`docs/pheasant-kb/`](../../docs/pheasant-kb/index.md). Everything else here is
+an alternative shape of the same code; see
+[Other ways to run pheasant](../../docs/other-deployments.md) for when to pick
+one.
+
 These files are generated from the live configuration schema with `pheasant
 setup`; the JSON answer files are the editable source of truth. No secret is
 stored in YAML.
 
 | Profile | State and coordination | Search/assistant | Intended size |
 |---|---|---|---|
+| **`pheasant-kb.yaml`** (default, run by the root `compose.yaml`) | PostgreSQL, NATS JetStream, a graph service, gRPC workers, generated tokens | Hybrid retrieval with a resident vector matrix and HNSW index, `gpt-6-luna` agentic answers with Decisions API judgements, bounded answer concurrency | One host, up to ~150k files by default; every service sized from `.env` |
 | `local-small.yaml` | Local SQLite, no broker or workers | BM25/text search and extractive answers; MCP and durable memory remain enabled | Laptop, offline, small corpus |
 | `local-advanced.yaml` | Single-node SQLite | Hybrid + graph retrieval by default, LanceDB, both WASM accelerators, `text-embedding-3-small`, and an agentic workflow using GPT-6 Luna for evidence grading and GPT-6 Sol for answers | One capable workstation/container |
 | `fleet.yaml` | PostgreSQL, NATS JetStream, shared durable volumes, a dedicated graph-query service, and stateless gRPC preparation workers | Concurrent hybrid retrieval with bounded per-process answer admission; API replicas keep no full graph resident | Multi-container, horizontally scaled ingestion and serving |
@@ -47,6 +56,7 @@ MCP server, or UI.
 Run these from the repository root:
 
 ```bash
+python -m pheasant setup --answers deploy/compose/answers/pheasant-kb.json --accept-defaults --plain --target compose --output deploy/compose/pheasant-kb.yaml --force
 python -m pheasant setup --answers deploy/compose/answers/local-small.json --accept-defaults --plain --target local --output deploy/compose/local-small.yaml --force
 python -m pheasant setup --answers deploy/compose/answers/local-advanced.json --accept-defaults --plain --target docker --output deploy/compose/local-advanced.yaml --force
 python -m pheasant setup --answers deploy/compose/answers/scalable.json --accept-defaults --plain --target compose --output deploy/compose/fleet.yaml --force
@@ -55,7 +65,15 @@ python -m pheasant setup --answers deploy/compose/answers/worker.json --accept-d
 
 ## Run the profiles
 
-Copy the environment template once for any Compose profile:
+pheasant-kb, from the repository root (the root `.env.example` lists every
+setting it reads):
+
+```bash
+echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
+```
+
+The profiles below read `deploy/compose/.env.example` instead. Copy it once
+for any of them:
 
 ```bash
 cp deploy/compose/.env.example .env
@@ -84,10 +102,11 @@ docker compose --env-file .env \
 Scalable fleet:
 
 ```bash
-# Set OPENAI_API_KEY and THREE distinct random values in .env:
+# Set OPENAI_API_KEY and FOUR distinct random values in .env:
 #   PHEASANT_API_TOKEN            callers -> the region's API
 #   PHEASANT_GRAPH_SERVICE_TOKEN  API replicas -> the internal graph API
 #   PHEASANT_INDEX_WORKER_TOKEN   the indexer -> the preparation workers
+#   PHEASANT_INGESTION_SERVICE_TOKEN  API replicas -> the indexer's landing service
 # One `openssl rand -hex 32` per line. Compose used to reuse the worker token
 # as the graph token; workers are the least-trusted tier and hold the first by
 # necessity, so that handed every worker the credential for the whole graph.
@@ -110,32 +129,28 @@ before using it.
 The UI is at <http://127.0.0.1:8765> and streamable HTTP MCP is at
 `http://127.0.0.1:8765/mcp` for both Docker profiles.
 
-## Assistant retrieval and Pheasant-lab
+## pheasant-kb notes
+
+pheasant-kb was previously shipped here as `docker-compose.pheasant-lab.yml`
+(project and knowledge base `pheasant-lab`). An existing lab region keeps its
+volumes and index with `COMPOSE_PROJECT_NAME=pheasant-lab` and
+`PHEASANT_KB_CONFIG=./pheasant.yaml` in the root `.env`; see
+[Operate pheasant-kb](../../docs/pheasant-kb/operate.md#move-from-pheasant-lab).
 
 Hybrid already runs lexical, vector, and graph retrieval concurrently.
 `multi_search` removes standalone vector and graph modes when hybrid is chosen;
-listing `[hybrid, graph, vector]` does not create extra search arms. The lab
+listing `[hybrid, graph, vector]` does not create extra search arms. pheasant-kb
 starts with one hybrid pass, keeps graph expansion, and runs at most one
 bounded follow-up round when the evidence is insufficient. Search fanout
 timings and failed arms are reported with the completed answer.
 
-The lab answer settings live in
-[`answers/pheasant-lab.json`](answers/pheasant-lab.json). Generate its runtime
-YAML from the typed schema and validate the deployment with:
-
-```powershell
-python -m pheasant setup --answers deploy/compose/answers/pheasant-lab.json --accept-defaults --plain --target compose --output pheasant.yaml --force
-python -m pheasant doctor -c pheasant.yaml --no-require-paths
-docker compose --env-file .env -f deploy/compose/docker-compose.pheasant-lab.yml config --quiet
-```
-
-**Driving this fleet from pheasant-swarm-search.** The lab connects over
-streamable HTTP MCP with the same `PHEASANT_API_TOKEN`: from the host at
+**Driving pheasant-kb from pheasant-swarm-search.** It connects over
+streamable HTTP MCP with the API token: from the host at
 `http://127.0.0.1:8765/mcp`, or from its own container
 (`docker-compose.fleet.yml` there, which joins this project's network) at
 `http://api:8765/mcp`. The MCP host guard is derived from
 `server.api.cors_origins`, so the answer file lists `http://api:8765`; a
-`pheasant.yaml` generated before it did answers that container **421**, so
+config generated before it did answers that container **421**, so
 regenerate it. Its shipped `configs/pheasant-mcp.example.yaml` targets this
 release: it submits through `submit_documents`, registers the landing
 directory (`/state` is allow-listed above), waits on `get_index_queue` while a
@@ -145,30 +160,14 @@ crossed to compare the region's document count with its receipts. MCP
 set, as it is here; a hand-built role-split region without a graph service
 indexes MCP syncs in the call even on `--role api`, while HTTP `/sync` refuses.
 
-Before regeneration, preserve existing secret values, source registrations,
-named volumes and workspace mounts. Keep one API, graph service and active
-indexer with four preparation workers and one logger until measurements justify
-a resource change. Worker scaling affects ingestion preparation, not answer
-latency; do not add indexer or graph replicas as an unmeasured answer fix.
-
-Use `scripts/benchmark_assistant_latency.py` for completed-answer timings. It
-separates HTTP completion, SSE workflow progress, first provisional answer
-text, and final-answer events, and supports MCP. Build separate development and
-held-out manifests from the deployment's
-own corpus; label expected facts and acceptable supporting passage IDs, then
-review claim support separately from citation-reference validity. Keep
-benchmark questions and reports outside indexed source roots and preserve the
-readiness denylist. A four-way, ten-repeat HTTP run can be started with:
-
-```powershell
-python scripts/benchmark_assistant_latency.py --base-url http://127.0.0.1:8765 --token-env PHEASANT_API_TOKEN --cases <held-out-cases.json> --concurrency 4 --repeats 10 --transport http --output-dir <report-directory>
-python scripts/benchmark_assistant_latency.py --base-url http://127.0.0.1:8765 --token-env PHEASANT_API_TOKEN --cases <held-out-cases.json> --concurrency 4 --repeats 10 --transport sse --output-dir <report-directory>
-```
-
-The harness marks reports invalid if the corpus or effective configuration
-changes during a run. Do not treat first progress, retrieval-only timing,
-cached-only results, incomplete answers, or unreviewed lexical matches as a
-latency/quality pass.
+Keep one API, graph service and active indexer with four preparation workers
+and one logger until measurements justify a resource change; the knobs and the
+signals for each are in
+[Scale up or down](../../docs/pheasant-kb/scale.md). Worker scaling affects
+ingestion preparation, not answer latency; do not add indexer or graph
+replicas as an unmeasured answer fix. Answer latency is measured with
+`scripts/benchmark_assistant_latency.py`
+([Operate](../../docs/pheasant-kb/operate.md#measure-answer-latency)).
 
 ## Throughput and durability notes
 

@@ -1,0 +1,281 @@
+pheasant:
+  name: pheasant-kb
+  description: 'pheasant-kb: the flagship stack. PostgreSQL, NATS JetStream, a graph
+    service, gRPC preparation workers, LanceDB, GPT-6 Luna, taxonomy and durable memory'
+  environment: compose
+  log_level: INFO
+  state_path: /state
+  workspace_root: /workspace
+  exports_path: /exports
+server:
+  host: 0.0.0.0
+  port: 8765
+  role: all
+  mcp:
+    enabled: true
+    max_request_body_size_mb: 1024
+    transports:
+      stdio: false
+      streamable_http: true
+      sse: false
+  api:
+    enabled: true
+    openapi: true
+    max_concurrent_requests: 32
+    drain_seconds: 20
+    graph_refresh_seconds: 30
+    cors_origins:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - http://localhost:8765
+      - http://127.0.0.1:8765
+      - http://localhost:8080
+      - http://127.0.0.1:8080
+      - http://localhost:3000
+      - http://127.0.0.1:3000
+      - http://api:8765
+      - http://host.docker.internal:8765
+  ui:
+    enabled: true
+    graph_visualization: true
+storage:
+  backend: postgres
+  dsn_env: PHEASANT_DATABASE_URL
+  pool_size: 16
+  graph_snapshots: true
+  graph_snapshot_interval_seconds: 900
+  graph_checkpoint_seconds: 120
+  checkpoint_mtbf_seconds: 86400
+  graph_checkpoint_max_seconds: 300
+  compression: zstd
+  max_state_size_gb: 250
+search:
+  default_mode: hybrid
+  max_results_default: 100
+  embeddings:
+    enabled: true
+    provider: openai-spec
+    model: text-embedding-3-small
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    dimensions: 1536
+    batch_size: 128
+    timeout_seconds: 30.0
+    query_timeout_seconds: 1.0
+    query_max_retries: 0
+    query_rate_limit_max_wait_seconds: 0.0
+    max_retries: 10
+    retry_backoff_seconds: 2.0
+    rate_limit_max_wait_seconds: 900.0
+  vector_store:
+    provider: lancedb
+    path: /state/vectors
+    resident: true
+    ann_index: ivf_hnsw_sq
+  wasm_relationship_search: true
+ingestion:
+  captioner:
+    provider: openai-spec
+    model: gpt-6-luna
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  transcriber:
+    provider: openai-spec
+    model: whisper-1
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  extractor:
+    provider: auto
+    html_text: true
+  landing_service_url: http://indexer:8765
+  landing_service_token_env: PHEASANT_INGESTION_SERVICE_TOKEN
+sync:
+  watcher:
+    enabled: true
+    max_watch_paths: 20000
+    debounce_ms: 250
+    batch_window_ms: 1000
+  git:
+    enabled: true
+    detect_commit_changes: true
+    detect_branch_switch: true
+    reindex_on_commit: true
+  scheduler:
+    enabled: true
+    interval_seconds: 900
+  limits:
+    max_files: null
+    max_file_size_mb: 1024
+    max_total_mb: null
+    follow_symlinks: false
+  source_processing:
+    chunk_max_chars: 2000
+    taxonomy_enabled: true
+    chunk_strategy: auto
+  concurrency:
+    max_parallel_sources: 4
+    max_parallel_files: 16
+    max_parallel_embeddings: 8
+    file_executor: remote
+    remote_worker_urls:
+      - grpc://worker:8766
+    remote_worker_enabled: true
+    remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
+    remote_worker_timeout_seconds: 120
+    remote_worker_batch_size: 16
+    remote_worker_max_inflight_batches: 8
+    worker_transport: grpc
+    remote_worker_pdf_pages_per_task: 500
+    lock_timeout_seconds: 300
+  queue:
+    enabled: true
+    backend: nats
+    visibility_seconds: 300
+    max_attempts: 5
+    nats_servers:
+      - nats://nats:4222
+    nats_stream: PHEASANT_INDEX
+    nats_subject: pheasant.index.tasks
+    nats_durable: pheasant-indexers
+graph:
+  memory_entity_bridging: true
+  wasm_cross_source_resolution: true
+  query_service_url: http://graph:8765
+  query_service_token_env: PHEASANT_GRAPH_SERVICE_TOKEN
+  query_service_timeout_seconds: 30.0
+  max_nodes: null
+security:
+  allow_workspace_roots:
+    - /workspace
+    - /memory
+    - /state
+    - /exports
+    - /data
+  allow_user_selected_source_paths: false
+  read_only_sources: true
+  deny_path_traversal: true
+  default_exclude_secrets: true
+  acl_enforced: true
+  default_visibility: public
+  api_auth:
+    token_env: PHEASANT_API_TOKEN
+    behind_authenticating_proxy: false
+memory:
+  consolidation_enabled: true
+  session_ttl_days: null
+  user_ttl_days: null
+  org_ttl_days: null
+  default_policy: prefer
+  steering_enabled: true
+  usage_tracking: true
+  max_records: null
+  about_max_targets: 12
+  session_max_records: null
+  user_max_records: null
+  org_max_records: null
+  max_records_per_subject: null
+assistant:
+  enabled: true
+  provider: openai
+  model: gpt-6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  allow_session_keys: false
+  max_context_chunks: 16
+  max_output_tokens: 16384
+  request_timeout_seconds: 180.0
+  max_facts: 16
+  workflow: agentic
+  workflow_options:
+    agentic:
+      staged_retrieval: true
+      combine_grade_and_answer: true
+      defer_graph_until_insufficient: true
+      output_tokens_by_depth:
+        short: 512
+        medium: 1024
+      answer_max_words:
+        short: 150
+        medium: 400
+  latency:
+    max_concurrent_answers: 4
+  retrieval:
+    max_rounds: 2
+    per_query_results: 10
+    max_context_passages: 16
+    retrieval_modes:
+      - hybrid
+      - graph
+      - vector
+    expand_graph: true
+    expand_depth: 2
+    expand_per_node: 4
+    grade_evidence: true
+    grader_model: gpt-6-luna
+    verify_citations: true
+    max_facts: 16
+  decisions:
+    mode: beta
+evaluation:
+  enabled: true
+  on_material_snapshot: false
+  max_results: 10
+  maximum_queries_per_run: 500
+  run_stale_seconds: 90.0
+  promotion:
+    enabled: false
+tuning:
+  enabled: true
+  auto:
+    enabled: false
+    apply: false
+observability:
+  interactions:
+    enabled: true
+    hot_retention_days: 7
+    cold_enabled: false
+    queue:
+      enabled: true
+      backend: nats
+      nats_stream: PHEASANT_LOGS
+      nats_subject: pheasant.logs.batches
+      nats_durable: pheasant-loggers
+  otlp_endpoint: ''
+readiness:
+  enabled: true
+  corpus_denylist:
+    - benchmark/*
+    - '*.answers.json'
+  max_search_latency_ms: 5000.0
+  max_ingest_ack_ms: 30000.0
+  max_index_lag_ms: 120000.0
+  latency_probe_queries: 12
+  concurrency_probe_writers: 4
+  concurrency_probe_items: 5
+sources:
+  - name: agent-memory
+    type: memory
+    path: /memory
+    description: Durable agent memory
+    include:
+      - '**/*.md'
+    exclude:
+      - '**/*.archived'
+    sync:
+      on_startup: true
+      on_file_change: debounce
+      on_git_commit: false
+      interval_seconds: 60
+  - name: uploads
+    type: document_folder
+    path: /state/uploads/uploads
+    enabled: true
+    include:
+      - '**/*'
+    sync:
+      on_startup: true
+      on_file_change: debounce
+      on_git_commit: true
+      interval_seconds: null
+synapse:
+  publish: false

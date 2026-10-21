@@ -62,16 +62,17 @@ plugins:
 
 nav:
   - Home: index.md
-  - Tutorials:
-      - 10-minute quickstart: tutorials/quickstart.md
-      - Multi-modal ingest (image + audio): tutorials/multimodal.md
-  - How-to guides:
-      - Set pheasant up: how-to/setup.md
-      - Run the web UI (Docker Compose & CLI): how-to/run-the-ui.md
+  - Get started:
+      - Run pheasant-kb: pheasant-kb/index.md
+      - Configure pheasant-kb: pheasant-kb/configure.md
+      - Scale up or down: pheasant-kb/scale.md
+      - Operate pheasant-kb: pheasant-kb/operate.md
+  - Use it:
       - Ask your knowledge base (web UI): how-to/chat-and-ui.md
-      - Customize the answering workflow: how-to/agent-workflows.md
       - Answer length, conversations & visuals: how-to/conversations-and-visuals.md
+      - Customize the answering workflow: how-to/agent-workflows.md
       - Attach to a coding agent (MCP): how-to/attach-to-coding-agent.md
+      - MCP for agents: mcp_client.md
       - Agent memory: how-to/agent-memory.md
       - Configure sources: how-to/sources.md
       - Ingest PDFs & Word documents: how-to/document-ingest.md
@@ -80,16 +81,22 @@ nav:
       - Chunk each file the way it is written: how-to/dynamic-chunking.md
       - Multi-modal ingest: how-to/multimodal-ingest.md
       - Vector self-search: how-to/vector-search.md
-      - Speed up indexing: how-to/indexing-performance.md
       - Monitor indexing: how-to/monitor-indexing.md
+      - Export a corpus as Parquet: how-to/parquet-exports.md
+  - Other deployments:
+      - Other ways to run pheasant: other-deployments.md
+      - "Single container: 10-minute quickstart": tutorials/quickstart.md
+      - "Single container: multi-modal tutorial": tutorials/multimodal.md
+      - Set pheasant up with the wizard: how-to/setup.md
+      - Run the web UI (Docker Compose & CLI): how-to/run-the-ui.md
+      - Deployment (Docker, Kubernetes, Helm): deployment.md
       - Running a worker fleet: how-to/worker-fleet.md
       - Separate graph-query service: how-to/graph-query-service.md
-      - Architecture regression testing: how-to/architecture-regression.md
-      - Capacity planning: how-to/capacity-planning.md
+      - Speed up indexing: how-to/indexing-performance.md
+      - Capacity planning and sharding: how-to/capacity-planning.md
+      - Backup & restore (single container): how-to/backup-restore.md
       - Attach to a Synapse fleet: how-to/attach-to-synapse.md
-      - Export a corpus as Parquet: how-to/parquet-exports.md
-      - Backup & restore: how-to/backup-restore.md
-      - MCP for agents: mcp_client.md
+      - Architecture regression testing: how-to/architecture-regression.md
   - Reference:
       - Configuration: configuration.md
       - Connector SDK: reference/connector-sdk.md
@@ -99,7 +106,6 @@ nav:
       - Graph model: graph_model.md
       - Parquet export schema: reference/export-schema.md
       - Security: security.md
-      - Deployment: deployment.md
   - Explanation:
       - Architecture: architecture.md
       - The memory system: memory-system.md

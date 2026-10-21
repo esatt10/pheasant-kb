@@ -38,25 +38,56 @@ your sources  →  pheasant indexes them  →  three ways to ask
 | **MCP**, at `/mcp` or over stdio | Claude Code, Cursor, VS Code and any MCP client search your knowledge base as a tool |
 | **The HTTP API** | The same search and answers, for your own applications |
 
-All three run the same index and the same ranking. It ships as one container
-with no database to stand up, no broker and no API key; nothing leaves the
-machine unless you connect a model.
+All three run the same index and the same ranking.
 
 ## Quick start
 
+pheasant runs as **pheasant-kb**: one command, a small set of containers. You
+need Docker with Compose and an OpenAI API key.
+
 ```bash
-docker run -p 127.0.0.1:8765:8765 \
-  -v "$PWD:/workspace:ro" \
-  -v pheasant-state:/state \
-  ghcr.io/esatt10/pheasant
+git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb && echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
 ```
 
-Open <http://127.0.0.1:8765>. Pheasant writes its own initial configuration,
-indexes `/workspace`, and serves the UI, the HTTP API and the MCP endpoint from
-that one address.
+Open <http://127.0.0.1:8765>, then paste the API token into **Connect API**:
 
-Prefer to stay on the host? `pip install pheasant-kb` then `pheasant up .` does
-the same thing without Docker.
+```bash
+docker compose exec api cat /run/pheasant/secrets/api-token
+```
+
+Drop files onto the UI, or add a repository or web page under **Sources**.
+On Windows, the same line in PowerShell is in the
+[guide](docs/pheasant-kb/index.md#the-one-line).
+
+### What you just started
+
+| Service | Job |
+|---|---|
+| `api` | The UI, HTTP API and MCP endpoint on `:8765` |
+| `indexer` | The one writer: syncs sources, commits chunks, graph and vectors |
+| `worker` ×4 | Parses and chunks files for the indexer |
+| `graph` | Answers graph queries for the api |
+| `logger` | Records interactions for evaluation and memory formation |
+| `postgres`, `nats` | State and full-text index; the durable work queues |
+
+Each one scales on its own, from `.env`: more workers for faster ingest, more
+indexer memory for a larger corpus, more api memory to hold more vectors.
+[Scale up or down](docs/pheasant-kb/scale.md) maps each part to its signal and
+its knob.
+
+→ [Run pheasant-kb](docs/pheasant-kb/index.md) ·
+[Configure it](docs/pheasant-kb/configure.md) ·
+[Scale it](docs/pheasant-kb/scale.md) ·
+[Operate it](docs/pheasant-kb/operate.md)
+
+Want the smallest footprint instead, with no database and no key? The same
+code runs as one process in one container:
+
+```bash
+docker run -p 127.0.0.1:8765:8765 -v "$PWD:/workspace:ro" -v pheasant-state:/state ghcr.io/esatt10/pheasant
+```
+
+See [other ways to run pheasant](docs/other-deployments.md).
 
 ## A tour
 
@@ -155,11 +186,11 @@ cell would make the picture say something the passages did not.
 ### Hand it to your coding agent
 
 ```bash
-pheasant client-config claude-code -o .mcp.json   # or: cursor, vscode
+claude mcp add --transport http pheasant http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $(docker compose exec -T api cat /run/pheasant/secrets/api-token)"
 ```
 
-That writes the config for you; any other MCP client can point at
-`http://127.0.0.1:8765/mcp` directly. Your agent then gets tools to search, to
+Any other MCP client takes the same URL and bearer header. Your agent then gets tools to search, to
 ask a grounded question, to explain a node, to walk the graph, and to read and
 write memory—the same surface the UI uses. The UI's **Connect agent** button
 shows the same snippet and the full tool list.
@@ -301,9 +332,10 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 | **Operations** | Idempotent, incremental sync; SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
 | **Scale** | Optional NATS queue, gRPC preparation workers, split API/indexer/worker roles and corpus sharding—each a selectable backend, never a prerequisite. |
 
-The defaults are the dependency-free ones. SQLite, local text search, HTTP, no
-queue and a single `--role all` process is a complete, supported deployment;
-everything above is something you turn on when you need it.
+pheasant-kb turns all of this on. The code's own defaults are the
+dependency-free ones (SQLite, local text search, no queue, one process), which
+is what makes the [single container](docs/other-deployments.md#single-container)
+a complete deployment too.
 
 <details>
 <summary><b>Also: pheasant can join a federated fleet</b></summary>
@@ -321,43 +353,23 @@ pheasant is a complete product. See
 
 ## Deploy
 
-Deployment files live under [`deploy/`](deploy/). Pick the smallest profile that
-fits the workload:
+[`compose.yaml`](compose.yaml) is pheasant-kb, and the documentation uses it
+as the reference:
 
-| Profile | Use it for |
-|---|---|
-| [`local-small.yaml`](deploy/compose/local-small.yaml) | Offline, local SQLite and text search |
-| [`local-advanced.yaml`](deploy/compose/local-advanced.yaml) | Single node with LanceDB, OpenAI, WASM and agentic retrieval |
-| [`fleet.yaml`](deploy/compose/fleet.yaml) | PostgreSQL, NATS and horizontally scaled gRPC workers |
+- [Run pheasant-kb](docs/pheasant-kb/index.md): the one line, what each
+  service does, where data lives
+- [Configure pheasant-kb](docs/pheasant-kb/configure.md): models, sources,
+  host folders, features to turn off
+- [Scale up or down](docs/pheasant-kb/scale.md): memory, CPU, storage, the
+  vector store, workers, the indexer
+- [Operate it](docs/pheasant-kb/operate.md): upgrades, backups, token
+  rotation, troubleshooting
 
-Commands, environment variables and operational notes are in the
-[`deploy/compose` guide](deploy/compose/README.md). Kubernetes and Helm
-manifests are in [`deploy/`](deploy/) too; local IDE agents can use the
-repository's [`pheasant-deploy` skill](.agents/skills/pheasant-deploy/SKILL.md)
-to assemble a deployment.
-
-## Configure
-
-Don't hand-write `pheasant.yaml`. The setup flow reads the live schema, so it
-cannot drift from the code:
-
-```bash
-pheasant setup                    # interactive
-pheasant setup --accept-defaults  # non-interactive
-```
-
-- [Set pheasant up](docs/how-to/setup.md) ·
-  [Configuration reference](docs/configuration.md) ·
-  [Configure sources](docs/how-to/sources.md)
-- [Run the UI](docs/how-to/run-the-ui.md) ·
-  [Attach a coding agent](docs/how-to/attach-to-coding-agent.md) ·
-  [Monitor indexing](docs/how-to/monitor-indexing.md)
-- [Capacity planning](docs/how-to/capacity-planning.md) ·
-  [Scale a worker fleet](docs/how-to/worker-fleet.md) ·
-  [Backup and restore](docs/how-to/backup-restore.md)
-
-Everything else—every command, route and MCP tool—is in the
-[interface matrix](docs/reference/interfaces.md).
+[Other ways to run pheasant](docs/other-deployments.md) covers the single
+container, `pip install`, the local profiles, Kubernetes and sharding. Every
+command, route and MCP tool is in the
+[interface matrix](docs/reference/interfaces.md); every setting in the
+[configuration reference](docs/configuration.md).
 
 ## Develop
 
