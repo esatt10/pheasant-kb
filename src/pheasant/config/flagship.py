@@ -68,6 +68,51 @@ def using_defaults(profile: str | None) -> Iterator[None]:
         _SELECTED.reset(token)
 
 
+def with_table_defaults(data: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """``data`` ready to build, and the table it is built on.
+
+    The hook ``PheasantConfig.model_validate`` calls first: the config's own
+    ``pheasant.defaults`` wins, then a selection in force, then the
+    environment, then the flagship. On the flagship ``data`` is laid over
+    :data:`FLAGSHIP_DEFAULTS`; on standalone it is used as it is, because the
+    standalone values are the dataclasses' own.
+    """
+
+    identity = data.get("pheasant") if isinstance(data.get("pheasant"), dict) else {}
+    table = resolve_defaults(identity.get("defaults"))
+    return (with_flagship_defaults(data) if table == FLAGSHIP else data), table
+
+
+def default_config(table: str | None = None) -> Any:
+    """The default configuration on ``table`` (or the one in force).
+
+    ``PheasantConfig()`` cannot be it: a dataclass constructor only knows the
+    values written on its fields, which are the standalone table.
+    """
+
+    from pheasant.config.schema import PheasantConfig
+
+    with using_defaults(table):
+        return PheasantConfig.model_validate({})
+
+
+def default_config_data(table: str | None = None) -> dict[str, Any]:
+    """:func:`default_config` as plain data, for a caller that will change it
+    and build again (``pheasant up``, ``pheasant init``, the layered loader).
+
+    The three storage paths ``model_validate`` derives from
+    ``pheasant.state_path`` are left unset, as they are in a config nobody has
+    built yet: dumped, they would pin ``/state/pheasant.db`` under a config
+    whose ``state_path`` the caller is about to move, and every write would
+    land in the old place.
+    """
+
+    data = default_config(table).model_dump(mode="json")
+    for key in ("sqlite_path", "graph_path", "manifest_path"):
+        data["storage"][key] = None
+    return data
+
+
 def with_flagship_defaults(data: dict[str, Any]) -> dict[str, Any]:
     """``data`` laid over :data:`FLAGSHIP_DEFAULTS`.
 
