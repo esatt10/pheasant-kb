@@ -49,7 +49,11 @@ the root `.env.example` (`PHEASANT_WORKERS`, `PHEASANT_INDEXER_MEMORY`, ...)
 rather than by editing `compose.yaml`. To change behaviour, copy
 `deploy/compose/pheasant-kb.yaml`, set `PHEASANT_KB_CONFIG` to the copy and
 recreate the pheasant services. Host folders mount under `/data` through a
-gitignored `compose.override.yaml`.
+gitignored `compose.override.yaml`. Back up with
+`docker compose run --rm backup` (stop the indexer first for an exact copy)
+and restore with `docker compose run --rm restore <name> --force` after
+stopping the pheasant services; never `pheasant backup` on this stack, which
+refuses a Postgres region.
 
 An existing stack named `pheasant-lab` holds its data in `pheasant-lab_*`
 volumes under knowledge base `pheasant-lab`. Keep it with

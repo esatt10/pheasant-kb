@@ -328,6 +328,53 @@ services:
       retries: 5
       start_period: 15s
 
+  # Backup and restore, on demand only (profile `tools`; `up` never starts
+  # them). Both run in the Postgres image so pg_dump matches the server:
+  #
+  #   docker compose run --rm backup
+  #   docker compose run --rm restore <name> [--force]
+  #
+  # See deploy/compose/backup.sh and restore.sh, and
+  # docs/pheasant-kb/operate.md#back-up-and-restore.
+  backup:
+    image: timescale/timescaledb-ha:pg17
+    profiles: ["tools"]
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["bash", "/scripts/backup.sh"]
+    environment: &pg-client-env
+      PGHOST: postgres
+      PGUSER: pheasant
+      PGPASSWORD: ${POSTGRES_PASSWORD:-pheasant}
+      PGDATABASE: pheasant
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./deploy/compose/backup.sh:/scripts/backup.sh:ro
+      - ${PHEASANT_BACKUP_PATH:-./backups}:/backups
+      - pheasant-state:/state:ro
+      - pheasant-memory:/memory:ro
+      - pheasant-secrets:/secrets:ro
+
+  restore:
+    image: timescale/timescaledb-ha:pg17
+    profiles: ["tools"]
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["bash", "/scripts/restore.sh"]
+    environment: *pg-client-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./deploy/compose/restore.sh:/scripts/restore.sh:ro
+      - ${PHEASANT_BACKUP_PATH:-./backups}:/backups
+      - pheasant-state:/state
+      - pheasant-memory:/memory
+      - pheasant-secrets:/secrets
+      - pheasant-worker-secret:/worker-secret
+
 volumes:
   pheasant-state:
   pheasant-workspace:
