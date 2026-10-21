@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -1087,31 +1086,17 @@ def _wizard_config(name: str) -> dict[str, Any]:
     return wizard.config_dict()
 
 
-def test_the_swarm_lab_region_regenerates_from_its_answer_file() -> None:
-    """pheasant-swarm-search vendors `swarm-lab.yaml` as its bundled region and
-    names this answer file as where it comes from. A hand edit to either side
-    is a vendored copy nobody can regenerate."""
-
-    vendored = yaml.safe_load((COMPOSE / "swarm-lab.yaml").read_text(encoding="utf-8"))
-    assert _wizard_config("swarm-lab") == vendored
-
-
-@pytest.mark.parametrize(
-    ("name", "dialled"),
-    [("pheasant-lab", "http://api:8765"), ("swarm-lab", "http://pheasant:8765")],
-)
-def test_the_lab_regions_admit_what_pheasant_swarm_search_needs(name: str, dialled: str) -> None:
-    """The lab's container reaches each region by Compose service name, and the
-    MCP host guard is derived from `cors_origins`: an origin missing there is a
-    421 on every call, on a region every in-process test reaches by loopback.
-    The fleet answers listed `host.docker.internal` and not `api`, which is the
-    name the lab's fleet Compose file dials. The rest is what its first sync
-    and its P1 arm need."""
+def test_the_lab_fleet_admits_what_pheasant_swarm_search_needs() -> None:
+    """pheasant-swarm-search's container reaches the fleet as `api:8765`, and
+    the MCP host guard is derived from `cors_origins`: an origin missing there
+    is a 421 on every call, on a region every in-process test reaches by
+    loopback. The answers listed `host.docker.internal` and not `api`. The rest
+    is what the lab's first sync and its P1 arm need."""
 
     from pheasant.mcp_server.server import _transport_security
 
-    config = PheasantConfig.model_validate(_wizard_config(name))
-    assert urlsplit(dialled).netloc in _transport_security(config).allowed_hosts
+    config = PheasantConfig.model_validate(_wizard_config("pheasant-lab"))
+    assert "api:8765" in _transport_security(config).allowed_hosts
     assert config.pheasant.name == "pheasant-lab"
     assert Path("/state") in config.security.allow_workspace_roots
     assert config.readiness.enabled
@@ -1119,10 +1104,7 @@ def test_the_lab_regions_admit_what_pheasant_swarm_search_needs(name: str, diall
     assert any(str(source.type) == "memory" for source in config.sources)
 
 
-@pytest.mark.parametrize(
-    "path",
-    [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml", COMPOSE / "swarm-lab.yaml"],
-)
+@pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])
 def test_standalone_profiles_keep_fixed_chunking(path: Path) -> None:
     """Rule 7: one container keeps exactly what it indexed before."""
 

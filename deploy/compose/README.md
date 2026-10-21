@@ -145,15 +145,6 @@ crossed to compare the region's document count with its receipts. MCP
 set, as it is here; a hand-built role-split region without a graph service
 indexes MCP syncs in the call even on `--role api`, while HTTP `/sync` refuses.
 
-The lab's own Compose stack runs a one-container region instead, configured by
-[`swarm-lab.yaml`](swarm-lab.yaml) and vendored there as
-`deploy/pheasant/pheasant.yaml`. Change it through its answer file and
-regenerate, so the copy stays reproducible:
-
-```powershell
-python -m pheasant setup --answers deploy/compose/answers/swarm-lab.json --accept-defaults --plain --target compose --output deploy/compose/swarm-lab.yaml --force
-```
-
 Before regeneration, preserve existing secret values, source registrations,
 named volumes and workspace mounts. Keep one API, graph service and active
 indexer with four preparation workers and one logger until measurements justify
