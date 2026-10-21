@@ -1562,6 +1562,9 @@ class StateStore:
             )
             return int(cursor.rowcount or 0)
 
+    def delete_source_checkpoint(self, source_id: str) -> None:
+        self.execute("DELETE FROM source_checkpoints WHERE source_id=?", (source_id,))
+
     def delete_source(self, source_id: str) -> None:
         with self.conn:
             self.conn.execute(

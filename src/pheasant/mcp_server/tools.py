@@ -25,6 +25,7 @@ from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
+from pheasant.mcp_server.source_url_tools import SourceUrlTools
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
@@ -76,7 +77,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools):
+class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)
@@ -147,7 +148,11 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools
 
         from pheasant.sync.queue import IndexTask, queue_from_config
 
-        payload = {"max_depth": max_depth, "full_scan": bool(full_scan)}
+        payload = {
+            "max_depth": max_depth,
+            "full_scan": bool(full_scan),
+            "source_config": SourceRegistry(self.config, self.state).config_digest(source_name),
+        }
         digest = hashlib.sha256(
             (
                 f"{self.config.knowledge_base_id}\0{source_name}\0{mode}\0"

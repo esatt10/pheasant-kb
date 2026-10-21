@@ -23,7 +23,8 @@ import yaml
 from pheasant.config.loader import deep_merge, dump_config_yaml
 from pheasant.config.profiles import profile_data
 from pheasant.config.schema import PheasantConfig, SourceType
-from pheasant.targets import joins_collection, merged_urls
+from pheasant.registry.placement import place_all
+from pheasant.targets import joins_collection, merged_urls, resolve_targets
 
 STATE_DIRNAME = ".pheasant"
 
@@ -55,6 +56,33 @@ def detect_source_type(path: Path) -> SourceType:
 def slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "workspace"
+
+
+def resolve_up_targets(
+    specs: list[str], config_path: Path, *, split: bool = False, name: str | None = None
+) -> list[Any]:
+    """Targets for ``pheasant up``/``host``, placed among the sources configured.
+
+    Placed before anything is fetched: a repository whose derived name another
+    source already holds clones into a directory of its own rather than over
+    that source's checkout (``registry.placement``).
+    """
+
+    local_state = state_root(config_path)
+    targets = resolve_targets(
+        specs,
+        clone_root=local_state / "sources",
+        workspace=local_state / "external",
+        split=split,
+        name=name,
+    )
+    try:
+        existing = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        existing = {}
+    sources = existing.get("sources") if isinstance(existing, dict) else None
+    by_name = {str(s.get("name")): s for s in sources or [] if isinstance(s, dict)}
+    return [target for _, target, _ in place_all(targets, by_name.get)]
 
 
 def state_root(config_path: Path) -> Path:

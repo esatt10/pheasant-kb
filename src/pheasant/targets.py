@@ -24,7 +24,8 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -88,6 +89,24 @@ class ResolvedTarget:
     clone_ref: str | None = None
     # True when `path` is a real local directory/file that must exist.
     local: bool = True
+
+    def renamed(self, name: str) -> ResolvedTarget:
+        """This target under another name, with a checkout of its own.
+
+        A repository's clone directory is named after the source, so a renamed
+        repository moves its clone too; two repositories sharing a directory
+        would each fetch over the other.
+        """
+
+        target = replace(self, name=name)
+        if self.clone_url and self.clone_path:
+            old = Path(self.clone_path)
+            new = old.parent / name
+            target.clone_path = str(new)
+            target.path = str(new / Path(self.path).relative_to(old))
+        elif not self.local:
+            target.path = str(Path(self.path).parent / name)
+        return target
 
     def to_source_dict(self) -> dict:
         payload: dict = {
@@ -426,16 +445,24 @@ def merged_urls(existing: list[str], added: list[str]) -> list[str]:
 def joins_collection(target_type: object, existing_type: object) -> bool:
     """Whether a target joins a same-named source rather than replacing it.
 
-    A web target is named after its host, so a second page of one site
-    resolves to the name of the first. That is the same collection, and the
-    page belongs in it; anything else with a clashing name is a different
+    A web (or API) target is named after its host, so a second page of one
+    site resolves to the name of the first. That is the same collection, and
+    the page belongs in it; anything else with a clashing name is a different
     source.
     """
 
-    web = SourceType.web_collection.value
-    return getattr(target_type, "value", target_type) == web and (
-        getattr(existing_type, "value", existing_type) == web
-    )
+    collections = {SourceType.web_collection.value, SourceType.api.value}
+    kind = getattr(target_type, "value", target_type)
+    return kind in collections and getattr(existing_type, "value", existing_type) == kind
+
+
+def free_name(base: str, taken: Callable[[str], bool]) -> str:
+    """``base``, or the first of ``base-2``, ``base-3`` … nothing holds yet."""
+
+    name, suffix = base, 2
+    while taken(name):
+        name, suffix = f"{base}-{suffix}", suffix + 1
+    return name
 
 
 def resolve_targets(
@@ -462,11 +489,8 @@ def resolve_targets(
         if same is not None and joins_collection(target.type, same.type):
             same.urls = merged_urls(same.urls, target.urls)
             continue
-        base = target.name
-        suffix = 2
-        while target.name in used:
-            target.name = f"{base}-{suffix}"
-            suffix += 1
+        if target.name in used:
+            target = target.renamed(free_name(target.name, used.__contains__))
         used.add(target.name)
         targets.append(target)
     return targets

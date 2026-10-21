@@ -23,6 +23,7 @@ from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
+from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -51,6 +52,7 @@ from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServic
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
+from pheasant.registry.placement import place_all
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
@@ -69,7 +71,7 @@ from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
 from pheasant.sync.web_connector import registration_connector
-from pheasant.targets import joins_collection, merged_urls
+from pheasant.targets import merged_urls
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
@@ -2028,6 +2030,7 @@ def create_app(
     register_readiness_routes(app, config=config, services=services, engine=engine)
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
+    register_source_url_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2185,10 +2188,13 @@ def create_app(
             if req.type is not None
             else str(source.type) in {member.value for member in SourceType}
         )
-        if _path_is_unused(str(req.type or source.type), is_builtin) and (
-            req.path or ""
-        ).strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
+        unused = _path_is_unused(str(req.type or source.type), is_builtin)
+        if unused and (req.path or "").strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
             resolved = Path(PLUGIN_PLACEHOLDER_PATH)
+        elif unused and (req.path or "").strip() == str(source.path):
+            # Unchanged and never read: quick add's web anchor does not exist,
+            # and checking it refused every edit of a quick-added collection.
+            resolved = source.path
         else:
             try:
                 resolved = _resolve_source_path(req.path, config) if req.path else source.path
@@ -2516,6 +2522,8 @@ def create_app(
                 payload = {
                     "max_depth": None,
                     "full_scan": False,
+                    # A changed source is a new task, not a duplicate of one in flight.
+                    "source_config": SourceRegistry(config, state).config_digest(name),
                     **dict(task_payload or {}),
                 }
                 digest = hashlib.sha256(
@@ -5180,16 +5188,14 @@ def create_app(
     # Quick add — the UI counterpart to `pheasant up <anything>`.
     # ------------------------------------------------------------------
     def _live_source(name: str) -> SourceConfig | None:
-        """A source as it stands: the config's, else the registry's runtime one."""
+        """A source as it is registered now, or None."""
 
         if state.source_removed(name):
             return None
+        SourceRegistry(config, state).adopt(name)  # another replica may have changed it
         for source in config.sources:
             if source.name == name:
                 return source
-        row = state.get_source(name)
-        if row and row.get("config_json"):
-            return _source_from_payload(json.loads(row["config_json"]))
         return None
 
     @app.post("/sources/quick-add")
@@ -5219,23 +5225,23 @@ def create_app(
                 split=req.split,
                 name=req.name,
             )
+            # Before fetching: a name taken by another source moves a checkout.
+            placed = place_all(targets, _live_source)
             if materialize_here:
-                for target in targets:
+                for _, target, _ in placed:
                     fetch_target(target)
         except TargetError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         registry = SourceRegistry(config, state)
         created: list[dict] = []
-        # Sources a web page joined rather than created: a second page of one
-        # site resolves to the first page's name, and replacing the source
-        # dropped every page added before it.
+        # Sources a web page joined rather than created (`registry.placement`).
         extended: set[str] = set()
-        for target in targets:
+        for kind, target, existing in placed:
             payload = target.to_source_dict()
-            existing = _live_source(target.name)
-            if existing is not None and joins_collection(target.type, existing.type):
+            if kind != "new":
                 payload = existing.model_dump(mode="json")
+            if kind == "join":
                 payload["urls"] = merged_urls(list(existing.urls), target.urls)
                 extended.add(target.name)
             if req.taxonomy:
@@ -5288,18 +5294,7 @@ def create_app(
                 # background; the caller gets sources back already
                 # registered and polls GET /sources' `syncing` field.
                 for entry in created:
-                    if entry["name"] in extended and not role_policy.indexes_locally:
-                        # An indexer that already read this source holds the
-                        # old URL list; the task carries the new one.
-                        refresh = {"operation": "refresh_source", "source": entry}
-                        job_id, queued = (
-                            None,
-                            _publish_background_sync(
-                                [entry["name"]], req.sync_mode, task_payload=refresh
-                            ),
-                        )
-                    else:
-                        job_id, queued = _start_background_sync(entry["name"], req.sync_mode)
+                    job_id, queued = _start_background_sync(entry["name"], req.sync_mode)
                     if job_id:
                         job_ids.append(job_id)
                     queued_tasks.extend(queued)

@@ -704,10 +704,11 @@ def test_pheasant_up_adds_a_page_to_the_sites_collection(tmp_path: Path) -> None
 
 
 def test_an_indexer_adopts_a_page_added_on_another_replica(tmp_path: Path, docs_site: str) -> None:
-    """On a fleet the api replica publishes the sync. An indexer that already
-    read the collection holds its old URL list, so the task carries the new
-    one (`refresh_source`) and the sync keeps every page it had."""
+    """On a fleet an api replica registers the change and publishes the sync.
+    An indexer that already read the collection held its old URL list in
+    memory and synced that; it adopts the registered source per task now."""
 
+    from pheasant.registry.source_registry import SourceRegistry
     from pheasant.sync.queue import IndexTask
 
     first = _web_source([f"{docs_site}{DOCS_PAGES[0]}"])
@@ -716,17 +717,16 @@ def test_an_indexer_adopts_a_page_added_on_another_replica(tmp_path: Path, docs_
 
     grown = first.model_dump(mode="json")
     grown["urls"] = [f"{docs_site}{page}" for page in DOCS_PAGES]
-    result = engine.apply_index_task(
-        IndexTask(
-            id="idx-refresh",
-            source_id="web",
-            payload={"operation": "refresh_source", "source": grown},
-        )
-    )
+    replica = SourceRegistry(_config(tmp_path), engine.state)  # its own config object
+    before = replica.config_digest("web")
+    replica.install(grown)
+    assert replica.config_digest("web") != before, "a changed source is a new task id"
+
+    result = engine.apply_index_task(IndexTask(id="idx-grown", source_id="web"))
     assert result.indexed_artifacts == 2, "the two new pages, and not the one already held"
-    held = {
-        row["relative_path"] for row in engine.state.rows("SELECT relative_path FROM artifacts")
-    }
+    held = {r["relative_path"] for r in engine.state.rows("SELECT relative_path FROM artifacts")}
     assert len(held) == 3
-    stored = json.loads(engine.state.get_source("web")["config_json"])
-    assert stored["urls"] == grown["urls"]
+
+    engine.state.set_source_enabled("web", False, "disabled")
+    SourceRegistry(engine.config, engine.state).adopt("web")
+    assert next(s for s in engine.config.sources if s.name == "web").enabled is False

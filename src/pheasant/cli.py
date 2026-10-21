@@ -2150,23 +2150,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command == "up":
-        from pheasant.quickstart import ensure_up_config, state_root
+        from pheasant.quickstart import ensure_up_config, resolve_up_targets
         from pheasant.sync.locks import EngineLeaseError
-        from pheasant.targets import TargetError, fetch_target, resolve_targets
+        from pheasant.targets import TargetError, fetch_target
 
         config_path = Path(args.config)
         specs = args.path if isinstance(args.path, list) else [args.path]
         if not specs:
             specs = ["."]
-        local_state = state_root(config_path)
         try:
-            targets = resolve_targets(
-                specs,
-                clone_root=local_state / "sources",
-                workspace=local_state / "external",
-                split=args.split,
-                name=args.name,
-            )
+            targets = resolve_up_targets(specs, config_path, split=args.split, name=args.name)
             for target in targets:
                 status = fetch_target(target)
                 if status:
