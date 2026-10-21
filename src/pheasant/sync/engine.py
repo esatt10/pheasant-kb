@@ -1749,6 +1749,11 @@ class SyncEngine:
             if not isinstance(payload, dict):
                 raise ValueError("replace_source task is missing its source configuration")
             return self.replace_source(payload, on_progress=on_progress)
+        if operation == "refresh_source":
+            payload = (getattr(task, "payload", None) or {}).get("source")
+            if not isinstance(payload, dict):
+                raise ValueError("refresh_source task is missing its source configuration")
+            SourceRegistry(self.config, self.state).install(payload)
         requested_mode = str(task.mode)
         resume_full = bool(
             requested_mode == "full"

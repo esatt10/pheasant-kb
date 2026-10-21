@@ -141,6 +141,16 @@ same way; folder sources are not affected.
   `security.allow_agent_private_urls: true`, because an agent can be steered
   by what it reads into asking the region to fetch an internal endpoint.
 
+A pasted URL (UI quick add, `pheasant up`) names its collection after the
+site, and **every page of one site joins that collection**: adding
+`https://developers.openai.com/api/docs/models`, then
+`https://developers.openai.com/chatgpt`, gives one `developers-openai-com`
+source holding both, browsed as folders that follow each URL's path
+(`developers.openai.com/api/docs/models.txt`, `developers.openai.com/chatgpt.txt`).
+A page already listed is not added twice. `POST /sources` and MCP
+`register_source` name the source themselves and set its whole URL list, so
+they replace rather than add.
+
 ## A minimal source
 
 ```yaml

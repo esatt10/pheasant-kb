@@ -408,6 +408,36 @@ def resolve_target(
     return _local_target(Path(spec), name=name, forced=forced)
 
 
+def merged_urls(existing: list[str], added: list[str]) -> list[str]:
+    """A web collection's URLs with ``added`` joined on: existing first, each once.
+
+    Order matters beyond tidiness: a URL with no path is stored as
+    ``index-<position>.html``, so appending keeps every page already indexed
+    at the path it was indexed under.
+    """
+
+    urls = list(existing)
+    for url in added:
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def joins_collection(target_type: object, existing_type: object) -> bool:
+    """Whether a target joins a same-named source rather than replacing it.
+
+    A web target is named after its host, so a second page of one site
+    resolves to the name of the first. That is the same collection, and the
+    page belongs in it; anything else with a clashing name is a different
+    source.
+    """
+
+    web = SourceType.web_collection.value
+    return getattr(target_type, "value", target_type) == web and (
+        getattr(existing_type, "value", existing_type) == web
+    )
+
+
 def resolve_targets(
     specs: list[str],
     *,
@@ -428,6 +458,10 @@ def resolve_targets(
             workspace=workspace,
             name=name if single else None,
         )
+        same = next((t for t in targets if t.name == target.name), None)
+        if same is not None and joins_collection(target.type, same.type):
+            same.urls = merged_urls(same.urls, target.urls)
+            continue
         base = target.name
         suffix = 2
         while target.name in used:

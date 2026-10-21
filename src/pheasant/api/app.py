@@ -69,6 +69,7 @@ from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
 from pheasant.sync.web_connector import registration_connector
+from pheasant.targets import joins_collection, merged_urls
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
@@ -5178,6 +5179,19 @@ def create_app(
     # ------------------------------------------------------------------
     # Quick add — the UI counterpart to `pheasant up <anything>`.
     # ------------------------------------------------------------------
+    def _live_source(name: str) -> SourceConfig | None:
+        """A source as it stands: the config's, else the registry's runtime one."""
+
+        if state.source_removed(name):
+            return None
+        for source in config.sources:
+            if source.name == name:
+                return source
+        row = state.get_source(name)
+        if row and row.get("config_json"):
+            return _source_from_payload(json.loads(row["config_json"]))
+        return None
+
     @app.post("/sources/quick-add")
     def quick_add(req: QuickAddRequest) -> dict:
         from pheasant.targets import TargetError, fetch_target, resolve_targets
@@ -5213,10 +5227,19 @@ def create_app(
 
         registry = SourceRegistry(config, state)
         created: list[dict] = []
+        # Sources a web page joined rather than created: a second page of one
+        # site resolves to the first page's name, and replacing the source
+        # dropped every page added before it.
+        extended: set[str] = set()
         for target in targets:
             payload = target.to_source_dict()
+            existing = _live_source(target.name)
+            if existing is not None and joins_collection(target.type, existing.type):
+                payload = existing.model_dump(mode="json")
+                payload["urls"] = merged_urls(list(existing.urls), target.urls)
+                extended.add(target.name)
             if req.taxonomy:
-                payload["taxonomy"] = {"enabled": True}
+                payload["taxonomy"] = {**(payload.get("taxonomy") or {}), "enabled": True}
             if target.local:
                 try:
                     if target.clone_url and not materialize_here:
@@ -5265,7 +5288,18 @@ def create_app(
                 # background; the caller gets sources back already
                 # registered and polls GET /sources' `syncing` field.
                 for entry in created:
-                    job_id, queued = _start_background_sync(entry["name"], req.sync_mode)
+                    if entry["name"] in extended and not role_policy.indexes_locally:
+                        # An indexer that already read this source holds the
+                        # old URL list; the task carries the new one.
+                        refresh = {"operation": "refresh_source", "source": entry}
+                        job_id, queued = (
+                            None,
+                            _publish_background_sync(
+                                [entry["name"]], req.sync_mode, task_payload=refresh
+                            ),
+                        )
+                    else:
+                        job_id, queued = _start_background_sync(entry["name"], req.sync_mode)
                     if job_id:
                         job_ids.append(job_id)
                     queued_tasks.extend(queued)
@@ -5273,6 +5307,7 @@ def create_app(
         return {
             "status": "registered",
             "sources": created,
+            "extended": sorted(extended),
             "sync_results": results,
             "syncing": syncing,
             "job_ids": job_ids,

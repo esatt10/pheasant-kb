@@ -23,6 +23,7 @@ import yaml
 from pheasant.config.loader import deep_merge, dump_config_yaml
 from pheasant.config.profiles import profile_data
 from pheasant.config.schema import PheasantConfig, SourceType
+from pheasant.targets import joins_collection, merged_urls
 
 STATE_DIRNAME = ".pheasant"
 
@@ -233,6 +234,16 @@ def _append_missing_sources(target: Any, config_path: Path) -> list[str]:
     added: list[str] = []
     for entry in targets:
         payload = entry.to_source_dict()
+        same = next((s for s in sources if str(s.get("name")) == payload["name"]), None)
+        if same is not None and joins_collection(payload["type"], same.get("type")):
+            # A second page of a site this config already collects: it joins
+            # that collection. Matching by path below would call it "already
+            # configured" and drop the page without a word.
+            urls = merged_urls(list(same.get("urls") or []), payload.get("urls") or [])
+            if urls != list(same.get("urls") or []):
+                same["urls"] = urls
+                added.append(payload["name"])
+            continue
         if _resolved(payload.get("path")) in known_paths:
             continue
         name = payload["name"]

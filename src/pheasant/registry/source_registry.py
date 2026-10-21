@@ -72,6 +72,21 @@ class SourceRegistry:
             clear_removal=revive,
         )
 
+    def install(self, source_payload: dict) -> SourceConfig:
+        """Adopt a changed source config, keeping everything already indexed.
+
+        The light sibling of ``SyncEngine.replace_source``, for a change a sync
+        reconciles by itself - a page added to a web collection. A process that
+        read a runtime source once keeps that copy in ``config.sources``, so an
+        indexer would otherwise go on syncing the URL list it saw first.
+        """
+
+        updated = PheasantConfig.model_validate({"sources": [source_payload]}).sources[0]
+        self.register_source(updated)
+        self.config.sources = [s for s in self.config.sources if s.name != updated.name]
+        self.config.sources.append(updated)
+        return updated
+
     def list_sources(
         self,
         enabled: bool | None = None,
