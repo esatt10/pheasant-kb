@@ -21,10 +21,10 @@ from typing import Any
 
 import yaml
 
-from pheasant.config.flagship import DEFAULTS_ENV, STANDALONE, using_defaults
+from pheasant.config.flagship import DEFAULTS_ENV, STANDALONE, default_config_data
 from pheasant.config.loader import deep_merge, dump_config_yaml
 from pheasant.config.profiles import profile_data
-from pheasant.config.schema import PheasantConfig, SourceType
+from pheasant.config.schema import SourceType
 from pheasant.registry.placement import place_all
 from pheasant.targets import joins_collection, merged_urls, resolve_targets
 
@@ -159,8 +159,7 @@ def render_up_config(
     # configuration (Postgres, NATS, a worker tier) cannot run in. So a config
     # it writes is built on the standalone table, and says so, unless
     # PHEASANT_DEFAULTS asks for the flagship explicitly.
-    with using_defaults(os.environ.get(DEFAULTS_ENV) or STANDALONE):
-        base = PheasantConfig.default().model_dump(mode="json")
+    base = default_config_data(os.environ.get(DEFAULTS_ENV) or STANDALONE)
     data: dict[str, Any] = deep_merge(base, profile_data(profile))
     origin = targets[0].path if len(targets) == 1 else f"{len(targets)} sources"
     data["pheasant"].update(

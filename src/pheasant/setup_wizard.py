@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.assistant.catalog import PROVIDERS, resolve_auto_provider
-from pheasant.config.flagship import resolve_defaults, using_defaults
+from pheasant.config.flagship import default_config, resolve_defaults, using_defaults
 from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_client.vscode import DEFAULT_IMAGE
 
@@ -78,8 +78,7 @@ def _default_config(profile: str) -> PheasantConfig:
     """One default config per table, read-only by convention: the wizard asks
     for a few hundred defaults per run and each would otherwise be a build."""
 
-    with using_defaults(profile):
-        return PheasantConfig.default()
+    return default_config(profile)
 
 
 @dataclass

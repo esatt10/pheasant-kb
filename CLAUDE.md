@@ -201,7 +201,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 174 pytest modules, offline by design
+└── tests/                     ← 175 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -305,8 +305,11 @@ their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
    ships names its table (`tests/test_flagship_defaults.py` fails one that
    does not), because a partial config that names none silently becomes a
    pheasant-kb config. `PheasantConfig()` is always standalone (a dataclass
-   constructor cannot consult a table); "the default" is
-   `PheasantConfig.default()` or `model_validate`.
+   constructor cannot consult a table); "the default" is `model_validate` or
+   `flagship.default_config()`, and a caller that edits a default dump and
+   builds again takes `default_config_data()`, which leaves the storage paths
+   derived from `state_path` unset (dumped, they pinned `/state/pheasant.db`
+   under a config whose `state_path` `pheasant up` then moved).
 8. **The MCP tool surface is public API.** Renaming or removing a tool breaks
    deployed agents — additive evolution only, deprecate before remove. One
    sanctioned exception to date: `export_obsidian_notes` was removed outright
