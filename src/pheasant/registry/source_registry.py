@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -71,6 +72,53 @@ class SourceRegistry:
             source.model_dump(mode="json"),
             clear_removal=revive,
         )
+
+    def install(self, source_payload: dict) -> SourceConfig:
+        """Register a changed source config here and keep everything indexed.
+
+        The light sibling of ``SyncEngine.replace_source``, for a change a sync
+        reconciles by itself - a page added to or taken from a web collection.
+        """
+
+        updated = PheasantConfig.model_validate({"sources": [source_payload]}).sources[0]
+        self.register_source(updated)
+        self._hold(updated)
+        return updated
+
+    def adopt(self, name: str) -> None:
+        """Hold ``name`` as it is registered now, not as this process first read it.
+
+        A process caches a runtime source in ``config.sources`` the first time
+        it reads it, so on a fleet an indexer synced the URL list it saw first
+        while an api replica had registered another. Read once per queued task.
+        """
+
+        row = self.state.get_source(name)
+        if not row or not row.get("config_json") or self.state.source_removed(name):
+            return
+        payload = json.loads(row["config_json"])
+        # Disabling writes the column, not the stored config.
+        payload["enabled"] = bool(row.get("enabled", payload.get("enabled", True)))
+        registered = PheasantConfig.model_validate({"sources": [payload]}).sources[0]
+        held = next((s for s in self.config.sources if s.name == name), None)
+        if held is None or held.model_dump(mode="json") != registered.model_dump(mode="json"):
+            self._hold(registered)
+
+    def config_digest(self, name: str) -> str | None:
+        """A short digest of ``name``'s registered config, for a queued task's id.
+
+        A sync is deduplicated by task id while one is outstanding, so a sync
+        published after the source changed must not share the id of one
+        already running over the old config.
+        """
+
+        row = self.state.get_source(name)
+        text = str((row or {}).get("config_json") or "")
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else None
+
+    def _hold(self, source: SourceConfig) -> None:
+        self.config.sources = [s for s in self.config.sources if s.name != source.name]
+        self.config.sources.append(source)
 
     def list_sources(
         self,

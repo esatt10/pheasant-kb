@@ -1749,6 +1749,8 @@ class SyncEngine:
             if not isinstance(payload, dict):
                 raise ValueError("replace_source task is missing its source configuration")
             return self.replace_source(payload, on_progress=on_progress)
+        # Sync the source as registered now: an api replica may have changed it.
+        SourceRegistry(self.config, self.state).adopt(str(task.source_id))
         requested_mode = str(task.mode)
         resume_full = bool(
             requested_mode == "full"
@@ -1851,6 +1853,8 @@ class SyncEngine:
                 )
                 self.manifests.delete(updated.name)
                 self.state.delete_source_artifacts(updated.name)
+                # And its schedule, or a web page "not due" would never be re-read.
+                self.state.delete_source_checkpoint(updated.name)
                 SourceRegistry(self.config, self.state).register_source(updated)
                 self.config.sources = [s for s in self.config.sources if s.name != updated.name]
                 self.config.sources.append(updated)

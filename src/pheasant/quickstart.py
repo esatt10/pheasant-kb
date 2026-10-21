@@ -23,6 +23,8 @@ import yaml
 from pheasant.config.loader import deep_merge, dump_config_yaml
 from pheasant.config.profiles import profile_data
 from pheasant.config.schema import PheasantConfig, SourceType
+from pheasant.registry.placement import place_all
+from pheasant.targets import joins_collection, merged_urls, resolve_targets
 
 STATE_DIRNAME = ".pheasant"
 
@@ -54,6 +56,33 @@ def detect_source_type(path: Path) -> SourceType:
 def slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "workspace"
+
+
+def resolve_up_targets(
+    specs: list[str], config_path: Path, *, split: bool = False, name: str | None = None
+) -> list[Any]:
+    """Targets for ``pheasant up``/``host``, placed among the sources configured.
+
+    Placed before anything is fetched: a repository whose derived name another
+    source already holds clones into a directory of its own rather than over
+    that source's checkout (``registry.placement``).
+    """
+
+    local_state = state_root(config_path)
+    targets = resolve_targets(
+        specs,
+        clone_root=local_state / "sources",
+        workspace=local_state / "external",
+        split=split,
+        name=name,
+    )
+    try:
+        existing = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        existing = {}
+    sources = existing.get("sources") if isinstance(existing, dict) else None
+    by_name = {str(s.get("name")): s for s in sources or [] if isinstance(s, dict)}
+    return [target for _, target, _ in place_all(targets, by_name.get)]
 
 
 def state_root(config_path: Path) -> Path:
@@ -233,6 +262,16 @@ def _append_missing_sources(target: Any, config_path: Path) -> list[str]:
     added: list[str] = []
     for entry in targets:
         payload = entry.to_source_dict()
+        same = next((s for s in sources if str(s.get("name")) == payload["name"]), None)
+        if same is not None and joins_collection(payload["type"], same.get("type")):
+            # A second page of a site this config already collects: it joins
+            # that collection. Matching by path below would call it "already
+            # configured" and drop the page without a word.
+            urls = merged_urls(list(same.get("urls") or []), payload.get("urls") or [])
+            if urls != list(same.get("urls") or []):
+                same["urls"] = urls
+                added.append(payload["name"])
+            continue
         if _resolved(payload.get("path")) in known_paths:
             continue
         name = payload["name"]

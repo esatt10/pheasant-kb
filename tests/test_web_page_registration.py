@@ -17,6 +17,7 @@ Each case here was a live failure found by registering a real page:
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
@@ -558,3 +560,173 @@ def test_the_api_opts_a_web_registration_in(tmp_path: Path, site: str) -> None:
     assert response.status_code == 200, response.text
     assert response.json()["source"]["connector"]["allow_experimental"] is True
     assert response.json()["sync_result"]["indexed_artifacts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. one site, many pages: each URL added builds the collection up
+# ---------------------------------------------------------------------------
+
+
+class _PathPageHandler(BaseHTTPRequestHandler):
+    """A page per path, naming its own path so each one is findable."""
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server's spelling
+        marker = self.path.strip("/").replace("/", "zz").replace("-", "") or "rootpage"
+        body = (
+            f"<!doctype html><html><head><title>{self.path}</title></head>"
+            f"<body><h1>{self.path}</h1><p>marker{marker} lives here.</p></body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@pytest.fixture()
+def docs_site() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PathPageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+DOCS_PAGES = ("/api/docs/model", "/chatgpt", "/api/docs/guides/realtime-transcription")
+
+
+def test_quick_adding_pages_of_one_site_builds_one_collection(
+    tmp_path: Path, docs_site: str
+) -> None:
+    """Regression: each URL of one host replaced the last one.
+
+    Quick add names a web collection after its host, and registering under a
+    name that existed replaced that source, so adding
+    developers.openai.com/chatgpt after /api/docs/model left only /chatgpt
+    and deleted the first page's index. Each URL now joins the collection,
+    and the pages stay in folders that follow their URL paths.
+    """
+
+    client = TestClient(create_app(config=_config(tmp_path)))
+    names = set()
+    for page in DOCS_PAGES:
+        response = client.post(
+            "/sources/quick-add", json={"target": f"{docs_site}{page}", "wait": True}
+        )
+        assert response.status_code == 200, response.text
+        names.update(source["name"] for source in response.json()["sources"])
+    assert len(names) == 1, "one site is one collection"
+    (name,) = names
+
+    sources = {s["name"]: s for s in client.get("/sources").json()}
+    assert set(sources) == {name}
+    urls = json.loads(sources[name]["config_json"])["urls"]
+    assert urls == [f"{docs_site}{page}" for page in DOCS_PAGES], "added in the order given"
+
+    markers = (
+        "markerapizzdocszzmodel",
+        "markerchatgpt",
+        "markerapizzdocszzguideszzrealtimetranscription",
+    )
+    for marker in markers:
+        hits = client.post("/search", json={"query": marker, "max_results": 3}).json()
+        assert hits["results"], f"{marker} was dropped from the collection"
+
+    host = docs_site.removeprefix("http://").replace(":", "_")
+    tree = client.get("/documents/tree", params={"source_name": name}).json()
+    assert [folder["name"] for folder in tree["directories"]] == [host]
+    docs = client.get(
+        "/documents/tree", params={"source_name": name, "path": f"{host}/api/docs"}
+    ).json()
+    assert [folder["name"] for folder in docs["directories"]] == ["guides"]
+    assert [file["name"] for file in docs["files"]] == ["model.txt"]
+    content = client.get(
+        "/documents/content",
+        params={"path": f"{name}/{host}/api/docs/guides/realtime-transcription.txt"},
+    ).json()
+    assert "markerapizzdocszzguideszzrealtimetranscription" in content["content"]
+
+
+def test_adding_a_page_twice_keeps_one_entry(tmp_path: Path, docs_site: str) -> None:
+    client = TestClient(create_app(config=_config(tmp_path)))
+    for _ in range(2):
+        client.post("/sources/quick-add", json={"target": f"{docs_site}/chatgpt", "wait": True})
+    (source,) = client.get("/sources").json()
+    assert json.loads(source["config_json"])["urls"] == [f"{docs_site}/chatgpt"]
+
+
+def test_pages_of_one_site_in_one_call_are_one_target(tmp_path: Path) -> None:
+    """`pheasant up a b c` suffixed the second page's source as `<host>-2`."""
+
+    from pheasant.targets import resolve_targets
+
+    urls = [f"https://developers.example.com{page}" for page in DOCS_PAGES]
+    targets = resolve_targets(
+        [*urls, urls[0], "https://other.example.com/x"],
+        clone_root=tmp_path / "clones",
+        workspace=tmp_path,
+    )
+    assert [t.name for t in targets] == ["developers-example-com", "other-example-com"]
+    assert targets[0].urls == urls
+
+
+def test_pheasant_up_adds_a_page_to_the_sites_collection(tmp_path: Path) -> None:
+    """A second `pheasant up <url>` of one site said "already configured" and
+    dropped the page: matching by path found the first page's collection."""
+
+    from pheasant.quickstart import added_sources, ensure_up_config
+    from pheasant.targets import resolve_targets
+
+    config_path = tmp_path / "pheasant.yaml"
+    urls = [f"https://developers.example.com{page}" for page in DOCS_PAGES]
+    for url in urls:
+        targets = resolve_targets([url], clone_root=tmp_path / "clones", workspace=tmp_path)
+        ensure_up_config(targets, config_path)
+    assert added_sources() == ["developers-example-com"]
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    (source,) = [s for s in written["sources"] if s["type"] == "web_collection"]
+    assert source["urls"] == urls
+
+    unchanged = config_path.read_text(encoding="utf-8")
+    ensure_up_config(
+        resolve_targets([urls[1]], clone_root=tmp_path / "clones", workspace=tmp_path),
+        config_path,
+    )
+    assert added_sources() == []
+    assert config_path.read_text(encoding="utf-8") == unchanged, "a known page rewrites nothing"
+
+
+def test_an_indexer_adopts_a_page_added_on_another_replica(tmp_path: Path, docs_site: str) -> None:
+    """On a fleet an api replica registers the change and publishes the sync.
+    An indexer that already read the collection held its old URL list in
+    memory and synced that; it adopts the registered source per task now."""
+
+    from pheasant.registry.source_registry import SourceRegistry
+    from pheasant.sync.queue import IndexTask
+
+    first = _web_source([f"{docs_site}{DOCS_PAGES[0]}"])
+    engine = SyncEngine(_config(tmp_path, first))
+    assert engine.sync_source("web", "incremental").indexed_artifacts == 1
+
+    grown = first.model_dump(mode="json")
+    grown["urls"] = [f"{docs_site}{page}" for page in DOCS_PAGES]
+    replica = SourceRegistry(_config(tmp_path), engine.state)  # its own config object
+    before = replica.config_digest("web")
+    replica.install(grown)
+    assert replica.config_digest("web") != before, "a changed source is a new task id"
+
+    result = engine.apply_index_task(IndexTask(id="idx-grown", source_id="web"))
+    assert result.indexed_artifacts == 2, "the two new pages, and not the one already held"
+    held = {r["relative_path"] for r in engine.state.rows("SELECT relative_path FROM artifacts")}
+    assert len(held) == 3
+
+    engine.state.set_source_enabled("web", False, "disabled")
+    SourceRegistry(engine.config, engine.state).adopt("web")
+    assert next(s for s in engine.config.sources if s.name == "web").enabled is False

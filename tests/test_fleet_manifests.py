@@ -1075,6 +1075,35 @@ def test_the_fleet_answer_files_regenerate_the_same_defaults(name: str) -> None:
     assert answers["sync.concurrency.remote_worker_pdf_pages_per_task"] == 500
 
 
+def _wizard_config(name: str) -> dict[str, Any]:
+    import json
+
+    from pheasant.setup_wizard import Wizard
+
+    answers = json.loads((COMPOSE / "answers" / f"{name}.json").read_text(encoding="utf-8"))
+    wizard = Wizard(accept_defaults=True, preset=answers)
+    wizard.run()
+    return wizard.config_dict()
+
+
+def test_the_lab_fleet_admits_what_pheasant_swarm_search_needs() -> None:
+    """pheasant-swarm-search's container reaches the fleet as `api:8765`, and
+    the MCP host guard is derived from `cors_origins`: an origin missing there
+    is a 421 on every call, on a region every in-process test reaches by
+    loopback. The answers listed `host.docker.internal` and not `api`. The rest
+    is what the lab's first sync and its P1 arm need."""
+
+    from pheasant.mcp_server.server import _transport_security
+
+    config = PheasantConfig.model_validate(_wizard_config("pheasant-lab"))
+    assert "api:8765" in _transport_security(config).allowed_hosts
+    assert config.pheasant.name == "pheasant-lab"
+    assert Path("/state") in config.security.allow_workspace_roots
+    assert config.readiness.enabled
+    assert config.security.api_auth.token_env == "PHEASANT_API_TOKEN"
+    assert any(str(source.type) == "memory" for source in config.sources)
+
+
 @pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])
 def test_standalone_profiles_keep_fixed_chunking(path: Path) -> None:
     """Rule 7: one container keeps exactly what it indexed before."""

@@ -130,9 +130,14 @@ docker compose --env-file .env -f deploy/compose/docker-compose.pheasant-lab.yml
 ```
 
 **Driving this fleet from pheasant-swarm-search.** The lab connects over
-streamable HTTP MCP (`PHEASANT_MCP_URL=http://127.0.0.1:8765/mcp`) with the
-same `PHEASANT_API_TOKEN`, and its shipped `configs/pheasant-mcp.example.yaml`
-targets 0.13.4: it submits through `submit_documents`, registers the landing
+streamable HTTP MCP with the same `PHEASANT_API_TOKEN`: from the host at
+`http://127.0.0.1:8765/mcp`, or from its own container
+(`docker-compose.fleet.yml` there, which joins this project's network) at
+`http://api:8765/mcp`. The MCP host guard is derived from
+`server.api.cors_origins`, so the answer file lists `http://api:8765`; a
+`pheasant.yaml` generated before it did answers that container **421**, so
+regenerate it. Its shipped `configs/pheasant-mcp.example.yaml` targets this
+release: it submits through `submit_documents`, registers the landing
 directory (`/state` is allow-listed above), waits on `get_index_queue` while a
 queued sync awaits an indexer, and reads `describe_source` once the barrier is
 crossed to compare the region's document count with its receipts. MCP

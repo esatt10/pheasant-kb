@@ -29,6 +29,12 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
   const [browsePath, setBrowsePath] = useState<string | null>(null);
   const [chosen, setChosen] = useState<string | null>((initial.path as string | undefined) ?? null);
   const [name, setName] = useState(String(initial.name ?? ""));
+  // Registering under a name that exists replaces that source and drops what it
+  // indexed, so a new source may not take one: the default is a free name, and
+  // a typed one that is taken is refused here rather than overwritten there.
+  const known = useQuery({ queryKey: ["sources"], queryFn: api.sources });
+  const knownNames = useMemo(() => new Set((known.data ?? []).map((s) => s.name)), [known.data]);
+  const nameTaken = !editing && knownNames.has(name.trim());
   const [type, setType] = useState(String(initial.type ?? "document_folder"));
   const [description, setDescription] = useState(String(initial.description ?? ""));
   const [enabled, setEnabled] = useState(Boolean(initial.enabled ?? true));
@@ -119,7 +125,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
     setChosen(path);
     if (!name) {
       const leaf = path.split(/[\\/]/).filter(Boolean).pop() ?? "source";
-      setName(leaf.replace(/[^a-zA-Z0-9-_]/g, "-").toLowerCase());
+      setName(freeName(leaf.replace(/[^a-zA-Z0-9-_]/g, "-").toLowerCase(), knownNames));
     }
   };
 
@@ -263,7 +269,14 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                   value={name}
                   disabled={editing}
                   onChange={(event) => setName(event.target.value)}
+                  aria-invalid={nameTaken}
                 />
+                {nameTaken && (
+                  <span className="error small" role="alert">
+                    A source named “{name.trim()}” already exists. Choose another name, or close
+                    this and use Edit on that source to change it.
+                  </span>
+                )}
               </label>
               <label className="field">
                 <span>Type</span>
@@ -487,6 +500,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                 (needsPath && !chosen) ||
                 (type === "web_collection" && patterns(urlsText).length === 0) ||
                 !name ||
+                nameTaken ||
                 mutation.isPending
               }
               onClick={() => mutation.mutate()}
@@ -525,4 +539,11 @@ function patterns(value: string): string[] {
 
 function lines(value: unknown): string {
   return Array.isArray(value) ? value.join("\n") : "";
+}
+
+/** ``base``, or the first of ``base-2``, ``base-3`` … no source holds yet. */
+function freeName(base: string, taken: Set<string>): string {
+  let name = base;
+  for (let suffix = 2; taken.has(name); suffix += 1) name = `${base}-${suffix}`;
+  return name;
 }

@@ -159,7 +159,8 @@ pheasant-kb/
 │   │                            file, minus excluded documents; @current
 │   │                            and @dir resolved), archive (remove a
 │   │                            document, keep it out of every sync,
-│   │                            reinstate it; + @remove)
+│   │                            reinstate it; + @remove), source_urls
+│   │                            (a web collection's pages: add, remove)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -189,7 +190,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 169 pytest modules, offline by design
+└── tests/                     ← 170 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -458,6 +459,17 @@ landing zone and drops the row, and reinstating it is refused. A name must
 match one document (`AMBIGUOUS_DOCUMENT`). An api replica writes the row and
 publishes an incremental sync; the indexer's sync prunes it
 (`ServiceContext.indexing` says which).
+
+**A pasted target never replaces a different source**
+(`registry/placement.py`). Quick add and `pheasant up` name a source after
+what was pasted, so two things can derive one name: a web or API page *joins*
+the collection named after its host, the same folder/checkout is re-added as
+it stands, and anything else takes `name-2` (a repository with its own
+checkout), decided before anything is fetched. `POST /sources` and MCP
+`register_source` set a whole config and do replace; `edit_source_urls` /
+`POST /sources/{name}/urls` change a collection's pages. A queued sync syncs a
+source as registered now (`SourceRegistry.adopt`), and a publish digests the
+registered config into the task id, so an indexer never syncs a stale copy.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
 third-party plugin needs no dispatch code here. One ships first-party: Google

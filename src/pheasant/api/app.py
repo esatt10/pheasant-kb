@@ -23,6 +23,7 @@ from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
+from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -51,6 +52,7 @@ from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServic
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
+from pheasant.registry.placement import place_all
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
@@ -69,6 +71,7 @@ from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
 from pheasant.sync.web_connector import registration_connector
+from pheasant.targets import merged_urls
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
@@ -2027,6 +2030,7 @@ def create_app(
     register_readiness_routes(app, config=config, services=services, engine=engine)
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
+    register_source_url_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2184,10 +2188,13 @@ def create_app(
             if req.type is not None
             else str(source.type) in {member.value for member in SourceType}
         )
-        if _path_is_unused(str(req.type or source.type), is_builtin) and (
-            req.path or ""
-        ).strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
+        unused = _path_is_unused(str(req.type or source.type), is_builtin)
+        if unused and (req.path or "").strip() in {"", PLUGIN_PLACEHOLDER_PATH}:
             resolved = Path(PLUGIN_PLACEHOLDER_PATH)
+        elif unused and (req.path or "").strip() == str(source.path):
+            # Unchanged and never read: quick add's web anchor does not exist,
+            # and checking it refused every edit of a quick-added collection.
+            resolved = source.path
         else:
             try:
                 resolved = _resolve_source_path(req.path, config) if req.path else source.path
@@ -2515,6 +2522,8 @@ def create_app(
                 payload = {
                     "max_depth": None,
                     "full_scan": False,
+                    # A changed source is a new task, not a duplicate of one in flight.
+                    "source_config": SourceRegistry(config, state).config_digest(name),
                     **dict(task_payload or {}),
                 }
                 digest = hashlib.sha256(
@@ -5178,6 +5187,17 @@ def create_app(
     # ------------------------------------------------------------------
     # Quick add — the UI counterpart to `pheasant up <anything>`.
     # ------------------------------------------------------------------
+    def _live_source(name: str) -> SourceConfig | None:
+        """A source as it is registered now, or None."""
+
+        if state.source_removed(name):
+            return None
+        SourceRegistry(config, state).adopt(name)  # another replica may have changed it
+        for source in config.sources:
+            if source.name == name:
+                return source
+        return None
+
     @app.post("/sources/quick-add")
     def quick_add(req: QuickAddRequest) -> dict:
         from pheasant.targets import TargetError, fetch_target, resolve_targets
@@ -5205,18 +5225,27 @@ def create_app(
                 split=req.split,
                 name=req.name,
             )
+            # Before fetching: a name taken by another source moves a checkout.
+            placed = place_all(targets, _live_source)
             if materialize_here:
-                for target in targets:
+                for _, target, _ in placed:
                     fetch_target(target)
         except TargetError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         registry = SourceRegistry(config, state)
         created: list[dict] = []
-        for target in targets:
+        # Sources a web page joined rather than created (`registry.placement`).
+        extended: set[str] = set()
+        for kind, target, existing in placed:
             payload = target.to_source_dict()
+            if kind != "new":
+                payload = existing.model_dump(mode="json")
+            if kind == "join":
+                payload["urls"] = merged_urls(list(existing.urls), target.urls)
+                extended.add(target.name)
             if req.taxonomy:
-                payload["taxonomy"] = {"enabled": True}
+                payload["taxonomy"] = {**(payload.get("taxonomy") or {}), "enabled": True}
             if target.local:
                 try:
                     if target.clone_url and not materialize_here:
@@ -5273,6 +5302,7 @@ def create_app(
         return {
             "status": "registered",
             "sources": created,
+            "extended": sorted(extended),
             "sync_results": results,
             "syncing": syncing,
             "job_ids": job_ids,

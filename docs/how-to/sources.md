@@ -141,6 +141,47 @@ same way; folder sources are not affected.
   `security.allow_agent_private_urls: true`, because an agent can be steered
   by what it reads into asking the region to fetch an internal endpoint.
 
+A pasted URL (UI quick add, `pheasant up`) names its collection after the
+site, and **every page of one site joins that collection**: adding
+`https://developers.openai.com/api/docs/models`, then
+`https://developers.openai.com/chatgpt`, gives one `developers-openai-com`
+source holding both, browsed as folders that follow each URL's path
+(`developers.openai.com/api/docs/models.txt`, `developers.openai.com/chatgpt.txt`).
+A page already listed is not added twice.
+
+### Adding and removing pages later
+
+| | Add | Remove |
+|---|---|---|
+| UI | **+ Add source** with one URL (joins the site's collection), or **edit** on the source and add lines to *Page URLs* | **edit** and delete lines, or **Remove** on a page in the taxonomy view (archived: held out of every sync, reinstatable) |
+| HTTP | `POST /sources/{name}/urls` with `add: [...]` (or quick add one URL) | `POST /sources/{name}/urls` with `remove: [...]`, or `POST /documents/archive` |
+| MCP | `edit_source_urls` with `add` | `edit_source_urls` with `remove`, or `archive_documents` |
+
+`add` and `remove` take one URL or a list, keep every other page as indexed,
+and say what changed (`added`, `removed`) and what did not need to
+(`already_listed`, `not_listed`). The source then syncs: an added page is
+fetched and a removed one leaves the index. A collection cannot be emptied
+this way; remove the source instead.
+
+`POST /sources` and MCP `register_source` are different on purpose: they name
+the source and set **its whole configuration**, URL list included, so calling
+one with a name that exists replaces that source. Use them to create a
+collection or rewrite it, and `edit_source_urls` to change its pages. (The UI's
+*Advanced…* form, which creates through `POST /sources`, refuses a name that
+is already taken.)
+
+### Names that would collide
+
+Quick add and `pheasant up` name a source after what was pasted, so two
+different things can derive one name. Neither ever replaces the source already
+there: a second folder called `docs` becomes `docs-2`, a second repository
+called `tools` becomes `tools-2` with a checkout of its own, and a second
+folder of one GitHub repository (`…/tree/main/src` beside `…/tree/main/docs`)
+becomes `repo-2`. Pasting the same folder, repository folder or file again is
+the source that is already there, re-added with whatever was set on it since.
+Only a web or API page *joins* an existing source, because the shared name is
+its site.
+
 ## A minimal source
 
 ```yaml

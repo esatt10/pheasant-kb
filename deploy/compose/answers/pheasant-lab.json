@@ -30,6 +30,7 @@
     "http://127.0.0.1:8080",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://api:8765",
     "http://host.docker.internal:8765"
   ],
   "server.ui.enabled": true,
