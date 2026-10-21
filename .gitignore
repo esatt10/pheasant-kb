@@ -221,6 +221,7 @@ pheasant.local.yaml
 pheasant.*.local.yaml
 # pheasant-kb: your own mounts and environment beside the shipped compose.yaml
 /compose.override.yaml
+/backups/
 .vscode/mcp.json
 /.pheasant/
 /workspace/

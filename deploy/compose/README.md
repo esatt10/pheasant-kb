@@ -160,6 +160,11 @@ crossed to compare the region's document count with its receipts. MCP
 set, as it is here; a hand-built role-split region without a graph service
 indexes MCP syncs in the call even on `--role api`, while HTTP `/sync` refuses.
 
+Back up and restore pheasant-kb with `docker compose run --rm backup` and
+`docker compose run --rm restore <name>` (`backup.sh`, `restore.sh` here);
+`pheasant backup` covers only the SQLite profiles. See
+[Operate pheasant-kb](../../docs/pheasant-kb/operate.md#back-up-and-restore).
+
 Keep one API, graph service and active indexer with four preparation workers
 and one logger until measurements justify a resource change; the knobs and the
 signals for each are in

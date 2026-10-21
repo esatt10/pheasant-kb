@@ -218,6 +218,7 @@ references / imports / calls / similar_to / supersedes / about). Full grammar:
 ```bash
 echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d   # pheasant-kb
 docker compose exec api cat /run/pheasant/secrets/api-token  # UI/MCP token
+docker compose run --rm backup | restore <name> [--force]     # pheasant-kb backups
 
 pip install -e ".[dev,mcp]"
 pytest -q                                  # offline by design
@@ -1309,7 +1310,16 @@ is an `.env` edit; `docs/pheasant-kb/scale.md` maps each to its metric.
 **The logger is not behind a profile**, because the config turns the
 observation queue on and nothing else drains it. Host folders mount under
 `/data` (allow-listed): the api mounts `/workspace` read-only, and Docker
-cannot create a mountpoint inside a read-only volume (measured).
+cannot create a mountpoint inside a read-only volume (measured). **Backups
+are one command:** `backup`/`restore` (profile `tools`) run
+`deploy/compose/backup.sh`/`restore.sh` in the Postgres image, so pg_dump
+matches the server, and copy the database, `/state`, `/memory` and the
+tokens as one checksummed folder; restore refuses running services and
+populated targets without `--force`, and keeps what it replaces (rule 2).
+`pheasant backup` refuses a Postgres region: it used to write the archive
+without the database and report success. Images: pheasant from GHCR
+(published by `container.yml` on every green merge to main, which then
+rewrites `compose.yaml`'s pin), Postgres and NATS from Docker Hub.
 `docker-compose.scale.yml` + `fleet.yaml` stay as the generic fleet the CI
 smoke tests run; do not grow a third copy of the topology.
 

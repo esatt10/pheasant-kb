@@ -269,3 +269,194 @@ def test_an_unreadable_file_is_reported_not_fatal(tmp_path: Path) -> None:
     )
     assert out.stdout == "unset"
     assert "PHEASANT_API_TOKEN_FILE" in out.stderr
+
+
+# -- backup.sh and restore.sh -------------------------------------------------
+#
+# The Postgres client is stood in for by three scripts that move one file's
+# contents around, so a backup and a restore are exercised end to end
+# (checksums, refusals, keeping the replaced data, the volumes) without a
+# server. What the stand-ins cannot prove is pg_dump's own fidelity, which is
+# Postgres's job.
+
+needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+
+FAKE_PG = {
+    "pg_dump": (
+        'for a in "$@"; do case "$a" in --file=*) cp "$FAKE_DB" "${a#--file=}";; esac; done\n'
+    ),
+    "pg_restore": 'for a in "$@"; do last="$a"; done; cp "$last" "$FAKE_DB"\n',
+    "psql": 'cat "$FAKE_TABLES"\n',
+}
+
+
+@pytest.fixture
+def region(tmp_path: Path) -> dict[str, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in FAKE_PG.items():
+        (bin_dir / name).write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+        (bin_dir / name).chmod(0o755)
+    paths = {
+        name: tmp_path / name for name in ("backups", "state", "memory", "secrets", "worker-secret")
+    }
+    for path in paths.values():
+        path.mkdir()
+    paths["bin"] = bin_dir
+    paths["db"] = tmp_path / "db"
+    paths["tables"] = tmp_path / "tables"
+    paths["db"].write_text("rows-v1\n", encoding="utf-8")
+    paths["tables"].write_text("12\n", encoding="utf-8")
+    (paths["state"] / "vectors").mkdir()
+    (paths["state"] / "vectors" / "v.lance").write_text("vectors-v1", encoding="utf-8")
+    (paths["memory"] / "m.md").write_text("memory-v1", encoding="utf-8")
+    (paths["secrets"] / "api-token").write_text("token-v1\n", encoding="utf-8")
+    (paths["secrets"] / "worker-token").write_text("worker-v1\n", encoding="utf-8")
+    return paths
+
+
+def _run(script: str, region: dict[str, Path], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(COMPOSE / script), *args],
+        env={
+            "PATH": f"{region['bin']}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "BACKUPS_DIR": str(region["backups"]),
+            "STATE_DIR": str(region["state"]),
+            "MEMORY_DIR": str(region["memory"]),
+            "SECRETS_DIR": str(region["secrets"]),
+            "WORKER_SECRET_DIR": str(region["worker-secret"]),
+            "PHEASANT_OWNER": f"{os.getuid()}:{os.getgid()}",
+            "PG_LIB_DIR": str(region["bin"] / "no-server-binaries"),
+            "PHEASANT_WRITERS": "",
+            "PHEASANT_SERVICES": "",
+            "FAKE_DB": str(region["db"]),
+            "FAKE_TABLES": str(region["tables"]),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def _backup(region: dict[str, Path]) -> str:
+    out = _run("backup.sh", region)
+    assert out.returncode == 0, out.stderr
+    [name] = [path.name for path in region["backups"].iterdir()]
+    assert name.startswith("pheasant-kb-")
+    return name
+
+
+@needs_bash
+def test_a_backup_holds_the_database_and_every_volume(region: dict[str, Path]) -> None:
+    name = _backup(region)
+    contents = sorted(path.name for path in (region["backups"] / name).iterdir())
+    assert contents == [
+        "SHA256SUMS",
+        "backup.txt",
+        "db.pgdump",
+        "memory.tar.gz",
+        "secrets.tar.gz",
+        "state.tar.gz",
+    ]
+    assert (region["backups"] / name / "db.pgdump").read_text() == "rows-v1\n"
+
+
+@needs_bash
+def test_restore_refuses_a_populated_stack_without_force(region: dict[str, Path]) -> None:
+    name = _backup(region)
+    out = _run("restore.sh", region, name)
+    assert out.returncode == 1
+    assert "already holds data in: database /state /memory" in out.stderr
+    assert (region["state"] / "vectors" / "v.lance").read_text() == "vectors-v1"
+
+
+@needs_bash
+def test_restore_with_force_brings_the_backup_back_and_keeps_what_it_replaced(
+    region: dict[str, Path],
+) -> None:
+    name = _backup(region)
+    region["db"].write_text("rows-v2\n", encoding="utf-8")
+    (region["state"] / "vectors" / "v.lance").write_text("vectors-v2", encoding="utf-8")
+    (region["memory"] / "m.md").write_text("memory-v2", encoding="utf-8")
+    for token in (region["secrets"] / "api-token", region["secrets"] / "worker-token"):
+        token.chmod(0o600)
+        token.write_text("rotated\n", encoding="utf-8")
+
+    out = _run("restore.sh", region, name, "--force")
+    assert out.returncode == 0, out.stderr
+
+    assert region["db"].read_text() == "rows-v1\n"
+    assert (region["state"] / "vectors" / "v.lance").read_text() == "vectors-v1"
+    assert (region["memory"] / "m.md").read_text() == "memory-v1"
+    assert _read(region["secrets"] / "api-token") == "token-v1"
+    assert _read(region["worker-secret"] / "worker-token") == "worker-v1"
+
+    [kept] = [p for p in region["backups"].iterdir() if p.name.startswith("pre-restore-")]
+    assert (kept / "db.pgdump").read_text() == "rows-v2\n"
+    [aside] = list(region["state"].glob(".replaced-*"))
+    assert (aside / "vectors" / "v.lance").read_text() == "vectors-v2"
+    [aside] = list(region["memory"].glob(".replaced-*"))
+    assert (aside / "m.md").read_text() == "memory-v2"
+
+
+@needs_bash
+def test_restore_refuses_a_backup_that_does_not_verify(region: dict[str, Path]) -> None:
+    name = _backup(region)
+    with (region["backups"] / name / "state.tar.gz").open("ab") as damaged:
+        damaged.write(b"\0")
+    out = _run("restore.sh", region, name, "--force")
+    assert out.returncode != 0
+    assert region["db"].read_text() == "rows-v1\n"
+    assert not list(region["state"].glob(".replaced-*"))
+
+
+@needs_bash
+def test_restore_into_an_empty_stack_needs_no_force(region: dict[str, Path]) -> None:
+    name = _backup(region)
+    for directory in ("state", "memory"):
+        shutil.rmtree(region[directory])
+        region[directory].mkdir()
+    region["tables"].write_text("0\n", encoding="utf-8")
+    region["db"].write_text("", encoding="utf-8")
+    out = _run("restore.sh", region, name)
+    assert out.returncode == 0, out.stderr
+    assert (region["state"] / "vectors" / "v.lance").read_text() == "vectors-v1"
+    assert not list(region["backups"].glob("pre-restore-*"))
+
+
+def test_backup_and_restore_are_on_demand_only() -> None:
+    services = _stack()["services"]
+    for name in ("backup", "restore"):
+        assert services[name]["profiles"] == ["tools"], name
+    backup_volumes = _volumes(services["backup"])
+    assert all(
+        volume.endswith(":ro") for volume in backup_volumes if not volume.endswith(":/backups")
+    ), "a backup reads the volumes it copies; it must not be able to change them"
+
+
+@pytest.mark.parametrize("command", ["backup", "restore"])
+def test_pheasant_backup_refuses_a_postgres_region(
+    tmp_path: Path, command: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It used to archive /state without the database and report success."""
+
+    from pheasant.cli import main
+
+    config = tmp_path / "pheasant.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "pheasant": {"state_path": str(tmp_path / "state")},
+                "storage": {"backend": "postgres", "dsn_env": "UNSET_FOR_THIS_TEST"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive = tmp_path / "out.tar.zst"
+    argv = (
+        ["backup", str(archive), "--config", str(config)]
+        if command == "backup"
+        else ["restore", str(archive), "--config", str(config)]
+    )
+    assert main(argv) == 2
+    assert "docker compose run --rm backup" in capsys.readouterr().err
+    assert not archive.exists()

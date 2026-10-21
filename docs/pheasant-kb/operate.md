@@ -17,6 +17,45 @@ Per-source progress (phase, rate, ETA, stalled) is in the UI's jobs tray and at
 [Monitor indexing](../how-to/monitor-indexing.md) explains what to watch, and
 [Scale up or down](scale.md) which number to move when one of them is high.
 
+## Where the images come from
+
+pheasant-kb runs three images, from two registries:
+
+| Image | Registry | Built from | Used by |
+|---|---|---|---|
+| `ghcr.io/esatt10/pheasant:<version>` | GitHub Container Registry | This repository's `Dockerfile` | `api`, `graph`, `indexer`, `worker`, `logger` and the three init services |
+| `timescale/timescaledb-ha:pg17` | Docker Hub | Timescale; Postgres 17 with the `pg_textsearch` extension | `postgres`, `backup`, `restore` |
+| `nats:2.10-alpine` | Docker Hub | The NATS project | `nats` |
+
+`docker compose up` pulls each from its own registry; nothing needs a login.
+Two things to know:
+
+- **Docker Hub limits anonymous pulls** per IP address. On a shared network or
+  a CI runner a first start can fail with `429 Too Many Requests`;
+  `docker login` with any free Docker Hub account raises the limit.
+- **The pheasant image is published for `linux/amd64`.** On Apple Silicon,
+  Docker Desktop runs it under emulation, which works but is slower. Building
+  locally gives a native image: `docker compose build`.
+
+### When a new pheasant image is published
+
+Every merge to `main` publishes one, automatically, once CI passes on the
+merged commit (`.github/workflows/container.yml`):
+
+1. CI runs on the merge commit.
+2. If it is green, the workflow builds the `Dockerfile` and pushes
+   `ghcr.io/esatt10/pheasant:<next version>` and `:latest` (and the
+   `pheasant-ui` image under the same version).
+3. It reads the tags back from the registry to confirm they are live.
+4. Only then does it commit `chore: release <version>` to `main`, rewriting the
+   image tag in `compose.yaml` and every other deployment file
+   (`scripts/sync_version.py`).
+
+So pheasant-kb itself is not an image: it is `compose.yaml` and its config in
+this repository, pinned to the image of the release it was committed with. A
+red CI on a merge publishes nothing, and the workflow run fails and names the
+commit. The next green merge publishes `main`'s head, including that commit.
+
 ## Upgrade
 
 Each release updates the image tag that `compose.yaml` names, so an upgrade is
@@ -38,33 +77,61 @@ you keep a config copy, compare it with the new
 
 ## Back up and restore
 
-Your data is in two volumes that must be copied together: the Postgres database
-and `/state`, where the vectors and graph snapshots live. Stop the indexer
-first, so neither moves during the copy:
+One command backs up everything a pheasant-kb stack holds: the Postgres
+database, `/state` (vectors, graph snapshots, images, uploads), agent memory
+and the four tokens.
 
 ```bash
-mkdir -p backups
-docker compose stop indexer
-docker compose exec -T postgres pg_dump -U pheasant -Fc pheasant > backups/pheasant.pgdump
-docker compose run --rm --no-deps --user 0 -v "$PWD/backups:/backups" \
-  --entrypoint tar indexer -czf /backups/state.tar.gz -C /state .
-docker compose start indexer
+docker compose stop indexer && docker compose run --rm backup && docker compose start indexer
 ```
 
-Add the `pheasant-memory` volume the same way if agents write memory
-(`-C /memory`), and `pheasant-secrets` if you want the tokens to survive a
-rebuild. To restore into an empty stack:
+Each backup is a folder in `./backups` (set `PHEASANT_BACKUP_PATH` in `.env`
+to put them elsewhere), named by time, for example
+`pheasant-kb-20261021T203120Z`, holding `db.pgdump`, `state.tar.gz`,
+`memory.tar.gz`, `secrets.tar.gz` and a `SHA256SUMS` file. A backup that fails
+half way leaves no folder, so one that exists is complete.
+
+Stopping the indexer is what makes the database and `/state` an exact pair.
+Without it the backup still runs, warns, and is usable: after restoring it,
+run a repair sync, which reconciles vectors with the chunks the database
+holds:
 
 ```bash
-docker compose up -d postgres
-docker compose exec -T postgres pg_restore -U pheasant -d pheasant --clean --if-exists < backups/pheasant.pgdump
-docker compose run --rm --no-deps --user 0 -v "$PWD/backups:/backups" \
-  --entrypoint tar indexer -xzf /backups/state.tar.gz -C /state
+docker compose stop indexer && docker compose run --rm --no-deps indexer repair -c /config/pheasant.yaml && docker compose start indexer
+```
+
+To restore:
+
+```bash
+docker compose stop api graph indexer logger worker
+docker compose run --rm restore pheasant-kb-20261021T203120Z --force
 docker compose up -d
 ```
 
-`pheasant backup` and `pheasant restore` cover the single-container,
-SQLite-backed deployment; see [Backup & restore](../how-to/backup-restore.md).
+`restore` is safe by default:
+
+- It checks every file against `SHA256SUMS` before touching anything.
+- It refuses while any pheasant service is still running.
+- It refuses a stack that already holds data unless you pass `--force`. Even
+  then nothing is deleted: the current database is dumped to
+  `backups/pre-restore-<time>/`, and the current `/state` and `/memory`
+  contents are moved into a `.replaced-<time>` folder on their own volumes.
+  Remove those once the restored stack checks out.
+- The database is restored in one transaction, so a failed restore leaves it
+  as it was.
+
+Run `docker compose run --rm restore` with no name to list the backups it can
+see. A token set in `.env` still replaces the restored one on the next start.
+
+Both commands run in the Postgres image, so `pg_dump` always matches the
+server's version, and neither runs on `docker compose up`. Their scripts are
+`deploy/compose/backup.sh` and `deploy/compose/restore.sh`. Copy the
+`backups` folder off the machine to make it a backup in any useful sense.
+
+`pheasant backup` and `pheasant restore` are for the single-container,
+SQLite-backed deployment ([Backup & restore](../how-to/backup-restore.md)).
+On a Postgres region they refuse and point here, rather than writing an
+archive without the database.
 
 ## Rotate a token
 
@@ -125,6 +192,7 @@ root. Starting fresh under the new names instead means a full re-index.
 | The UI shows **Connect API**, or requests return `401` | Paste the API token: `docker compose exec api cat /run/pheasant/secrets/api-token`. |
 | MCP returns `421 Misdirected Request` | The client reached the stack under a hostname missing from `server.api.cors_origins`. Add the origin in your config copy. |
 | A service restarts during a large sync | Usually out of memory. `docker inspect --format '{{.State.OOMKilled}}' <container>` confirms it; raise that service's `*_MEMORY` ([Scale](scale.md)). |
+| A pull fails with `429 Too Many Requests` | Docker Hub's anonymous limit, on the `postgres` or `nats` image. `docker login`, then `docker compose up -d` again. |
 | `range of CPUs is from 0.01 to N` on start | A `*_CPUS` value exceeds the host's cores. Lower it in `.env`. |
 | The indexer logs `429` from OpenAI | Your rate limit. Lower `sync.concurrency.max_parallel_embeddings`. |
 | A sync stays `awaiting_claim` in `GET /queue` | The indexer is not running or not healthy: `docker compose ps indexer`, then its logs. |
