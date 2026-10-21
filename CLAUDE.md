@@ -190,7 +190,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 170 pytest modules, offline by design
+└── tests/                     ← 171 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1195,6 +1195,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
   content-addressed media store so a replica with no source mount can show
   them; `[fig:n]` is verified like `[n]`.
+- **Math is TeX, typeset in the UI** (`ui/src/util/math.ts`, KaTeX). It is
+  tokenized *inside* `marked` (or `$a_1 * b_2$` is emphasis) into an empty
+  `data-tex` placeholder, and typeset only *after* DOMPurify, because KaTeX
+  needs the `style` attributes the document views forbid for file content;
+  `trust: false` refuses `\href` and friends. Chat answers, the Markdown and
+  notebook views and the node inspector share it. `chat.needs_math` (a TeX
+  delimiter or command in a passage, or a question asking for an equation)
+  has `build_prompt` put `MATH_RULE` before the question — the one place
+  every answering path passes the evidence — and is otherwise absent, so
+  every other prompt is byte-identical (the diagram prompt opts out); `replies` doubles a backslash JSON
+  does not define, so `"\alpha"` in a combined reply is TeX, not a refusal.
+  `tests/test_answer_math.py`.
 - **MCP Apps.** The three assistant tools declare
   `ui://pheasant/knowledge-view.html` (`text/html;profile=mcp-app`); the web UI
   hosts the same file in `sandbox="allow-scripts"` and speaks the host half of

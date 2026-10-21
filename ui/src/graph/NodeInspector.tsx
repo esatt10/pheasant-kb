@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { marked } from "marked";
+import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import { api } from "../api/client";
+import { mathExtension, renderMath } from "../util/math";
 import type { GraphLink, GraphNode } from "../api/types";
 import { colorForNode } from "./graphStyles";
 
@@ -32,9 +33,11 @@ const MARKDOWN_TYPES = new Set(["markdown_note", "document", "memory_record"]);
  * `marked` is deliberately run with no HTML passthrough of its own and the
  * result is sanitized before it reaches dangerouslySetInnerHTML.
  */
+const markdown = new Marked(mathExtension, { gfm: true, breaks: false });
+
 function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { async: false, gfm: true, breaks: false }) as string;
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  const html = markdown.parse(text, { async: false }) as string;
+  return renderMath(DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }));
 }
 
 const CONTENT_TYPES = new Set(["file", "document", "markdown_note", "memory_record", "chunk"]);

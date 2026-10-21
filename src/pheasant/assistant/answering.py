@@ -121,7 +121,7 @@ def _diagram(
         question,
         citations,
         llm,
-        prompt=build_prompt(question, citations, facts, documents),
+        prompt=build_prompt(question, citations, facts, documents, math_notation=False),
         kind=kind,
         evidence=evidence,
     )

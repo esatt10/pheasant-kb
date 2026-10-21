@@ -4,13 +4,15 @@ import type { Tokens } from "marked";
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 import type { Figure } from "../api/types";
+import { mathExtension, renderMath } from "../util/math";
 import { FigureImage } from "./FigureImage";
 
 /**
  * Render the assistant's Markdown while keeping citation markers connected to
  * the source strip. Markdown is model-authored, so its HTML is sanitized before
  * it reaches the DOM; raw HTML and remote images are not part of the answer
- * format.
+ * format. TeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) is typeset after
+ * sanitizing (`util/math`).
  */
 export function AnswerBody({
   text,
@@ -23,7 +25,7 @@ export function AnswerBody({
   figures?: Figure[];
   onFigure?: (figure: Figure) => void;
 }) {
-  const renderer = useMemo(() => new Marked(markdownOptions), []);
+  const renderer = useMemo(() => new Marked(mathExtension, markdownOptions), []);
   return <>{renderBlocks(text, onCite, figures, onFigure, renderer)}</>;
 }
 
@@ -95,9 +97,11 @@ function renderBlocks(
     const flush = (suffix: string) => {
       const source = prose.join("\n");
       if (source.trim()) {
-        const html = DOMPurify.sanitize(parser.parse(source, { async: false }), {
-          USE_PROFILES: { html: true },
-        });
+        const html = renderMath(
+          DOMPurify.sanitize(parser.parse(source, { async: false }), {
+            USE_PROFILES: { html: true },
+          }),
+        );
         out.push(
           <div
             className="answer-markdown"

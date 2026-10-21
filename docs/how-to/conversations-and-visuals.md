@@ -395,6 +395,38 @@ passages and says it was drawn rather than found.
 Bytes are served by `GET /media?node_id=…` and the MCP `get_image` tool, under
 the same read check as every other content operation.
 
+## Mathematics
+
+The web UI typesets TeX with KaTeX wherever it renders Markdown: chat answers,
+the Markdown and notebook views of the document viewer, and the graph's node
+inspector. A formula a document carries is rendered when the document is
+opened, and one an answer writes is rendered in the chat.
+
+| Delimiters | Rendered as |
+|---|---|
+| `$…$`, `\(…\)` | inline |
+| `$$…$$`, `\[…\]` | displayed — on a line of its own, or inside a sentence |
+| `\begin{align}…\end{align}` (also `equation`, `gather`, `multline`, …) on its own lines | displayed, numbered as KaTeX numbers them |
+
+A `$` opens math only before a non-space and closes it only after one, with no
+digit following, so "costs $5 and $10" stays prose; `\$` is always a literal
+dollar, and code spans and fenced blocks are never typeset. A formula KaTeX
+cannot parse is shown as its source, in red.
+
+When the question asks for an equation, a derivation or a proof, or a passage
+the model reads carries TeX, the answering prompt gains one rule: write
+mathematics in these delimiters and copy a passage's formula as written. Every
+other question is sent the prompt it always was. TeX in a JSON reply written
+with single backslashes (`"\alpha"`, which is not valid JSON) is read as the
+TeX the model meant.
+
+KaTeX runs untrusted: `\href`, `\url`, `\includegraphics` and the `\html…`
+commands are refused, and math is typeset only *after* the page's HTML is
+sanitized, so a formula cannot add a link, fetch anything or carry markup.
+Text extracted from a PDF holds its formulas as glyphs, not TeX, so those
+passages show as text. The MCP App view (`knowledge_view.html`) shows TeX as
+written.
+
 ## MCP Apps
 
 `ask_knowledge_base`, `create_visual` and `get_image` each declare

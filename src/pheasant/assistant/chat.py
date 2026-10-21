@@ -164,6 +164,49 @@ line of its own. Only use the listed numbers, and never describe an image \
 beyond its caption."""
 
 
+MATH_RULE = """\
+MATH: write mathematics as LaTeX — $...$ inline and $$...$$ on a line of its \
+own for a displayed equation — and copy a formula from a passage exactly as \
+it is written there. Never put a citation marker inside the math."""
+
+# What makes a question or a passage mathematical: TeX math delimiters, a
+# display environment, or a common TeX command; or a question asking for an
+# equation. Spans are bounded so a document full of unclosed openers costs a
+# linear scan. Deliberately narrow — the rule joins the prompt only when it
+# applies, so every other prompt stays the one pheasant has always sent.
+_MATH_TEXT_RE = re.compile(
+    r"\$\$.{1,2000}?\$\$|\\\(.{1,500}?\\\)|\\\[.{1,2000}?\\\]"
+    r"|\\begin\{(?:equation|align|gather|multline)"
+    r"|\$(?=[^$\s])[^$\n]*?\\(?:frac|sum|int|sqrt|alpha|beta|theta|lambda|sigma|mu|pi|partial"
+    r"|nabla|mathbf|mathrm|cdot|times|leq|geq|infty)[^$\n]*?\$",
+    re.DOTALL,
+)
+_MATH_QUESTION_RE = re.compile(
+    r"\b(?:equations?|formulas?|formulae|derivations?|derive|proofs?|prove|theorems?|lemmas?"
+    r"|integrals?|derivatives?|latex|tex|math(?:ematical|s)?)\b",
+    re.IGNORECASE,
+)
+
+
+def needs_math(question: str, citations: list[dict], documents: dict | None = None) -> bool:
+    """Whether the answer is likely to need mathematics, read without a call.
+
+    True when the question asks for an equation or a proof, or a passage the
+    model will read (a whole document where one was hydrated, else the
+    snippet) carries TeX math. Decides whether ``build_prompt`` adds
+    ``MATH_RULE``.
+    """
+    if _MATH_QUESTION_RE.search(question or ""):
+        return True
+    documents = documents or {}
+    for citation in citations:
+        document = documents.get(citation.get("index"))
+        text = getattr(document, "text", None) or citation.get("snippet") or ""
+        if _MATH_TEXT_RE.search(text):
+            return True
+    return False
+
+
 def system_prompt_for(
     intent: str | None, depth: str | None = None, figures: bool = False, form: str | None = None
 ) -> str:
@@ -656,6 +699,7 @@ def build_prompt(
     *,
     history_text: str = "",
     figures: list[dict] | None = None,
+    math_notation: bool = True,
 ) -> str:
     """Numbered passages + graph facts + the question.
 
@@ -667,7 +711,11 @@ def build_prompt(
 
     ``history_text`` (earlier turns, ``assistant.conversation``) leads the
     prompt and ``figures`` follow the facts; with neither, the prompt is
-    byte-identical to the one pheasant has always sent.
+    byte-identical to the one pheasant has always sent. ``MATH_RULE`` precedes
+    the question when ``needs_math`` says the answer will need it — here
+    rather than in the system prompt because this is the one function every
+    answering path calls with the question and the evidence. A caller whose
+    output is not typeset (a diagram's labels) passes ``math_notation=False``.
     """
     documents = documents or {}
     lines = [history_text] if history_text else []
@@ -711,6 +759,8 @@ def build_prompt(
                 f"{described} (shown in {where})"
             )
         lines.append("")
+    if math_notation and needs_math(question, citations, documents):
+        lines += [MATH_RULE, ""]
     lines.append(f"Question: {question}")
     return "\n".join(lines)
 

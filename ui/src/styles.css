@@ -917,6 +917,28 @@ select.text-input {
   max-width: 100%;
 }
 
+/* Typeset math (`util/math.ts`). A displayed equation scrolls inside itself
+   for the same reason a code block does. */
+.math--display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.math--display .katex-display {
+  margin: 0.6em 0;
+}
+
+.math .katex {
+  font-size: 1.08em;
+}
+
+.math .katex-error,
+.math-error {
+  color: var(--danger);
+}
+
 .answer-code code {
   display: block;
   background: none;

@@ -22,6 +22,11 @@ from typing import Any
 _THINK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE)
 _FENCE_RE = re.compile(r"```[A-Za-z0-9_-]*\s*\n?(.*?)```", re.DOTALL)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+# A backslash JSON does not define an escape for: TeX written into a string
+# value with single backslashes (``"\alpha"``, ``"\sum"``), which is how a
+# model answering with mathematics writes it. Doubled, it reads as the TeX the
+# model meant; strict parsing would reject the whole reply.
+_INVALID_ESCAPE_RE = re.compile(r'(?<!\\)\\(?!["\\/bfnrtu])')
 
 
 def json_object(raw: str | None) -> dict[str, Any] | None:
@@ -52,7 +57,8 @@ def _objects_in(text: str) -> list[dict[str, Any]]:
 
     text = text.strip()
     found: list[dict[str, Any]] = []
-    for attempt in (text, _TRAILING_COMMA_RE.sub(r"\1", text)):
+    lenient = _TRAILING_COMMA_RE.sub(r"\1", text)
+    for attempt in (text, lenient, _INVALID_ESCAPE_RE.sub(r"\\\\", lenient)):
         if found:
             break
         decoder = json.JSONDecoder()
