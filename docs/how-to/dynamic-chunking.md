@@ -33,7 +33,7 @@ sync:
 ```
 
 **It is the default in every shipped fleet profile** — `deploy/compose/fleet.yaml`
-(and the `scalable`/`pheasant-lab` answer files it is generated from) and
+(and the `scalable`/`pheasant-kb` answer files it is generated from) and
 `deploy/kubernetes/scaled/configmap.yaml` — and not in any single-container
 profile, which keeps `fixed`.
 

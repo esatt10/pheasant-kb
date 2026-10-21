@@ -2,7 +2,7 @@
 
 Off by default (``search.vector_store.ann_index: none``), because it trades
 recall for latency and a region should choose that knowingly. Measured on the
-pheasant-lab stack (60,509 x 1536-d, one core), against an exact scan's 245 ms:
+pheasant-kb stack (60,509 x 1536-d, one core), against an exact scan's 245 ms:
 
 ==========================  ========  ===========  ===========
 index, query setting        build     k=40         k=300

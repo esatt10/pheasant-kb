@@ -130,6 +130,32 @@ cpu_quota_threads() {
     echo "$threads"
 }
 
+# Secrets as files: the `NAME_FILE` convention the postgres image made
+# standard. For every `NAME_FILE` in the environment, NAME is exported from
+# that file's contents, unless NAME is already set to something non-empty,
+# which wins. This is what lets the pheasant-kb stack (compose.yaml) generate
+# its four tokens into volumes on first boot instead of asking a person for
+# them, and lets Kubernetes or Swarm hand any key over as a mounted file.
+# An unreadable file is reported and skipped rather than fatal: the server's
+# own startup refusal then names the variable it is missing, which is the
+# more useful error.
+load_file_secrets() {
+    for secret_name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)_FILE=.*$/\1/p'); do
+        eval "secret_current=\${$secret_name:-}"
+        [ -n "$secret_current" ] && continue
+        eval "secret_path=\${${secret_name}_FILE}"
+        if [ -r "$secret_path" ]; then
+            secret_value=$(cat "$secret_path")
+            export "$secret_name=$secret_value"
+        else
+            echo "pheasant: ${secret_name}_FILE names $secret_path, which is not readable; $secret_name stays unset." >&2
+        fi
+    done
+    unset secret_name secret_current secret_path secret_value
+}
+
+load_file_secrets
+
 if blas_threads=$(cpu_quota_threads); then
     : "${OPENBLAS_NUM_THREADS:=$blas_threads}" "${OMP_NUM_THREADS:=$blas_threads}"
     : "${MKL_NUM_THREADS:=$blas_threads}" "${LANCE_CPU_THREADS:=$blas_threads}"

@@ -1,5 +1,11 @@
 # Set pheasant up
 
+!!! tip "pheasant-kb is the default deployment"
+    pheasant-kb ships a ready configuration and needs no wizard; to change it,
+    see [Configure pheasant-kb](../pheasant-kb/configure.md). The wizard below
+    builds a configuration for any other shape.
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 There are three ways in, and none of them require you to write YAML by hand.
 
 ## 1. One line, no config at all

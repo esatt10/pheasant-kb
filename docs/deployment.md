@@ -1,5 +1,11 @@
 # Deployment
 
+!!! tip "pheasant-kb is the default deployment"
+    Most people run pheasant as **pheasant-kb**, `compose.yaml` at the repository
+    root. This page covers the other shapes: one container, custom Compose
+    files, Kubernetes and Helm.
+    Start with [Run pheasant-kb](pheasant-kb/index.md).
+
 pheasant is packaged as one container image and can run locally, with Docker Compose, in Docker Desktop Kubernetes, or in enterprise Kubernetes.
 
 ## Local Docker

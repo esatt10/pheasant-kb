@@ -1,6 +1,6 @@
 ---
 name: pheasant-deploy
-description: Configure, deploy, validate, troubleshoot, or scale Pheasant locally from a blank canvas or the repository's small, advanced, and fleet presets. Use when an IDE agent is asked to set up Pheasant, select or modify a deployment profile, configure Docker Compose, enable MCP/vector/agentic/memory/PostgreSQL/NATS/gRPC/WASM features, connect an agent, verify repository URL synchronization, or diagnose startup and indexing health.
+description: Configure, deploy, validate, troubleshoot, or scale Pheasant, starting from pheasant-kb (the default stack, `compose.yaml` at the repository root) or, when asked for something smaller, a blank canvas or the small, advanced and fleet presets. Use when an IDE agent is asked to set up Pheasant, select or modify a deployment profile, configure Docker Compose, enable MCP/vector/agentic/memory/PostgreSQL/NATS/gRPC/WASM features, connect an agent, verify repository URL synchronization, or diagnose startup and indexing health.
 ---
 
 # Deploy Pheasant
@@ -10,19 +10,51 @@ Treat configuration as generated data and deployment state as user data.
 ## Establish context
 
 1. Read `AGENTS.md`, then `CLAUDE.md`.
-2. Read `docs/how-to/setup.md` for configuration work.
-3. Read `deploy/compose/README.md` for Docker profiles.
+2. Read `docs/pheasant-kb/index.md`: pheasant-kb is the default deployment
+   and the reference every other guide is written against.
+3. Read `docs/how-to/setup.md` for configuration work and
+   `deploy/compose/README.md` for the other Docker profiles.
 4. Read only the task-specific guide afterward:
    - sources or repository URLs: `docs/how-to/sources.md`
    - MCP attachment: `docs/how-to/attach-to-coding-agent.md`
    - indexing progress: `docs/how-to/monitor-indexing.md`
-   - scaling: `docs/how-to/worker-fleet.md` and `docs/how-to/capacity-planning.md`
+   - configuring pheasant-kb: `docs/pheasant-kb/configure.md`
+   - scaling: `docs/pheasant-kb/scale.md`, then `docs/how-to/worker-fleet.md`
+     and `docs/how-to/capacity-planning.md`
+   - upgrades, backups, resets: `docs/pheasant-kb/operate.md`
    - failures: `docs/troubleshooting.md`
 
 Inspect the current worktree and running containers before changing either.
 Preserve unrelated local changes and existing volumes.
 
 ## Choose one route
+
+### pheasant-kb (default)
+
+Use it unless the user asks for something smaller, has no OpenAI key, or
+cannot run several containers:
+
+```bash
+test -f .env || cp .env.example .env    # then set OPENAI_API_KEY
+docker compose config --quiet
+docker compose up -d
+```
+
+It needs only `OPENAI_API_KEY`: `secrets-init` generates the four distinct
+tokens into volumes on first boot and keeps them. The API token for the UI and
+MCP clients is read with
+`docker compose exec api cat /run/pheasant/secrets/api-token`; never print it
+into a commit or a shared log. Size every service through the variables in
+the root `.env.example` (`PHEASANT_WORKERS`, `PHEASANT_INDEXER_MEMORY`, ...)
+rather than by editing `compose.yaml`. To change behaviour, copy
+`deploy/compose/pheasant-kb.yaml`, set `PHEASANT_KB_CONFIG` to the copy and
+recreate the pheasant services. Host folders mount under `/data` through a
+gitignored `compose.override.yaml`.
+
+An existing stack named `pheasant-lab` holds its data in `pheasant-lab_*`
+volumes under knowledge base `pheasant-lab`. Keep it with
+`COMPOSE_PROJECT_NAME=pheasant-lab` and its own config in `.env`; never start
+it under the new names without saying that means a full re-index.
 
 ### Blank canvas
 
@@ -58,10 +90,12 @@ Select the smallest adequate preset:
   LanceDB and gRPC preparation workers using `fleet.yaml` and `worker.yaml`.
 
 For advanced or fleet deployments, require `OPENAI_API_KEY` in `.env`. The
-fleet additionally requires a real `POSTGRES_PASSWORD` and three *distinct*
-long random values — `PHEASANT_API_TOKEN` (callers to the API),
-`PHEASANT_GRAPH_SERVICE_TOKEN` (API replicas to the internal graph API) and
-`PHEASANT_INDEX_WORKER_TOKEN` (the indexer to the preparation workers). Never
+generic fleet additionally requires a real `POSTGRES_PASSWORD` and four
+*distinct* long random values — `PHEASANT_API_TOKEN` (callers to the API),
+`PHEASANT_GRAPH_SERVICE_TOKEN` (API replicas to the internal graph API),
+`PHEASANT_INDEX_WORKER_TOKEN` (the indexer to the preparation workers) and
+`PHEASANT_INGESTION_SERVICE_TOKEN` (API replicas to the indexer's landing
+service). Never
 reuse one value across two of them: workers are the least-trusted tier and
 hold the third by necessity, and a serving process refuses to start when the
 graph and worker tokens match. Never print or place secret values in YAML,
@@ -76,18 +110,19 @@ docker compose --env-file .env \
   -f deploy/compose/docker-compose.advanced.yml up -d --build
 ```
 
-Start the fleet and scale the CPU preparation path:
+Start the generic fleet and scale the CPU preparation path:
 
 ```bash
 docker compose --env-file .env \
   -f deploy/compose/docker-compose.scale.yml config --quiet
 docker compose --env-file .env \
   -f deploy/compose/docker-compose.scale.yml up -d --build \
-  --scale indexer=4 --scale worker=8
+  --scale indexer=1 --scale worker=8
 ```
 
-Scale indexers for multiple concurrently queued sources and gRPC workers for
-parsing/chunking. Do not claim that workers accelerate OpenAI embeddings; the
+Scale gRPC workers for parsing/chunking. Extra indexers are hot standbys, not
+throughput: one indexer is the commit authority per knowledge base, and past
+its ceiling the answer is a shard. Do not claim that workers accelerate OpenAI embeddings; the
 provider's RPM/TPM quota bounds that phase.
 
 ## Configure a custom preset
@@ -121,10 +156,10 @@ curl -fsS http://127.0.0.1:8765/jobs
 ```
 
 Inspect service logs when readiness, queue depth or indexing progress stalls.
-Report the selected profile, config path, Compose path, UI URL
+Report the selected profile (pheasant-kb unless another was chosen), config path, Compose path, UI URL
 `http://127.0.0.1:8765`, MCP URL `http://127.0.0.1:8765/mcp`, required unset
 environment variable names, health state and any remaining validation failure.
 
-Never run `deploy/compose/docker-compose.fresh.yml`, remove a named volume, or replace an
+Never run `deploy/compose/docker-compose.fresh.yml` or `docker compose down -v`, remove a named volume, or replace an
 existing state directory unless the user explicitly requests a reset and the
 exact targets have been inspected first.
