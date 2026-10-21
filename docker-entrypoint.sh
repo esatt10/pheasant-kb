@@ -72,8 +72,16 @@ ensure_config() {
 
     # `--accept-defaults` asks nothing and reads every default off the live
     # schema, so this stays correct as the schema changes.
+    #
+    # A container with no config mounted is one process on its own: the
+    # `docker run` path, never pheasant-kb (whose compose.yaml mounts its
+    # config). pheasant-kb's configuration needs Postgres, NATS and a worker
+    # tier this container does not have, so the config written here is built
+    # on the standalone table (SQLite, no queue, no key) and records that,
+    # unless PHEASANT_DEFAULTS asks for something else.
     if [ -n "$answers_file" ]; then
-        if python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" \
+        if PHEASANT_DEFAULTS="${PHEASANT_DEFAULTS:-standalone}" \
+                python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" \
                 --answers "$answers_file" >/dev/null; then
             rm -f "$answers_file"
             return 0
@@ -81,7 +89,8 @@ ensure_config() {
         rm -f "$answers_file"
         return 1
     fi
-    python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" >/dev/null
+    PHEASANT_DEFAULTS="${PHEASANT_DEFAULTS:-standalone}" \
+        python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" >/dev/null
 }
 
 # Index the workspace when something is actually mounted there. An empty

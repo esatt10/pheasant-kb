@@ -16,6 +16,7 @@ data:
   pheasant.yaml: |
     pheasant:
       name: k8s-pheasant
+      defaults: standalone
       environment: kubernetes
       log_level: INFO
       state_path: /state

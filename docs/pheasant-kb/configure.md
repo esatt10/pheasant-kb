@@ -41,7 +41,12 @@ data already indexed is stored under it.
     from the Config page fails. Edit the file instead. Tuning bundles are
     different: they live in the database, and the Tuning page applies them.
 
-Every key is documented in the [configuration reference](../configuration.md).
+Your copy only needs the keys you change. `pheasant-kb.yaml` is pheasant's
+default configuration written out in full, so a copy holding just
+`assistant: {model: gpt-6-sol}` is pheasant-kb with a different model. Every
+other key is documented in the [configuration reference](../configuration.md),
+and [Defaults](../configuration.md#defaults-pheasant-kb-or-standalone) lists
+what pheasant-kb sets.
 The sections below describe what pheasant-kb sets and the changes people
 usually make.
 

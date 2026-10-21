@@ -1,5 +1,6 @@
 {
   "pheasant.name": "pheasant-local-small",
+  "pheasant.defaults": "standalone",
   "pheasant.description": "Offline-first local Pheasant profile for a laptop or small corpus",
   "pheasant.environment": "local",
   "pheasant.log_level": "INFO",

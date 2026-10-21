@@ -77,6 +77,7 @@ def _config(root: Path, docs: Path, queries: int) -> Any:
         {
             "pheasant": {
                 "name": "capacity",
+                "defaults": "standalone",
                 "state_path": str(root / "state"),
                 "workspace_root": str(root),
                 "exports_path": str(root / "exports"),

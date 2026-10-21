@@ -1,5 +1,6 @@
 pheasant:
   name: pheasant-local-small
+  defaults: standalone
   description: Offline-first local Pheasant profile for a laptop or small corpus
   environment: local
   log_level: INFO

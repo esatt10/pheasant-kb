@@ -23,6 +23,9 @@ services:
       - "${PHEASANT_BIND:-127.0.0.1}:${PHEASANT_PORT:-8765}:8765"
     environment:
       PHEASANT_CONFIG: /config/pheasant.yaml
+      # One container: SQLite, no queue, no workers. pheasant's default
+      # configuration is pheasant-kb's (compose.yaml at the repository root).
+      PHEASANT_DEFAULTS: standalone
       # Keep the image entrypoint from treating this source checkout as the
       # initial corpus. Sources are intentionally configured in the web UI.
       PHEASANT_WORKSPACE: /ui-managed-sources

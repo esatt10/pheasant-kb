@@ -11,6 +11,9 @@ services:
       - "${PHEASANT_BIND:-127.0.0.1}:${PHEASANT_PORT:-8765}:8765"
     environment:
       PHEASANT_CONFIG: /config/pheasant.yaml
+      # One container: SQLite, no queue, no workers. pheasant's default
+      # configuration is pheasant-kb's (compose.yaml at the repository root).
+      PHEASANT_DEFAULTS: standalone
       # Keep first boot source-free; add paths or URLs from the UI/MCP.
       PHEASANT_WORKSPACE: /ui-managed-sources
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

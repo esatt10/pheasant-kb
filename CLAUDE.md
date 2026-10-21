@@ -298,14 +298,22 @@ their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
    format + lint, pytest, Python ≥ 3.11, type hints.
 6. **Never import pheasant-flock.** The Synapse boundary is contract JSON over
    HTTP. Never hand-edit vendored files under `contracts/`.
-7. **Standalone mode is sacred.** Every change must leave a router-less,
-   infrastructure-free pheasant fully functional. Postgres, gRPC, the broker
-   and the role split are *selectable backends*; SQLite, HTTP, no queue and
-   `--role all` are the defaults, and each seam owes a test asserting the
-   no-infrastructure path is unchanged. This is about the **code's** defaults.
-   The *documented* default deployment is pheasant-kb (`compose.yaml`), which
-   selects those backends in its config; it does not change what the schema
-   defaults to, and the single container must keep working with no key.
+7. **The defaults are pheasant-kb's; standalone stays one switch away.**
+   An unset key takes pheasant-kb's value (`config/flagship.py`, pinned to
+   `deploy/compose/pheasant-kb.yaml`): Postgres, NATS, the role split, gRPC
+   workers, OpenAI models. The values written in `schema.py` are the
+   **standalone** table (SQLite, no queue, `--role all`, offline stubs, no
+   key), selected by `pheasant.defaults: standalone` or
+   `PHEASANT_DEFAULTS=standalone`, and every change must leave it fully
+   functional, router-less and infrastructure-free: the offline suite runs on
+   it (`conftest.py`), each seam owes a test asserting that path is
+   unchanged, and anything that builds a one-process deployment (`pheasant
+   up`, `pheasant init`, the image's first-boot config) builds on it. Every config this repo
+   ships names its table (`tests/test_flagship_defaults.py` fails one that
+   does not), because a partial config that names none silently becomes a
+   pheasant-kb config. `PheasantConfig()` is always standalone (a dataclass
+   constructor cannot consult a table); "the default" is
+   `PheasantConfig.default()` or `model_validate`.
 8. **The MCP tool surface is public API.** Renaming or removing a tool breaks
    deployed agents — additive evolution only, deprecate before remove. One
    sanctioned exception to date: `export_obsidian_notes` was removed outright
@@ -1342,7 +1350,15 @@ without the database and report success. Images: pheasant from GHCR
 (published by `container.yml` on every green merge to main, which then
 rewrites `compose.yaml`'s pin), Postgres and NATS from Docker Hub.
 `docker-compose.scale.yml` + `fleet.yaml` stay as the generic fleet the CI
-smoke tests run; do not grow a third copy of the topology.
+smoke tests run; do not grow a third copy of the topology. **Its config is
+also the code's default** (rule 7): `config/flagship.py` lays
+`FLAGSHIP_DEFAULTS` under every `model_validate` unless the config or
+`PHEASANT_DEFAULTS` says `standalone`, records the resolved table on
+`pheasant.defaults` so a dump reloads on it, and the layered loader picks the
+file's table *before* dumping a base (a standalone file over a flagship dump
+inherited every flagship value). `docs/configuration.md`'s defaults table is
+generated (`defaults_table()`) and tested. A test or script that builds its
+own region names `defaults: standalone`; the benchmarks do.
 
 ### Scale
 
@@ -1366,8 +1382,10 @@ set rather than about every replica's.
 Selectable backends, dependency-free side first: `storage.backend`
 sqlite|postgres, `sync.queue.backend` off|local|nats,
 `sync.concurrency.worker_transport` http|grpc,
-`observability.interactions.queue.backend` off|local|nats. Two exceptions,
-both deliberate. `storage.graph_format` defaults to `rows`, the side that is
+`observability.interactions.queue.backend` off|local|nats. The first of each
+is the standalone table's value and the second pheasant-kb's, which is the
+default (rule 7). Within the standalone table, two exceptions, both
+deliberate. `storage.graph_format` defaults to `rows`, the side that is
 *better*, because both sides need the same state store and neither adds a
 dependency — the rule is about not requiring infrastructure, not about
 preferring the older mechanism. And `storage.lexical_index` defaults to
