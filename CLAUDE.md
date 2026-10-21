@@ -108,8 +108,13 @@ pheasant-kb/
 │   │                            extractor (7 doc formats), notebook
 │   │                            (.ipynb as its cells), okf (OKF
 │   │                            frontmatter, per file), captioner,
-│   │                            transcriber, office, msdoc, media (image
-│   │                            bytes, content-addressed under /state)
+│   │                            transcriber, office, msdoc, docx_text,
+│   │                            media (image bytes, content-addressed
+│   │                            under /state); equations as LaTeX:
+│   │                            omml (Word math), pdf_objects + pdf_glyphs
+│   │                            (the builtin reader's glyphs), pdf_math +
+│   │                            pdf_regions (what on a page is math),
+│   │                            math_layout (geometry to TeX), tex_symbols
 │   ├── graph/                 ← model, simple (the indexer's working set),
 │   │                            retraction (what re-indexing a file takes
 │   │                            back: stale chunks, embeds, imports, calls,
@@ -190,7 +195,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 170 pytest modules, offline by design
+└── tests/                     ← 173 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -401,6 +406,26 @@ The WASM resolver knows only Python imports and links, so
 resolver rather than dropping it. Non-Python call targets carry their
 language in the ID; Python's is unchanged. `tests/test_code_analysis.py`
 pins one file per language, including a ghost hidden in a comment or string.
+
+**Equations become LaTeX** when `ingestion.extractor.math: latex` (default
+`off`, which is byte-identical to before). Word math (OMML) converts element
+by element (`ingestion/omml.py`), the same walker under the builtin and
+python-docx readers (`docx_text.py`). A PDF has no math markup, so equations
+are rebuilt from glyph *layout*: math fonts and math characters seed regions,
+which grow by touching rules, fraction bars and radicals (`pdf_regions.py`),
+and each region is parsed geometrically (`math_layout.py`: fractions,
+radicals, limits, tall delimiters as matrices/`cases`, scripts). TeX's
+OML/OMS/OMX fonts are decoded by code, including matplotlib's BaKoMa shift
+(`tex_symbols.py`). It runs under every provider: `native` reads pymupdf's
+`rawdict` (with CIDs for unmapped glyphs) and drawings, `builtin` and
+`sandboxed` interpret the content stream themselves (`pdf_objects.py`,
+`pdf_glyphs.py`), and the sandbox's lexer is the Rust `pdf_lex` export,
+asserted byte-identical to `lex_pdf`. A page with no math is the old text,
+the setting enters the source fingerprint only when on, and
+`pdf_reader_version(math)` carries `+math` so a fleet worker that cannot read
+equations has its page range read locally. Pictures of equations, outlined
+glyphs and scans are not read; a variable set in the body font's italic is
+prose. `tests/test_document_math.py`, `tests/test_math_reading.py`.
 
 **Images and audio** are captioned/transcribed into indexable text that flows
 through the normal path. Both default to a deterministic offline stub, and an
@@ -1195,6 +1220,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   kept off the WASM resolver's inputs); the indexer stores image bytes in a
   content-addressed media store so a replica with no source mount can show
   them; `[fig:n]` is verified like `[n]`.
+- **Math is TeX, typeset in the UI** (`ui/src/util/math.ts`, KaTeX). It is
+  tokenized *inside* `marked` (or `$a_1 * b_2$` is emphasis) into an empty
+  `data-tex` placeholder, and typeset only *after* DOMPurify, because KaTeX
+  needs the `style` attributes the document views forbid for file content;
+  `trust: false` refuses `\href` and friends. Chat answers, the Markdown and
+  notebook views and the node inspector share it. `chat.needs_math` (a TeX
+  delimiter or command in a passage, or a question asking for an equation)
+  has `build_prompt` put `MATH_RULE` before the question — the one place
+  every answering path passes the evidence — and is otherwise absent, so
+  every other prompt is byte-identical (the diagram prompt opts out); `replies` doubles a backslash JSON
+  does not define, so `"\alpha"` in a combined reply is TeX, not a refusal.
+  `tests/test_answer_math.py`.
 - **MCP Apps.** The three assistant tools declare
   `ui://pheasant/knowledge-view.html` (`text/html;profile=mcp-app`); the web UI
   hosts the same file in `sandbox="allow-scripts"` and speaks the host half of

@@ -529,6 +529,14 @@ def test_idempotency_keys_are_content_addressed(tmp_path: Path) -> None:
     renamed["item"]["relative_path"] = "elsewhere.md"
     assert _idempotency_key(renamed) != _idempotency_key(task)
 
+    # The same bytes read under other parser settings are other text, so a
+    # result cached before ``math: latex`` was switched on is not reused.
+    latex = json.loads(json.dumps(task))
+    latex["extractor"] = {"math": "latex"}
+    plain = json.loads(json.dumps(task))
+    plain["extractor"] = {"math": "off"}
+    assert len({_idempotency_key(latex), _idempotency_key(plain), _idempotency_key(task)}) == 3
+
 
 def test_a_retried_task_is_answered_from_cache_not_reparsed(tmp_path: Path) -> None:
     task = _task(tmp_path)

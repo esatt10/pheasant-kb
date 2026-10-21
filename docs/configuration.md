@@ -791,6 +791,7 @@ offline and deterministic.
 |---|---|---|
 | `provider` | `auto` | `auto` \| `native` \| `builtin` \| `sandboxed` (see below) |
 | `html_text` | `false` | Strip markup from HTML/XHTML so prose indexes instead of tags |
+| `math` | `off` | `latex` writes equations in PDFs and DOCX as TeX (see [Equations](#equations-as-latex)) |
 
 **Providers**
 
@@ -843,7 +844,40 @@ ingestion:
   extractor:
     provider: auto
     html_text: false
+    math: off
 ```
+
+#### Equations as LaTeX
+
+`math: latex` writes every equation the extractor finds as TeX in the indexed
+text — `$…$` inline, `$$…$$` displayed, `\tag{n}` for a numbered one — so a
+formula is searchable as written and the web UI typesets it
+([Mathematics](how-to/conversations-and-visuals.md#mathematics)). No model is
+involved: both readers below are deterministic.
+
+| Format | How | Providers |
+|---|---|---|
+| DOCX | Office Math XML (`m:oMath`) converted element by element: fractions, scripts, radicals, n-ary operators with limits, delimiters, matrices, `cases`, accents, functions | `builtin` and `native` share one converter and produce identical text |
+| PDF | Rebuilt from the glyphs: seeded by math fonts and operators, grown over what touches them; fraction bars and overlines from thin rules; scripts from size and baseline; limits, radicals, matrices and equation numbers from geometry | `native`/`auto` read glyphs through pymupdf; `builtin` interprets content streams itself; `sandboxed` does the same with every PDF token produced inside its WASM guest |
+
+Without the switch, equations are what they always were: absent from DOCX text
+(neither reader looked at Office Math) and scrambled in PDF text.
+
+**What it reads.** TeX output (Computer Modern and Latin Modern, with or
+without ToUnicode maps — the TeX font encodings are fixed, so a glyph is
+recovered from its code), Word and LibreOffice equations (Cambria Math,
+OpenSymbol, the Symbol font), and Unicode math fonts. **What it cannot.**
+Equations drawn as pictures or as vector outlines carry no characters, and a
+scanned page has none; those stay as they were. A PDF that sets a variable in
+the body font's own italic with nothing else mathematical around it is read as
+prose.
+
+**What it changes.** A page with no equation extracts byte-identically, on
+every provider — the switch rebuilds only pages that hold one. Turning it on
+re-reads document sources once (it is part of their fingerprint), and a
+preparation worker reading a long PDF's pages must run the same equation
+reader or its range is read on the indexer instead. It costs about 30 ms per
+page holding mathematics and a cheap check per page without.
 
 ### `ingestion.captioner` / `ingestion.transcriber`
 

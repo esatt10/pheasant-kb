@@ -389,6 +389,8 @@ class RemoteExtractPagesRequest(BaseModel):
     content_base64: str
     first_page: int
     stop_page: int
+    #: Write equations as LaTeX (``ingestion.extractor.math: latex``).
+    math: bool = False
 
 
 class RemotePrepareRequest(BaseModel):
@@ -1834,10 +1836,10 @@ def create_app(
             raise HTTPException(status_code=422, detail="empty or negative page range")
         try:
             content = base64.b64decode(req.content_base64, validate=True)
-            pages = pdf_page_texts(content, req.first_page, req.stop_page)
+            pages = pdf_page_texts(content, req.first_page, req.stop_page, math=req.math)
         except Exception as exc:  # noqa: BLE001 - any reader failure is the task's
             raise HTTPException(status_code=422, detail=f"{type(exc).__name__}: {exc}") from exc
-        return {"pages": pages, "reader_version": pdf_reader_version()}
+        return {"pages": pages, "reader_version": pdf_reader_version(req.math)}
 
     @app.post("/internal/indexing/prepare")
     def remote_prepare(

@@ -1,7 +1,11 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { Marked } from "marked";
 import { useMemo } from "react";
+import { mathExtension, renderMath } from "../../util/math";
 import { highlightLines, languageFor } from "../highlight";
+
+/** Markdown cells, with the TeX a notebook usually carries typeset. */
+const markdown = new Marked(mathExtension, { gfm: true });
 
 interface Cell {
   cell_type: string;
@@ -60,11 +64,13 @@ export function NotebookView({ text }: { text: string }) {
 function NotebookCell({ cell, language }: { cell: Cell; language: string }) {
   const source = joined(cell.source);
   if (cell.cell_type === "markdown") {
-    const html = DOMPurify.sanitize(marked.parse(source, { async: false, gfm: true }) as string, {
-      USE_PROFILES: { html: true },
-      FORBID_TAGS: ["img", "style", "iframe", "form", "video", "audio", "source", "picture"],
-      FORBID_ATTR: ["style", "srcset"],
-    });
+    const html = renderMath(
+      DOMPurify.sanitize(markdown.parse(source, { async: false }) as string, {
+        USE_PROFILES: { html: true },
+        FORBID_TAGS: ["img", "style", "iframe", "form", "video", "audio", "source", "picture"],
+        FORBID_ATTR: ["style", "srcset"],
+      }),
+    );
     return <div className="nb-cell nb-cell--markdown md-view" dangerouslySetInnerHTML={{ __html: html }} />;
   }
   if (cell.cell_type !== "code") {

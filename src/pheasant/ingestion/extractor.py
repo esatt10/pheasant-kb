@@ -368,8 +368,23 @@ def scan_pdf_content_stream(stream: bytes) -> str:
     return "\n".join(out)
 
 
-def extract_pdf_text_builtin(content: bytes) -> str:
-    """Pure-stdlib PDF text extraction (no third-party dependency)."""
+def extract_pdf_text_builtin(content: bytes, math: bool = False) -> str:
+    """Pure-stdlib PDF text extraction (no third-party dependency).
+
+    ``math`` rebuilds the pages that hold equations from their glyphs
+    (:func:`pheasant.ingestion.pdf_glyphs.math_text`); a document with none
+    reads exactly as it does without it.
+    """
+    if math:
+        try:
+            from pheasant.ingestion.pdf_glyphs import math_text
+
+            rewritten = math_text(content)
+        except Exception as exc:  # noqa: BLE001 - equations are an improvement, never a failure
+            logger.warning("PDF equation reading failed (%s); using the plain scan", exc)
+            rewritten = None
+        if rewritten is not None:
+            return _tidy(rewritten)
     parts: list[str] = []
     total = 0
     for stream in iter_pdf_content_streams(content):
@@ -389,47 +404,12 @@ def extract_pdf_text_builtin(content: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
-def extract_docx_text_builtin(content: bytes) -> str:
-    """Pure-stdlib DOCX text extraction.
+def extract_docx_text_builtin(content: bytes, math: bool = False) -> str:
+    """Pure-stdlib DOCX text extraction (:mod:`pheasant.ingestion.docx_text`)."""
 
-    Unlike the PDF path this is not a fidelity compromise: ``word/document.xml``
-    stores the body text as ``<w:t>`` runs inside ``<w:p>`` paragraphs, so
-    reading it with ``zipfile`` + ``xml.etree`` recovers the document text
-    directly. Tables are included (their cells are ordinary paragraphs).
-    """
-    import io
-    import xml.etree.ElementTree as ET
-    import zipfile
+    from pheasant.ingestion.docx_text import extract_docx_text
 
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            names = set(archive.namelist())
-            if "word/document.xml" not in names:
-                return ""
-            xml_bytes = archive.read("word/document.xml")
-    except (zipfile.BadZipFile, KeyError, OSError) as exc:
-        logger.debug("DOCX archive unreadable: %s", exc)
-        return ""
-
-    try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as exc:
-        logger.debug("DOCX document.xml unparseable: %s", exc)
-        return ""
-
-    lines: list[str] = []
-    for paragraph in root.iter(f"{_DOCX_MAIN_NS}p"):
-        buf: list[str] = []
-        for node in paragraph.iter():
-            tag = node.tag
-            if tag == f"{_DOCX_MAIN_NS}t":
-                buf.append(node.text or "")
-            elif tag == f"{_DOCX_MAIN_NS}tab":
-                buf.append("\t")
-            elif tag == f"{_DOCX_MAIN_NS}br":
-                buf.append("\n")
-        lines.append("".join(buf))
-    return _tidy("\n".join(lines))
+    return extract_docx_text(content, math=math)
 
 
 # ---------------------------------------------------------------------------
@@ -491,19 +471,20 @@ def _format_for(relative_path: str) -> str | None:
     return _FORMAT_BY_EXTENSION.get(Path(relative_path).suffix.lower())
 
 
-def extract_builtin(kind: str | None, content: bytes) -> str:
+def extract_builtin(kind: str | None, content: bytes, math: bool = False) -> str:
     """Standard-library-only extraction for one already-resolved format.
 
     The single place formats map to readers, so a new format cannot be wired
     into one provider and silently forgotten in another. PPTX/XLSX/EPUB/RTF
     live in :mod:`pheasant.ingestion.office` and legacy DOC in
     :mod:`pheasant.ingestion.msdoc`; imports are local so a text-only region
-    never loads any of them.
+    never loads any of them. ``math`` writes equations as LaTeX
+    (``ingestion.extractor.math``).
     """
     if kind == "pdf":
-        return extract_pdf_text_builtin(content)
+        return extract_pdf_text_builtin(content, math=math)
     if kind == "docx":
-        return extract_docx_text_builtin(content)
+        return extract_docx_text_builtin(content, math=math)
     if kind == "html":
         return extract_html_text(content)
     if kind == "pptx":
@@ -532,16 +513,17 @@ def extract_builtin(kind: str | None, content: bytes) -> str:
 class BuiltinExtractor:
     """Standard-library-only extractor. No third-party imports, ever."""
 
-    def __init__(self, model: str = "builtin"):
+    def __init__(self, model: str = "builtin", math: bool = False):
         self.model = model
         self.calls = 0
+        self.math = math
 
     def extract(self, content: bytes, relative_path: str, sidecar: bytes | None = None) -> str:
         authored = _sidecar_text(sidecar)
         if authored is not None:
             return authored
         self.calls += 1
-        return extract_builtin(_format_for(relative_path), content)
+        return extract_builtin(_format_for(relative_path), content, math=self.math)
 
 
 class NativeExtractor:
@@ -553,10 +535,13 @@ class NativeExtractor:
     that one format instead of failing the sync.
     """
 
-    def __init__(self, model: str = "native", pdf_pages: PdfPages | None = None):
+    def __init__(
+        self, model: str = "native", pdf_pages: PdfPages | None = None, math: bool = False
+    ):
         self.model = model
         self.calls = 0
-        self._builtin = BuiltinExtractor()
+        self.math = math
+        self._builtin = BuiltinExtractor(math=math)
         self.pdf_pages = pdf_pages
 
     def extract(self, content: bytes, relative_path: str, sidecar: bytes | None = None) -> str:
@@ -577,7 +562,7 @@ class NativeExtractor:
         # for them — the OOXML/EPUB text *is* the XML, and RTF is a text
         # format. So "native" is honestly the same code path here rather than
         # a pretend upgrade.
-        return extract_builtin(kind, content)
+        return extract_builtin(kind, content, math=self.math)
 
     def _extract_pdf(self, content: bytes, relative_path: str) -> str:
         if _pymupdf() is None:
@@ -585,7 +570,7 @@ class NativeExtractor:
             return extract_pdf_text_builtin(content)
         try:
             if self.pdf_pages is None:
-                pages = pdf_page_texts(content)
+                pages = pdf_page_texts(content, math=True) if self.math else pdf_page_texts(content)
             else:
                 pages = self.pdf_pages(content, relative_path)
             return _tidy("\n\n".join(pages))
@@ -630,14 +615,32 @@ class NativeExtractor:
             return extract_docx_text_builtin(content)
         try:
             document = docx.Document(io.BytesIO(content))
-            lines = [paragraph.text for paragraph in document.paragraphs]
+            lines = [self._paragraph(paragraph) for paragraph in document.paragraphs]
             for table in document.tables:
                 for row in table.rows:
-                    lines.extend(cell.text for cell in row.cells)
+                    lines.extend(self._cell(cell) for cell in row.cells)
             return _tidy("\n".join(lines))
         except Exception as exc:
             logger.warning("python-docx failed on %s (%s); using builtin", relative_path, exc)
-            return extract_docx_text_builtin(content)
+            return extract_docx_text_builtin(content, math=self.math)
+
+    def _paragraph(self, paragraph: Any) -> str:
+        """``paragraph.text``, or with ``math`` and an equation, the walk that
+        writes it as LaTeX (python-docx's text omits Office Math entirely)."""
+
+        if self.math:
+            from pheasant.ingestion.omml import contains_math
+
+            if contains_math(paragraph._p):
+                from pheasant.ingestion.docx_text import docx_paragraph_text
+
+                return docx_paragraph_text(paragraph._p)
+        return paragraph.text
+
+    def _cell(self, cell: Any) -> str:
+        if self.math:
+            return "\n".join(self._paragraph(paragraph) for paragraph in cell.paragraphs)
+        return cell.text
 
 
 class AutoExtractor:
@@ -650,11 +653,12 @@ class AutoExtractor:
     between indexing a document and silently dropping it.
     """
 
-    def __init__(self, model: str = "auto", pdf_pages: PdfPages | None = None):
+    def __init__(self, model: str = "auto", pdf_pages: PdfPages | None = None, math: bool = False):
         self.model = model
         self.calls = 0
-        self._native = NativeExtractor(pdf_pages=pdf_pages)
-        self._builtin = BuiltinExtractor()
+        self.math = math
+        self._native = NativeExtractor(pdf_pages=pdf_pages, math=math)
+        self._builtin = BuiltinExtractor(math=math)
 
     @property
     def pdf_pages(self) -> PdfPages | None:
@@ -685,20 +689,27 @@ class AutoExtractor:
 
 def build_extractor(settings: ExtractorSettings) -> DocumentExtractor:
     provider = (settings.provider or "auto").lower()
+    math = math_enabled(settings)
     if provider == "auto":
-        return AutoExtractor()
+        return AutoExtractor(math=math)
     if provider == "builtin":
-        return BuiltinExtractor()
+        return BuiltinExtractor(math=math)
     if provider == "native":
-        return NativeExtractor()
+        return NativeExtractor(math=math)
     if provider == "sandboxed":
         from pheasant.ingestion.extractor_sandbox import SandboxedExtractor
 
-        return SandboxedExtractor(fallback=AutoExtractor())
+        return SandboxedExtractor(fallback=AutoExtractor(math=math), math=math)
     raise ValueError(
         f"Unsupported ingestion.extractor.provider {settings.provider!r}; "
         "expected 'auto', 'native', 'builtin' or 'sandboxed'"
     )
+
+
+def math_enabled(settings: Any) -> bool:
+    """Whether ``ingestion.extractor.math`` asks for equations as LaTeX."""
+
+    return str(getattr(settings, "math", "off") or "off").strip().lower() == "latex"
 
 
 def extractable_extensions(settings: ExtractorSettings | None = None) -> set[str]:

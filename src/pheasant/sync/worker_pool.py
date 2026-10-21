@@ -408,6 +408,7 @@ class WorkerPool:
         stop: int,
         *,
         deadline: float | None = None,
+        math: bool = False,
     ) -> list[str]:
         """The text of PDF pages ``[first, stop)``, read by one worker.
 
@@ -425,7 +426,9 @@ class WorkerPool:
             timeout = (
                 self._timeout if remaining is None else max(0.001, min(self._timeout, remaining))
             )
-            pages = extract(endpoint.url, content, first, stop, token=self._token, timeout=timeout)
+            pages = extract(
+                endpoint.url, content, first, stop, token=self._token, timeout=timeout, math=math
+            )
             if len(pages) != stop - first:
                 raise _Retryable(f"worker returned {len(pages)} pages for {stop - first}")
             return pages
@@ -564,16 +567,24 @@ def _idempotency_key(task: dict[str, Any]) -> str:
     ``content_hash`` before dispatch), so this costs nothing and lets a worker
     answer a retried request from cache instead of re-parsing. The relative
     path is included because two identical files in one source are two
-    artifacts with two stable IDs.
+    artifacts with two stable IDs. The extractor settings are included when
+    present, because the same bytes read with ``math: latex`` or
+    ``html_text`` are different text, and a cached answer from before the
+    switch would otherwise be handed back after it.
     """
+
+    import hashlib
 
     payload = task.get("payload") or {}
     item = task.get("item") or {}
     source = task.get("source") or {}
     digest = payload.get("sha256") or item.get("sha256") or ""
     if not digest:
-        import hashlib
-
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(raw).hexdigest()
-    return f"{source.get('name', '')}:{item.get('relative_path', '')}:{digest}"
+    key = f"{source.get('name', '')}:{item.get('relative_path', '')}:{digest}"
+    extractor = task.get("extractor")
+    if extractor is not None:
+        raw = json.dumps(extractor, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        key += f":x{hashlib.sha256(raw).hexdigest()[:16]}"
+    return key

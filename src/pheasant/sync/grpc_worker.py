@@ -260,6 +260,7 @@ class GrpcTransport:
         *,
         token: str,
         timeout: float,
+        math: bool = False,
     ) -> list[str]:
         """One page range of one PDF, on whichever replica the channel picks."""
 
@@ -269,7 +270,9 @@ class GrpcTransport:
 
         channel = self._channel(url)
         stub = self._pb2_grpc.PreparationWorkerStub(channel)
-        request = self._pb2.ExtractPagesRequest(content=content, first_page=first, stop_page=stop)
+        request = self._pb2.ExtractPagesRequest(
+            content=content, first_page=first, stop_page=stop, math=math
+        )
         try:
             response = stub.ExtractPages(
                 request,
@@ -284,10 +287,10 @@ class GrpcTransport:
             raise TaskRejected(response.error)
         from pheasant.ingestion.pdf_pages import pdf_reader_version
 
-        if response.reader_version != pdf_reader_version():
+        if response.reader_version != pdf_reader_version(math):
             raise TaskRejected(
                 f"worker reads PDFs with pymupdf {response.reader_version or '(none)'}, "
-                f"this process with {pdf_reader_version() or '(none)'}"
+                f"this process with {pdf_reader_version(math) or '(none)'}"
             )
         return list(response.pages)
 
@@ -337,6 +340,7 @@ def request_from_task(pb2: Any, task: dict[str, Any], key: str) -> Any:
     encoded = payload.pop("content_base64", "")
     content = base64.b64decode(encoded, validate=True) if encoded else b""
     git_metadata = task.get("git_metadata")
+    extractor = task.get("extractor")
     return pb2.PrepareRequest(
         idempotency_key=key,
         source_json=json.dumps(task.get("source") or {}, separators=(",", ":")),
@@ -346,6 +350,7 @@ def request_from_task(pb2: Any, task: dict[str, Any], key: str) -> Any:
         git_metadata_json=(
             "" if git_metadata is None else json.dumps(git_metadata, separators=(",", ":"))
         ),
+        extractor_json=("" if extractor is None else json.dumps(extractor, separators=(",", ":"))),
     )
 
 
@@ -368,6 +373,7 @@ def task_from_request(request: Any) -> dict[str, Any]:
         "git_metadata": (
             json.loads(request.git_metadata_json) if request.git_metadata_json else None
         ),
+        "extractor": json.loads(request.extractor_json) if request.extractor_json else None,
     }
 
 
@@ -484,7 +490,7 @@ class PreparationWorkerServicer:
         if stop < first:
             return pb2.ExtractPagesResponse(error=f"empty page range [{first}, {stop})")
         try:
-            pages = pdf_page_texts(request.content, first, stop)
+            pages = pdf_page_texts(request.content, first, stop, math=bool(request.math))
             # A protobuf ``string`` must be valid UTF-8. A lone surrogate would
             # fail serialization after this returns, which the coordinator
             # sees as a retryable error and retries on every replica; refusing
@@ -494,7 +500,9 @@ class PreparationWorkerServicer:
         except Exception as exc:  # noqa: BLE001 - any pymupdf failure is the task's
             return pb2.ExtractPagesResponse(error=f"{type(exc).__name__}: {exc}"[:500])
         logger.info("gRPC page extraction complete: pages %d-%d", first, first + len(pages))
-        return pb2.ExtractPagesResponse(pages=pages, reader_version=pdf_reader_version())
+        return pb2.ExtractPagesResponse(
+            pages=pages, reader_version=pdf_reader_version(bool(request.math))
+        )
 
     def Check(self, request: Any, context: Any):  # noqa: N802 - gRPC spelling
         pb2, _ = load_protos()

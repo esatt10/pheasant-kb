@@ -53,6 +53,9 @@ message PrepareRequest {
   string payload_meta_json = 5;
   // [branch, commit, dirty] or absent.
   string git_metadata_json = 6;
+  // ExtractorSettings (html_text, math, ...) or absent: the parser settings
+  // the JSON route carries as ``extractor``.
+  string extractor_json = 7;
 }
 
 message PrepareResponse {
@@ -81,6 +84,10 @@ message ExtractPagesRequest {
   // [first_page, stop_page), zero-based.
   uint32 first_page = 2;
   uint32 stop_page = 3;
+  // Write equations as LaTeX (ingestion.extractor.math: latex). A worker that
+  // predates this field ignores it and answers with a reader_version lacking
+  // the math suffix, which the coordinator refuses and reads itself.
+  bool math = 4;
 }
 
 message ExtractPagesResponse {

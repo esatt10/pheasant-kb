@@ -48,6 +48,16 @@ split is deliberate rather than incidental:
   memory-safety and denial-of-service surface, and that is the part that runs
   inside the cap.
 
+Equations (``ingestion.extractor.math: latex``)
+-----------------------------------------------
+Rebuilding an equation needs a PDF's object dictionaries, fonts, CMaps and
+the positions its content streams draw glyphs at
+(:mod:`pheasant.ingestion.pdf_glyphs`). All of that syntax is tokenized by the
+guest's ``pdf_lex``, the twin of :func:`~pheasant.ingestion.pdf_objects.lex_pdf`
+held byte-for-byte equal to it, so the host walks typed tokens and never
+parses attacker bytes itself. What stays on the host is what already did:
+finding ``N G obj`` boundaries and inflating streams, both bounded.
+
 Correctness is not taken on trust
 ---------------------------------
 The guest is a port, so it can drift from the Python reference in ways a
@@ -205,7 +215,40 @@ def scan_pdf_content_stream_wasm(stream: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def extract_pdf_text_sandboxed(content: bytes) -> str:
+def lex_pdf_wasm(data: bytes) -> list[tuple[int, bytes]]:
+    """:func:`~pheasant.ingestion.pdf_objects.lex_pdf`, run in the guest.
+
+    A fresh instance per call, as for the scanner. Input the guest rejects
+    (fuel, memory) yields no tokens: that object or stream is skipped, the
+    way a trapping content stream already costs only its own text.
+    """
+    from pheasant.ingestion.pdf_objects import deserialize_tokens
+
+    if not data:
+        return []
+    engine, module = _engine_and_module()
+    assert wasmtime is not None
+    store = wasmtime.Store(engine)
+    store.set_fuel(SANDBOX_FUEL)
+    store.set_limits(memory_size=SANDBOX_MAX_MEMORY_BYTES)
+    instance = wasmtime.Linker(engine).instantiate(store, module)
+    exports = instance.exports(store)
+    try:
+        in_ptr = exports["wasm_alloc"](store, len(data))
+        exports["memory"].write(store, data, in_ptr)
+        out_len_ptr = exports["wasm_alloc"](store, 4)
+        out_ptr = exports["pdf_lex"](store, in_ptr, len(data), out_len_ptr)
+        (out_len,) = struct.unpack(
+            "<I", bytes(exports["memory"].read(store, out_len_ptr, out_len_ptr + 4))
+        )
+        raw = bytes(exports["memory"].read(store, out_ptr, out_ptr + out_len))
+    except guest_failures() as trap:
+        logger.warning("sandboxed PDF lexer rejected input: %s", translate_trap(trap, "pdf_lex"))
+        return []
+    return deserialize_tokens(raw)
+
+
+def extract_pdf_text_sandboxed(content: bytes, math: bool = False) -> str:
     """Sandboxed twin of ``extract_pdf_text_builtin``.
 
     Host-side stream carving + inflate (bounded), guest-side tokenizing
@@ -215,6 +258,16 @@ def extract_pdf_text_sandboxed(content: bytes) -> str:
     """
     from pheasant.ingestion.extractor import MAX_TOTAL_TEXT_CHARS
 
+    if math:
+        try:
+            from pheasant.ingestion.pdf_glyphs import math_text
+
+            rewritten = math_text(content, lexer=lex_pdf_wasm, scan=_scan_or_empty)
+        except Exception as exc:  # noqa: BLE001 - equations are an improvement, never a failure
+            logger.warning("sandboxed PDF equation reading failed (%s); using the plain scan", exc)
+            rewritten = None
+        if rewritten is not None:
+            return _tidy(rewritten)
     parts: list[str] = []
     total = 0
     for stream in iter_pdf_content_streams(content):
@@ -230,6 +283,14 @@ def extract_pdf_text_sandboxed(content: bytes) -> str:
         if total >= MAX_TOTAL_TEXT_CHARS:
             break
     return _tidy("\n".join(parts))
+
+
+def _scan_or_empty(stream: bytes) -> str:
+    try:
+        return scan_pdf_content_stream_wasm(stream)
+    except SandboxError as exc:
+        logger.warning("sandboxed PDF scan rejected a content stream: %s", exc)
+        return ""
 
 
 class SandboxedExtractor:
@@ -251,9 +312,15 @@ class SandboxedExtractor:
     gets explicit caps (:mod:`pheasant.ingestion.msdoc`) rather than a guest.
     """
 
-    def __init__(self, fallback: DocumentExtractor | None = None, model: str = "sandboxed"):
+    def __init__(
+        self,
+        fallback: DocumentExtractor | None = None,
+        model: str = "sandboxed",
+        math: bool = False,
+    ):
         self.model = model
         self.calls = 0
+        self.math = math
         self._fallback = fallback
         # Fail loudly at construction when the extra is absent: an operator
         # who asked for isolation must not silently run without it.
@@ -266,8 +333,8 @@ class SandboxedExtractor:
         self.calls += 1
         kind = _format_for(relative_path)
         if kind == "pdf":
-            return extract_pdf_text_sandboxed(content)
-        return extract_builtin(kind, content)
+            return extract_pdf_text_sandboxed(content, math=self.math)
+        return extract_builtin(kind, content, math=self.math)
 
 
 def reset_for_tests() -> None:

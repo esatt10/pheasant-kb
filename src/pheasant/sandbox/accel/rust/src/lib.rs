@@ -676,3 +676,237 @@ pub extern "C" fn pdf_scan_text(
     }
     ptr
 }
+
+// ---------------------------------------------------------------------------
+// PDF tokenizer: the guest half of `pheasant.ingestion.pdf_objects.lex_pdf`.
+// ---------------------------------------------------------------------------
+//
+// Every PDF syntax the equation reader parses (object dictionaries, object
+// streams, CMaps, content streams) is tokenized here, so attacker-controlled
+// syntax never meets a host-side parser. Output is the Python reference's
+// `serialize_tokens`: one kind byte, a little-endian u32 length, the payload.
+// `tests/test_pdf_math_extraction.py` holds the two byte-for-byte equal.
+
+const TOK_NUMBER: u8 = 1;
+const TOK_NAME: u8 = 2;
+const TOK_STRING: u8 = 3;
+const TOK_HEXSTRING: u8 = 4;
+const TOK_KEYWORD: u8 = 5;
+const TOK_ARRAY_OPEN: u8 = 6;
+const TOK_ARRAY_CLOSE: u8 = 7;
+const TOK_DICT_OPEN: u8 = 8;
+const TOK_DICT_CLOSE: u8 = 9;
+const TOK_BRACE_OPEN: u8 = 10;
+const TOK_BRACE_CLOSE: u8 = 11;
+const MAX_LEX_TOKENS: usize = 4_000_000;
+
+#[inline]
+fn pdf_whitespace(b: u8) -> bool {
+    matches!(b, 0x00 | 0x09 | 0x0A | 0x0C | 0x0D | 0x20)
+}
+
+#[inline]
+fn pdf_delimiter(b: u8) -> bool {
+    matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+}
+
+#[inline]
+fn is_hex_digit(b: u8) -> bool {
+    hex_val(b).is_some()
+}
+
+fn push_token(out: &mut Vec<u8>, kind: u8, value: &[u8]) {
+    out.push(kind);
+    out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    out.extend_from_slice(value);
+}
+
+fn literal_end(data: &[u8], start: usize) -> usize {
+    let n = data.len();
+    let mut depth: i32 = 1;
+    let mut i = start;
+    while i < n {
+        let b = data[i];
+        if b == 0x5C {
+            i += 2;
+            continue;
+        }
+        if b == 0x28 {
+            depth += 1;
+        } else if b == 0x29 {
+            depth -= 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    n
+}
+
+fn decode_name(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < raw.len() {
+        if raw[i] == 0x23 && i + 2 < raw.len() && is_hex_digit(raw[i + 1]) && is_hex_digit(raw[i + 2]) {
+            out.push(hex_val(raw[i + 1]).unwrap() * 16 + hex_val(raw[i + 2]).unwrap());
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn is_pdf_number(word: &[u8]) -> bool {
+    let mut i = 0usize;
+    if i < word.len() && (word[i] == b'+' || word[i] == b'-') {
+        i += 1;
+    }
+    let rest = &word[i..];
+    if rest.is_empty() {
+        return false;
+    }
+    if rest[0] == b'.' {
+        return rest.len() > 1 && rest[1..].iter().all(|b| b.is_ascii_digit());
+    }
+    let mut j = 0usize;
+    while j < rest.len() && rest[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == 0 {
+        return false;
+    }
+    if j == rest.len() {
+        return true;
+    }
+    rest[j] == b'.' && rest[j + 1..].iter().all(|b| b.is_ascii_digit())
+}
+
+fn find_from(data: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if from >= data.len() || needle.len() > data.len() {
+        return None;
+    }
+    data[from..].windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+}
+
+fn skip_inline_image(data: &[u8], start: usize) -> usize {
+    let n = data.len();
+    let mut i = start + 1;
+    while i < n {
+        match find_from(data, b"EI", i) {
+            None => return n,
+            Some(j) => {
+                let before = if j > 0 { data[j - 1] } else { 0x20 };
+                let after = if j + 2 < n { data[j + 2] } else { 0x20 };
+                if pdf_whitespace(before) && (pdf_whitespace(after) || pdf_delimiter(after)) {
+                    return j + 2;
+                }
+                i = j + 2;
+            }
+        }
+    }
+    n
+}
+
+fn lex_pdf(data: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let n = data.len();
+    let mut count = 0usize;
+    let mut i = 0usize;
+    while i < n && count < MAX_LEX_TOKENS {
+        let b = data[i];
+        if pdf_whitespace(b) {
+            i += 1;
+        } else if b == b'%' {
+            while i < n && data[i] != 10 && data[i] != 13 {
+                i += 1;
+            }
+        } else if b == b'(' {
+            let end = literal_end(data, i + 1);
+            let slice = &data[(i + 1).min(n)..end.min(n)];
+            push_token(&mut out, TOK_STRING, &decode_pdf_literal(slice));
+            count += 1;
+            i = end + 1;
+        } else if b == b'<' {
+            if i + 1 < n && data[i + 1] == b'<' {
+                push_token(&mut out, TOK_DICT_OPEN, b"");
+                count += 1;
+                i += 2;
+                continue;
+            }
+            let end = find_from(data, b">", i + 1).unwrap_or(n);
+            let mut digits: Vec<u8> = data[(i + 1).min(n)..end].iter().copied().filter(|c| is_hex_digit(*c)).collect();
+            if digits.len() % 2 == 1 {
+                digits.push(b'0');
+            }
+            let bytes: Vec<u8> = digits
+                .chunks_exact(2)
+                .map(|p| hex_val(p[0]).unwrap() * 16 + hex_val(p[1]).unwrap())
+                .collect();
+            push_token(&mut out, TOK_HEXSTRING, &bytes);
+            count += 1;
+            i = end + 1;
+        } else if b == b'>' {
+            if i + 1 < n && data[i + 1] == b'>' {
+                push_token(&mut out, TOK_DICT_CLOSE, b"");
+                count += 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else if b == b'[' || b == b']' || b == b'{' || b == b'}' {
+            let kind = match b {
+                b'[' => TOK_ARRAY_OPEN,
+                b']' => TOK_ARRAY_CLOSE,
+                b'{' => TOK_BRACE_OPEN,
+                _ => TOK_BRACE_CLOSE,
+            };
+            push_token(&mut out, kind, b"");
+            count += 1;
+            i += 1;
+        } else if b == b'/' {
+            let start = i + 1;
+            i = start;
+            while i < n && !pdf_whitespace(data[i]) && !pdf_delimiter(data[i]) {
+                i += 1;
+            }
+            push_token(&mut out, TOK_NAME, &decode_name(&data[start..i]));
+            count += 1;
+        } else if b == b')' {
+            i += 1;
+        } else {
+            let start = i;
+            while i < n && !pdf_whitespace(data[i]) && !pdf_delimiter(data[i]) {
+                i += 1;
+            }
+            let word = &data[start..i];
+            if is_pdf_number(word) {
+                push_token(&mut out, TOK_NUMBER, word);
+            } else {
+                push_token(&mut out, TOK_KEYWORD, word);
+                if word == b"ID" {
+                    i = skip_inline_image(data, i);
+                }
+            }
+            count += 1;
+        }
+    }
+    out
+}
+
+/// Tokenize PDF syntax, returning the serialized token stream.
+#[no_mangle]
+pub extern "C" fn pdf_lex(input_ptr: *const u8, input_len: usize, out_len_ptr: *mut u32) -> *const u8 {
+    let input = unsafe { slice::from_raw_parts(input_ptr, input_len) };
+    let bytes = lex_pdf(input);
+    let len = bytes.len() as u32;
+    let boxed = bytes.into_boxed_slice();
+    let ptr = boxed.as_ptr();
+    forget(boxed);
+    unsafe {
+        *out_len_ptr = len;
+    }
+    ptr
+}

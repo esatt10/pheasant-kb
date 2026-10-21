@@ -168,6 +168,7 @@ class HttpTransport:
         *,
         token: str,
         timeout: float,
+        math: bool = False,
     ) -> list[str]:
         """The text of PDF pages ``[first, stop)`` from one worker.
 
@@ -186,6 +187,7 @@ class HttpTransport:
             "content_base64": base64.b64encode(content).decode("ascii"),
             "first_page": first,
             "stop_page": stop,
+            "math": math,
         }
         connection = None
         try:
@@ -199,10 +201,10 @@ class HttpTransport:
                 self.discard(connection)
         decoded = self._decode(status, headers, raw, url)
         version = str(decoded.get("reader_version") or "")
-        if version != pdf_reader_version():
+        if version != pdf_reader_version(math):
             raise TaskRejected(
                 f"worker reads PDFs with pymupdf {version or '(none)'}, "
-                f"this process with {pdf_reader_version() or '(none)'}"
+                f"this process with {pdf_reader_version(math) or '(none)'}"
             )
         pages = decoded.get("pages")
         if not isinstance(pages, list) or not all(isinstance(page, str) for page in pages):

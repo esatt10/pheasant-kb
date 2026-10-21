@@ -30,6 +30,8 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.chunk_plan import PLANNER_VERSION, strategy_of
+from pheasant.ingestion.extractor import math_enabled, source_includes_documents
+from pheasant.ingestion.pdf_math import MATH_VERSION
 
 SOURCE_SCOPE = "source:{name}"
 EMBEDDING_SCOPE = "embeddings"
@@ -65,7 +67,8 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     folded in for web collections only, where every item is a page and
     turning it on changes all of their text. A folder source keeps its
     fingerprint, so flipping it does not re-read every repository in the
-    region.
+    region. Its ``math`` switch is folded in, when on, for sources whose
+    ``include`` admits a document, for the same reason.
     """
 
     chunking = getattr(source, "chunking", None)
@@ -116,6 +119,12 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     if source_type == "web_collection":
         payload["text_pipeline"] = WEB_TEXT_PIPELINE
         payload["html_text"] = bool(getattr(extractor, "html_text", False))
+    if math_enabled(extractor) and source_includes_documents(source):
+        # Equations as LaTeX change the text of every document holding one.
+        # Off is omitted, so no stored fingerprint moves until someone turns it
+        # on, and only sources that can carry a document re-read; bumping
+        # MATH_VERSION re-reads exactly those.
+        payload["math"] = MATH_VERSION
     return _digest(payload)
 
 

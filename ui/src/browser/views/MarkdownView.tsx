@@ -5,6 +5,7 @@ import type { Tokens } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "../../api/client";
+import { mathExtension, renderMath } from "../../util/math";
 import { escapeHtml, highlightLines, languageFor } from "../highlight";
 
 export interface MarkdownSection {
@@ -108,7 +109,7 @@ function sanitize(html: string): string {
 }
 
 function makeParser(): Marked {
-  return new Marked({
+  return new Marked(mathExtension, {
     gfm: true,
     renderer: {
       image({ href, text, title }: Tokens.Image) {
@@ -153,7 +154,8 @@ export function MarkdownView({
   const parser = useMemo(makeParser, []);
   const { front, sections } = useMemo(() => splitSections(text), [text]);
   const rendered = useMemo(
-    () => sections.map((section) => sanitize(parser.parse(section.body, { async: false }) as string)),
+    () =>
+      sections.map((section) => renderMath(sanitize(parser.parse(section.body, { async: false }) as string))),
     [parser, sections],
   );
   const frontData = useMemo(() => readFront(front), [front]);
