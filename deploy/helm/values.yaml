@@ -13,6 +13,7 @@ config:
   pheasantYaml: |
     pheasant:
       name: helm-pheasant
+      defaults: standalone
       environment: kubernetes
       state_path: /state
       workspace_root: /workspace

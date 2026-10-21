@@ -14,12 +14,14 @@ never rewritten — re-running ``up`` reuses it unchanged.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from pheasant.config.flagship import DEFAULTS_ENV, STANDALONE, using_defaults
 from pheasant.config.loader import deep_merge, dump_config_yaml
 from pheasant.config.profiles import profile_data
 from pheasant.config.schema import PheasantConfig, SourceType
@@ -153,9 +155,13 @@ def render_up_config(
     workspace = _common_workspace(local_paths, config_path.resolve().parent)
     kb_name = name or (targets[0].name if len(targets) == 1 else slugify(workspace.name))
 
-    data: dict[str, Any] = deep_merge(
-        PheasantConfig().model_dump(mode="json"), profile_data(profile)
-    )
+    # `pheasant up` indexes and serves in this one process, which pheasant-kb's
+    # configuration (Postgres, NATS, a worker tier) cannot run in. So a config
+    # it writes is built on the standalone table, and says so, unless
+    # PHEASANT_DEFAULTS asks for the flagship explicitly.
+    with using_defaults(os.environ.get(DEFAULTS_ENV) or STANDALONE):
+        base = PheasantConfig.default().model_dump(mode="json")
+    data: dict[str, Any] = deep_merge(base, profile_data(profile))
     origin = targets[0].path if len(targets) == 1 else f"{len(targets)} sources"
     data["pheasant"].update(
         {

@@ -1,5 +1,6 @@
 pheasant:
   name: pheasant-local-advanced
+  defaults: standalone
   description: Feature-rich single-node Pheasant profile with SQLite, LanceDB, OpenAI,
     WASM, MCP, and durable memory
   environment: docker

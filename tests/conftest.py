@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+# The suite is offline by design, so it runs on the standalone defaults:
+# SQLite, no queue, one process, stub models. pheasant's own default is
+# pheasant-kb's configuration (Postgres, NATS, OpenAI), which
+# tests/test_flagship_defaults.py exercises explicitly. Nothing above imports
+# pheasant, so this is set before any config is built, and every CLI the
+# suite runs as a subprocess inherits it.
+os.environ.setdefault("PHEASANT_DEFAULTS", "standalone")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures"

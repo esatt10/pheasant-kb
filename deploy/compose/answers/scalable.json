@@ -1,5 +1,6 @@
 {
   "pheasant.name": "pheasant-scalable",
+  "pheasant.defaults": "standalone",
   "pheasant.description": "High-throughput Pheasant fleet with PostgreSQL, NATS JetStream, gRPC workers, LanceDB, OpenAI, WASM, MCP, and opt-in durable memory",
   "pheasant.environment": "compose",
   "pheasant.log_level": "INFO",

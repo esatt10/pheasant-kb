@@ -25,9 +25,16 @@ apart.
 | `nats` | An in-process queue, or none | NATS JetStream |
 | Vectors, graph files | `/state` | A shared volume (RWX) |
 
-The single-container defaults are the code's own defaults. Every setting
-pheasant-kb changes is something you can switch on in a smaller shape one at a
-time, through `pheasant setup` or the [configuration reference](configuration.md).
+pheasant's defaults are pheasant-kb's, and every shape on this page runs on the
+other table, **standalone**: SQLite, no queue, one process, offline stubs, no
+key. The ones that configure themselves select it on their own: the single
+container writes a standalone config when nothing is mounted, `pheasant up`
+writes one, and every config under `deploy/` other than pheasant-kb's says
+`defaults: standalone`. Anything else selects it with
+`PHEASANT_DEFAULTS=standalone`, or with `defaults: standalone` under
+`pheasant:` in its config. From there, each setting pheasant-kb changes can be
+switched on one at a time; the full list is in
+[Defaults](configuration.md#defaults-pheasant-kb-or-standalone).
 
 ## Single container
 

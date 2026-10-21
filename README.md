@@ -332,10 +332,12 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 | **Operations** | Idempotent, incremental sync; SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
 | **Scale** | Optional NATS queue, gRPC preparation workers, split API/indexer/worker roles and corpus sharding—each a selectable backend, never a prerequisite. |
 
-pheasant-kb turns all of this on. The code's own defaults are the
-dependency-free ones (SQLite, local text search, no queue, one process), which
-is what makes the [single container](docs/other-deployments.md#single-container)
-a complete deployment too.
+pheasant-kb turns all of this on, and its configuration is pheasant's default:
+a key you do not set takes pheasant-kb's value. The other table, `standalone`
+(SQLite, local text search, no queue, one process, no key), is what the
+[single container](docs/other-deployments.md#single-container) and
+`pheasant up` run on, and one setting selects it anywhere:
+`PHEASANT_DEFAULTS=standalone`.
 
 <details>
 <summary><b>Also: pheasant can join a federated fleet</b></summary>

@@ -81,6 +81,12 @@ pheasant start -c pheasant.yaml
 Never hand-write `pheasant.yaml`. Use `pheasant setup`, `--answers`, or a
 documented API/config surface so the live schema validates every key.
 
+pheasant's defaults are pheasant-kb's (Postgres, NATS, workers, OpenAI). Any
+config for a smaller shape must say `pheasant.defaults: standalone` (or run
+with `PHEASANT_DEFAULTS=standalone`); one that names no table becomes a
+pheasant-kb config and refuses to start without Postgres. `pheasant up` and
+the image's first-boot config already write standalone.
+
 ### Preset
 
 Select the smallest adequate preset:

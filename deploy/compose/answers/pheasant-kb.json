@@ -1,5 +1,6 @@
 {
   "pheasant.name": "pheasant-kb",
+  "pheasant.defaults": "flagship",
   "pheasant.description": "pheasant-kb: the flagship stack. PostgreSQL, NATS JetStream, a graph service, gRPC preparation workers, LanceDB, GPT-6 Luna, taxonomy and durable memory",
   "pheasant.environment": "compose",
   "pheasant.log_level": "INFO",

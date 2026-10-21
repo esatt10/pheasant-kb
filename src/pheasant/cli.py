@@ -1349,19 +1349,6 @@ def _engine(
 #: keeps its name here because callers and tests import it from the CLI.
 PROGRESS_MARKER = worker_progress_marker
 
-#: `pheasant backup` archives a SQLite database and the state directory. On
-#: Postgres it used to write that same archive with no database in it and
-#: report success: a backup that cannot restore the index, discovered only
-#: when someone needs it. The database and /state belong in one backup taken
-#: together, which is what the pheasant-kb recipe does with pg_dump.
-POSTGRES_BACKUP_REFUSAL = (
-    "ERROR: pheasant cannot {action} this region: its database is Postgres, and "
-    "`pheasant backup`/`restore` cover SQLite state only.\n"
-    "pheasant-kb: docker compose run --rm backup   (restore: docker compose run --rm "
-    "restore <name>). See docs/pheasant-kb/operate.md#back-up-and-restore.\n"
-    "Elsewhere: pg_dump the database and archive the state directory together."
-)
-
 
 def _progress_emitter():
     """A progress hook that writes one NDJSON line per update to stdout.
@@ -3011,7 +2998,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     if args.command == "backup":
         from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import create_backup
+        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, create_backup
         from pheasant.persistence.paths import StatePaths
 
         cfg = load_config(Path(args.config))
@@ -3025,7 +3012,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "restore":
         from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import restore_backup
+        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, restore_backup
         from pheasant.persistence.paths import StatePaths
 
         cfg = load_config(Path(args.config))

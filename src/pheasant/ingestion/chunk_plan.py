@@ -381,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         config = PheasantConfig.model_validate(
             {
+                # The preview shows what --strategy does to this file; a
+                # deployment's own processing overrides belong to --config.
+                "pheasant": {"defaults": "standalone"},
                 "sources": [
                     {
                         "name": "preview",
@@ -388,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
                         "path": str(args.path.parent),
                         "chunking": {"strategy": args.strategy},
                     }
-                ]
+                ],
             }
         )
         source = config.sources[0]

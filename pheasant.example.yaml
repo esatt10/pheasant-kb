@@ -6,6 +6,7 @@ deployment:
 
 pheasant:
   name: local-pheasant
+  defaults: standalone
   description: Lightweight MCP knowledge graph and retrieval server
   environment: local
   log_level: INFO

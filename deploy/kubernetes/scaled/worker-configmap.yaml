@@ -15,6 +15,7 @@ data:
   pheasant.yaml: |
     pheasant:
       name: k8s-pheasant-worker
+      defaults: standalone
       environment: kubernetes
       log_level: INFO
       # A worker never reads or writes authoritative state. These paths exist

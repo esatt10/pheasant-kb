@@ -71,7 +71,14 @@ Schema changes migrate on start (`db-init` runs before anything serves) and
 keep the originals they replace; release notes say when a release changes how
 files are processed, which re-reads the affected sources on their next sync.
 Your `.env`, your
-`compose.override.yaml` and your own `pheasant.yaml` copy are not touched. If
+`compose.override.yaml` and your own `pheasant.yaml` copy are not touched.
+
+Since pheasant-kb became pheasant's default configuration, a config that names
+no defaults table is built on pheasant-kb's. pheasant-kb configs are
+unaffected. A config of your own for a *different* shape, such as a laptop
+`pheasant up` config written before this release, needs `defaults: standalone`
+under `pheasant:` to keep running on SQLite; see
+[Defaults](../configuration.md#defaults-pheasant-kb-or-standalone). If
 you keep a config copy, compare it with the new
 `deploy/compose/pheasant-kb.yaml` for settings you may want to adopt.
 

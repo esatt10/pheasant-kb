@@ -23,6 +23,9 @@
 # So the zero-config path is genuinely one line:
 #   docker run -p 8765:8765 -v "$PWD:/workspace:ro" -v pheasant-state:/state \
 #     ghcr.io/esatt10/pheasant
+# With nothing mounted at /config the entrypoint writes a config on the
+# standalone defaults (SQLite, one process). pheasant's own default is
+# pheasant-kb's configuration, which compose.yaml mounts for every tier.
 
 # --------------------------------------------------------------------------
 # Stage 1 — the web UI bundle.

@@ -118,7 +118,8 @@ Named volumes, prefixed with the project name (`pheasant-kb_`):
 ## What it is configured to do
 
 The shipped configuration, [`deploy/compose/pheasant-kb.yaml`](https://github.com/esatt10/pheasant-kb/blob/main/deploy/compose/pheasant-kb.yaml),
-turns on the full product:
+is pheasant's default configuration: a key any config leaves unset takes its
+value. It turns on the full product:
 
 - **Hybrid retrieval**: BM25 full-text (Postgres `pg_textsearch`), vectors
   (`text-embedding-3-small` in LanceDB, held in memory, with an HNSW index) and
