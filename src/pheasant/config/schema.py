@@ -599,12 +599,30 @@ class ExtractorSettings(ModelMixin):
     knowledge base, so it is an explicit operator choice rather than a
     surprise on upgrade.
 
+    ``math`` is ``off`` (default) or ``latex``. With ``latex``, equations are
+    written as TeX in the extracted text — ``$…$`` inline, ``$$…$$`` displayed
+    — so they are searchable and the UI typesets them. A DOCX equation is
+    converted from its Office Math XML (:mod:`pheasant.ingestion.omml`); a PDF
+    equation is rebuilt from its glyphs' fonts and positions
+    (:mod:`pheasant.ingestion.pdf_math`), by every provider. Off by default
+    for the reason ``html_text`` is: it changes the indexed text of documents
+    that hold equations. Turning it on re-reads document sources once (it is
+    part of their fingerprint); text with no equation in it is unchanged.
+
     A sidecar ``<file>.extract.txt`` always wins, providing authored text with
     no extractor at all (mirrors the caption/transcript sidecars).
     """
 
     provider: str = "auto"
     html_text: bool = False
+    math: str = "off"
+
+    def __post_init__(self) -> None:
+        self.math = str(self.math or "off").strip().lower()
+        if self.math not in ("off", "latex"):
+            raise ValueError(
+                f"ingestion.extractor.math must be 'off' or 'latex', not {self.math!r}"
+            )
 
 
 @dataclass

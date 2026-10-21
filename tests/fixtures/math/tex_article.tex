@@ -1,0 +1,22 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\pagestyle{empty}
+\begin{document}
+\section*{Least squares}
+Let $X \in \mathbb{R}^{n \times p}$ be a design matrix.\footnote{We assume $n > p$.} The estimate minimises
+\begin{equation}
+L(\beta) = \sum_{i=1}^{n} \left( y_i - x_i^\top \beta \right)^2,
+\end{equation}
+and its variance is $\operatorname{Var}(\hat\beta) = \sigma^2 (X^\top X)^{-1}$.
+The density is
+\[
+f(x) = \frac{1}{\sqrt{2\pi\sigma^2}} \exp\left( -\frac{(x-\mu)^2}{2\sigma^2} \right).
+\]
+The mean is $\bar{x} = \frac{1}{n} \sum_{i=1}^n x_i$ and $\lim_{n \to \infty} \left(1 + \frac{1}{n}\right)^n = e$.
+\[
+|x| = \begin{cases} x & \text{if } x \geq 0, \\ -x & \text{otherwise.} \end{cases}
+\qquad
+A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}
+\]
+Roots such as $\sqrt[3]{x+1}$, and $\alpha \leq \beta \neq \gamma$ with $x_{i_j} \neq y'$.
+\end{document}

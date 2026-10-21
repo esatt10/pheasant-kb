@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from pheasant.ingestion.extractor import math_enabled
 from pheasant.ingestion.pdf_pages import pdf_page_count, pdf_page_texts
 from pheasant.sync.preparation import _remote_inflight_batches
 from pheasant.sync.remote_worker import RemoteWorkerError, configured_token
@@ -60,6 +61,7 @@ class RemotePdfPages:
         max_inflight: int = 0,
         transport: str = "grpc",
         pool_factory: Any = None,
+        math: bool = False,
     ) -> None:
         self.urls = list(urls)
         self.token_env = token_env
@@ -69,6 +71,8 @@ class RemotePdfPages:
         self.max_inflight = int(max_inflight or 0)
         self.transport = transport
         self._pool_factory = pool_factory
+        #: Equations as LaTeX, read the same way by a worker and locally.
+        self.math = bool(math)
         self._pool: Any = None
         self._lock = threading.Lock()
 
@@ -83,12 +87,12 @@ class RemotePdfPages:
     def __call__(self, content: bytes, relative_path: str) -> list[str]:
         total = pdf_page_count(content)
         if total <= self.pages_per_task:
-            return pdf_page_texts(content)
+            return self._local(content)
         try:
             pool = self._worker_pool()
         except RemoteWorkerError as exc:
             logger.warning("Reading %s locally: %s", relative_path, exc)
-            return pdf_page_texts(content)
+            return self._local(content)
         ranges = [
             (first, min(first + self.pages_per_task, total))
             for first in range(0, total, self.pages_per_task)
@@ -118,14 +122,26 @@ class RemotePdfPages:
 
     def _read(self, pool: Any, content: bytes, relative_path: str, first: int, stop: int):
         try:
-            return pool.extract_pages(
-                content, first, stop, deadline=time.monotonic() + self.timeout
-            )
+            deadline = time.monotonic() + self.timeout
+            if self.math:
+                return pool.extract_pages(content, first, stop, deadline=deadline, math=True)
+            return pool.extract_pages(content, first, stop, deadline=deadline)
         except Exception as exc:  # noqa: BLE001 - the fleet is an optimization
             logger.warning(
                 "Reading pages %d-%d of %s locally: %s", first + 1, stop, relative_path, exc
             )
-            return pdf_page_texts(content, first, stop)
+            return self._local(content, first, stop)
+
+    def _local(self, content: bytes, first: int = 0, stop: int | None = None) -> list[str]:
+        """This process's read of a range, the way a worker would read it."""
+
+        if self.math:
+            return pdf_page_texts(content, first, stop, math=True)
+        return (
+            pdf_page_texts(content)
+            if first == 0 and stop is None
+            else pdf_page_texts(content, first, stop)
+        )
 
     def _worker_pool(self) -> Any:
         with self._lock:
@@ -167,6 +183,7 @@ def remote_pdf_pages(config: Any) -> RemotePdfPages | None:
         max_parallel_files=int(concurrency.max_parallel_files or 1),
         max_inflight=int(getattr(concurrency, "remote_worker_max_inflight_batches", 0) or 0),
         transport=str(concurrency.worker_transport or "http").lower(),
+        math=math_enabled(getattr(getattr(config, "ingestion", None), "extractor", None)),
     )
 
 

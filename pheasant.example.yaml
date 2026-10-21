@@ -322,6 +322,12 @@ ingestion:
                           #   those extensions have always indexed as raw
                           #   markup, so enabling it changes existing chunk
                           #   boundaries and is an explicit choice.
+    math: off             # "off" | "latex": write equations in PDFs and DOCX
+                          #   as TeX ($…$ inline, $$…$$ displayed), rebuilt
+                          #   from Office Math XML or from a PDF's glyphs by
+                          #   every provider. OFF by default for the reason
+                          #   html_text is; turning it on re-reads document
+                          #   sources once. Text with no equation is unchanged.
   # Image captioning — built only when `include` admits an image extension.
   captioner:
     provider: stub        # "stub" (deterministic, offline) | "openai-spec"

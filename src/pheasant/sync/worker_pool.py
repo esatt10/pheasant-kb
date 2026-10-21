@@ -408,6 +408,7 @@ class WorkerPool:
         stop: int,
         *,
         deadline: float | None = None,
+        math: bool = False,
     ) -> list[str]:
         """The text of PDF pages ``[first, stop)``, read by one worker.
 
@@ -425,7 +426,9 @@ class WorkerPool:
             timeout = (
                 self._timeout if remaining is None else max(0.001, min(self._timeout, remaining))
             )
-            pages = extract(endpoint.url, content, first, stop, token=self._token, timeout=timeout)
+            pages = extract(
+                endpoint.url, content, first, stop, token=self._token, timeout=timeout, math=math
+            )
             if len(pages) != stop - first:
                 raise _Retryable(f"worker returned {len(pages)} pages for {stop - first}")
             return pages

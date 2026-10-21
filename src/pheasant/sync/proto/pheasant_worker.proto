@@ -81,6 +81,10 @@ message ExtractPagesRequest {
   // [first_page, stop_page), zero-based.
   uint32 first_page = 2;
   uint32 stop_page = 3;
+  // Write equations as LaTeX (ingestion.extractor.math: latex). A worker that
+  // predates this field ignores it and answers with a reader_version lacking
+  // the math suffix, which the coordinator refuses and reads itself.
+  bool math = 4;
 }
 
 message ExtractPagesResponse {

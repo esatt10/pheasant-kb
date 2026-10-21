@@ -423,8 +423,10 @@ TeX the model meant.
 KaTeX runs untrusted: `\href`, `\url`, `\includegraphics` and the `\html…`
 commands are refused, and math is typeset only *after* the page's HTML is
 sanitized, so a formula cannot add a link, fetch anything or carry markup.
-Text extracted from a PDF holds its formulas as glyphs, not TeX, so those
-passages show as text. The MCP App view (`knowledge_view.html`) shows TeX as
+By default a PDF's or Word document's formulas are indexed as their glyphs,
+not TeX; with `ingestion.extractor.math: latex` the extractors write them as
+`$…$` / `$$…$$` and those passages typeset too (see
+[Equations as LaTeX](../configuration.md#equations-as-latex)). The MCP App view (`knowledge_view.html`) shows TeX as
 written.
 
 ## MCP Apps
