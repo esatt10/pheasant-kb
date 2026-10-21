@@ -145,6 +145,11 @@ def test_the_task_round_trips_through_the_proto(tmp_path: Path) -> None:
     task = _task(tmp_path)
     assert task_from_request(request_from_task(pb2, task, "key")) == task
 
+    # The extractor settings ride too: a gRPC worker that dropped them would
+    # read a fleet's documents without ``math`` or ``html_text``.
+    task["extractor"] = {"html_text": False, "math": "latex"}
+    assert task_from_request(request_from_task(pb2, task, "key")) == task
+
 
 def test_binary_content_survives_the_round_trip(tmp_path: Path) -> None:
     pb2, _ = load_protos()
@@ -276,7 +281,7 @@ def test_a_refused_file_does_not_fail_the_rest_of_the_stream(
     transport.discard(channel)
 
     assert body["results"][0]["parsed"]["relative_path"] == "note-0.md"
-    assert "only accepts ordinary text" in body["results"][1]["error"]
+    assert "does not support this content type" in body["results"][1]["error"]
     assert body["results"][2]["parsed"] is not None
 
 

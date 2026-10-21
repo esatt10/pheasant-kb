@@ -53,6 +53,9 @@ message PrepareRequest {
   string payload_meta_json = 5;
   // [branch, commit, dirty] or absent.
   string git_metadata_json = 6;
+  // ExtractorSettings (html_text, math, ...) or absent: the parser settings
+  // the JSON route carries as ``extractor``.
+  string extractor_json = 7;
 }
 
 message PrepareResponse {

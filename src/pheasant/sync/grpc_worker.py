@@ -340,6 +340,7 @@ def request_from_task(pb2: Any, task: dict[str, Any], key: str) -> Any:
     encoded = payload.pop("content_base64", "")
     content = base64.b64decode(encoded, validate=True) if encoded else b""
     git_metadata = task.get("git_metadata")
+    extractor = task.get("extractor")
     return pb2.PrepareRequest(
         idempotency_key=key,
         source_json=json.dumps(task.get("source") or {}, separators=(",", ":")),
@@ -349,6 +350,7 @@ def request_from_task(pb2: Any, task: dict[str, Any], key: str) -> Any:
         git_metadata_json=(
             "" if git_metadata is None else json.dumps(git_metadata, separators=(",", ":"))
         ),
+        extractor_json=("" if extractor is None else json.dumps(extractor, separators=(",", ":"))),
     )
 
 
@@ -371,6 +373,7 @@ def task_from_request(request: Any) -> dict[str, Any]:
         "git_metadata": (
             json.loads(request.git_metadata_json) if request.git_metadata_json else None
         ),
+        "extractor": json.loads(request.extractor_json) if request.extractor_json else None,
     }
 
 
