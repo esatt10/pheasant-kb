@@ -43,6 +43,7 @@ import socket
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -235,3 +236,178 @@ def running(
         (source_id, _stale_before(stale_after_s)),
     )
     return dict(rows[0]) if rows else None
+
+
+def cancellable(
+    prepared_items: Any,
+    run: SyncRun,
+    processed: set[str],
+    stopped: list[SyncCancelled],
+):
+    """Yield ``prepared_items`` until the run is cancelled, then stop.
+
+    A generator rather than a ``try`` around the commit loop, so the loop body
+    is unchanged: the run is checked before each item is handed out, and a
+    cancel ends the iteration with the request left in ``stopped`` for the
+    caller to act on. An item counts as ``processed`` once the loop asks for
+    the next one, which is after its body ran to the end or to a ``continue``
+    -- never for an item that was only read ahead. (Counting it before the
+    ``yield`` instead would be equivalent on the cancel path, which checks
+    before an item is handed out; the order matters only to a body that
+    raises, and then the sync fails and ``processed`` is never read.)
+
+    Closing ``prepared_items`` is what stops the look-ahead: its executor is
+    told to drop work it has not started rather than prepare a window of items
+    nobody will commit.
+    """
+
+    try:
+        for prepared in prepared_items:
+            try:
+                run.checkpoint()
+            except SyncCancelled as cancelled:
+                stopped.append(cancelled)
+                return
+            yield prepared
+            processed.add(prepared.item.identity)
+    finally:
+        close = getattr(prepared_items, "close", None)
+        if close is not None:
+            close()
+
+
+def finish_cancelled(
+    engine: Any,
+    cancelled: SyncCancelled,
+    *,
+    source: Any,
+    connector: Any,
+    mode: str,
+    manifest: dict[str, Any],
+    items: list[Any],
+    processed: set[str],
+    counts: dict[str, int],
+    started_at: str,
+    report: Callable[..., None],
+    embedding_progress: Callable[[int], None],
+    details: dict[str, Any],
+) -> Any:
+    """Stop a pass somebody cancelled, keeping everything it committed.
+
+    ``SyncEngine.sync_source`` calls this with itself as ``engine`` when
+    :func:`cancellable` ends its loop early, beside `vanished.prune_vanished`.
+
+    Each item the loop committed is already in the state store and the
+    working graph; this makes the rest of that durable -- vectors flushed,
+    graph published, manifest saved -- so the next incremental sync skips
+    those items by checksum and reads only what this pass never reached.
+
+    What it deliberately does **not** record is anything that claims the
+    pass was complete. Not the source fingerprint (a full sync escalated
+    by a config change stays escalated). Not the deletion of files missing
+    from the listing, nor the whole-graph enrichment: both run on the next
+    pass, which the dirty flag below makes enrich even if it finds nothing
+    new. Not "healthy": the source says ``cancelled`` until a sync of it
+    finishes. And not the connector's checkpoint, unless the connector can
+    build one that is true of a partial pass (``partial_checkpoint_from_items``).
+    """
+
+    from pheasant.ingestion.pipeline import utc_now
+    from pheasant.sync.engine import SyncResult
+
+    indexed = int(counts.get("indexed") or 0)
+    skipped = int(counts.get("skipped") or 0)
+    total_items = len(items)
+    logger.info(
+        "Sync of %s %s after %d of %d item(s)",
+        source.name,
+        cancelled,
+        len(processed),
+        total_items,
+    )
+    report("cancelling", len(processed), total_items, str(cancelled))
+    if engine.vectors is not None:
+        # Before the commit mutex, as in `_finalize_index_state`: this
+        # waits on a provider, and committed chunks without their vectors
+        # are exactly what no later incremental sync would re-embed.
+        engine.vectors.flush(on_progress=embedding_progress)
+    with engine._sync_mutex:
+        if indexed:
+            engine.flush_node_index()
+            engine.graph_store.save(engine.config.knowledge_base_id, engine.graph_builder.graph)
+            engine._graph_dirty = False
+            engine._last_checkpoint = time.monotonic()
+            engine.state.set_fingerprint(
+                engine._ENRICH_DIRTY_SCOPE.format(name=source.name), "1", utc_now()
+            )
+        engine.manifests.save(source.name, manifest)
+    partial = connector.partial_checkpoint_from_items(items, processed)
+    if partial is not None:
+        cursor, high_watermark = partial
+        high_watermark.update(
+            {"indexed_artifacts": indexed, "skipped_artifacts": skipped, "cancelled": True}
+        )
+        connector.set_checkpoint(cursor, high_watermark, "cancelled")
+    engine.state.mark_source_status(source.name, "cancelled")
+    outcome = {
+        "requested_by": cancelled.requested_by,
+        "reason": cancelled.reason or None,
+        "processed_items": len(processed),
+        "total_items": total_items,
+        "checkpoint_saved": partial is not None,
+    }
+    now = utc_now()
+    engine.state.append_sync_event(
+        uuid.uuid4().hex,
+        source.name,
+        "sync.cancelled",
+        "cancelled",
+        started_at,
+        now,
+        {
+            "mode": mode,
+            "connector_type": connector.connector_type,
+            "fetched": int(counts.get("fetched") or 0),
+            "skipped": int(counts.get("transfer_skipped") or 0),
+            "indexed_artifacts": indexed,
+            "skipped_artifacts": skipped,
+            "cancelled": outcome,
+            **details,
+        },
+    )
+    graph_nodes, graph_edges = engine._graph_counts()
+    return SyncResult(
+        source.name,
+        indexed,
+        skipped,
+        graph_nodes,
+        graph_edges,
+        "cancelled",
+        {
+            "connector_type": connector.connector_type,
+            "fetched": int(counts.get("fetched") or 0),
+            "skipped": int(counts.get("transfer_skipped") or 0),
+            "cancelled": outcome,
+            **details,
+        },
+    )
+
+
+def skip_disabled(engine: Any, source_id: str) -> Any:
+    """The result of a queued sync for a disabled source, or ``None`` to run it.
+
+    A task published before the source was disabled is still in the queue, and
+    an indexer restarted mid-sync has it redelivered -- which used to resume the
+    source anyway, so disabling a sync that was looping did not stop it. Such a
+    task is acknowledged, not failed: there is nothing to retry until somebody
+    enables the source again.
+    """
+
+    registered = engine.state.get_source(source_id)
+    if registered is None or int(registered["enabled"] or 0):
+        return None
+    from pheasant.sync.engine import SyncResult
+
+    logger.info("Skipping queued sync of %s: the source is disabled", source_id)
+    nodes, edges = engine._graph_counts()
+    return SyncResult(source_id, 0, 0, nodes, edges, "disabled", {"skipped": "source disabled"})

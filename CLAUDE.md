@@ -199,7 +199,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 173 pytest modules, offline by design
+└── tests/                     ← 175 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →

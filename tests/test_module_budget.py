@@ -62,7 +62,10 @@ CEILINGS: dict[str, int] = {
     # with their dataclass settings; this explicit raise accounts for that field.
     # Raised by 14 for the vector store's resident/ANN settings (seven fields,
     # one comment line each; their rationale lives in search/vector_*.py).
-    "config/schema.py": 2274,
+    # Raised by 10 for `ingestion.extractor.html_chrome`: one field, its
+    # validation, and the docstring paragraph every extractor setting carries;
+    # the rules themselves live in `ingestion/html_text.py`.
+    "config/schema.py": 2284,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -84,7 +87,9 @@ CEILINGS: dict[str, int] = {
     # the split this test is actually asking for.
     # Raised to 1115 for `archived_documents`, the per-document tombstone, on
     # the same grounds: a table's DDL belongs in the file that declares tables.
-    "persistence/schema.py": 1115,
+    # Raised to 1124 for `sync_runs` (a running sync and its cancel request),
+    # on those grounds again; its code lives in `sync/cancellation.py`.
+    "persistence/schema.py": 1124,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
@@ -97,7 +102,14 @@ CEILINGS: dict[str, int] = {
     # removed-source tombstone guard in `_source`/the enabled-source walk.
     # Raised to 2795 for the archived-document step's two call sites; the step
     # itself lives in `sync/archived.py`, beside `sync/vanished.py`.
-    "sync/engine.py": 2795,
+    # Raised to 2870 for cancelling a sync and surviving an unreadable item.
+    # The steps live beside the others -- the cancelled pass, the run row and
+    # the disabled-source skip in `sync/cancellation.py`, the read failures in
+    # `sync/preparation.py` -- and what stays is the loop's own wiring: the run
+    # in the write lock's `with`, the per-item check and failure note, the two
+    # call sites, and the look-ahead executors cancelling unstarted work when
+    # the loop stops early, which only the executors can do.
+    "sync/engine.py": 2870,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

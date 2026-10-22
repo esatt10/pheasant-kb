@@ -49,14 +49,8 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
-from pheasant.jobs import (
-    FAILED_SYNC_STATUSES,
-    JOBS_CLEAR_PATH,
-    JobClearServiceClient,
-    JobClearServiceError,
-    JobRegistry,
-    sync_job_status,
-)
+from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
+from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServiceError, JobRegistry
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry

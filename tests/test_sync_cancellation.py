@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
 from pheasant.config.schema import PheasantConfig
-from pheasant.jobs import sync_job_status
+from pheasant.job_snapshots import sync_job_status
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services import ServiceContext, SourceNotFound, sync_control
 from pheasant.services.errors import SyncNotRunning

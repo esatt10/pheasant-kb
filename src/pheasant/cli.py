@@ -538,7 +538,8 @@ class _QueueDrainer:
     def _run(self) -> None:
         import logging
 
-        from pheasant.jobs import FAILED_SYNC_STATUSES, JobRegistry, sync_job_status
+        from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
+        from pheasant.jobs import JobRegistry
         from pheasant.sync.queue import drain, owner_id, queue_from_config
 
         log = logging.getLogger("pheasant.cli")

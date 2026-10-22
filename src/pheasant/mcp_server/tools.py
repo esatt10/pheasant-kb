@@ -20,7 +20,8 @@ from pheasant.config.schema import (
 )
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
-from pheasant.jobs import FAILED_SYNC_STATUSES, JobRegistry, sync_job_status
+from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
+from pheasant.jobs import JobRegistry
 from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.inventory_tools import InventoryTools

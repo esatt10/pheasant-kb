@@ -12,6 +12,7 @@ mutates authoritative state.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,8 @@ from pheasant.ingestion.content_types import is_text_file
 from pheasant.ingestion.media import MAX_MEDIA_BYTES, stored_suffix
 from pheasant.ingestion.pipeline import ParsedArtifact, parse_connector_payload, sha256_bytes
 from pheasant.sync.connectors import ConnectorItem, ConnectorPayload
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pheasant.sync.engine import SyncMode
@@ -150,3 +153,54 @@ def _remote_inflight_batches(workers: int, batches: int, urls: int, configured: 
 
     per_fleet = configured if configured > 0 else urls * 2
     return max(1, min(workers, batches, per_fleet))
+
+
+class ReadFailures:
+    """The items one pass could not read, and what that means for the pass.
+
+    One unreadable item is that item's failure: it keeps what the index holds,
+    is reported with its path and error (the job's ``failures``, the sync's
+    ``unreadable``), and is read again by the next sync. Before this one page
+    that timed out failed a whole web collection, and a queued sync of 4,698
+    pages was redelivered from its first page, forever. Every item failing is
+    different -- the network or the mount is gone -- and still fails the pass,
+    rather than recording one that saw nothing as healthy.
+    """
+
+    def __init__(self, source_name: str) -> None:
+        self.source_name = source_name
+        self.items: list[tuple[str, str]] = []
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def note(self, prepared: _PreparedItem) -> list[dict[str, str]]:
+        """Record ``prepared`` if it could not be read; its failures for the job."""
+
+        if not prepared.read_error:
+            return []
+        path = prepared.item.relative_path
+        self.items.append((path, prepared.read_error))
+        logger.warning(
+            "%s: could not read %s (%s); keeping what the index holds",
+            self.source_name,
+            path,
+            prepared.read_error,
+        )
+        return [{"path": path, "error": prepared.read_error}]
+
+    def require_some_read(self, total_items: int) -> None:
+        if self.items and len(self.items) == total_items:
+            path, error = self.items[0]
+            raise RuntimeError(
+                f"could not read any of the {total_items} item(s) of {self.source_name} "
+                f"(first: {path}: {error})"
+            )
+
+    def details(self) -> dict[str, Any]:
+        if not self.items:
+            return {}
+        return {
+            "unreadable_items": len(self.items),
+            "unreadable": [{"path": p, "error": e} for p, e in self.items[:25]],
+        }
