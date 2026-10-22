@@ -1,7 +1,7 @@
 """An exact nearest-neighbour scan held in memory, for a LanceDB table that fits.
 
 LanceDB with no ANN index answers a query by reading every vector from its
-files: 280 ms p50 for 60,509 x 1536-d vectors on one core (the pheasant-lab
+files: 280 ms p50 for 60,509 x 1536-d vectors on one core (the pheasant-kb
 api tier), and compaction made it slower, not faster. The same top-k as one
 float32 matrix-vector product is 34 ms with an identical result set, because
 the matrix is already decoded and contiguous and BLAS reads it at memory

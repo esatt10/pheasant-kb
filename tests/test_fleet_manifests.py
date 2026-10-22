@@ -1041,7 +1041,7 @@ def _fleet_configs() -> dict[str, Any]:
         ),
         **{
             f"answers/{name}.json": json.loads((COMPOSE / "answers" / f"{name}.json").read_text())
-            for name in ("scalable", "pheasant-lab")
+            for name in ("scalable", "pheasant-kb")
         },
     }
 
@@ -1065,7 +1065,7 @@ def test_every_fleet_chunks_by_plan_and_reads_long_pdfs_on_its_workers(name: str
     assert reader.transport == config.sync.concurrency.worker_transport
 
 
-@pytest.mark.parametrize("name", ["answers/scalable.json", "answers/pheasant-lab.json"])
+@pytest.mark.parametrize("name", ["answers/scalable.json", "answers/pheasant-kb.json"])
 def test_the_fleet_answer_files_regenerate_the_same_defaults(name: str) -> None:
     """`fleet.yaml` is regenerated from its answer file; a default that lives
     only in the YAML is one regeneration away from disappearing."""
@@ -1095,9 +1095,9 @@ def test_the_lab_fleet_admits_what_pheasant_swarm_search_needs() -> None:
 
     from pheasant.mcp_server.server import _transport_security
 
-    config = PheasantConfig.model_validate(_wizard_config("pheasant-lab"))
+    config = PheasantConfig.model_validate(_wizard_config("pheasant-kb"))
     assert "api:8765" in _transport_security(config).allowed_hosts
-    assert config.pheasant.name == "pheasant-lab"
+    assert config.pheasant.name == "pheasant-kb"
     assert Path("/state") in config.security.allow_workspace_roots
     assert config.readiness.enabled
     assert config.security.api_auth.token_env == "PHEASANT_API_TOKEN"

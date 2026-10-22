@@ -71,6 +71,7 @@ def _region(state: Path, corpora: dict[str, Path], strategy: str, args: Any) -> 
         {
             "pheasant": {
                 "name": f"compare-{strategy}",
+                "defaults": "standalone",
                 "state_path": str(state / "state"),
                 "workspace_root": str(state),
                 "exports_path": str(state / "exports"),

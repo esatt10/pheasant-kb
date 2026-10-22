@@ -1,106 +1,77 @@
 # pheasant
 
-pheasant is a **Docker-first, local-first knowledge harness** for you and your
-agents. It turns your sources — git repositories, folders, single
-files, PDFs and Office documents, images and audio, web collections, a
-Google Drive connector and APIs — into a
-queryable **knowledge graph** with hybrid self-search, served over MCP, HTTP and
-a web UI.
+pheasant is a **knowledge harness** for you and your agents. It turns your
+sources (git repositories, folders, PDFs and Office documents, images and
+audio, web pages, Google Drive and APIs) into one **knowledge graph** with
+hybrid search and cited answers, served through a web UI, an HTTP API and MCP.
 
-!!! tip "Part of the Synapse Suite"
-    pheasant is the **region** component of **Synapse**, a federated
-    knowledge-base platform. New here, or want the whole-system view? Start at
-    the suite front door:
-    **[The Synapse Suite →](https://esatt10.github.io/pheasant-flock/)**
-    (the [pheasant-flock](https://github.com/esatt10/pheasant-flock)
-    router site). This site is the region/KB half.
+## Start here
 
-It runs perfectly well **standalone**: point it at some sources, sync, and query
-over MCP or HTTP. It also has a **second role**: each pheasant container can act
-as a federated **"brain region"** inside a **Synapse** fleet.
+pheasant runs as **pheasant-kb**: one command, a small set of containers.
 
-## Two roles, one container
+=== "macOS / Linux"
+
+    ```bash
+    git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb && echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
+    ```
+
+=== "Windows (PowerShell)"
+
+    ```powershell
+    git clone https://github.com/esatt10/pheasant-kb; cd pheasant-kb; Set-Content .env "OPENAI_API_KEY=sk-..."; docker compose up -d
+    ```
+
+Then open <http://127.0.0.1:8765>. The rest of the documentation uses this
+stack as its reference.
 
 <div class="grid cards" markdown>
 
--   :material-database-search: **Standalone knowledge base / MCP context server**
+-   :material-rocket-launch: **[Run pheasant-kb](pheasant-kb/index.md)**
 
-    Index your code and docs, search them by text, graph, or vector
-    similarity, and expose the result to agents over MCP. Multi-modal: images
-    are captioned and audio is transcribed into the same searchable space.
+    The one line, the token, adding your first sources, connecting an agent,
+    and what each container does.
 
-    [:octicons-arrow-right-24: Start with the quickstart](tutorials/quickstart.md)
+-   :material-tune: **[Configure it](pheasant-kb/configure.md)**
 
--   :material-lan-connect: **Federated region in a Synapse fleet**
+    Models, sources, host folders, retrieval, ingestion, and the features you
+    can turn off.
 
-    Publish a bounded **semantic contract** describing what this region knows.
-    A Synapse router scores contracts, routes global queries to the right
-    regions, and fans out to each region's self-search.
+-   :material-arrow-expand-all: **[Scale it up or down](pheasant-kb/scale.md)**
 
-    [:octicons-arrow-right-24: Attach to a Synapse fleet](how-to/attach-to-synapse.md)
+    Memory, CPU, storage, the vector store, workers and the indexer: which one
+    is limited, and which number to move.
+
+-   :material-wrench: **[Operate it](pheasant-kb/operate.md)**
+
+    Status, upgrades, backups, token rotation and troubleshooting.
 
 </div>
 
-!!! tip "Standalone behavior is sacred"
-    Every Synapse feature is **off by default**. With no `synapse:` block set,
-    pheasant behaves exactly like a router-less knowledge base. You never have
-    to join a fleet to get full value.
-
-## Pick your path
+## Use it
 
 | You want to… | Go here |
 |---|---|
-| Stand up a knowledge base in 10 minutes | [Quickstart tutorial](tutorials/quickstart.md) |
-| See it in the browser (Docker Compose or CLI) | [Run the web UI](how-to/run-the-ui.md) |
-| Index images and audio (offline) | [Multi-modal tutorial](tutorials/multimodal.md) |
-| Configure source types and sync modes | [Configure sources](how-to/sources.md) |
-| Turn on semantic / vector search | [Vector self-search](how-to/vector-search.md) |
-| Tune local workers or add indexing nodes | [Speed up indexing](how-to/indexing-performance.md) |
-| Join a federated Synapse fleet | [Attach to a Synapse fleet](how-to/attach-to-synapse.md) |
-| Connect an agent over MCP | [MCP for agents](mcp_client.md) |
-| Back up and restore region state | [Backup & restore](how-to/backup-restore.md) |
-| See every command, route, and tool | [Interface matrix](reference/interfaces.md) |
+| Ask questions and browse sources in the web UI | [Ask your knowledge base](how-to/chat-and-ui.md) |
+| Get longer answers, follow-ups and diagrams | [Answers, conversations and visuals](how-to/conversations-and-visuals.md) |
+| Give a coding agent your knowledge base | [Attach to a coding agent](how-to/attach-to-coding-agent.md) · [MCP tools](mcp_tools.md) |
+| Let agents remember | [Agent memory](how-to/agent-memory.md) |
+| Add and tune sources | [Configure sources](how-to/sources.md) |
+| Know whether retrieval is any good, and fix it | [Knowledge effectiveness](knowledge-effectiveness.md) · [Retrieval tuning](retrieval-tuning.md) |
+| See every command, route and tool | [Interface matrix](reference/interfaces.md) |
 
-## The persistence split
+## Other ways to run it
 
-pheasant keeps three clearly separated directories. Understanding the split
-makes operations (backups, restores, mounts) predictable:
+The same code runs as a single container with no database, broker or key, on
+the host with `pip install pheasant-kb`, or across a Kubernetes cluster. See
+[Other ways to run pheasant](other-deployments.md).
 
-| Directory | Contents | Treat as |
-|---|---|---|
-| `/state` | SQLite DB, graph JSON + zstd snapshots, manifests, the published contract, the event stream, the vector index | **Operational source of truth — user data.** Back this up. |
-| `/exports` | Graph JSON and visualization payloads | Regenerable |
+## pheasant and Synapse
 
-See [Architecture](architecture.md) for the full component map and runtime flow.
-
-## How the two repos relate
-
-Synapse is a two-repo system:
-
-- **pheasant** (this repo) is a **region** — a self-contained knowledge base
-  with its own sync engine, graph, and self-search. It publishes a semantic
-  contract and answers fan-out queries.
-- **[pheasant-flock](https://github.com/esatt10/pheasant-flock)** is
-  the **router** — the "nervous system" that scores contracts, routes global
-  queries across regions, merges and re-ranks the answers, and discovers
-  cross-region relationships ("white matter").
-
-The boundary between them is **contract JSON over HTTP** — there is no Python
-dependency between the repos, and a router-less pheasant keeps working unchanged.
-For the global, cross-region search experience, see the
-[pheasant-flock documentation site](https://github.com/esatt10/pheasant-flock).
-
-## What's shipped
-
-- **Sync engine** with `incremental` / `full` / `validate_only` / `repair` modes,
-  crash-safe WAL state, a single-writer lease, and connector checkpoints.
-- **Hybrid search** over `text` (SQLite FTS5 + BM25), `graph`, and `vector`
-  (optional embeddings) — see [Vector self-search](how-to/vector-search.md).
-- **Multi-modal ingest**: image captioning and audio transcription, both with a
-  deterministic offline stub default — see the
-  [multi-modal tutorial](tutorials/multimodal.md).
-- **Backup & restore** of region state (`pheasant backup` / `pheasant restore`)
-  plus zstd graph snapshots with retention.
-- **Synapse region wiring**: contract publisher, NDJSON event stream + router
-  webhook, and optional Ed25519 contract signing.
-- **MCP and HTTP** interfaces, plus a React web UI sidecar.
+pheasant is also the **region** half of **Synapse**, a federated knowledge-base
+system whose router lives in
+[pheasant-flock](https://github.com/esatt10/pheasant-flock). A region publishes
+a semantic contract describing what it knows; the router uses it to decide
+which regions to ask. It is entirely optional and off by default: a router-less
+pheasant is a complete product. See
+[Attach to a Synapse fleet](how-to/attach-to-synapse.md) and
+[the Synapse suite](https://esatt10.github.io/pheasant-flock/).

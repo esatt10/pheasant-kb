@@ -1,5 +1,11 @@
 # How to back up and restore region state
 
+!!! tip "pheasant-kb is the default deployment"
+    This page covers the single-container, SQLite-backed deployment. pheasant-kb
+    keeps its index in Postgres; back it up as described in
+    [Operate pheasant-kb](../pheasant-kb/operate.md#back-up-and-restore).
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 `/state` is pheasant's operational source of truth — SQLite, the graph and its
 snapshots, manifests, the published contract, the event stream, and the vector
 index. Treat it as **user data** and back it up.

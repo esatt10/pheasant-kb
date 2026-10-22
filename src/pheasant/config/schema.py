@@ -17,6 +17,7 @@ from pheasant.config.exclusions import (
 from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
+from pheasant.config.flagship import with_table_defaults
 from pheasant.config.model import ModelMixin
 from pheasant.config.retired import resolve_source_type
 from pheasant.ingestion.content_types import default_include_globs
@@ -212,6 +213,9 @@ class PheasantSettings(ModelMixin):
     state_path: Path = Path("/state")
     workspace_root: Path = Path("/workspace")
     exports_path: Path = Path("/exports")
+    #: ``flagship`` (pheasant-kb's, the default) or ``standalone`` (the values
+    #: written in this module); see :mod:`pheasant.config.flagship`.
+    defaults: str | None = None
 
 
 @dataclass
@@ -2143,8 +2147,10 @@ class PheasantConfig(ModelMixin):
         list, whose `path` is anchored to `workspace_root` and whose `type` may
         be a plugin string outside the enum, and the three state paths defaulted
         from `pheasant.state_path` at the end.
+        ``data`` is laid over pheasant-kb's defaults first: see ``config/flagship.py``.
         """
 
+        data, table = with_table_defaults(data)
         cfg = cls(
             **{
                 name: _build(annotation, data.get(name))
@@ -2193,6 +2199,7 @@ class PheasantConfig(ModelMixin):
         cfg.storage.sqlite_path = cfg.storage.sqlite_path or state / "pheasant.db"
         cfg.storage.graph_path = cfg.storage.graph_path or state / "graphs"
         cfg.storage.manifest_path = cfg.storage.manifest_path or state / "manifests"
+        cfg.pheasant.defaults = table
         return cfg
 
     def effective_source(

@@ -1,5 +1,6 @@
 pheasant:
   name: pheasant-scalable-worker
+  defaults: standalone
   description: Stateless gRPC preparation worker for the scalable Pheasant fleet
   environment: compose
   log_level: INFO

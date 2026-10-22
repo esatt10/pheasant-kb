@@ -1,5 +1,10 @@
 # Run the web UI (and keep it up to date)
 
+!!! tip "pheasant-kb is the default deployment"
+    pheasant-kb serves the UI at <http://127.0.0.1:8765> after one
+    `docker compose up -d`. The options below are for running it some other way.
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 You have the `pheasant` CLI working and you want to *see* your knowledge base —
 the three-pane workspace with sources, chat, and the graph canvas. This page is
 the complete path from a shell prompt to a browser tab, plus the rules for

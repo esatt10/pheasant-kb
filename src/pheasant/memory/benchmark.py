@@ -508,6 +508,7 @@ def _membench_config(root: Path, *, compaction_enabled: bool = False) -> Path:
     config_path.write_text(
         f"""pheasant:
   name: membench
+  defaults: standalone
   state_path: {root / "state"}
   exports_path: {root / "exports"}
   workspace_root: {root}

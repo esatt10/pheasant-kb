@@ -2998,10 +2998,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     if args.command == "backup":
         from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import create_backup
+        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, create_backup
         from pheasant.persistence.paths import StatePaths
 
         cfg = load_config(Path(args.config))
+        if cfg.storage.backend != "sqlite":
+            print(POSTGRES_BACKUP_REFUSAL.format(action="back up"), file=sys.stderr)
+            return 2
         paths = StatePaths.from_config(cfg)
         out = create_backup(paths.state, Path(args.output), sqlite_path=paths.sqlite)
         size = out.stat().st_size
@@ -3009,10 +3012,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "restore":
         from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import restore_backup
+        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, restore_backup
         from pheasant.persistence.paths import StatePaths
 
         cfg = load_config(Path(args.config))
+        if cfg.storage.backend != "sqlite":
+            print(POSTGRES_BACKUP_REFUSAL.format(action="restore"), file=sys.stderr)
+            return 2
         paths = StatePaths.from_config(cfg)
         try:
             target = restore_backup(Path(args.input), paths.state, force=args.force)

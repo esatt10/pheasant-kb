@@ -285,7 +285,7 @@ def _request_once(
         else:
             assert mcp_client is not None
             arguments = {
-                "knowledge_base": case.get("knowledge_base") or "pheasant-lab",
+                "knowledge_base": case.get("knowledge_base") or "pheasant-kb",
                 "question": case["question"],
                 "mode": case.get("mode", "hybrid"),
                 "max_results": case.get("max_results", 8),

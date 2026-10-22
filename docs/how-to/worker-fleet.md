@@ -1,5 +1,12 @@
 # Running a worker fleet
 
+!!! tip "pheasant-kb is the default deployment"
+    pheasant-kb already runs this topology on one host, with four workers and
+    every tier sized from `.env`; [Scale up or down](../pheasant-kb/scale.md)
+    is the short version of this page. Read on for how the fleet works
+    and for running it on Kubernetes.
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 ## Split the process first
 
 Before any of the below matters, decide what each process *is*. One pheasant

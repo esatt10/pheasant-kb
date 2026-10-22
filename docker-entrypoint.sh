@@ -72,8 +72,16 @@ ensure_config() {
 
     # `--accept-defaults` asks nothing and reads every default off the live
     # schema, so this stays correct as the schema changes.
+    #
+    # A container with no config mounted is one process on its own: the
+    # `docker run` path, never pheasant-kb (whose compose.yaml mounts its
+    # config). pheasant-kb's configuration needs Postgres, NATS and a worker
+    # tier this container does not have, so the config written here is built
+    # on the standalone table (SQLite, no queue, no key) and records that,
+    # unless PHEASANT_DEFAULTS asks for something else.
     if [ -n "$answers_file" ]; then
-        if python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" \
+        if PHEASANT_DEFAULTS="${PHEASANT_DEFAULTS:-standalone}" \
+                python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" \
                 --answers "$answers_file" >/dev/null; then
             rm -f "$answers_file"
             return 0
@@ -81,7 +89,8 @@ ensure_config() {
         rm -f "$answers_file"
         return 1
     fi
-    python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" >/dev/null
+    PHEASANT_DEFAULTS="${PHEASANT_DEFAULTS:-standalone}" \
+        python -m pheasant setup --accept-defaults --output "$CONFIG_PATH" >/dev/null
 }
 
 # Index the workspace when something is actually mounted there. An empty
@@ -129,6 +138,32 @@ cpu_quota_threads() {
     [ "$threads" -lt 1 ] && threads=1
     echo "$threads"
 }
+
+# Secrets as files: the `NAME_FILE` convention the postgres image made
+# standard. For every `NAME_FILE` in the environment, NAME is exported from
+# that file's contents, unless NAME is already set to something non-empty,
+# which wins. This is what lets the pheasant-kb stack (compose.yaml) generate
+# its four tokens into volumes on first boot instead of asking a person for
+# them, and lets Kubernetes or Swarm hand any key over as a mounted file.
+# An unreadable file is reported and skipped rather than fatal: the server's
+# own startup refusal then names the variable it is missing, which is the
+# more useful error.
+load_file_secrets() {
+    for secret_name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)_FILE=.*$/\1/p'); do
+        eval "secret_current=\${$secret_name:-}"
+        [ -n "$secret_current" ] && continue
+        eval "secret_path=\${${secret_name}_FILE}"
+        if [ -r "$secret_path" ]; then
+            secret_value=$(cat "$secret_path")
+            export "$secret_name=$secret_value"
+        else
+            echo "pheasant: ${secret_name}_FILE names $secret_path, which is not readable; $secret_name stays unset." >&2
+        fi
+    done
+    unset secret_name secret_current secret_path secret_value
+}
+
+load_file_secrets
 
 if blas_threads=$(cpu_quota_threads); then
     : "${OPENBLAS_NUM_THREADS:=$blas_threads}" "${OMP_NUM_THREADS:=$blas_threads}"

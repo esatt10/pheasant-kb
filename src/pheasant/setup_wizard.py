@@ -36,10 +36,12 @@ import shutil
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
 from pheasant.assistant.catalog import PROVIDERS, resolve_auto_provider
+from pheasant.config.flagship import default_config, resolve_defaults, using_defaults
 from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_client.vscode import DEFAULT_IMAGE
 
@@ -54,18 +56,29 @@ QuestionValidator = Callable[[Any], Any]
 def schema_default(dotted: str) -> Any:
     """The live default for a dotted config path, read off the dataclasses.
 
-    ``schema_default("search.embeddings.model")`` instantiates a default
+    ``schema_default("search.embeddings.model")`` builds the default
     :class:`~pheasant.config.schema.PheasantConfig` and walks to the field, so
     a default that changes in the schema changes in the wizard with no second
     edit. A typo raises immediately (at import time, via the module-level
     section list) rather than silently offering ``None``.
+
+    "The default" is the table in force: pheasant-kb's unless the answers or
+    ``PHEASANT_DEFAULTS`` select standalone (:mod:`pheasant.config.flagship`).
     """
-    cursor: Any = PheasantConfig()
+    cursor: Any = _default_config(resolve_defaults())
     for part in dotted.split("."):
         cursor = getattr(cursor, part)
     if isinstance(cursor, Path):
         return str(cursor)
     return cursor
+
+
+@cache
+def _default_config(profile: str) -> PheasantConfig:
+    """One default config per table, read-only by convention: the wizard asks
+    for a few hundred defaults per run and each would otherwise be a build."""
+
+    return default_config(profile)
 
 
 @dataclass
@@ -1549,12 +1562,21 @@ class Wizard:
         self.advanced = advanced
         self.accept_defaults = accept_defaults
         self.answers: dict[str, Any] = dict(preset or {})
+        # Which defaults every answer is offered against, and which the
+        # written config will be built on. Recorded in the file so it reloads
+        # on the same table whatever PHEASANT_DEFAULTS says later.
+        self.defaults = resolve_defaults(self.answers.get("pheasant.defaults"))
+        self.answers["pheasant.defaults"] = self.defaults
         self.secrets: dict[str, str] = {}
         self.sources: list[dict[str, Any]] = []
 
     # -- the interview ----------------------------------------------------
 
     def run(self, sections: list[Section] | None = None) -> dict[str, Any]:
+        with using_defaults(self.defaults):
+            return self._interview(sections)
+
+    def _interview(self, sections: list[Section] | None = None) -> dict[str, Any]:
         sections = sections or build_sections()
         p = self.prompter
         p.say()
@@ -1694,7 +1716,8 @@ class Wizard:
             data["sources"] = [dict(source) for source in self.sources]
         # Validate here rather than at write time: a wizard that writes a file
         # the loader then rejects has wasted the whole interview.
-        PheasantConfig.model_validate(json.loads(json.dumps(data, default=str)))
+        with using_defaults(self.defaults):
+            PheasantConfig.model_validate(json.loads(json.dumps(data, default=str)))
         return data
 
     def env_values(self) -> dict[str, str]:
@@ -1708,7 +1731,7 @@ class SetupSaveAndExit(KeyboardInterrupt):
 class GuidedWizard(Wizard):
     """Six-phase responsive interview layered over the stable wizard API."""
 
-    def run(self, sections: list[Section] | None = None) -> dict[str, Any]:
+    def _interview(self, sections: list[Section] | None = None) -> dict[str, Any]:
         p = self.prompter
         p.say()
         for line in _wrap("pheasant setup — a guided, scrollable configuration interview", p.width):

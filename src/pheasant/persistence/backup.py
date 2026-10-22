@@ -25,6 +25,19 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+#: `pheasant backup` archives a SQLite database and the state directory. On
+#: Postgres it used to write that same archive with no database in it and
+#: report success: a backup that cannot restore the index, discovered only
+#: when someone needs it. The database and /state belong in one backup taken
+#: together, which is what the pheasant-kb recipe does with pg_dump.
+POSTGRES_BACKUP_REFUSAL = (
+    "ERROR: pheasant cannot {action} this region: its database is Postgres, and "
+    "`pheasant backup`/`restore` cover SQLite state only.\n"
+    "pheasant-kb: docker compose run --rm backup   (restore: docker compose run --rm "
+    "restore <name>). See docs/pheasant-kb/operate.md#back-up-and-restore.\n"
+    "Elsewhere: pg_dump the database and archive the state directory together."
+)
+
 # Members of the state dir that a backup captures (relative to the state root).
 DB_MEMBER = "pheasant.db"
 DIR_MEMBERS = ("graphs", "events", "vectors", "manifests")
