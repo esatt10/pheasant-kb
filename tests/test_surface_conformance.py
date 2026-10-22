@@ -749,6 +749,9 @@ CONFORMED = {
     "archive_documents": ("POST /documents/archive", "archive_documents"),
     "reinstate_documents": ("POST /documents/reinstate", "reinstate_documents"),
     "archived_documents": ("GET /documents/archived", "list_archived_documents"),
+    # Driven through both surfaces in tests/test_sync_cancellation.py, refusal
+    # text included: a cancel needs a sync running to accept it.
+    "cancel_sync": ("POST /sources/{name}/cancel", "cancel_sync"),
 }
 
 
@@ -768,6 +771,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
     from pheasant.services import source_browser as source_browser_service
+    from pheasant.services import sync_control as sync_control_service
     from pheasant.services import web_pages as web_pages_service
 
     public: set[str] = set()
@@ -782,6 +786,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         source_browser_service,
         web_pages_service,
         archive_service,
+        sync_control_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):

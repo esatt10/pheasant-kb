@@ -43,6 +43,12 @@ class _PreparedItem:
     #: indexed" and nothing like each other — a control folded into a routine
     #: counter is one nobody can see working.
     refused_by: str | None = None
+    #: Why the connector could not read this item -- a page that timed out, a
+    #: redirect loop, a file the process may not open. The item keeps whatever
+    #: the index already holds for it and the sync carries on; before this one
+    #: unreachable page failed the whole pass, and a queued sync of a large web
+    #: collection was redelivered from its first page, forever.
+    read_error: str | None = None
     #: An image's bytes, or a fetched web page's HTML, carried to the single
     #: writer so it can store them in the media store (`ingestion.media`), under
     #: the store's size cap. Everything else is text the chunks already hold,

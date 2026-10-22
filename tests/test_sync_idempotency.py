@@ -1503,3 +1503,142 @@ def test_two_names_one_symbol_id_index_both_and_resync_unchanged(tmp_path: Path)
         assert set(first) <= {node_id for node_id, _attrs in graph.iter_nodes()}
     finally:
         engine.close()
+
+
+# ---------------------------------------------------------------------------
+# An item the connector cannot read
+# ---------------------------------------------------------------------------
+
+
+class _FlakySite:
+    """A local site whose pages can be told to fail with a 500."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        site = self
+        self.broken: set[str] = set()
+
+        class Pages(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - http.server's spelling
+                name = self.path.strip("/")
+                if name in site.broken:
+                    self.send_response(500)
+                    self.end_headers()
+                    return
+                body = f"Page {name} mentions marker{name} once.".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Pages)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def flaky_site():
+    site = _FlakySite()
+    try:
+        yield site
+    finally:
+        site.close()
+
+
+def _web_engine(root: Path, base: str, pages: list[str]) -> SyncEngine:
+    return SyncEngine(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "flaky",
+                    "state_path": str(root / "state"),
+                    "workspace_root": str(root),
+                    "exports_path": str(root / "exports"),
+                },
+                "sources": [
+                    {
+                        "name": "site",
+                        "type": "web_collection",
+                        "path": "/unused",
+                        "urls": [f"{base}/{page}" for page in pages],
+                        "connector": {"allow_experimental": True},
+                        "sync": {"interval_seconds": 0},
+                    }
+                ],
+            }
+        )
+    )
+
+
+def _site_state(engine: SyncEngine) -> dict[str, list]:
+    return {
+        "artifacts": sorted(
+            (str(r["relative_path"]), str(r["sha256"]))
+            for r in engine.state.rows("SELECT relative_path, sha256 FROM artifacts")
+        ),
+        "chunks": sorted(str(r["id"]) for r in engine.state.rows("SELECT id FROM chunks")),
+    }
+
+
+def test_an_unreadable_page_is_recorded_and_the_rest_of_the_sync_goes_on(
+    tmp_path: Path, flaky_site: _FlakySite
+) -> None:
+    """One page that cannot be fetched used to fail the whole pass, and a
+    queued sync of a large collection was redelivered from its first page,
+    forever. It is that page's failure now, and the sync completes."""
+
+    pages = ["one", "two", "three"]
+    engine = _web_engine(tmp_path / "flaky", flaky_site.base, pages)
+    try:
+        flaky_site.broken = {"two"}
+        result = engine.sync_source("site", "incremental")
+        assert result.status == "healthy"
+        assert result.indexed_artifacts == 2
+        assert result.details["unreadable_items"] == 1
+        assert result.details["unreadable"][0]["path"].endswith("two.txt")
+        assert "HTTPError" in result.details["unreadable"][0]["error"]
+
+        # A page indexed before keeps its text while it cannot be fetched.
+        flaky_site.broken = {"one"}
+        engine.sync_source("site", "incremental")
+        assert engine.state.rows(
+            "SELECT 1 FROM artifacts WHERE relative_path LIKE ?", ("%one.txt",)
+        ), "a page that failed to fetch was dropped from the index"
+
+        # And once every page answers, incremental equals a clean full sync.
+        flaky_site.broken = set()
+        engine.sync_source("site", "incremental")
+        recovered = _site_state(engine)
+    finally:
+        engine.close()
+
+    fresh = _web_engine(tmp_path / "fresh", flaky_site.base, pages)
+    try:
+        fresh.sync_source("site", "full")
+        assert recovered == _site_state(fresh)
+    finally:
+        fresh.close()
+
+
+def test_a_sync_that_can_read_nothing_still_fails(tmp_path: Path, flaky_site: _FlakySite) -> None:
+    """A network that is down is not one bad page: recording that pass as
+    healthy would hide the outage behind a clean status."""
+
+    engine = _web_engine(tmp_path, flaky_site.base, ["one", "two"])
+    try:
+        flaky_site.broken = {"one", "two"}
+        with pytest.raises(RuntimeError, match="could not read any of the 2 item"):
+            engine.sync_source("site", "incremental")
+    finally:
+        engine.close()

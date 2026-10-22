@@ -538,7 +538,7 @@ class _QueueDrainer:
     def _run(self) -> None:
         import logging
 
-        from pheasant.jobs import JobRegistry
+        from pheasant.jobs import FAILED_SYNC_STATUSES, JobRegistry, sync_job_status
         from pheasant.sync.queue import drain, owner_id, queue_from_config
 
         log = logging.getLogger("pheasant.cli")
@@ -599,10 +599,10 @@ class _QueueDrainer:
                     except Exception as exc:
                         jobs.finish(job.id, "failed", error=str(exc))
                         raise
-                    failed = result.status in {"failed", "timeout", "limit_exceeded"}
+                    failed = result.status in FAILED_SYNC_STATUSES
                     jobs.finish(
                         job.id,
-                        "failed" if failed else "succeeded",
+                        sync_job_status([result.status]),
                         error=(result.details.get("error") or result.status) if failed else None,
                         result={
                             "source_id": result.source_id,

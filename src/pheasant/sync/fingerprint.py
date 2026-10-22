@@ -30,7 +30,12 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.chunk_plan import PLANNER_VERSION, strategy_of
-from pheasant.ingestion.extractor import math_enabled, source_includes_documents
+from pheasant.ingestion.extractor import (
+    HTML_CHROME_VERSION,
+    html_chrome_enabled,
+    math_enabled,
+    source_includes_documents,
+)
 from pheasant.ingestion.pdf_math import MATH_VERSION
 
 SOURCE_SCOPE = "source:{name}"
@@ -119,6 +124,11 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     if source_type == "web_collection":
         payload["text_pipeline"] = WEB_TEXT_PIPELINE
         payload["html_text"] = bool(getattr(extractor, "html_text", False))
+        if html_chrome_enabled(extractor):
+            # Omitted while off, so no stored fingerprint moves until someone
+            # turns it on; bumping HTML_CHROME_VERSION re-reads exactly the
+            # collections that strip.
+            payload["html_chrome"] = HTML_CHROME_VERSION
     if math_enabled(extractor) and source_includes_documents(source):
         # Equations as LaTeX change the text of every document holding one.
         # Off is omitted, so no stored fingerprint moves until someone turns it

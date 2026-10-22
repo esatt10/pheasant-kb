@@ -20,12 +20,13 @@ from pheasant.config.schema import (
 )
 from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
-from pheasant.jobs import JobRegistry
+from pheasant.jobs import FAILED_SYNC_STATUSES, JobRegistry, sync_job_status
 from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.mcp_server.source_url_tools import SourceUrlTools
+from pheasant.mcp_server.sync_control_tools import SyncControlTools
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
@@ -77,7 +78,9 @@ def _preview_rows(results: list[dict]) -> list[dict]:
     return rows
 
 
-class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools):
+class PheasantTools(
+    ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools, SyncControlTools
+):
     def __init__(self, config: PheasantConfig):
         self.config = config
         self.paths = StatePaths.from_config(config)
@@ -322,10 +325,10 @@ class PheasantTools(ReadinessTools, AssistantTools, InventoryTools, ArchiveTools
             except Exception as exc:  # background tool work cannot propagate
                 self.jobs.finish(job.id, "failed", error=str(exc))
                 return
-            failed = result.get("status") in {"failed", "timeout", "limit_exceeded"}
+            failed = result.get("status") in FAILED_SYNC_STATUSES
             self.jobs.finish(
                 job.id,
-                "failed" if failed else "succeeded",
+                sync_job_status([str(result.get("status") or "")]),
                 error=(result.get("details") or {}).get("error") if failed else None,
                 result=result,
             )

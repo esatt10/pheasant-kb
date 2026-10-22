@@ -178,6 +178,24 @@ class SourceConnector(ABC):
         }
         return cursor, high_watermark
 
+    def partial_checkpoint_from_items(
+        self,
+        items: list[ConnectorItem],
+        processed: set[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """The checkpoint to keep after a pass that stopped part-way, or ``None``.
+
+        ``processed`` holds the identities of the items the engine finished
+        (committed or skipped); the rest of ``items`` were listed and never
+        reached. ``None`` -- keep the previous checkpoint -- is the safe answer
+        and the default: a connector whose checkpoint is a change token
+        ("everything up to here was seen") would otherwise have every item the
+        pass never reached skipped by each later incremental sync. A connector
+        whose checkpoint is per item overrides this.
+        """
+
+        return None
+
     def _require_experimental_enabled(self) -> None:
         if self.experimental and not self.source.connector.allow_experimental:
             raise ConnectorUnavailable(

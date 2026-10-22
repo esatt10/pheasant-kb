@@ -331,6 +331,21 @@ CREATE TABLE IF NOT EXISTS source_leases (
   acquired_at TEXT NOT NULL,
   heartbeat_at TEXT NOT NULL
 );
+-- The sync running now, per source, and a request to stop it
+-- (`sync/cancellation.py`). A row rather than a process flag because the
+-- process running a sync is rarely the one somebody asks to cancel it. The run
+-- heartbeats the row; a cancel is accepted only by a row whose heartbeat is
+-- fresh, and a new run replaces the row, so a request never outlives its run.
+CREATE TABLE IF NOT EXISTS sync_runs (
+  source_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  cancel_requested_at TEXT,
+  cancel_requested_by TEXT,
+  cancel_reason TEXT
+);
 CREATE TABLE IF NOT EXISTS sync_fingerprints (
   scope TEXT PRIMARY KEY,
   fingerprint TEXT NOT NULL,

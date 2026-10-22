@@ -609,12 +609,23 @@ class ExtractorSettings(ModelMixin):
     that hold equations. Turning it on re-reads document sources once (it is
     part of their fingerprint); text with no equation in it is unchanged.
 
+    ``html_chrome`` is ``keep`` (default) or ``strip``, and acts only with
+    ``html_text`` on. With ``strip``, extracted HTML loses the site around
+    the page: menus, page-level headers and footers, cookie banners and
+    hidden elements, by per-page rules (``extract_html_text``). On a
+    marketing site that chrome is most of every page and matches nearly
+    every query. Keep by default for the reason ``html_text`` is off by
+    default; turning it on re-reads web collections once (it is part of
+    their fingerprint). A local ``.html`` file is re-extracted when it next
+    changes or on a ``full`` sync.
+
     A sidecar ``<file>.extract.txt`` always wins, providing authored text with
     no extractor at all (mirrors the caption/transcript sidecars).
     """
 
     provider: str = "auto"
     html_text: bool = False
+    html_chrome: str = "keep"
     math: str = "off"
 
     def __post_init__(self) -> None:
@@ -622,6 +633,12 @@ class ExtractorSettings(ModelMixin):
         if self.math not in ("off", "latex"):
             raise ValueError(
                 f"ingestion.extractor.math must be 'off' or 'latex', not {self.math!r}"
+            )
+        self.html_chrome = str(self.html_chrome or "keep").strip().lower()
+        if self.html_chrome not in ("keep", "strip"):
+            raise ValueError(
+                "ingestion.extractor.html_chrome must be 'keep' or 'strip', "
+                f"not {self.html_chrome!r}"
             )
 
 

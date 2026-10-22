@@ -275,6 +275,33 @@ class WebCollectionConnector(SourceConnector):
             },
         )
 
+    def partial_checkpoint_from_items(
+        self,
+        items: list[ConnectorItem],
+        processed: set[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Keep what a cancelled pass learned about the pages it finished.
+
+        Only those: the engine reads ahead of what it commits, so a page can
+        have been fetched -- and its validators and schedule updated here --
+        without its new text ever reaching the index. Saving that entry would
+        mark the page "checked, not due" and the next incremental sync would
+        never read it again. Every other URL keeps the entry the previous
+        checkpoint had, so the next pass is exactly as conditional as this one
+        would have been.
+        """
+
+        finished = {
+            item.uri: self._seen_validators[item.uri]
+            for item in items
+            if item.identity in processed and item.uri in self._seen_validators
+        }
+        saved, self._seen_validators = self._seen_validators, finished
+        try:
+            return self.checkpoint_from_items(items)
+        finally:
+            self._seen_validators = saved
+
     def _cached_validators(self, url: str) -> dict[str, Any]:
         validators = (self._previous_cursor or {}).get("validators") or {}
         cached = validators.get(url)

@@ -54,11 +54,13 @@ from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync import archived
+from pheasant.sync.cancellation import SyncCancelled, SyncRun
 from pheasant.sync.checkpoint_interval import (
     optimal_checkpoint_interval as optimal_checkpoint_interval,
 )
 from pheasant.sync.connectors import (
     ConnectorItem,
+    ConnectorUnavailable,
     ItemNotModified,
     connector_for_source,
 )
@@ -191,6 +193,44 @@ def _restore_iso_ts(filename_ts: str) -> str:
         date_part, _, time_part = ts.partition("T")
         return f"{date_part}T{time_part.replace('-', ':')}"
     return ts
+
+
+def _cancellable(
+    prepared_items: Any,
+    run: SyncRun,
+    processed: set[str],
+    stopped: list[SyncCancelled],
+):
+    """Yield ``prepared_items`` until the run is cancelled, then stop.
+
+    A generator rather than a ``try`` around the commit loop, so the loop body
+    is unchanged: the run is checked before each item is handed out, and a
+    cancel ends the iteration with the request left in ``stopped`` for the
+    caller to act on. An item counts as ``processed`` once the loop asks for
+    the next one, which is after its body ran to the end or to a ``continue``
+    -- never for an item that was only read ahead. (Counting it before the
+    ``yield`` instead would be equivalent on the cancel path, which checks
+    before an item is handed out; the order matters only to a body that
+    raises, and then the sync fails and ``processed`` is never read.)
+
+    Closing ``prepared_items`` is what stops the look-ahead: its executor is
+    told to drop work it has not started rather than prepare a window of items
+    nobody will commit.
+    """
+
+    try:
+        for prepared in prepared_items:
+            try:
+                run.checkpoint()
+            except SyncCancelled as cancelled:
+                stopped.append(cancelled)
+                return
+            yield prepared
+            processed.add(prepared.item.identity)
+    finally:
+        close = getattr(prepared_items, "close", None)
+        if close is not None:
+            close()
 
 
 @dataclass(frozen=True)
@@ -1023,6 +1063,19 @@ class SyncEngine:
                 skipped=True,
                 transfer_skipped=True,
             )
+        except ConnectorUnavailable:
+            # The connector cannot read *anything* (an experimental type not
+            # enabled, a scheme it refuses): a fact about the source, not this
+            # item, so the sync fails as it always did.
+            raise
+        except Exception as exc:  # noqa: BLE001 - one unreadable item is not the source
+            return _PreparedItem(
+                position,
+                item,
+                previous,
+                skipped=True,
+                read_error=f"{type(exc).__name__}: {exc}"[:500],
+            )
         content_hash = payload.sha256 or item.sha256 or sha256_bytes(payload.content)
         if mode == "incremental" and previous and previous.get("sha256") == content_hash:
             return _PreparedItem(
@@ -1384,14 +1437,22 @@ class SyncEngine:
                         pending.append(submit(position, item))
                         in_flight += 1
 
-            fill()
-            while pending:
-                head = pending.popleft()
-                if isinstance(head, Future):
-                    in_flight -= 1
-                    head = head.result()
-                yield head
+            try:
                 fill()
+                while pending:
+                    head = pending.popleft()
+                    if isinstance(head, Future):
+                        in_flight -= 1
+                        head = head.result()
+                    yield head
+                    fill()
+            finally:
+                # A consumer that stops early (a cancelled sync) closes this
+                # generator; leaving the executor would otherwise wait for the
+                # whole look-ahead window to be prepared first.
+                for entry in pending:
+                    if isinstance(entry, Future):
+                        entry.cancel()
 
     def _prepared_items_remote(
         self,
@@ -1490,13 +1551,19 @@ class SyncEngine:
                         pending.append(submit(next(iterator)))
                     except StopIteration:
                         break
-                while pending:
-                    yield from pending.popleft().result()
-                    try:
-                        batch = next(iterator)
-                    except StopIteration:
-                        continue
-                    pending.append(submit(batch))
+                try:
+                    while pending:
+                        yield from pending.popleft().result()
+                        try:
+                            batch = next(iterator)
+                        except StopIteration:
+                            continue
+                        pending.append(submit(batch))
+                finally:
+                    # As in `_prepared_items`: a closed generator drops the
+                    # batches no worker has started.
+                    for future in pending:
+                        future.cancel()
         finally:
             # Health is published again on the way out so the gauge reflects
             # what this sync actually observed, not what it assumed at the
@@ -1715,6 +1782,116 @@ class SyncEngine:
             self.manifests.save(source.name, manifest)
             return pruned_vectors
 
+    def _finish_cancelled(
+        self,
+        cancelled: SyncCancelled,
+        *,
+        source: SourceConfig,
+        connector: Any,
+        mode: SyncMode,
+        manifest: dict[str, Any],
+        items: list[Any],
+        processed: set[str],
+        counts: dict[str, int],
+        started_at: str,
+        report: Callable[..., None],
+        embedding_progress: Callable[[int], None],
+        details: dict[str, Any],
+    ) -> SyncResult:
+        """Stop a pass somebody cancelled, keeping everything it committed.
+
+        Each item the loop committed is already in the state store and the
+        working graph; this makes the rest of that durable -- vectors flushed,
+        graph published, manifest saved -- so the next incremental sync skips
+        those items by checksum and reads only what this pass never reached.
+
+        What it deliberately does **not** record is anything that claims the
+        pass was complete. Not the source fingerprint (a full sync escalated
+        by a config change stays escalated). Not the deletion of files missing
+        from the listing, nor the whole-graph enrichment: both run on the next
+        pass, which the dirty flag below makes enrich even if it finds nothing
+        new. Not "healthy": the source says ``cancelled`` until a sync of it
+        finishes. And not the connector's checkpoint, unless the connector can
+        build one that is true of a partial pass (``partial_checkpoint_from_items``).
+        """
+
+        indexed = int(counts.get("indexed") or 0)
+        skipped = int(counts.get("skipped") or 0)
+        total_items = len(items)
+        logger.info(
+            "Sync of %s %s after %d of %d item(s)",
+            source.name,
+            cancelled,
+            len(processed),
+            total_items,
+        )
+        report("cancelling", len(processed), total_items, str(cancelled))
+        if self.vectors is not None:
+            # Before the commit mutex, as in `_finalize_index_state`: this
+            # waits on a provider, and committed chunks without their vectors
+            # are exactly what no later incremental sync would re-embed.
+            self.vectors.flush(on_progress=embedding_progress)
+        with self._sync_mutex:
+            if indexed:
+                self.flush_node_index()
+                self.graph_store.save(self.config.knowledge_base_id, self.graph_builder.graph)
+                self._graph_dirty = False
+                self._last_checkpoint = time.monotonic()
+                self.state.set_fingerprint(
+                    self._ENRICH_DIRTY_SCOPE.format(name=source.name), "1", utc_now()
+                )
+            self.manifests.save(source.name, manifest)
+        partial = connector.partial_checkpoint_from_items(items, processed)
+        if partial is not None:
+            cursor, high_watermark = partial
+            high_watermark.update(
+                {"indexed_artifacts": indexed, "skipped_artifacts": skipped, "cancelled": True}
+            )
+            connector.set_checkpoint(cursor, high_watermark, "cancelled")
+        self.state.mark_source_status(source.name, "cancelled")
+        outcome = {
+            "requested_by": cancelled.requested_by,
+            "reason": cancelled.reason or None,
+            "processed_items": len(processed),
+            "total_items": total_items,
+            "checkpoint_saved": partial is not None,
+        }
+        now = utc_now()
+        self.state.append_sync_event(
+            uuid.uuid4().hex,
+            source.name,
+            "sync.cancelled",
+            "cancelled",
+            started_at,
+            now,
+            {
+                "mode": mode,
+                "connector_type": connector.connector_type,
+                "fetched": int(counts.get("fetched") or 0),
+                "skipped": int(counts.get("transfer_skipped") or 0),
+                "indexed_artifacts": indexed,
+                "skipped_artifacts": skipped,
+                "cancelled": outcome,
+                **details,
+            },
+        )
+        graph_nodes, graph_edges = self._graph_counts()
+        return SyncResult(
+            source.name,
+            indexed,
+            skipped,
+            graph_nodes,
+            graph_edges,
+            "cancelled",
+            {
+                "connector_type": connector.connector_type,
+                "fetched": int(counts.get("fetched") or 0),
+                "skipped": int(counts.get("transfer_skipped") or 0),
+                "cancelled": outcome,
+                **details,
+            },
+        )
+
     def apply_index_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:
         """Apply one durable data-plane or control-plane queue task.
 
@@ -1751,6 +1928,23 @@ class SyncEngine:
             return self.replace_source(payload, on_progress=on_progress)
         # Sync the source as registered now: an api replica may have changed it.
         SourceRegistry(self.config, self.state).adopt(str(task.source_id))
+        registered = self.state.get_source(str(task.source_id))
+        if registered is not None and not int(registered["enabled"] or 0):
+            # Disabled after this task was published. A redelivered task -- an
+            # indexer restarted mid-sync -- used to resume the source anyway,
+            # so disabling a sync that was looping did not stop it. Acked, not
+            # failed: there is nothing to retry until somebody enables it.
+            logger.info("Skipping queued sync of %s: the source is disabled", task.source_id)
+            graph_nodes, graph_edges = self._graph_counts()
+            return SyncResult(
+                str(task.source_id),
+                0,
+                0,
+                graph_nodes,
+                graph_edges,
+                "disabled",
+                {"skipped": "the source is disabled"},
+            )
         requested_mode = str(task.mode)
         resume_full = bool(
             requested_mode == "full"
@@ -1926,7 +2120,13 @@ class SyncEngine:
         # the method: everything above is argument resolution, and a
         # saturation gauge that counted it would report a busy region for
         # work that never touched the commit stream.
-        with self.commit_meter.busy(), self._source_write_lock(source.name):
+        # The run is registered once the write lock is held, so one source
+        # never has two runs and its `sync_runs` row has one writer.
+        with (
+            self.commit_meter.busy(),
+            self._source_write_lock(source.name),
+            SyncRun(self.state, source.name) as run,
+        ):
             remote_state: dict[str, Any] | None = None
             if source.type.value == "repository":
                 # URL quick-add repositories are managed checkouts. Updating
@@ -2033,6 +2233,9 @@ class SyncEngine:
             fetched = 0
             transfer_skipped = 0
             refused: list[tuple[str, str]] = []
+            # Items the connector could not read: (path, error). Each keeps
+            # what the index already holds and the pass goes on.
+            unreadable: list[tuple[str, str]] = []
             embedded_chunks = 0
             indexed_bytes = 0
             changed_ids: set[str] = set()
@@ -2068,12 +2271,27 @@ class SyncEngine:
                 git_metadata,
                 items,
             )
-            for prepared in prepared_items:
+            # Identities of the items this pass finished, committed or
+            # skipped. Only a cancelled pass reads it: it is what separates an
+            # item the loop handled from one that was read ahead and dropped.
+            processed: set[str] = set()
+            stopped: list[SyncCancelled] = []
+            for prepared in _cancellable(prepared_items, run, processed, stopped):
                 position = prepared.position
                 item = prepared.item
                 fetched += int(prepared.fetched)
-                skipped += int(prepared.skipped)
+                skipped += int(prepared.skipped and not prepared.read_error)
                 transfer_skipped += int(prepared.transfer_skipped)
+                item_failures: list[dict[str, str]] = []
+                if prepared.read_error:
+                    unreadable.append((item.relative_path, prepared.read_error))
+                    item_failures.append({"path": item.relative_path, "error": prepared.read_error})
+                    logger.warning(
+                        "%s: could not read %s (%s); keeping what the index holds",
+                        source.name,
+                        item.relative_path,
+                        prepared.read_error,
+                    )
                 if prepared.refused_by:
                     # Never silent: a control whose only evidence is an absence
                     # cannot be told from a typo in the pattern.
@@ -2092,6 +2310,8 @@ class SyncEngine:
                     indexed=indexed,
                     skipped=skipped,
                     bytes_done=indexed_bytes,
+                    failed=len(unreadable),
+                    **({"failures": item_failures} if item_failures else {}),
                 )
                 parsed = prepared.parsed
                 if prepared.skipped or parsed is None:
@@ -2213,6 +2433,40 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
+            if stopped:
+                return self._finish_cancelled(
+                    stopped[0],
+                    source=source,
+                    connector=connector,
+                    mode=mode,
+                    manifest=manifest,
+                    items=items,
+                    processed=processed,
+                    counts={
+                        "indexed": indexed,
+                        "skipped": skipped,
+                        "fetched": fetched,
+                        "transfer_skipped": transfer_skipped,
+                    },
+                    started_at=started_at,
+                    report=report,
+                    embedding_progress=embedding_progress,
+                    details=details_extra,
+                )
+            if unreadable and len(unreadable) == total_items:
+                # Nothing at all could be read: the network or the mount is
+                # gone, not one page. Fail as before rather than record a
+                # pass that saw nothing as healthy.
+                path, error = unreadable[0]
+                raise RuntimeError(
+                    f"could not read any of the {total_items} item(s) of {source.name} "
+                    f"(first: {path}: {error})"
+                )
+            if unreadable:
+                details_extra["unreadable_items"] = len(unreadable)
+                details_extra["unreadable"] = [
+                    {"path": path, "error": error} for path, error in unreadable[:25]
+                ]
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed

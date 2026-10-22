@@ -93,7 +93,9 @@ pheasant-kb/
 │   ├── sync/                  ← engine, connectors, vanished (deleted files
 │   │                            leave on any sync), archived (removed
 │   │                            documents are never read), web_connector (listed
-│   │                            URLs, per-page revalidation), watcher,
+│   │                            URLs, per-page revalidation), cancellation
+│   │                            (stop a running sync from any process),
+│   │                            watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
@@ -165,7 +167,9 @@ pheasant-kb/
 │   │                            and @dir resolved), archive (remove a
 │   │                            document, keep it out of every sync,
 │   │                            reinstate it; + @remove), source_urls
-│   │                            (a web collection's pages: add, remove)
+│   │                            (a web collection's pages: add, remove),
+│   │                            sync_control (cancel a source's running
+│   │                            sync)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            apps/knowledge_view.html (the MCP App view)
@@ -469,6 +473,18 @@ what a complete listing no longer contains (`sync/vanished.py`, opt-in per
 connector through `complete_listing`), and re-indexing an edited file retracts
 the imports, calls and symbols its new text dropped (`graph/retraction.py`).
 After either, incremental equals a full sync of what is there now.
+
+**A running sync can be stopped from any process** (`sync/cancellation.py`,
+`services/sync_control.py`, table `sync_runs`; MCP `cancel_sync`, `POST
+/sources/{name}/cancel`). The run holds a heartbeated row per source, a cancel
+is one `UPDATE … RETURNING` against a fresh one (so with nothing running it is
+`SYNC_NOT_RUNNING`, never a request stored for the next sync), and the engine
+reads it between items. A cancelled pass keeps everything it committed and
+records nothing that claims completeness — no source fingerprint, no vanished
+pruning, no `healthy` — so the next incremental finishes it and equals a full
+sync. A connector keeps its checkpoint only if it can build one true of a
+partial pass (`partial_checkpoint_from_items`; the web connector does, for the
+pages it finished and never for ones it merely read ahead).
 
 **A document can be removed on purpose and stay removed**
 (`services/archive.py`, `sync/archived.py`, table `archived_documents`). The

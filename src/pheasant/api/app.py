@@ -24,6 +24,7 @@ from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
+from pheasant.api.sync_control_routes import register_sync_control_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -48,7 +49,14 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
-from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServiceError, JobRegistry
+from pheasant.jobs import (
+    FAILED_SYNC_STATUSES,
+    JOBS_CLEAR_PATH,
+    JobClearServiceClient,
+    JobClearServiceError,
+    JobRegistry,
+    sync_job_status,
+)
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
@@ -2033,6 +2041,7 @@ def create_app(
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
     register_source_url_routes(app, services=services)
+    register_sync_control_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2412,10 +2421,10 @@ def create_app(
             logger.exception("background sync failed")
             jobs.finish(job_id, "failed", error=str(exc))
             return
-        failed = [r for r in results if r.status in {"failed", "timeout", "limit_exceeded"}]
+        failed = [r for r in results if r.status in FAILED_SYNC_STATUSES]
         jobs.finish(
             job_id,
-            "failed" if failed else "succeeded",
+            sync_job_status([r.status for r in results]),
             error=(failed[0].details.get("error") or failed[0].status) if failed else None,
             result={
                 "results": [

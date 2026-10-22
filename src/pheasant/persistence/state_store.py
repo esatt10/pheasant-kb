@@ -381,6 +381,7 @@ class StateStore:
                 "evaluation_replays": "id",
                 # A table added after the marker: absent, it must force the DDL.
                 "archived_documents": "acl",
+                "sync_runs": "cancel_reason",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()
