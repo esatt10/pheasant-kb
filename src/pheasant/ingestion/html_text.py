@@ -87,10 +87,25 @@ def extract_html_text(content: bytes, *, strip_chrome: bool = False) -> str:
 
 
 def _strip_chrome(soup: Any) -> None:
-    """Remove the site around a page's content, in place. See the constants above."""
+    """Remove the site around a page's content, in place. See the constants above.
+
+    "Inside a content scope", "inside main/article" and "holds a main/article"
+    are decided once per page, as sets, rather than by a ``find_parent`` and a
+    descendant ``find`` per candidate element: on a 390 KB marketing page that
+    was ~1,100 tree searches and more than the parse itself.
+    """
+
+    inside_scope: set[int] = set()
+    inside_main: set[int] = set()
+    holds_main: set[int] = set()
+    for scope in soup.find_all(_CONTENT_SCOPES):
+        inside_scope.update(id(tag) for tag in scope.find_all(True))
+        if scope.name in ("main", "article"):
+            inside_main.update(id(tag) for tag in scope.find_all(True))
+            holds_main.update(id(parent) for parent in scope.parents)
 
     def in_content(tag: Any) -> bool:
-        return tag.find_parent(_CONTENT_SCOPES) is not None
+        return id(tag) in inside_scope
 
     def named_like_chrome(tag: Any) -> bool:
         tokens = [str(token).lower() for token in tag.get("class") or []]
@@ -113,11 +128,7 @@ def _strip_chrome(soup: Any) -> None:
             or name in _CHROME_ALWAYS
             or role == "navigation"
             or ((name in _CHROME_PAGE_LEVEL or role in _CHROME_ROLES) and not in_content(tag))
-            or (
-                named_like_chrome(tag)
-                and tag.find_parent(("main", "article")) is None
-                and tag.find(("main", "article")) is None
-            )
+            or (named_like_chrome(tag) and id(tag) not in inside_main and id(tag) not in holds_main)
         ):
             doomed.append(tag)
     for tag in doomed:

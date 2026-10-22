@@ -215,7 +215,11 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 2m
-    mem_limit: 2560m
+    # 4.5 GiB, up from 2.5: a 4,698-page web collection was OOM-killed at its
+    # end-of-sync vector maintenance (compaction, an IVF_HNSW_SQ rebuild and the
+    # resident matrix over ~52k x 1536-d vectors measured ~2 GiB on their own),
+    # on top of the ~1.8 GiB working set the item loop had reached.
+    mem_limit: 4608m
     cpus: 2.0
     command: ["serve", "--role", "indexer"]
     depends_on:
