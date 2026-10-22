@@ -1642,3 +1642,31 @@ def test_a_sync_that_can_read_nothing_still_fails(tmp_path: Path, flaky_site: _F
             engine.sync_source("site", "incremental")
     finally:
         engine.close()
+
+
+def test_two_urls_that_reduce_to_one_path_are_two_artifacts(
+    tmp_path: Path, flaky_site: _FlakySite
+) -> None:
+    """A page listed with and without its trailing slash, and two titles in a
+    script the path sanitiser reduces to ``_``, used to share one artifact: an
+    incremental sync rewrote it with each page in turn, and a ``full`` sync
+    failed on the duplicate chunk id. Each URL is its own artifact now, and a
+    path no other URL shares is exactly what it was."""
+
+    # "あ" and "い": both sanitise to the same `item` segment.
+    pages = ["one", "one/", "%E3%81%82", "%E3%81%84", "two"]
+    engine = _web_engine(tmp_path / "site", flaky_site.base, pages)
+    try:
+        full = engine.sync_source("site", "full")
+        assert full.status == "healthy" and full.indexed_artifacts == len(pages)
+        paths = sorted(
+            str(r["relative_path"])
+            for r in engine.state.rows("SELECT relative_path FROM artifacts")
+        )
+        assert len(set(paths)) == len(pages), paths
+        assert any(p.endswith("/two.txt") for p in paths), "an unshared path moved"
+        after_full = _site_state(engine)
+        assert engine.sync_source("site", "incremental").indexed_artifacts == 0
+        assert _site_state(engine) == after_full, "a re-sync rewrote a shared artifact"
+    finally:
+        engine.close()
