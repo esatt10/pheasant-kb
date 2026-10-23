@@ -434,6 +434,20 @@ class SimpleMultiDiGraph:
                 for node_id, attrs in self._nodes.items()
             ]
 
+    def index_rows_for(self, node_ids: list[str]) -> list[tuple[str, str, str]]:
+        """``index_rows`` for the named nodes only; absent ones are skipped."""
+
+        with self._lock:
+            return [
+                (
+                    node_id,
+                    str(self._nodes[node_id].get("source_id") or ""),
+                    self._search_blobs.get(node_id, ""),
+                )
+                for node_id in node_ids
+                if node_id in self._nodes
+            ]
+
     def take_index_delta(self) -> tuple[list[tuple[str, str, str]], list[str]]:
         """Claim what the search index still owes: ``(upserts, removals)``.
 

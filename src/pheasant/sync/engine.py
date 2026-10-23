@@ -1750,7 +1750,8 @@ class SyncEngine:
             # See checkpoint_graph: manifests may lag a published generation,
             # but must never claim a graph generation that did not commit.
             self.manifests.save(source.name, manifest)
-            reconcile_node_index(self.node_index, self.graph_builder.graph, source.name)
+            graph, kb_id = self.graph_builder.graph, self.config.knowledge_base_id
+            reconcile_node_index(self.node_index, graph, source.name, kb_id=kb_id)
             return pruned_vectors
 
     def apply_index_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:

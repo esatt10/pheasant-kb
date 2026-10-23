@@ -269,6 +269,25 @@ def test_a_killed_run_is_noticed_and_its_lost_rows_restored(tmp_path) -> None:
         engine.close()
 
 
+def test_a_source_missing_from_the_index_is_restored_by_an_ordinary_sync(tmp_path) -> None:
+    """The lab's larger leak: an uploads source with no index rows at all,
+    4,456 nodes the graph arm could not reach, and no crash to set off a
+    repair. An unchanged source has nothing pending to write, so only a
+    comparison with the saved graph finds it."""
+
+    engine = _healing_engine(tmp_path)
+    try:
+        expected = _source_nodes(engine)
+        engine.node_index.apply([], sorted(engine.node_index.ids("docs")))
+        assert engine.node_index.ids("docs") == set(), "the fixture left rows behind"
+
+        result = engine.sync_source("docs", "incremental")
+        assert result.indexed_artifacts == 0, "the repair needed a change to the source"
+        assert engine.node_index.ids("docs") == expected
+    finally:
+        engine.close()
+
+
 def test_a_clean_run_does_not_walk_the_graph_for_missing_rows(tmp_path, monkeypatch) -> None:
     """The missing-row check walks every node, so it runs only after a death."""
 

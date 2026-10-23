@@ -188,6 +188,17 @@ class NodeIndex:
             )
         return {str(row["node_id"]) for row in rows}
 
+    def persisted_ids(self, kb_id: str, source_id: str) -> set[str]:
+        """The node ids the saved graph holds for one source (``graph_nodes``).
+
+        Empty on the whole-file graph backend, which keeps no such rows.
+        """
+
+        rows = self.state.rows(
+            "SELECT node_id FROM graph_nodes WHERE kb_id=? AND source_id=?", (kb_id, source_id)
+        )
+        return {str(row["node_id"]) for row in rows}
+
     def apply(self, upserts: Iterable[tuple[str, str, str]], removals: Iterable[str]) -> int:
         """Incremental update: delete then re-insert the touched rows."""
 
@@ -373,7 +384,12 @@ def _tsquery_expression(tokens: list[str]) -> str:
 
 
 def reconcile(
-    index: NodeIndex, graph: Any, source_id: str | None = None, *, missing: bool = False
+    index: NodeIndex,
+    graph: Any,
+    source_id: str | None = None,
+    *,
+    kb_id: str | None = None,
+    missing: bool = False,
 ) -> tuple[int, int]:
     """Make the index agree with ``graph`` for one source; ``(removed, added)``.
 
@@ -385,12 +401,21 @@ def reconcile(
     boomi-web chunk or entity. Nothing removed them, because nothing compared.
 
     *Stale* rows -- held for a node the graph does not have -- cost one lookup
-    per row of the source, so every sync removes its source's. *Missing* rows
-    -- a graph node the index lacks, from a lost upsert -- need the graph's
-    nodes for the source, which is a walk of the whole graph, so ``missing``
-    asks for it only where a run is known to have died. Converges whatever is
-    still pending: a stale row a later flush would have removed is removed
-    now, and a missing row a later flush rewrites is written twice.
+    per row of the source, so every sync removes its source's.
+
+    *Missing* rows -- a graph node the index lacks -- were the larger leak:
+    4,573 on the lab, every node of an uploads source among them, so the graph
+    arm could not reach a single one of its documents. Nothing had crashed
+    that anyone could see, and a source whose content never changes has
+    nothing pending to write, so a check gated on a known crash never ran.
+    With ``kb_id`` (the row backend, the default) the source's saved node ids
+    say what it should hold, so every sync adds what is missing too, looking
+    up only those nodes in ``graph``. ``missing`` walks the whole graph
+    instead, for the file backend, where a run is known to have died.
+
+    Converges whatever is still pending: a stale row a later flush would have
+    removed is removed now, and a missing row a later flush rewrites is
+    written twice.
     """
 
     try:
@@ -403,6 +428,9 @@ def reconcile(
                 for row in graph.index_rows()
                 if (source_id is None or row[1] == source_id) and row[0] not in held
             ]
+        elif kb_id is not None and source_id is not None:
+            absent = [node_id for node_id in index.persisted_ids(kb_id, source_id) - held]
+            added = graph.index_rows_for(absent) if absent else []
         if stale or added:
             index.apply(added, stale)
             logger.warning(

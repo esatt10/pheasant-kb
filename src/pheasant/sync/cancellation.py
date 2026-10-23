@@ -351,7 +351,12 @@ def finish_cancelled(
                 engine._ENRICH_DIRTY_SCOPE.format(name=source.name), "1", utc_now()
             )
         engine.manifests.save(source.name, manifest)
-        reconcile_node_index(engine.node_index, engine.graph_builder.graph, source.name)
+        reconcile_node_index(
+            engine.node_index,
+            engine.graph_builder.graph,
+            source.name,
+            kb_id=engine.config.knowledge_base_id,
+        )
     partial = connector.partial_checkpoint_from_items(items, processed)
     if partial is not None:
         cursor, high_watermark = partial
