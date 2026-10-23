@@ -46,6 +46,7 @@ from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.node_index import NodeIndex
+from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.search.vector_store import (
     VectorSearcher,
     vector_indexer_from_config,
@@ -1749,6 +1750,7 @@ class SyncEngine:
             # See checkpoint_graph: manifests may lag a published generation,
             # but must never claim a graph generation that did not commit.
             self.manifests.save(source.name, manifest)
+            reconcile_node_index(self.node_index, self.graph_builder.graph, source.name)
             return pruned_vectors
 
     def apply_index_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:
@@ -1987,6 +1989,11 @@ class SyncEngine:
                     self.state.mark_source_status(source.name, "remote_error")
                     logger.error("Remote update failed for %s: %s", source.name, exc)
                     raise
+            if run.predecessor_died:  # its pending node-index delta died with it
+                with self._sync_mutex:
+                    self._ensure_persisted_graph_loaded()
+                    graph = self.graph_builder.graph
+                    reconcile_node_index(self.node_index, graph, source.name, missing=True)
             connector = connector_for_source(source, self.state)
             if mode == "validate_only":
                 health = connector.validate()

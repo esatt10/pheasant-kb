@@ -175,6 +175,19 @@ class NodeIndex:
         self._populated = written > 0
         return written
 
+    def ids(self, source_id: str | None = None) -> set[str]:
+        """The node ids the index holds, for one source or all of them."""
+
+        if not self.ensure():
+            return set()
+        if source_id is None:
+            rows = self.state.rows("SELECT node_id FROM graph_nodes_fts")
+        else:
+            rows = self.state.rows(
+                "SELECT node_id FROM graph_nodes_fts WHERE source_id=?", (source_id,)
+            )
+        return {str(row["node_id"]) for row in rows}
+
     def apply(self, upserts: Iterable[tuple[str, str, str]], removals: Iterable[str]) -> int:
         """Incremental update: delete then re-insert the touched rows."""
 
@@ -357,3 +370,48 @@ def _tsquery_expression(tokens: list[str]) -> str:
             if len(word) > 1:
                 terms.append(f"{word}:*")
     return " | ".join(dict.fromkeys(terms))
+
+
+def reconcile(
+    index: NodeIndex, graph: Any, source_id: str | None = None, *, missing: bool = False
+) -> tuple[int, int]:
+    """Make the index agree with ``graph`` for one source; ``(removed, added)``.
+
+    The index is written from the graph's pending delta, which is claimed on
+    flush and held in memory until then -- while the graph's rows are saved on
+    their own schedule, mid-sync included. A process killed between the two
+    (an OOM kill at the end of a large sync, four times on the lab) left index
+    rows for nodes the saved graph no longer had: 46 of them, every one a
+    boomi-web chunk or entity. Nothing removed them, because nothing compared.
+
+    *Stale* rows -- held for a node the graph does not have -- cost one lookup
+    per row of the source, so every sync removes its source's. *Missing* rows
+    -- a graph node the index lacks, from a lost upsert -- need the graph's
+    nodes for the source, which is a walk of the whole graph, so ``missing``
+    asks for it only where a run is known to have died. Converges whatever is
+    still pending: a stale row a later flush would have removed is removed
+    now, and a missing row a later flush rewrites is written twice.
+    """
+
+    try:
+        held = index.ids(source_id)
+        stale = [node_id for node_id in held if not graph.has_node(node_id)]
+        added: list[tuple[str, str, str]] = []
+        if missing:
+            added = [
+                row
+                for row in graph.index_rows()
+                if (source_id is None or row[1] == source_id) and row[0] not in held
+            ]
+        if stale or added:
+            index.apply(added, stale)
+            logger.warning(
+                "Node index repaired for %s: %d stale row(s) removed, %d missing added",
+                source_id or "every source",
+                len(stale),
+                len(added),
+            )
+        return len(stale), len(added)
+    except Exception:  # noqa: BLE001 - cache maintenance is never a failed sync
+        logger.warning("Could not reconcile the node index for %s", source_id, exc_info=True)
+        return 0, 0

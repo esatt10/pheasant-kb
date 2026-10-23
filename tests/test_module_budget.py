@@ -109,7 +109,10 @@ CEILINGS: dict[str, int] = {
     # in the write lock's `with`, the per-item check and failure note, the two
     # call sites, and the look-ahead executors cancelling unstarted work when
     # the loop stops early, which only the executors can do.
-    "sync/engine.py": 2870,
+    # Raised to 2880 for the node-index reconcile's two call sites (after a
+    # source is saved, and after a killed predecessor); the reconcile itself
+    # lives in `search/node_index.py`.
+    "sync/engine.py": 2880,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

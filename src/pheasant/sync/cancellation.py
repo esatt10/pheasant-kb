@@ -47,6 +47,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.sync.locks import SOURCE_HEARTBEAT_SECONDS, SOURCE_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,10 @@ class SyncRun:
             CHECK_INTERVAL_SECONDS if check_interval_s is None else check_interval_s
         )
         self._registered = False
+        #: The previous run of this source left its row behind: it never
+        #: reached ``__exit__``, so it was killed. Anything it held only in
+        #: memory -- the node index's pending delta -- was lost with it.
+        self.predecessor_died = False
         self._next_check = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -110,6 +115,11 @@ class SyncRun:
     def __enter__(self) -> SyncRun:
         now = _now()
         try:
+            # The write lock is held, so a row here belongs to a run that ended
+            # without clearing it -- a killed process, never a live one.
+            self.predecessor_died = bool(
+                self.state.rows("SELECT 1 FROM sync_runs WHERE source_id=?", (self.source_id,))
+            )
             # Replacing the row clears any request a previous run left behind:
             # that request was for a sync that has ended.
             self.state.execute(
@@ -341,6 +351,7 @@ def finish_cancelled(
                 engine._ENRICH_DIRTY_SCOPE.format(name=source.name), "1", utc_now()
             )
         engine.manifests.save(source.name, manifest)
+        reconcile_node_index(engine.node_index, engine.graph_builder.graph, source.name)
     partial = connector.partial_checkpoint_from_items(items, processed)
     if partial is not None:
         cursor, high_watermark = partial
