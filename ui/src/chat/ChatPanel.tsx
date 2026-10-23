@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -251,6 +251,8 @@ export function ChatPanel({
             ) : turn.answer ? (
               <AnswerTurn
                 answer={turn.answer}
+                drawn={turn.drawn ?? null}
+                onDrawn={(drawn) => dispatch({ type: "visual-drawn", id: turn.id, drawn })}
                 onCitationClick={onCitationClick}
                 onAsk={submit}
                 sessionId={sessionId}
@@ -513,12 +515,17 @@ function FanoutBreakdown({ timings }: { timings?: WorkflowStep["fanout_timings"]
 
 function AnswerTurn({
   answer,
+  drawn,
+  onDrawn,
   onCitationClick,
   onAsk,
   sessionId,
   sourceName,
 }: {
   answer: ChatAnswer;
+  /** The visual drawn or redrawn for this turn, held in the session. */
+  drawn: VisualResponse | null;
+  onDrawn: (drawn: VisualResponse) => void;
   onCitationClick: (nodeId: string | undefined) => void;
   onAsk: (text: string) => void;
   sessionId: string | null;
@@ -526,8 +533,9 @@ function AnswerTurn({
 }) {
   const byIndex = new Map(answer.citations.map((c) => [c.index, c]));
   // A visual asked for after the fact — of the whole answer, or of one
-  // passage. Held per turn: it belongs to this answer, not the conversation.
-  const [drawn, setDrawn] = useState<VisualResponse | null>(null);
+  // passage — or redrawn in the view. Held on the turn in the session rather
+  // than here, so it outlives this component: a re-render, a new question or
+  // a remount must not bring the original picture back.
   const draw = useMutation({
     mutationFn: (citations: Citation[]) =>
       api.visualize({
@@ -539,7 +547,7 @@ function AnswerTurn({
         session_id: sessionId,
         source_name: sourceName,
       }),
-    onSuccess: setDrawn,
+    onSuccess: onDrawn,
   });
   const cited = answer.citations.filter((citation) => citation.used);
   const chosen = drawn?.visual ?? answer.visual ?? null;
@@ -550,6 +558,14 @@ function AnswerTurn({
       ? null
       : chosen;
   const visualCitations = drawn ? drawn.citations : answer.citations;
+  // One object per change, not per render: the frame re-sends its result to
+  // the view whenever this identity changes, and a fresh literal every render
+  // sent the original visual back over a redraw on any re-render at all.
+  const figures = answer.figures;
+  const frameResult = useMemo(
+    () => ({ visual, citations: visualCitations, figures: figures ?? [] }),
+    [visual, visualCitations, figures],
+  );
   // A paged listing with rows is drawn as a table that grows in place; an
   // empty one is just its sentence.
   const { state, dispatch } = useSession();
@@ -604,7 +620,8 @@ function AnswerTurn({
       {visual ? (
         <div className="msg__visual">
           <McpAppFrame
-            result={{ visual, citations: visualCitations, figures: answer.figures ?? [] }}
+            result={frameResult}
+            onRedrawn={onDrawn}
             onAsk={onAsk}
             title={visual.diagram?.title ?? "Visual"}
           />
