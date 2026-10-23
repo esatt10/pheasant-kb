@@ -139,7 +139,11 @@ services:
     # allocator warm-up; 2 GiB leaves one full warm working set of headroom.
     # A 1024 MiB base64 MCP body is parsed in memory before submission.
     mem_limit: 4096m
-    cpus: 1.0
+    # Two cores: with one, a refresh of the resident vector copy and the
+    # queries it serves shared a single core, and a question landing during
+    # a reload took 19 s instead of 0.4. The refresh also lowers its own
+    # priority and is a delta now (search/vector_resident.py).
+    cpus: 2.0
     command: ["serve", "--role", "api"]
     depends_on:
       db-init:

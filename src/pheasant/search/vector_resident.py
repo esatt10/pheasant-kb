@@ -31,12 +31,24 @@ on the api tier's one core with the queries they were meant to speed up. Now:
 * a newer version starts a reload at most every :data:`RELOAD_MIN_SECONDS`,
   so an indexing burst costs one reload per window, not one per write;
 * the decode is a zero-copy view and an in-place normalise (`_unit_rows`).
+
+**A new version is a delta, not a reload** (`_delta`). Chunk ids are
+content-addressed -- the text's hash is part of the id -- so an id that is in
+both versions names the same text and therefore the same vector, and the only
+changes between two versions are ids added and ids removed. A refresh reads the
+id column alone, diffs it against the held copy, fetches just the added rows
+and drops the removed ones: the same rows a full read produces, for a fraction
+of it. A change too large to be a delta (a new model, a rebuilt source) falls
+back to the full read, as does anything unexpected. The loading thread also
+lowers its own priority (`_yield_cpu`), so on a small api tier a refresh takes
+the CPU only when a request is not using it.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -53,7 +65,19 @@ COLUMNS = ["chunk_id", "payload_json", "vector"]
 #: The shortest gap between two reloads. While a source indexes, the table
 #: gains a version every few seconds; reloading per version spent the api
 #: tier's CPU on copies nobody read before the next one replaced them.
-RELOAD_MIN_SECONDS = 30.0
+RELOAD_MIN_SECONDS = 10.0
+
+#: A delta larger than this share of the held rows is read in full instead:
+#: past it, fetching the added rows by id costs about what one scan does.
+DELTA_MAX_SHARE = 0.25
+
+#: Ids per ``chunk_id IN (...)`` fetch of a delta's added rows.
+DELTA_FETCH_BATCH = 400
+
+#: The niceness a loading thread takes. Linux schedules each thread on its
+#: own, so this ranks a refresh below the request threads within the
+#: container's CPU quota, rather than splitting the quota with them.
+LOAD_NICENESS = 19
 
 #: How often the refresher started by :meth:`ResidentVectors.warm` looks for
 #: a newer version. One ``table.version`` read; the reload itself is throttled.
@@ -98,6 +122,8 @@ class ResidentVectors:
         return int(table.count_rows()) * int(width) * 4
 
     def _load(self, table: Any, version: int) -> None:
+        if self.background:
+            _yield_cpu()
         started = time.monotonic()
         try:
             if self._bytes_for(table) > self.max_bytes:
@@ -110,18 +136,20 @@ class ResidentVectors:
                     version,
                 )
                 return
-            arrow = table.search().select(COLUMNS).limit(None).to_arrow()
-            ids = arrow.column("chunk_id").to_pylist()
-            payloads = arrow.column("payload_json").to_pylist()
-            matrix = _unit_rows(arrow.column("vector").combine_chunks(), len(ids))
-            snapshot = _Snapshot(version, ids, payloads, matrix)
+            with self._lock:
+                held = self._snapshot
+            snapshot = _delta(table, version, held) if held is not None else None
+            how = "updated" if snapshot is not None else "loaded"
+            if snapshot is None:
+                snapshot = _full(table, version)
             with self._lock:
                 self._snapshot = snapshot
             logger.info(
-                "Holding %d vectors resident (v%s, %.0f MB) in %.1fs",
-                len(ids),
+                "Holding %d vectors resident (v%s, %.0f MB), %s in %.2fs",
+                len(snapshot.ids),
                 version,
-                matrix.nbytes / 1e6,
+                snapshot.matrix.nbytes / 1e6,
+                how,
                 time.monotonic() - started,
             )
         except Exception:  # noqa: BLE001 - an optimisation; the disk scan still answers
@@ -209,6 +237,81 @@ class ResidentVectors:
             )
             for i in top
         ]
+
+
+def _full(table: Any, version: int) -> _Snapshot:
+    arrow = table.search().select(COLUMNS).limit(None).to_arrow()
+    ids = arrow.column("chunk_id").to_pylist()
+    payloads = arrow.column("payload_json").to_pylist()
+    matrix = _unit_rows(arrow.column("vector").combine_chunks(), len(ids))
+    return _Snapshot(version, ids, payloads, matrix)
+
+
+def _delta(table: Any, version: int, held: _Snapshot) -> _Snapshot | None:
+    """``held`` brought to ``version`` by its added and removed ids, or ``None``.
+
+    ``None`` means "read it in full": the delta is too large, the ids are not
+    unique, a fetch did not return what the id column promised, or anything
+    raised. Exact either way -- see the module docstring for why an id present
+    in both versions needs no re-read.
+    """
+
+    try:
+        current = table.search().select(["chunk_id"]).limit(None).to_arrow()
+        ids_now = current.column("chunk_id").to_pylist()
+        now = set(ids_now)
+        if len(now) != len(ids_now):
+            return None
+        position = {chunk_id: i for i, chunk_id in enumerate(held.ids)}
+        removed = [i for chunk_id, i in position.items() if chunk_id not in now]
+        added = [chunk_id for chunk_id in ids_now if chunk_id not in position]
+        if not removed and not added:
+            return _Snapshot(version, held.ids, held.payloads, held.matrix)
+        if len(removed) + len(added) > DELTA_MAX_SHARE * max(1, len(held.ids)):
+            return None
+        new_ids: list[str] = []
+        new_payloads: list[str] = []
+        new_rows: list[np.ndarray] = []
+        for start in range(0, len(added), DELTA_FETCH_BATCH):
+            batch = added[start : start + DELTA_FETCH_BATCH]
+            quoted = ", ".join("'" + chunk_id.replace("'", "''") + "'" for chunk_id in batch)
+            arrow = (
+                table.search().where(f"chunk_id IN ({quoted})").select(COLUMNS).limit(None)
+            ).to_arrow()
+            new_ids.extend(arrow.column("chunk_id").to_pylist())
+            new_payloads.extend(arrow.column("payload_json").to_pylist())
+            new_rows.append(_unit_rows(arrow.column("vector").combine_chunks(), arrow.num_rows))
+        if sorted(new_ids) != sorted(added):
+            return None  # the table moved under the fetch; a full read settles it
+        keep = np.ones(len(held.ids), dtype=bool)
+        keep[removed] = False
+        # One pass over the held matrix, not two: the kept rows are written
+        # straight into the result (a mask then a concatenate copied 320 MB
+        # twice -- 1.25 s of a 1.56 s delta at 52k x 1536 on two cores).
+        # Never in place: a query may be reading the held copy right now.
+        kept = len(held.ids) - len(removed)
+        added_rows = sum(rows.shape[0] for rows in new_rows)
+        matrix = np.empty((kept + added_rows, held.matrix.shape[1]), dtype=np.float32)
+        np.compress(keep, held.matrix, axis=0, out=matrix[:kept])
+        at = kept
+        for rows in new_rows:
+            matrix[at : at + rows.shape[0]] = rows
+            at += rows.shape[0]
+        ids = [chunk_id for chunk_id, k in zip(held.ids, keep, strict=True) if k] + new_ids
+        payloads = [p for p, k in zip(held.payloads, keep, strict=True) if k] + new_payloads
+        return _Snapshot(version, ids, payloads, matrix)
+    except Exception:  # noqa: BLE001 - the full read is always the answer
+        logger.debug("resident vector delta failed; reading in full", exc_info=True)
+        return None
+
+
+def _yield_cpu() -> None:
+    """Lower this thread's scheduling priority, where the platform allows it."""
+
+    try:
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), LOAD_NICENESS)
+    except (AttributeError, OSError):  # not Linux, or not permitted: no matter
+        pass
 
 
 def _unit_rows(flat: Any, rows: int) -> np.ndarray:

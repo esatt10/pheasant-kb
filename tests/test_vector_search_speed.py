@@ -163,6 +163,71 @@ def test_warm_loads_without_a_query_and_keeps_the_copy_current(
     _until(lambda: store._resident._snapshot.version > before)  # no search needed
 
 
+def _rows_by_id(snapshot) -> dict[str, list[float]]:
+    return {
+        chunk_id: snapshot.matrix[i].round(6).tolist() for i, chunk_id in enumerate(snapshot.ids)
+    }
+
+
+def test_a_new_version_is_applied_as_a_delta_equal_to_a_full_read(tmp_path: Path) -> None:
+    """Content-addressed ids make an id in both versions the same vector, so
+    added and removed ids are the whole change -- and the result has to be
+    exactly what reading the table again would give."""
+
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=300)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    fresh = _vectors(5, seed=11).tolist()
+    store.upsert(
+        [f"chunk:added{n}" for n in range(5)],
+        fresh,
+        [{"source_id": "s0", "artifact_id": f"file:a{n}"} for n in range(5)],
+    )
+    store.delete([held.ids[0], held.ids[7]])
+    table = store._table()
+    delta = vector_resident._delta(table, int(table.version), held)
+    full = vector_resident._full(table, int(table.version))
+    assert delta is not None, "a small change fell back to a full read"
+    assert sorted(delta.ids) == sorted(full.ids)
+    assert _rows_by_id(delta) == _rows_by_id(full)
+    assert dict(zip(delta.ids, delta.payloads, strict=True)) == dict(
+        zip(full.ids, full.payloads, strict=True)
+    )
+
+
+def test_a_change_too_large_for_a_delta_is_read_in_full(tmp_path: Path) -> None:
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=40)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    store.upsert(
+        [f"chunk:many{n}" for n in range(30)],
+        _vectors(30, seed=5).tolist(),
+        [{"source_id": "s0", "artifact_id": "f"} for _ in range(30)],
+    )
+    table = store._table()
+    assert vector_resident._delta(table, int(table.version), held) is None
+
+
+def test_a_loading_thread_lowers_its_own_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from pheasant.search import vector_resident
+
+    asked: list[tuple] = []
+    monkeypatch.setattr(os, "PRIO_PROCESS", 0, raising=False)
+    monkeypatch.setattr(os, "setpriority", lambda *a: asked.append(a), raising=False)
+    store = _store(tmp_path, resident=True)
+    store.search(QUERIES[0], 5)
+    _until(lambda: store._resident._snapshot is not None)
+    assert asked and asked[0][2] == vector_resident.LOAD_NICENESS
+
+
 def test_the_fast_decode_matches_the_old_one() -> None:
     import pyarrow as pa
 
