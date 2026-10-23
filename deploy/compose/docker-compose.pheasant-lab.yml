@@ -215,11 +215,14 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 2m
-    # 4.5 GiB, up from 2.5: a 4,698-page web collection was OOM-killed at its
-    # end-of-sync vector maintenance (compaction, an IVF_HNSW_SQ rebuild and the
-    # resident matrix over ~52k x 1536-d vectors measured ~2 GiB on their own),
-    # on top of the ~1.8 GiB working set the item loop had reached.
-    mem_limit: 4608m
+    # 6 GiB, up from 2.5 by way of 4.5: a 4,698-page web collection was
+    # OOM-killed at its end-of-sync vector maintenance (compaction, an
+    # IVF_HNSW_SQ rebuild and the resident matrix over ~52k x 1536-d vectors
+    # measured ~2 GiB on their own) on top of the ~1.8 GiB its item loop
+    # reached -- and at 4.5 GiB still, four times, when it overlapped three
+    # other collections (max_parallel_sources: 4). Needs Docker's VM above the
+    # WSL2 default of half the host's RAM (lab: memory=10GB in ~/.wslconfig).
+    mem_limit: 6144m
     cpus: 2.0
     command: ["serve", "--role", "indexer"]
     depends_on:
