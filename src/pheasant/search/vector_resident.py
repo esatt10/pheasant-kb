@@ -17,6 +17,20 @@ Freshness follows the table's version. A search on a newer version than the
 one held starts a background reload and answers from the held copy until it
 lands, so a write costs readers one stale answer window (seconds) rather than
 a blocked request; the vector arm already skips hits whose chunk is gone.
+
+**No query waits for a load.** The first version loaded the table inside
+whichever request arrived first -- 37.9 s for one question on the lab, after
+every restart -- and reloaded the whole table on every new version, which an
+indexing source produces every few seconds, so back-to-back reloads competed
+on the api tier's one core with the queries they were meant to speed up. Now:
+
+* a serving process calls :meth:`ResidentVectors.warm` at boot, which loads in
+  the background and then keeps the copy current from a refresher thread;
+* until a copy exists, ``search`` returns ``None`` and the store answers from
+  LanceDB (its ANN index when one is configured) rather than blocking;
+* a newer version starts a reload at most every :data:`RELOAD_MIN_SECONDS`,
+  so an indexing burst costs one reload per window, not one per write;
+* the decode is a zero-copy view and an in-place normalise (`_unit_rows`).
 """
 
 from __future__ import annotations
@@ -25,6 +39,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -34,6 +49,15 @@ logger = logging.getLogger(__name__)
 #: The columns a resident copy holds. Never ``payload_json``'s parse: payloads
 #: are ~180 bytes and only the top k are decoded per query.
 COLUMNS = ["chunk_id", "payload_json", "vector"]
+
+#: The shortest gap between two reloads. While a source indexes, the table
+#: gains a version every few seconds; reloading per version spent the api
+#: tier's CPU on copies nobody read before the next one replaced them.
+RELOAD_MIN_SECONDS = 30.0
+
+#: How often the refresher started by :meth:`ResidentVectors.warm` looks for
+#: a newer version. One ``table.version`` read; the reload itself is throttled.
+REFRESH_SECONDS = 10.0
 
 
 class _Snapshot:
@@ -64,6 +88,9 @@ class ResidentVectors:
         self._loading: int | None = None
         #: The version known to exceed the cap, so it is not re-read per query.
         self._oversized: int | None = None
+        #: Monotonic start of the last load, for the reload throttle.
+        self._last_load: float | None = None
+        self._refresher: threading.Thread | None = None
 
     @staticmethod
     def _bytes_for(table: Any) -> int:
@@ -86,12 +113,7 @@ class ResidentVectors:
             arrow = table.search().select(COLUMNS).limit(None).to_arrow()
             ids = arrow.column("chunk_id").to_pylist()
             payloads = arrow.column("payload_json").to_pylist()
-            flat = arrow.column("vector").combine_chunks()
-            width = flat.type.list_size
-            matrix = np.array(flat.values, dtype=np.float32).reshape(len(ids), width)
-            norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-            norms[norms == 0.0] = 1.0
-            matrix /= norms
+            matrix = _unit_rows(arrow.column("vector").combine_chunks(), len(ids))
             snapshot = _Snapshot(version, ids, payloads, matrix)
             with self._lock:
                 self._snapshot = snapshot
@@ -110,21 +132,58 @@ class ResidentVectors:
 
     def _ensure(self, table: Any) -> _Snapshot | None:
         version = int(table.version)
+        now = time.monotonic()
         with self._lock:
             held = self._snapshot
             if held is not None and held.version == version:
                 return held
-            if self._oversized == version or self._loading == version:
+            if self._oversized == version or self._loading is not None:
                 return held
+            if (
+                self.background
+                and held is not None
+                and self._last_load is not None
+                and now - self._last_load < RELOAD_MIN_SECONDS
+            ):
+                return held  # throttled; the refresher reloads once the window passes
             self._loading = version
-        if held is None or not self.background:
+            self._last_load = now
+        if not self.background:
             self._load(table, version)
             with self._lock:
                 return self._snapshot
         threading.Thread(
             target=self._load, args=(table, version), name="resident-vectors", daemon=True
         ).start()
-        return held  # one version behind until the reload lands
+        # Never the request's wait: with nothing held yet the store answers
+        # from LanceDB, and otherwise from the held copy, until this lands.
+        return held
+
+    def warm(self, table_fn: Callable[[], Any]) -> None:
+        """Load in the background now, and keep the copy current from then on.
+
+        ``table_fn`` returns the table as it is now, or ``None`` while it does
+        not exist; the refresher calls it off the request path. Started once
+        per process, by a role that serves searches, at boot.
+        """
+
+        if not self.background or self._refresher is not None:
+            return
+
+        def refresh() -> None:
+            while True:
+                try:
+                    table = table_fn()
+                    if table is not None:
+                        self._ensure(table)
+                except Exception:  # noqa: BLE001 - a missed beat costs one window
+                    logger.debug("resident vector refresh failed", exc_info=True)
+                time.sleep(REFRESH_SECONDS)
+
+        self._refresher = threading.Thread(
+            target=refresh, name="resident-vectors-refresh", daemon=True
+        )
+        self._refresher.start()
 
     def search(
         self, table: Any, query_vec: list[float], k: int
@@ -150,3 +209,22 @@ class ResidentVectors:
             )
             for i in top
         ]
+
+
+def _unit_rows(flat: Any, rows: int) -> np.ndarray:
+    """The vectors as one writable float32 matrix of unit rows.
+
+    A zero-copy view of Arrow's buffer copied once into memory this process
+    owns, then row norms by ``einsum`` and an in-place scale. Measured for
+    52k x 1536 on one core: ``np.array(flat.values)`` took 4.3 s (it walks
+    the values) and ``np.linalg.norm`` plus a divide took 7.3 s. A zero row
+    stays zero.
+    """
+
+    width = flat.type.list_size
+    matrix = np.array(flat.values.to_numpy(zero_copy_only=False), dtype=np.float32, copy=True)
+    matrix = matrix.reshape(rows, width)
+    norms = np.sqrt(np.einsum("ij,ij->i", matrix, matrix))
+    norms[norms == 0.0] = 1.0
+    matrix *= (1.0 / norms)[:, None]
+    return matrix

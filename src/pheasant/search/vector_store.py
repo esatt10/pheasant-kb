@@ -739,7 +739,21 @@ class LanceDBVectorStore:
         ]
 
     def warm(self) -> bool:
-        """Touch a small index once so its first user query avoids cold I/O."""
+        """Touch a small index once so its first user query avoids cold I/O.
+
+        With ``resident`` on, also start holding the table in memory -- in the
+        background, kept current from then on (`ResidentVectors.warm`) -- so
+        no query after boot waits for the load the first one used to pay.
+        """
+        if self._resident is not None:
+
+            def current() -> Any:
+                try:
+                    return self._table()
+                except Exception:  # noqa: BLE001 - not created yet, or mid re-create
+                    return None
+
+            self._resident.warm(current)
         table = self._table()
         if table is None:
             return False
