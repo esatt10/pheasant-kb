@@ -850,3 +850,165 @@ def test_lancedb_holds_its_table_and_still_sees_other_writers(
     writer.reset()
     writer.upsert(["c3"], [[0.0, 1.0]], [{"source_id": "s1", "artifact_id": "a3"}])
     assert [hit[0] for hit in reader.search([0.0, 1.0], 5)] == ["c3"]
+
+
+# ---------------------------------------------------------------------------
+# A warm first query: one shared connection pool, and a quiet keep-warm beat
+# ---------------------------------------------------------------------------
+
+
+class _CountingServer:
+    """An HTTP/1.1 server that remembers each request's client port."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen: list[tuple[str, str, int, str | None]] = []
+        self.seen = seen
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def _answer(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                seen.append(
+                    (
+                        self.command,
+                        self.path,
+                        self.client_address[1],
+                        self.headers.get("Authorization"),
+                    )
+                )
+                body = b'{"data": []}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = _answer  # noqa: N815 - http.server's spelling
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def counting_server():
+    from pheasant.search import embedding_client
+
+    embedding_client._POOL.clear()
+    server = _CountingServer()
+    try:
+        yield server
+    finally:
+        server.close()
+        embedding_client._POOL.clear()
+
+
+def _post_from_a_new_thread(url: str) -> None:
+    import threading
+    from urllib.request import Request
+
+    from pheasant.search.embedding_client import _transport
+
+    worker = threading.Thread(
+        target=lambda: _transport(Request(url, data=b"{}", method="POST"), 5.0)
+    )
+    worker.start()
+    worker.join()
+
+
+def test_a_connection_kept_alive_on_one_thread_serves_the_next(counting_server) -> None:
+    """Per-thread connections meant a serving replica's request threads -- one
+    of dozens -- rarely held a live one, so the first question after a quiet
+    spell paid a TLS handshake past the query-embedding timeout."""
+
+    _post_from_a_new_thread(counting_server.base + "/embeddings")
+    _post_from_a_new_thread(counting_server.base + "/embeddings")
+    ports = {port for _method, _path, port, _auth in counting_server.seen}
+    assert len(counting_server.seen) == 2
+    assert len(ports) == 1, "the second thread opened its own connection"
+
+
+def test_a_connection_idle_too_long_is_replaced_not_reused(
+    counting_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.search import embedding_client
+
+    monkeypatch.setattr(embedding_client, "IDLE_REUSE_SECONDS", -1.0)
+    _post_from_a_new_thread(counting_server.base + "/embeddings")
+    _post_from_a_new_thread(counting_server.base + "/embeddings")
+    assert len({port for *_rest, port, _auth in counting_server.seen}) == 2
+
+
+def test_ping_asks_for_the_model_list_with_the_key(
+    counting_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.search.embedding_client import OpenAISpecEmbedder
+
+    monkeypatch.setenv("PING_TEST_KEY", "sk-test")
+    embedder = OpenAISpecEmbedder(counting_server.base, "m", api_key_env="PING_TEST_KEY")
+    assert embedder.ping() is True
+    method, path, _port, auth = counting_server.seen[-1]
+    assert (method, path, auth) == ("GET", "/models", "Bearer sk-test")
+
+
+def test_a_keep_warm_search_moves_no_metric_and_no_salience(tmp_path: Path) -> None:
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.search.hybrid import HybridSearch
+    from pheasant.search.keep_warm import quiet_copy
+    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.sync.engine import SyncEngine
+    from pheasant.telemetry import metrics
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "note.md").write_text("# Note\n\nThe overview word appears here.\n", encoding="utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "warm",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [{"name": "docs", "type": "document_folder", "path": str(corpus)}],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        engine.sync_source("docs", "full")
+        metrics.register_default_metrics(
+            "test"
+        )  # what create_app does; unregistered, nothing counts
+        search = HybridSearch(SearchStore(engine.state), usage_tracking=True, stage_sample_rate=1.0)
+        quiet = quiet_copy(search)
+
+        def counted() -> float:
+            return sum(
+                metrics.REGISTRY.value("pheasant_retrieval_arm_total", arm=arm, outcome=outcome)
+                or 0.0
+                for arm in ("text", "vector", "graph")
+                for outcome in ("ok", "empty", "failed")
+            )
+
+        before = counted()
+        quiet.search_context(config.knowledge_base_id, "overview", mode="hybrid")
+        assert counted() == before, "a keep-warm search moved the retrieval metrics"
+        assert quiet.usage_tracking is False and quiet.stage_sample_rate == 0.0
+        search.search_context(config.knowledge_base_id, "overview", mode="hybrid")
+        assert counted() > before, "a real search stopped counting"
+        assert search.usage_tracking is True, "the copy changed the original"
+    finally:
+        engine.close()

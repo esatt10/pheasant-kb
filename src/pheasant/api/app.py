@@ -1040,6 +1040,9 @@ def create_app(
         warm_vector_store = getattr(getattr(search.vector, "store", None), "warm", None)
         if callable(warm_vector_store):
             try:
+                from pheasant.search.keep_warm import start as keep_warm
+
+                keep_warm(search, config.knowledge_base_id)
                 if warm_vector_store():
                     logger.info("Warmed the small vector index before serving queries")
             except Exception:
