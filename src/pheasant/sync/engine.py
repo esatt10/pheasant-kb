@@ -576,6 +576,26 @@ class SyncEngine:
             logger.warning("Could not update the graph node index: %s", exc)
             return 0
 
+    def reconcile_node_index(self, source_name: str, *, missing: bool = False) -> None:
+        """`node_index.reconcile` against the truth this process holds (see there)."""
+
+        saved = self.config.storage.graph_format == "rows"
+
+        def working() -> Any:
+            with self._sync_mutex:
+                self._ensure_persisted_graph_loaded()
+                return self.graph_builder.graph
+
+        graph = working if (saved or missing or self._graph_loaded) else None
+        reconcile_node_index(
+            self.node_index,
+            source_name,
+            kb_id=self.config.knowledge_base_id,
+            graph=graph,
+            saved_rows=saved,
+            missing=missing,
+        )
+
     def rebuild_node_index(self) -> int:
         """Rebuild the whole index from the in-memory graph."""
 
@@ -1750,8 +1770,7 @@ class SyncEngine:
             # See checkpoint_graph: manifests may lag a published generation,
             # but must never claim a graph generation that did not commit.
             self.manifests.save(source.name, manifest)
-            graph, kb_id = self.graph_builder.graph, self.config.knowledge_base_id
-            reconcile_node_index(self.node_index, graph, source.name, kb_id=kb_id)
+            self.reconcile_node_index(source.name)
             return pruned_vectors
 
     def apply_index_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:
@@ -1991,10 +2010,7 @@ class SyncEngine:
                     logger.error("Remote update failed for %s: %s", source.name, exc)
                     raise
             if run.predecessor_died:  # its pending node-index delta died with it
-                with self._sync_mutex:
-                    self._ensure_persisted_graph_loaded()
-                    graph = self.graph_builder.graph
-                    reconcile_node_index(self.node_index, graph, source.name, missing=True)
+                self.reconcile_node_index(source.name, missing=True)
             connector = connector_for_source(source, self.state)
             if mode == "validate_only":
                 health = connector.validate()

@@ -237,6 +237,7 @@ def test_a_lost_removal_is_repaired_by_the_next_sync(tmp_path) -> None:
         graph = engine.graph_builder.graph
         victim = next(n for n in _source_nodes(engine) if n.startswith("chunk:"))
         graph.remove_nodes_from([victim])
+        engine.graph_store.save(engine.config.knowledge_base_id, graph)  # a checkpoint
         graph.take_index_delta()  # the flush that never happened
         assert victim in engine.node_index.ids("docs"), "the fixture did not leave a stale row"
 
@@ -286,6 +287,32 @@ def test_a_source_missing_from_the_index_is_restored_by_an_ordinary_sync(tmp_pat
         assert engine.node_index.ids("docs") == expected
     finally:
         engine.close()
+
+
+def test_a_fresh_process_with_nothing_to_change_keeps_every_row(tmp_path) -> None:
+    """The regression the first version shipped: a sync worker with nothing to
+    change never loads the working graph, and judging rows against that empty
+    graph deleted every row of every source it synced -- 69,000 on the lab.
+    The saved rows are the truth, and nothing here loads the graph."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    first = _healing_engine(tmp_path)
+    config = first.config
+    expected = first.node_index.ids("docs")
+    first.close()
+    assert expected
+
+    # Built the way a sync worker child builds it (cli.py): the graph is loaded
+    # only when a task mutates it, so a no-change sync never holds it.
+    fresh = SyncEngine(config, defer_persisted_graph_load=True)
+    try:
+        assert not fresh._graph_loaded, "the fixture loaded the graph up front"
+        fresh.sync_source("docs", "incremental")
+        assert fresh.node_index.ids("docs") == expected, "a no-change sync removed index rows"
+        assert not fresh._graph_loaded, "the reconcile loaded the graph with nothing to add"
+    finally:
+        fresh.close()
 
 
 def test_a_clean_run_does_not_walk_the_graph_for_missing_rows(tmp_path, monkeypatch) -> None:

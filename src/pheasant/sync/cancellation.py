@@ -47,7 +47,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.sync.locks import SOURCE_HEARTBEAT_SECONDS, SOURCE_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -351,12 +350,7 @@ def finish_cancelled(
                 engine._ENRICH_DIRTY_SCOPE.format(name=source.name), "1", utc_now()
             )
         engine.manifests.save(source.name, manifest)
-        reconcile_node_index(
-            engine.node_index,
-            engine.graph_builder.graph,
-            source.name,
-            kb_id=engine.config.knowledge_base_id,
-        )
+        engine.reconcile_node_index(source.name)
     partial = connector.partial_checkpoint_from_items(items, processed)
     if partial is not None:
         cursor, high_watermark = partial
