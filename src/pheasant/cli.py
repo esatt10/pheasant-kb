@@ -1741,6 +1741,7 @@ def main(argv: list[str] | None = None) -> int:
         help=argparse.SUPPRESS,
     )
     sync_p.add_argument("--task-payload", default=None, help=argparse.SUPPRESS)
+    sync_p.add_argument("--task-payload-file", default=None, help=argparse.SUPPRESS)
     sync_p.add_argument("--worker-child", action="store_true", help=argparse.SUPPRESS)
     scan_p = sub.add_parser(
         "scan",
@@ -2315,14 +2316,19 @@ def main(argv: list[str] | None = None) -> int:
             # the server, which is the whole point of running sync out of
             # process.
             engine.ensure_node_index()
-            if args.task_payload:
+            if args.task_payload or args.task_payload_file:
                 import base64
                 import json as _json
 
                 from pheasant.sync.queue import IndexTask
 
-                task_payload = _json.loads(
-                    base64.urlsafe_b64decode(args.task_payload.encode("ascii")).decode("utf-8")
+                # `run_sync` sends a file: Linux refuses an argument over 128 KiB.
+                task_payload = (
+                    _json.loads(Path(args.task_payload_file).read_text(encoding="utf-8"))
+                    if args.task_payload_file
+                    else _json.loads(
+                        base64.urlsafe_b64decode(args.task_payload.encode("ascii")).decode("utf-8")
+                    )
                 )
                 delivery_attempt = int(task_payload.pop("_delivery_attempt", 0) or 0)
                 task = IndexTask(

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import subprocess
 import sys
@@ -101,13 +102,19 @@ def run_sync(
         command += ["--depth", str(depth)]
     if on_progress is not None:
         command += ["--progress"]
+    payload_file: str | None = None
     if task_payload:
-        import base64
+        # A file, not an argument: Linux refuses any single argument over
+        # 128 KiB (MAX_ARG_STRLEN), and a task carrying a source's whole
+        # configuration -- a 4,698-URL web collection's is ~330 KB -- failed
+        # every sync with `[Errno 7] Argument list too long` before the child
+        # started. Private to this user (mkstemp), removed once the child exits.
+        import tempfile
 
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(task_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).decode("ascii")
-        command += ["--task-payload", encoded]
+        fd, payload_file = tempfile.mkstemp(prefix="pheasant-task-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(task_payload, handle, sort_keys=True, separators=(",", ":"))
+        command += ["--task-payload-file", payload_file]
     # Server-owned workers queue behind another legitimate writer. The public
     # CLI remains fail-fast, which is important for scripts and diagnostics.
     command += ["--wait-for-lease", str(DEFAULT_LEASE_WAIT_S)]
@@ -126,6 +133,9 @@ def run_sync(
     except subprocess.TimeoutExpired:
         logger.error("Sync worker timed out after %.0fs", timeout)
         return {"status": "timeout", "source_id": source_name, "results": []}
+    finally:
+        if payload_file is not None:
+            Path(payload_file).unlink(missing_ok=True)
 
     if returncode != 0:
         # stderr carries the child's traceback; surface the tail, which is the

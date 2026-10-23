@@ -657,6 +657,82 @@ def test_task_payload_round_trips_through_the_row(tmp_path: Path) -> None:
         store.close()
 
 
+def test_a_large_task_payload_reaches_the_child_by_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux refuses one argument over 128 KiB (Windows a whole command line
+    over 32 KiB), and the payload used to travel base64-encoded on argv: a
+    4,698-URL web collection failed every queued sync with ``[Errno 7]
+    Argument list too long`` before the child started."""
+
+    from pheasant.sync import worker
+
+    payload = {"operation": "replace_source", "blob": "x" * 300_000}
+    seen: dict[str, Any] = {}
+
+    def fake_run(command, timeout, on_progress):
+        path = command[command.index("--task-payload-file") + 1]
+        seen["longest"] = max(len(part) for part in command)
+        seen["path"] = Path(path)
+        seen["payload"] = json.loads(Path(path).read_text(encoding="utf-8"))
+        return 0, json.dumps({"results": []}), ""
+
+    monkeypatch.setattr(worker, "_run_streaming", fake_run)
+    worker.run_sync(tmp_path / "pheasant.yaml", "web", task_payload=payload)
+    assert seen["longest"] < 4096, "the payload is still on the command line"
+    assert seen["payload"] == payload
+    assert not seen["path"].exists(), "the payload file outlived the child"
+
+
+def test_a_child_installs_a_source_with_thousands_of_urls(tmp_path: Path) -> None:
+    """The real child process, end to end, with the shape that failed live."""
+
+    import yaml
+
+    from pheasant.sync.worker import run_sync
+
+    config_path = tmp_path / "pheasant.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "pheasant": {
+                    "name": "bigpayload",
+                    "state_path": str(tmp_path / "state"),
+                    "workspace_root": str(tmp_path),
+                    "exports_path": str(tmp_path / "exports"),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    urls = [f"https://example.test/page-{n:05d}-with-a-longish-slug" for n in range(5000)]
+    source = {
+        "name": "web",
+        "type": "web_collection",
+        "path": "/unused",
+        "urls": urls,
+        "connector": {"allow_experimental": True},
+    }
+    assert len(json.dumps(source)) > 128 * 1024
+    report = run_sync(
+        config_path,
+        "web",
+        task_payload={"operation": "replace_source", "source": source},
+        timeout=300,
+    )
+    assert report.get("status") not in {"failed", "timeout"}, report
+    store = StateStore(
+        StatePaths.from_config(
+            PheasantConfig.model_validate(yaml.safe_load(config_path.read_text(encoding="utf-8")))
+        ).sqlite
+    )
+    try:
+        installed = json.loads(store.get_source("web")["config_json"])
+        assert installed["urls"] == urls
+    finally:
+        store.close()
+
+
 def test_owner_ids_are_unique_per_claimant() -> None:
     """A recycled pid must not be mistaken for the process that died."""
 
