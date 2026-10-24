@@ -1,0 +1,15 @@
+{
+  "baseline": "baseline",
+  "arms": [
+    {"name": "baseline", "options": {}},
+    {"name": "passages-8", "options": {"synthesis_passages": 8}},
+    {"name": "excerpt-3000", "options": {"passage_chars": 3000}},
+    {"name": "prune", "options": {"decision_gates": ["sufficiency", "followup", "accept", "prune"]}},
+    {"name": "rewrite-low", "options": {"repair_efforts": ["low"]}},
+    {"name": "rewrite-low-escalate", "options": {"repair_efforts": ["low"], "max_repairs": 2}},
+    {
+      "name": "passages-8+rewrite-low-escalate",
+      "options": {"synthesis_passages": 8, "repair_efforts": ["low"], "max_repairs": 2}
+    }
+  ]
+}

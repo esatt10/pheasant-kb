@@ -19,9 +19,9 @@ here take the *judgements* out of that call:
   every hit.
 * **accept** — after the answer is written and its citations verified: is
   every claim supported by the passage it cites, and does it answer the
-  question. Because a rejected draft is rewritten once at the assistant's own
-  effort, the first draft can be written at ``draft_reasoning_effort`` —
-  cheap first, escalate on doubt.
+  question. Because a rejected draft is rewritten (at the assistant's own
+  effort unless ``repair_efforts`` says otherwise), the first draft can be
+  written at ``draft_reasoning_effort`` — cheap first, escalate on doubt.
 
 Every judgement that cannot be had (no key, a refusal, a timeout, a circuit
 opened by an earlier 401/404) falls back to the model-written path the loop
@@ -42,6 +42,7 @@ from typing import Any, TypedDict
 from pheasant.assistant import decisions
 from pheasant.assistant.decisions import Decider, DecisionUnavailable
 from pheasant.assistant.workflows import WorkflowStep
+from pheasant.config.assistant_decisions import REPAIR_EFFORTS
 
 #: How much of each cited document the acceptance gate reads. The writer read
 #: whole documents (``chat.hydrate_citations``); a judge reading less would
@@ -49,6 +50,9 @@ from pheasant.assistant.workflows import WorkflowStep
 #: region, a 4,000-character cut sent a correct answer to a rewrite.
 ACCEPT_DOCUMENT_CHARS = 16_000
 ACCEPT_TOTAL_CHARS = 120_000
+
+#: The most rewrites one request may ask for through ``options.max_repairs``.
+MAX_REQUEST_REPAIRS = 3
 
 #: Kinds of miss, as the sufficiency request offers them. The description is
 #: what the trace says is missing, since the API writes no prose of its own.
@@ -160,6 +164,19 @@ def for_request(decider: Decider | None, options: dict[str, Any]) -> Decider | N
     gates = options.get("decision_gates")
     if isinstance(gates, (list, tuple)):
         decider = decider.with_gates(tuple(g for g in gates if g in decisions.GATES))
+    max_repairs, efforts = decider.max_repairs, decider.repair_efforts
+    requested = options.get("max_repairs")
+    if isinstance(requested, int) and not isinstance(requested, bool):
+        if 0 <= requested <= MAX_REQUEST_REPAIRS:
+            max_repairs = requested
+    ladder = options.get("repair_efforts")
+    ladder = [ladder] if isinstance(ladder, str) else ladder
+    # All or nothing: dropping one bad entry would shift every later rewrite
+    # onto the wrong effort. What ran is in the payload's ``decisions`` block.
+    if isinstance(ladder, (list, tuple)) and all(e in REPAIR_EFFORTS for e in ladder):
+        efforts = tuple(ladder)
+    if (max_repairs, efforts) != (decider.max_repairs, decider.repair_efforts):
+        decider = decider.with_repairs(max_repairs, efforts)
     return decider.with_mode(mode)
 
 
@@ -567,23 +584,11 @@ def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> 
             "passage it cites, and answer the question that was asked."
         )
     long_answer = str(state.get("depth") or "short") == "long"
-    if (
-        llm is not None
-        and not repairing
-        and not long_answer
-        and active(ctx, "accept")
-        and decider.draft_reasoning_effort is not None
-        and getattr(llm, "provider", None) == "openai"
-        and getattr(llm, "model_id", None) == "gpt-6-luna"
-        and callable(getattr(llm, "with_reasoning_effort", None))
-    ):
-        configured = getattr(llm, "reasoning_effort", None)
-        effort = min(
-            (decider.draft_reasoning_effort, configured), key=lambda e: _EFFORT_ORDER.get(e, 2)
-        )
-        if effort != configured:
-            draft.llm = llm.with_reasoning_effort(effort)
-            draft.effort = effort
+    if repairing:
+        wanted = _wanted(decider.repair_effort(int(state.get("repairs") or 0)))
+        draft.llm, draft.effort = _at_effort(llm, wanted)
+    elif not long_answer and active(ctx, "accept"):
+        draft.llm, draft.effort = _at_effort(llm, decider.draft_reasoning_effort)
     request = ctx.get("request")
     if (
         not repairing
@@ -597,6 +602,36 @@ def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> 
 
         draft.on_delta = TextPreview(request.on_draft)
     return draft
+
+
+def _wanted(effort: str) -> str | None:
+    """A ``repair_efforts`` entry as an effort to ask for; ``full`` asks for none."""
+
+    return None if effort == "full" else effort
+
+
+def _at_effort(llm: Any, effort: str | None) -> tuple[Any, str | None]:
+    """``llm`` lowered to ``effort``, and the effort it now writes at.
+
+    ``None`` back means "unchanged": no effort asked for, a model other than
+    ``gpt-6-luna`` (the only one the wire sends an effort to), or one already
+    configured at or below it — an effort is never raised above the
+    assistant's own.
+    """
+
+    if (
+        llm is None
+        or effort is None
+        or getattr(llm, "provider", None) != "openai"
+        or getattr(llm, "model_id", None) != "gpt-6-luna"
+        or not callable(getattr(llm, "with_reasoning_effort", None))
+    ):
+        return llm, None
+    configured = getattr(llm, "reasoning_effort", None)
+    lowest = min((effort, configured), key=lambda e: _EFFORT_ORDER.get(e, 2))
+    if lowest == configured:
+        return llm, None
+    return llm.with_reasoning_effort(lowest), lowest
 
 
 def finish_synthesis(
@@ -711,10 +746,11 @@ def accept_node(state: dict, ctx: dict) -> dict:
         if responsive < threshold:
             problems.append("not to answer the question that was asked")
         decisions.record("accept", "repaired", result.seconds)
+        _, rewrite_effort = _at_effort(ctx.get("llm"), _wanted(decider.repair_effort(repairs + 1)))
         return {
             **_accept_step(
                 state,
-                f"draft rejected ({scores}); rewriting at full effort",
+                f"draft rejected ({scores}); rewriting at {rewrite_effort or 'full'} effort",
                 {**entry, "outcome": "repaired"},
             ),
             "acceptance": acceptance,

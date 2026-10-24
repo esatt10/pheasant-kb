@@ -246,6 +246,8 @@ class Decider:
     prune_min_keep: int = 3
     draft_reasoning_effort: str | None = "low"
     max_repairs: int = 1
+    #: Effort per rewrite (``none`` / ``low`` / ``full``); past the end, ``full``.
+    repair_efforts: tuple[str, ...] = ()
     #: ``environment`` / ``assistant`` (the answering model's own OpenAI
     #: credential) — reported, never the key itself.
     source: str = "environment"
@@ -271,6 +273,14 @@ class Decider:
     def with_gates(self, gates: tuple[str, ...]) -> Decider:
         return replace(self, gates=gates)
 
+    def with_repairs(self, max_repairs: int, efforts: tuple[str, ...]) -> Decider:
+        return replace(self, max_repairs=max_repairs, repair_efforts=efforts)
+
+    def repair_effort(self, attempt: int) -> str:
+        """The effort rewrite number ``attempt`` (1-based) is asked for."""
+        efforts = self.repair_efforts
+        return efforts[attempt - 1] if 0 < attempt <= len(efforts) else "full"
+
     def gate(self, name: str, mode: str = "beta") -> bool:
         """Is ``name`` a gate this handle runs in ``mode``?"""
         return self.mode == mode and name in self.gates
@@ -287,6 +297,8 @@ class Decider:
                 "accept": self.accept_threshold,
             },
             "draft_reasoning_effort": self.draft_reasoning_effort,
+            "max_repairs": self.max_repairs,
+            "repair_efforts": list(self.repair_efforts),
         }
 
     def decide(self, input: Any, questions: list[dict[str, Any]]) -> DecisionResult:
@@ -390,6 +402,7 @@ def resolve_decider(
         prune_min_keep=int(getattr(decisions, "prune_min_keep", 3)),
         draft_reasoning_effort=getattr(decisions, "draft_reasoning_effort", "low"),
         max_repairs=int(getattr(decisions, "max_repairs", 1)),
+        repair_efforts=tuple(getattr(decisions, "repair_efforts", None) or ()),
         source=source,
     )
 
