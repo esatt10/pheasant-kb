@@ -117,10 +117,7 @@ DEFAULTS: dict[str, Any] = {
     "per_query_results": 8,
     # Total passages offered to the synthesis step.
     "max_context_passages": 12,
-    # Of those, how many the answer is written from (the top of the window);
-    # unset is all of them. Unlike lowering `max_context_passages` it leaves
-    # the evidence judgement's window, and the `max_results` floor, alone.
-    "synthesis_passages": None,
+    "synthesis_passages": None,  # of those, how many it is written from (drafting.py)
     # Ask the model to grade its own evidence before answering.
     "grade_evidence": True,
     "grader_model": None,
@@ -1037,9 +1034,6 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     intent = str(state.get("intent") or "knowledge")
     depth = str(state.get("depth") or "short")
     passages = state.get("passages", [])[: int(options["max_context_passages"])]
-    cap = options.get("synthesis_passages")
-    if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
-        passages = passages[:cap]
     draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
     passages, llm = draft.passages, draft.llm
     citations = passages_to_citations(passages, int(options["max_context_passages"]))
