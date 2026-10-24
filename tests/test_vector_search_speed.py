@@ -164,9 +164,15 @@ def test_warm_loads_without_a_query_and_keeps_the_copy_current(
 
 
 def _rows_by_id(snapshot) -> dict[str, list[float]]:
+    """What a query can see: each live id's vector (dead rows are not live)."""
+
     return {
-        chunk_id: snapshot.matrix[i].round(6).tolist() for i, chunk_id in enumerate(snapshot.ids)
+        chunk_id: snapshot.matrix[i].round(6).tolist() for chunk_id, i in snapshot.position.items()
     }
+
+
+def _payloads_by_id(snapshot) -> dict[str, str]:
+    return {chunk_id: snapshot.payloads[i] for chunk_id, i in snapshot.position.items()}
 
 
 def test_a_new_version_is_applied_as_a_delta_equal_to_a_full_read(tmp_path: Path) -> None:
@@ -190,11 +196,48 @@ def test_a_new_version_is_applied_as_a_delta_equal_to_a_full_read(tmp_path: Path
     delta = vector_resident._delta(table, int(table.version), held)
     full = vector_resident._full(table, int(table.version))
     assert delta is not None, "a small change fell back to a full read"
-    assert sorted(delta.ids) == sorted(full.ids)
+    assert set(delta.position) == set(full.position)
     assert _rows_by_id(delta) == _rows_by_id(full)
-    assert dict(zip(delta.ids, delta.payloads, strict=True)) == dict(
-        zip(full.ids, full.payloads, strict=True)
-    )
+    assert _payloads_by_id(delta) == _payloads_by_id(full)
+    # Appended, not copied: the kept rows are the very buffer `held` holds.
+    assert delta.matrix is held.matrix
+    assert delta.n == held.n + 5 and delta.live == held.live - 2 + 5
+
+
+def test_a_removed_row_is_never_returned_while_it_still_has_its_slot(tmp_path: Path) -> None:
+    """A delta marks a removed row dead rather than compacting it away, so the
+    search has to skip it -- even when it is the best match there is."""
+
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=200)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    target = held.ids[3]
+    query = held.matrix[held.position[target]].tolist()
+    store.delete([target])
+    table = store._table()
+    resident = vector_resident.ResidentVectors(10**9, background=False)
+    resident._snapshot = held
+    resident._last_load = None
+    hits = resident.search(table, query, 5)
+    assert resident._snapshot.matrix is held.matrix, "the removal was not applied as a delta"
+    assert target not in [chunk_id for chunk_id, _score, _payload in hits]
+    assert len(hits) == 5
+
+
+def test_a_delta_that_would_overrun_the_spare_capacity_reads_in_full(tmp_path: Path) -> None:
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=50)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    tight = vector_resident._Snapshot(
+        held.version, held.ids, held.payloads, held.matrix[: held.n], held.n
+    )  # no spare rows at all
+    store.upsert(["chunk:one-more"], [QUERIES[0]], [{"source_id": "s0", "artifact_id": "f"}])
+    table = store._table()
+    assert vector_resident._delta(table, int(table.version), tight) is None
 
 
 def test_a_change_too_large_for_a_delta_is_read_in_full(tmp_path: Path) -> None:

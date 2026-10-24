@@ -84,16 +84,52 @@ LOAD_NICENESS = 19
 REFRESH_SECONDS = 10.0
 
 
+#: Spare rows a full load leaves after the live ones, as a share of them (and
+#: at least SPARE_MIN_ROWS): what a delta appends into without copying.
+SPARE_SHARE = 0.25
+SPARE_MIN_ROWS = 4096
+
+#: Dead rows -- removed by a delta, still occupying their slot -- past this
+#: share of a snapshot make the next refresh a full load, which compacts.
+DEAD_MAX_SHARE = 0.10
+
+
 class _Snapshot:
-    """One table version, decoded: unit-norm rows, ids and raw payloads."""
+    """One table version, decoded: unit-norm rows, ids and raw payloads.
 
-    __slots__ = ("version", "ids", "payloads", "matrix")
+    ``matrix`` is a buffer with spare capacity, of which rows ``[:n]`` belong to
+    this snapshot; ``alive`` marks which of those are still in the table (None:
+    all of them) and ``position`` maps each live id to its row. A delta appends
+    into ``matrix[n:]`` and hands the next snapshot the same buffer, so a query
+    still holding this one -- which reads only ``[:n]`` -- never sees a row it
+    did not load, and no update copies the rows it keeps.
+    """
 
-    def __init__(self, version: int, ids: list[str], payloads: list[str], matrix: np.ndarray):
+    __slots__ = ("version", "ids", "payloads", "matrix", "n", "alive", "position")
+
+    def __init__(
+        self,
+        version: int,
+        ids: list[str],
+        payloads: list[str],
+        matrix: np.ndarray,
+        n: int | None = None,
+        alive: np.ndarray | None = None,
+        position: dict[str, int] | None = None,
+    ):
         self.version = version
         self.ids = ids
         self.payloads = payloads
         self.matrix = matrix
+        self.n = len(ids) if n is None else n
+        self.alive = alive
+        self.position = (
+            position if position is not None else {chunk_id: i for i, chunk_id in enumerate(ids)}
+        )
+
+    @property
+    def live(self) -> int:
+        return len(self.position)
 
 
 class ResidentVectors:
@@ -146,9 +182,9 @@ class ResidentVectors:
                 self._snapshot = snapshot
             logger.info(
                 "Holding %d vectors resident (v%s, %.0f MB), %s in %.2fs",
-                len(snapshot.ids),
+                snapshot.live,
                 version,
-                snapshot.matrix.nbytes / 1e6,
+                snapshot.matrix[: snapshot.n].nbytes / 1e6,
                 how,
                 time.monotonic() - started,
             )
@@ -217,16 +253,19 @@ class ResidentVectors:
         self, table: Any, query_vec: list[float], k: int
     ) -> list[tuple[str, float, dict[str, Any]]] | None:
         snapshot = self._ensure(table)
-        if snapshot is None or not snapshot.ids:
+        if snapshot is None or not snapshot.live:
             return None
+        rows = snapshot.matrix[: snapshot.n]
         query = np.asarray(query_vec, dtype=np.float32)
-        if query.shape[0] != snapshot.matrix.shape[1]:
+        if query.shape[0] != rows.shape[1]:
             return None  # a dimension change is mid-flight; the store's own scan knows
         norm = float(np.linalg.norm(query))
         if norm == 0.0:
             return []
-        scores = snapshot.matrix @ (query / norm)
-        k = min(k, len(snapshot.ids))
+        scores = rows @ (query / norm)
+        if snapshot.alive is not None:
+            scores[~snapshot.alive] = -np.inf
+        k = min(k, snapshot.live)
         top = np.argpartition(-scores, k - 1)[:k]
         top = top[np.argsort(-scores[top], kind="stable")]
         return [
@@ -243,17 +282,27 @@ def _full(table: Any, version: int) -> _Snapshot:
     arrow = table.search().select(COLUMNS).limit(None).to_arrow()
     ids = arrow.column("chunk_id").to_pylist()
     payloads = arrow.column("payload_json").to_pylist()
-    matrix = _unit_rows(arrow.column("vector").combine_chunks(), len(ids))
+    spare = max(SPARE_MIN_ROWS, int(len(ids) * SPARE_SHARE))
+    flat = arrow.column("vector").combine_chunks()
+    matrix = _unit_rows(flat, len(ids), capacity=len(ids) + spare)
     return _Snapshot(version, ids, payloads, matrix)
 
 
 def _delta(table: Any, version: int, held: _Snapshot) -> _Snapshot | None:
     """``held`` brought to ``version`` by its added and removed ids, or ``None``.
 
-    ``None`` means "read it in full": the delta is too large, the ids are not
-    unique, a fetch did not return what the id column promised, or anything
-    raised. Exact either way -- see the module docstring for why an id present
-    in both versions needs no re-read.
+    Chunk ids are content-addressed, so an id in both versions is the same
+    vector and the change is exactly the ids added and removed. The added rows
+    are written into the spare capacity after ``held.n`` and the removed ones
+    marked dead; nothing ``held`` keeps is copied. The first version compacted
+    the whole matrix on every delta, and on the lab that copy alone -- 320 MB
+    into freshly faulted pages, 83k of them -- was 2.6 to 10.6 s of a 5-6 s
+    refresh, where appending a refresh's rows took 0.2 ms.
+
+    ``None`` means "read it in full": the change is too large, the spare
+    capacity is spent, dead rows have reached DEAD_MAX_SHARE (a full read
+    compacts), the ids are not unique, a fetch did not return what the id
+    column promised, or anything raised.
     """
 
     try:
@@ -262,44 +311,54 @@ def _delta(table: Any, version: int, held: _Snapshot) -> _Snapshot | None:
         now = set(ids_now)
         if len(now) != len(ids_now):
             return None
-        position = {chunk_id: i for i, chunk_id in enumerate(held.ids)}
-        removed = [i for chunk_id, i in position.items() if chunk_id not in now]
-        added = [chunk_id for chunk_id in ids_now if chunk_id not in position]
+        removed = [chunk_id for chunk_id in held.position if chunk_id not in now]
+        added = [chunk_id for chunk_id in ids_now if chunk_id not in held.position]
         if not removed and not added:
-            return _Snapshot(version, held.ids, held.payloads, held.matrix)
-        if len(removed) + len(added) > DELTA_MAX_SHARE * max(1, len(held.ids)):
+            return _Snapshot(
+                version, held.ids, held.payloads, held.matrix, held.n, held.alive, held.position
+            )
+        if len(removed) + len(added) > DELTA_MAX_SHARE * max(1, held.live):
+            return None
+        if held.n + len(added) > held.matrix.shape[0]:
+            return None  # the spare capacity is spent: a full read sizes a new buffer
+        dead = held.n - held.live + len(removed)
+        if dead > DEAD_MAX_SHARE * max(1, held.n + len(added)):
             return None
         new_ids: list[str] = []
         new_payloads: list[str] = []
-        new_rows: list[np.ndarray] = []
+        at = held.n
         for start in range(0, len(added), DELTA_FETCH_BATCH):
             batch = added[start : start + DELTA_FETCH_BATCH]
             quoted = ", ".join("'" + chunk_id.replace("'", "''") + "'" for chunk_id in batch)
             arrow = (
                 table.search().where(f"chunk_id IN ({quoted})").select(COLUMNS).limit(None)
             ).to_arrow()
+            rows = _unit_rows(arrow.column("vector").combine_chunks(), arrow.num_rows)
+            # Beyond `held.n`: no reader of `held` looks here.
+            held.matrix[at : at + arrow.num_rows] = rows
+            at += arrow.num_rows
             new_ids.extend(arrow.column("chunk_id").to_pylist())
             new_payloads.extend(arrow.column("payload_json").to_pylist())
-            new_rows.append(_unit_rows(arrow.column("vector").combine_chunks(), arrow.num_rows))
         if sorted(new_ids) != sorted(added):
             return None  # the table moved under the fetch; a full read settles it
-        keep = np.ones(len(held.ids), dtype=bool)
-        keep[removed] = False
-        # One pass over the held matrix, not two: the kept rows are written
-        # straight into the result (a mask then a concatenate copied 320 MB
-        # twice -- 1.25 s of a 1.56 s delta at 52k x 1536 on two cores).
-        # Never in place: a query may be reading the held copy right now.
-        kept = len(held.ids) - len(removed)
-        added_rows = sum(rows.shape[0] for rows in new_rows)
-        matrix = np.empty((kept + added_rows, held.matrix.shape[1]), dtype=np.float32)
-        np.compress(keep, held.matrix, axis=0, out=matrix[:kept])
-        at = kept
-        for rows in new_rows:
-            matrix[at : at + rows.shape[0]] = rows
-            at += rows.shape[0]
-        ids = [chunk_id for chunk_id, k in zip(held.ids, keep, strict=True) if k] + new_ids
-        payloads = [p for p, k in zip(held.payloads, keep, strict=True) if k] + new_payloads
-        return _Snapshot(version, ids, payloads, matrix)
+        n = held.n + len(new_ids)
+        alive = np.ones(n, dtype=bool)
+        if held.alive is not None:
+            alive[: held.n] = held.alive
+        position = dict(held.position)
+        for chunk_id in removed:
+            alive[position.pop(chunk_id)] = False
+        for offset, chunk_id in enumerate(new_ids):
+            position[chunk_id] = held.n + offset
+        return _Snapshot(
+            version,
+            held.ids + new_ids,
+            held.payloads + new_payloads,
+            held.matrix,
+            n,
+            alive if not alive.all() else None,
+            position,
+        )
     except Exception:  # noqa: BLE001 - the full read is always the answer
         logger.debug("resident vector delta failed; reading in full", exc_info=True)
         return None
@@ -314,20 +373,23 @@ def _yield_cpu() -> None:
         pass
 
 
-def _unit_rows(flat: Any, rows: int) -> np.ndarray:
+def _unit_rows(flat: Any, rows: int, *, capacity: int | None = None) -> np.ndarray:
     """The vectors as one writable float32 matrix of unit rows.
 
-    A zero-copy view of Arrow's buffer copied once into memory this process
-    owns, then row norms by ``einsum`` and an in-place scale. Measured for
-    52k x 1536 on one core: ``np.array(flat.values)`` took 4.3 s (it walks
-    the values) and ``np.linalg.norm`` plus a divide took 7.3 s. A zero row
-    stays zero.
+    With ``capacity``, a buffer of that many rows whose first ``rows`` are the
+    vectors (the rest uninitialised spare, see `_Snapshot`). A zero-copy view
+    of Arrow's buffer is copied once into memory this process owns, then
+    normalised in place: ``np.array(flat.values)`` walked the values one by one
+    (4.3 s for 52k x 1536 on one core) and ``np.linalg.norm`` plus a divide
+    added 7.3 s. A zero row stays zero.
     """
 
     width = flat.type.list_size
-    matrix = np.array(flat.values.to_numpy(zero_copy_only=False), dtype=np.float32, copy=True)
-    matrix = matrix.reshape(rows, width)
+    values = flat.values.to_numpy(zero_copy_only=False)
+    buffer = np.empty((max(rows, capacity or rows), width), dtype=np.float32)
+    matrix = buffer[:rows]
+    matrix[...] = values.reshape(rows, width)
     norms = np.sqrt(np.einsum("ij,ij->i", matrix, matrix))
     norms[norms == 0.0] = 1.0
     matrix *= (1.0 / norms)[:, None]
-    return matrix
+    return buffer if capacity else matrix
