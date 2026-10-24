@@ -18,7 +18,10 @@ person's first question. Every :data:`INTERVAL_SECONDS` it
 * runs one canned hybrid search through the real stack, with usage tracking,
   stage sampling and the retrieval counters off, so it moves no salience, no
   ledger row and no metric a tuning batch reads. Its query embedding is cached
-  after the first beat, so it costs the provider nothing either.
+  after the first beat, so it costs the provider nothing either; and
+* reads the corpus vocabulary a plan is grounded in (`search/corpus_shape.py`),
+  once at start and then whenever it goes stale, so the 5.6 s ``ts_stat`` scan
+  behind it is never a person's wait.
 
 Deliberately not a substitute for the request path's own resilience: a beat
 that fails is logged at debug and the next one tries again.
@@ -31,6 +34,8 @@ import logging
 import threading
 import time
 from typing import Any
+
+from pheasant.search import corpus_shape
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +66,19 @@ def start(
     quiet = quiet_copy(search)
     embedder = getattr(getattr(search, "vector", None), "embedder", None)
 
+    def vocabulary() -> None:
+        state = getattr(getattr(search, "store", None), "state", None)
+        if state is not None:
+            try:
+                corpus_shape.vocabulary(state, corpus_shape.PLAN_VOCABULARY)
+            except Exception:  # noqa: BLE001 - as below
+                logger.debug("keep-warm: corpus vocabulary failed", exc_info=True)
+
     def beat() -> None:
+        vocabulary()
         while True:
             time.sleep(interval)
+            vocabulary()
             ping = getattr(embedder, "ping", None)
             if callable(ping):
                 try:

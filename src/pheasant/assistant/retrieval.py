@@ -50,6 +50,7 @@ from typing import Any
 from pheasant.graph.traversal import neighbors as _graph_neighbors
 from pheasant.graph.traversal import slice_ as _graph_slice
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
+from pheasant.search import corpus_shape
 from pheasant.search.criteria import path_scope, path_within
 
 logger = logging.getLogger(__name__)
@@ -1506,17 +1507,23 @@ class PheasantRetriever:
 
     # ---------------------------------------------------------- capabilities
 
-    def capabilities(self) -> RetrievalCapabilities:
-        """What this knowledge base can answer with, right now."""
+    def modes(self) -> list[str]:
+        """The search modes this knowledge base can run, without counting anything."""
         modes = ["hybrid", "text"]
         if self.graph is not None:
             modes.append("graph")
-        vector_enabled = getattr(self.search_engine, "vector", None) is not None
+        if getattr(self.search_engine, "vector", None) is not None:
+            modes.append("vector")
+        return modes
+
+    def capabilities(self) -> RetrievalCapabilities:
+        """What this knowledge base can answer with; per question, so no scans (corpus_shape)."""
+        modes = self.modes()
+        vector_enabled = "vector" in modes
         vector_count = 0
         if vector_enabled:
-            modes.append("vector")
             try:
-                vector_count = int(self.search_engine.vector.store.count())
+                vector_count = corpus_shape.vector_count(self.search_engine.vector.store)
             except Exception:  # a missing/corrupt store must not break planning
                 vector_count = 0
 
@@ -1537,7 +1544,9 @@ class PheasantRetriever:
 
         node_counts: dict[str, int] = {}
         if self.graph is not None:
-            node_counts = self.graph.type_counts()
+            node_counts = dict(
+                corpus_shape.counted(self.graph, "node_types", self.graph.type_counts)
+            )
 
         return RetrievalCapabilities(
             knowledge_base=self.knowledge_base,
@@ -1572,8 +1581,6 @@ class PheasantRetriever:
         if cached is not None:
             cached.node_types = dict(node_counts or {})
             return cached
-
-        from pheasant.search.sqlite_store import corpus_vocabulary as _corpus_vocabulary
 
         def aggregate(sql: str, params: tuple = ()) -> list[tuple[str, int]]:
             try:
@@ -1612,8 +1619,11 @@ class PheasantRetriever:
             # read off the FTS index's own vocabulary table. Previously this
             # came from `artifact_terms` concept rows; those were retired
             # (graph.enrichment._add_concept) and this is the same question
-            # answered from the index SQLite already maintains.
-            concepts=[term for term, _ in _corpus_vocabulary(self.state, 24)],
+            # answered from the index SQLite already maintains; held (corpus_shape).
+            concepts=[
+                term
+                for term, _ in corpus_shape.vocabulary(self.state, corpus_shape.PLAN_VOCABULARY)
+            ],
             symbols=[
                 label
                 for label, _ in aggregate(

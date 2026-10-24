@@ -136,7 +136,9 @@ pheasant-kb/
 │   │                            block's declared shape), criteria, vector,
 │   │                            vector_indexer (embed-on-sync, off the
 │   │                            commit loop), ranking (the tunable
-│   │                            parameters, fleet-scoped)
+│   │                            parameters, fleet-scoped), corpus_shape
+│   │                            (the facts a plan reads, held off the
+│   │                            question path), keep_warm
 │   ├── memory/                ← store, projection, policy, steering, salience,
 │   │                            bridge, maintenance, formation, benchmark
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
