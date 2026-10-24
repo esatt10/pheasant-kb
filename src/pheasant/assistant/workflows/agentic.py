@@ -541,7 +541,7 @@ def retrieve_node(state: AgentState, ctx: dict) -> dict:
         and _defer_graph_for_request(state, ctx, options)
         and "hybrid" in configured_modes
     ):
-        available = ctx["retriever"].capabilities().modes
+        available = ctx["retriever"].modes()
         first_pass_modes = [mode for mode in ("text", "vector") if mode in available]
         if not first_pass_modes:
             first_pass_modes = ["hybrid"]

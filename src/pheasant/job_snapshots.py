@@ -194,3 +194,24 @@ def _refresh_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
         stalled = stalled or bool(source["stalled"])
     payload["stalled"] = stalled
     return payload
+
+
+#: Sync outcomes that end a job as ``failed``.
+FAILED_SYNC_STATUSES = frozenset({"failed", "timeout", "limit_exceeded"})
+
+
+def sync_job_status(statuses: list[str]) -> str:
+    """The terminal job state for the sync results ``statuses``.
+
+    A failure outranks a cancel: a ``sync_all`` in which one source failed and
+    another was stopped has something wrong with it, which "cancelled" would
+    hide. A cancel outranks success, because a person who stopped a sync and
+    then sees its job say ``succeeded`` has been told the opposite of what
+    happened.
+    """
+
+    if any(status in FAILED_SYNC_STATUSES for status in statuses):
+        return "failed"
+    if any(status == "cancelled" for status in statuses):
+        return "cancelled"
+    return "succeeded"

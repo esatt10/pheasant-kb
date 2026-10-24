@@ -46,6 +46,7 @@ from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.node_index import NodeIndex
+from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.search.vector_store import (
     VectorSearcher,
     vector_indexer_from_config,
@@ -54,11 +55,19 @@ from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync import archived
+from pheasant.sync.cancellation import (
+    SyncCancelled,
+    SyncRun,
+    cancellable,
+    finish_cancelled,
+    skip_disabled,
+)
 from pheasant.sync.checkpoint_interval import (
     optimal_checkpoint_interval as optimal_checkpoint_interval,
 )
 from pheasant.sync.connectors import (
     ConnectorItem,
+    ConnectorUnavailable,
     ItemNotModified,
     connector_for_source,
 )
@@ -74,6 +83,7 @@ from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
+    ReadFailures,
     _media_bytes,
     _prepare_filesystem_item_process,
     _PreparedItem,
@@ -566,6 +576,26 @@ class SyncEngine:
             logger.warning("Could not update the graph node index: %s", exc)
             return 0
 
+    def reconcile_node_index(self, source_name: str, *, missing: bool = False) -> None:
+        """`node_index.reconcile` against the truth this process holds (see there)."""
+
+        saved = self.config.storage.graph_format == "rows"
+
+        def working() -> Any:
+            with self._sync_mutex:
+                self._ensure_persisted_graph_loaded()
+                return self.graph_builder.graph
+
+        graph = working if (saved or missing or self._graph_loaded) else None
+        reconcile_node_index(
+            self.node_index,
+            source_name,
+            kb_id=self.config.knowledge_base_id,
+            graph=graph,
+            saved_rows=saved,
+            missing=missing,
+        )
+
     def rebuild_node_index(self) -> int:
         """Rebuild the whole index from the in-memory graph."""
 
@@ -1023,6 +1053,19 @@ class SyncEngine:
                 skipped=True,
                 transfer_skipped=True,
             )
+        except ConnectorUnavailable:
+            # The connector cannot read *anything* (an experimental type not
+            # enabled, a scheme it refuses): a fact about the source, not this
+            # item, so the sync fails as it always did.
+            raise
+        except Exception as exc:  # noqa: BLE001 - one unreadable item is not the source
+            return _PreparedItem(
+                position,
+                item,
+                previous,
+                skipped=True,
+                read_error=f"{type(exc).__name__}: {exc}"[:500],
+            )
         content_hash = payload.sha256 or item.sha256 or sha256_bytes(payload.content)
         if mode == "incremental" and previous and previous.get("sha256") == content_hash:
             return _PreparedItem(
@@ -1384,14 +1427,22 @@ class SyncEngine:
                         pending.append(submit(position, item))
                         in_flight += 1
 
-            fill()
-            while pending:
-                head = pending.popleft()
-                if isinstance(head, Future):
-                    in_flight -= 1
-                    head = head.result()
-                yield head
+            try:
                 fill()
+                while pending:
+                    head = pending.popleft()
+                    if isinstance(head, Future):
+                        in_flight -= 1
+                        head = head.result()
+                    yield head
+                    fill()
+            finally:
+                # A consumer that stops early (a cancelled sync) closes this
+                # generator; leaving the executor would otherwise wait for the
+                # whole look-ahead window to be prepared first.
+                for entry in pending:
+                    if isinstance(entry, Future):
+                        entry.cancel()
 
     def _prepared_items_remote(
         self,
@@ -1490,13 +1541,19 @@ class SyncEngine:
                         pending.append(submit(next(iterator)))
                     except StopIteration:
                         break
-                while pending:
-                    yield from pending.popleft().result()
-                    try:
-                        batch = next(iterator)
-                    except StopIteration:
-                        continue
-                    pending.append(submit(batch))
+                try:
+                    while pending:
+                        yield from pending.popleft().result()
+                        try:
+                            batch = next(iterator)
+                        except StopIteration:
+                            continue
+                        pending.append(submit(batch))
+                finally:
+                    # As in `_prepared_items`: a closed generator drops the
+                    # batches no worker has started.
+                    for future in pending:
+                        future.cancel()
         finally:
             # Health is published again on the way out so the gauge reflects
             # what this sync actually observed, not what it assumed at the
@@ -1713,6 +1770,7 @@ class SyncEngine:
             # See checkpoint_graph: manifests may lag a published generation,
             # but must never claim a graph generation that did not commit.
             self.manifests.save(source.name, manifest)
+            self.reconcile_node_index(source.name)
             return pruned_vectors
 
     def apply_index_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:
@@ -1751,6 +1809,8 @@ class SyncEngine:
             return self.replace_source(payload, on_progress=on_progress)
         # Sync the source as registered now: an api replica may have changed it.
         SourceRegistry(self.config, self.state).adopt(str(task.source_id))
+        if (skipped := skip_disabled(self, str(task.source_id))) is not None:
+            return skipped
         requested_mode = str(task.mode)
         resume_full = bool(
             requested_mode == "full"
@@ -1926,7 +1986,13 @@ class SyncEngine:
         # the method: everything above is argument resolution, and a
         # saturation gauge that counted it would report a busy region for
         # work that never touched the commit stream.
-        with self.commit_meter.busy(), self._source_write_lock(source.name):
+        # The run is registered once the write lock is held, so one source
+        # never has two runs and its `sync_runs` row has one writer.
+        with (
+            self.commit_meter.busy(),
+            self._source_write_lock(source.name),
+            SyncRun(self.state, source.name) as run,
+        ):
             remote_state: dict[str, Any] | None = None
             if source.type.value == "repository":
                 # URL quick-add repositories are managed checkouts. Updating
@@ -1943,6 +2009,8 @@ class SyncEngine:
                     self.state.mark_source_status(source.name, "remote_error")
                     logger.error("Remote update failed for %s: %s", source.name, exc)
                     raise
+            if run.predecessor_died:  # its pending node-index delta died with it
+                self.reconcile_node_index(source.name, missing=True)
             connector = connector_for_source(source, self.state)
             if mode == "validate_only":
                 health = connector.validate()
@@ -2033,6 +2101,7 @@ class SyncEngine:
             fetched = 0
             transfer_skipped = 0
             refused: list[tuple[str, str]] = []
+            unreadable = ReadFailures(source.name)
             embedded_chunks = 0
             indexed_bytes = 0
             changed_ids: set[str] = set()
@@ -2068,12 +2137,18 @@ class SyncEngine:
                 git_metadata,
                 items,
             )
-            for prepared in prepared_items:
+            # Identities of the items this pass finished, committed or
+            # skipped. Only a cancelled pass reads it: it is what separates an
+            # item the loop handled from one that was read ahead and dropped.
+            processed: set[str] = set()
+            stopped: list[SyncCancelled] = []
+            for prepared in cancellable(prepared_items, run, processed, stopped):
                 position = prepared.position
                 item = prepared.item
                 fetched += int(prepared.fetched)
-                skipped += int(prepared.skipped)
+                skipped += int(prepared.skipped and not prepared.read_error)
                 transfer_skipped += int(prepared.transfer_skipped)
+                item_failures = unreadable.note(prepared)
                 if prepared.refused_by:
                     # Never silent: a control whose only evidence is an absence
                     # cannot be told from a typo in the pattern.
@@ -2092,6 +2167,8 @@ class SyncEngine:
                     indexed=indexed,
                     skipped=skipped,
                     bytes_done=indexed_bytes,
+                    failed=len(unreadable),
+                    **({"failures": item_failures} if item_failures else {}),
                 )
                 parsed = prepared.parsed
                 if prepared.skipped or parsed is None:
@@ -2213,6 +2290,29 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
+            if stopped:
+                return finish_cancelled(
+                    self,
+                    stopped[0],
+                    source=source,
+                    connector=connector,
+                    mode=mode,
+                    manifest=manifest,
+                    items=items,
+                    processed=processed,
+                    counts={
+                        "indexed": indexed,
+                        "skipped": skipped,
+                        "fetched": fetched,
+                        "transfer_skipped": transfer_skipped,
+                    },
+                    started_at=started_at,
+                    report=report,
+                    embedding_progress=embedding_progress,
+                    details=details_extra,
+                )
+            unreadable.require_some_read(total_items)
+            details_extra.update(unreadable.details())
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed

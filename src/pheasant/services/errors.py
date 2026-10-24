@@ -405,3 +405,23 @@ class NotReinstatable(InvalidRequest):
             f"{document} was an uploaded file and removing it deleted it; upload it again"
         )
         self.document = document
+
+
+class SyncNotRunning(ServiceError):
+    """A cancel for a source with no sync running.
+
+    Refused rather than remembered: a request held until the next sync started
+    would stop work somebody asked for later, which is the opposite of what
+    the first caller wanted. Not retryable as it stands -- a caller that wants
+    to stop a sync still waiting in the queue asks again once it has started.
+    """
+
+    status = 409
+    code = "SYNC_NOT_RUNNING"
+
+    def __init__(self, source: str) -> None:
+        super().__init__(
+            f"{source} has no sync running, so there is nothing to cancel. A sync "
+            "still waiting in the index queue can be cancelled once an indexer starts it."
+        )
+        self.source = source

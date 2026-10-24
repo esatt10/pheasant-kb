@@ -1,6 +1,13 @@
 import { createContext, useContext, useEffect, useMemo, useReducer } from "react";
 import type { ReactNode } from "react";
-import type { AnswerDepth, ChatAnswer, GraphLink, GraphNode, HistoryTurn } from "../api/types";
+import type {
+  AnswerDepth,
+  ChatAnswer,
+  GraphLink,
+  GraphNode,
+  HistoryTurn,
+  VisualResponse,
+} from "../api/types";
 import { NOISY_NODE_TYPES } from "../graph/graphStyles";
 
 /**
@@ -78,6 +85,13 @@ export interface ChatTurn {
   question: string;
   answer?: ChatAnswer;
   error?: string;
+  /**
+   * The visual this turn shows instead of the answer's own: one drawn after
+   * the fact ("Visualize") or redrawn in the MCP App ("Redraw as"). Held on
+   * the turn, in memory, so a new question or a re-render keeps it, and a
+   * page refresh -- which never restores the conversation -- clears it.
+   */
+  drawn?: VisualResponse;
 }
 
 export interface SessionState {
@@ -223,6 +237,7 @@ export type SessionAction =
   | { type: "ask"; id: string; question: string }
   | { type: "answered"; id: string; answer: ChatAnswer }
   | { type: "ask-failed"; id: string; error: string }
+  | { type: "visual-drawn"; id: string; drawn: VisualResponse }
   | { type: "clear-view" }
   | { type: "new-conversation" }
   | { type: "new-topic" }
@@ -402,6 +417,13 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         panelTab: action.answer.facts.length > 0 ? "facts" : "graph",
       };
     }
+    case "visual-drawn":
+      return {
+        ...state,
+        turns: state.turns.map((turn) =>
+          turn.id === action.id ? { ...turn, drawn: action.drawn } : turn,
+        ),
+      };
     case "ask-failed":
       return {
         ...state,

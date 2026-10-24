@@ -239,6 +239,60 @@ def test_visualizing_a_passage_answers_identically_on_both_surfaces(region: dict
     assert over_mcp["citations"][0]["snippet"].startswith("# Release process")
 
 
+def test_a_heading_from_the_graph_arm_is_drawn_from_its_own_section(tmp_path) -> None:
+    """A visual's "Redraw as" sends back its own evidence, which the graph arm
+    fills with heading nodes as often as chunks. Refusing them refused every
+    redraw of such an answer with UNKNOWN_NODE. A heading is read under the
+    file that owns it, from its own section."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "guide.md").write_text(
+        "# Guide\n\n## Install\n\nRun the installer and accept the defaults.\n\n"
+        "## Upgrade\n\nStop the service, replace the binary, start it again.\n",
+        encoding="utf-8",
+    )
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "headings",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(workspace),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "server": {"host": "127.0.0.1"},
+            "storage": {"graph_snapshots": False},
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "markdown_folder",
+                    "path": str(workspace),
+                    "taxonomy": {"enabled": True},
+                }
+            ],
+        }
+    )
+    tools = PheasantTools(config)
+    tools.engine.sync_source("docs", "full")
+    tools.engine.reload_graph()
+    graph = tools.engine.graph_builder.graph
+    headings = [
+        (node_id, attrs)
+        for node_id, attrs in graph.nodes(data=True)
+        if attrs.get("type") == "heading" and "Upgrade" in str(attrs.get("label") or "")
+    ]
+    assert headings, "the fixture produced no heading node"
+    heading_id, attrs = headings[0]
+
+    drawn = tools.create_visual(config.knowledge_base_id, "the upgrade", node_ids=[heading_id])
+    cited = drawn["citations"][0]
+    assert cited["node_id"] == attrs["artifact_id"], "not read under the file that owns it"
+    assert "replace the binary" in cited["snippet"]
+
+    with pytest.raises(ServiceError, match="Unknown node: entity:nowhere"):
+        tools.create_visual(config.knowledge_base_id, "x", node_ids=["entity:nowhere"])
+
+
 def test_an_unknown_passage_is_refused_with_one_text(region: dict) -> None:
     body = {"request": "x", "node_ids": ["file:docs:nope.md:branch=none"]}
     response = region["client"].post("/assistant/visual", json=body)

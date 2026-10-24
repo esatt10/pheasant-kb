@@ -91,8 +91,13 @@ class HybridSearch:
         default_memory_policy: str = "auto",
         usage_tracking: bool = False,
         stage_sample_rate: float = 0.0,
+        observed: bool = True,
     ):
         self.store = store
+        # Whether this search counts in the always-on retrieval metrics. Off
+        # only for searches nobody asked (`search/keep_warm.py`), which would
+        # otherwise move the stage rates the tuning plane reads.
+        self.observed = observed
         # Optional semantic candidates (Synapse 21.4). None when
         # search.embeddings is disabled: "vector" contributes nothing and
         # every other mode behaves exactly as before.
@@ -564,7 +569,8 @@ class HybridSearch:
         # the assistant are all covered by construction — and so a new caller
         # cannot be added without it. Counters only: never a database write on
         # the request path.
-        observe_search(payload, stages)
+        if self.observed:
+            observe_search(payload, stages)
         if sampled and stages is not None:
             # A sampled search annotates the row the *handler* is already
             # going to write. It does not write one of its own, which would be

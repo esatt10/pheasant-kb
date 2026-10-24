@@ -65,6 +65,22 @@ IDs remain unchanged until they reach the storage-safe limit. Longer values
 keep their source and prefix context and end in a deterministic
 `:sha256=<digest>` suffix; the original reference remains in node attributes.
 
+## Web collection paths
+
+A listed URL's relative path is `{host}/{path}`, each segment reduced to
+`[A-Za-z0-9._-]`, with `.txt` added when the path has no suffix; the
+artifact ID is `file:{source}:{relpath}:branch=none` as for any file. Two URLs
+can reduce to one path: a page listed with and without its trailing slash, or
+titles in a script the reduction turns into `_`. Each URL on a shared path then
+ends `-{digest}` before its suffix, the digest being the first 8 hex characters
+of the sha256 of its exact URL (`web_connector._distinct_paths`). Decision
+note: an addition to the grammar, not a change. Every path no other URL shares
+is exactly what it was. A shared path never named one page -- each sync
+rewrote it with whichever URL came last, and a `full` sync failed on its
+duplicate chunk ID -- so the stored artifact under it drops out of the listing
+and the next sync removes it, as for any page taken off the list. No migration
+is owed (rule 3).
+
 ## Required provenance
 
 Nodes and search results should record source ID, knowledge base ID, relative path, content hash, indexed timestamp, branch, commit, and parser/rule provenance when available.

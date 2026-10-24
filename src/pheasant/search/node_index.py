@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -174,6 +174,35 @@ class NodeIndex:
             )
         self._populated = written > 0
         return written
+
+    def ids(self, source_id: str | None = None) -> set[str]:
+        """The node ids the index holds, for one source or all of them."""
+
+        if not self.ensure():
+            return set()
+        if source_id is None:
+            rows = self.state.rows("SELECT node_id FROM graph_nodes_fts")
+        else:
+            rows = self.state.rows(
+                "SELECT node_id FROM graph_nodes_fts WHERE source_id=?", (source_id,)
+            )
+        return {str(row["node_id"]) for row in rows}
+
+    def has_saved_graph(self, kb_id: str) -> bool:
+        """Whether the row backend holds any saved node for this knowledge base."""
+
+        return bool(self.state.rows("SELECT 1 FROM graph_nodes WHERE kb_id=? LIMIT 1", (kb_id,)))
+
+    def persisted_ids(self, kb_id: str, source_id: str) -> set[str]:
+        """The node ids the saved graph holds for one source (``graph_nodes``).
+
+        Empty on the whole-file graph backend, which keeps no such rows.
+        """
+
+        rows = self.state.rows(
+            "SELECT node_id FROM graph_nodes WHERE kb_id=? AND source_id=?", (kb_id, source_id)
+        )
+        return {str(row["node_id"]) for row in rows}
 
     def apply(self, upserts: Iterable[tuple[str, str, str]], removals: Iterable[str]) -> int:
         """Incremental update: delete then re-insert the touched rows."""
@@ -357,3 +386,74 @@ def _tsquery_expression(tokens: list[str]) -> str:
             if len(word) > 1:
                 terms.append(f"{word}:*")
     return " | ".join(dict.fromkeys(terms))
+
+
+def reconcile(
+    index: NodeIndex,
+    source_id: str,
+    *,
+    kb_id: str,
+    graph: Callable[[], Any] | None,
+    saved_rows: bool,
+    missing: bool = False,
+) -> tuple[int, int]:
+    """Make the index agree with the graph for one source; ``(removed, added)``.
+
+    The index is written from the graph's pending delta, which is claimed on
+    flush and held in memory until then -- while the graph's rows are saved on
+    their own schedule, mid-sync included. A process killed between the two
+    left rows for nodes the saved graph no longer had (46 on the lab, after
+    four OOM kills), and lost writes left graph nodes the index never got
+    (4,573, an entire uploads source among them, with no crash anyone saw).
+
+    **The truth has to be one the caller actually holds.** The first version
+    judged rows against the in-memory working graph -- which a sync with
+    nothing to change never loads, so to it every node looked absent, and it
+    deleted every row of every source it touched. On the row backend
+    (``saved_rows``) the saved ``graph_nodes`` are the truth instead: stale and
+    missing are both a comparison of two id sets, and the working graph is
+    loaded (``graph()``) only to build rows that need adding. A knowledge base
+    with no saved rows at all is never read as "has no nodes". On the file
+    backend, which saves no rows, ``graph`` is ``None`` unless the working
+    graph is loaded, and then nothing is done; ``missing`` walks the whole of
+    it, after a run is known to have died.
+
+    Converges whatever is still pending: a stale row a later flush would have
+    removed is removed now, and a missing row a later flush rewrites is
+    written twice.
+    """
+
+    try:
+        held = index.ids(source_id)
+        added: list[tuple[str, str, str]] = []
+        if saved_rows:
+            if not index.has_saved_graph(kb_id):
+                return 0, 0
+            persisted = index.persisted_ids(kb_id, source_id)
+            stale = sorted(held - persisted)
+            absent = sorted(persisted - held)
+            if absent and graph is not None:
+                added = graph().index_rows_for(absent)
+        else:
+            if graph is None:
+                return 0, 0
+            working = graph()
+            stale = [node_id for node_id in held if not working.has_node(node_id)]
+            if missing:
+                added = [
+                    row
+                    for row in working.index_rows()
+                    if row[1] == source_id and row[0] not in held
+                ]
+        if stale or added:
+            index.apply(added, stale)
+            logger.warning(
+                "Node index repaired for %s: %d stale row(s) removed, %d missing added",
+                source_id,
+                len(stale),
+                len(added),
+            )
+        return len(stale), len(added)
+    except Exception:  # noqa: BLE001 - cache maintenance is never a failed sync
+        logger.warning("Could not reconcile the node index for %s", source_id, exc_info=True)
+        return 0, 0

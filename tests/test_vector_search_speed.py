@@ -83,16 +83,208 @@ def test_a_resident_copy_follows_the_table_version(tmp_path: Path) -> None:
     assert store.search(query, 5)[0][0] == "chunk:new"
 
 
-def test_a_background_reload_serves_the_held_copy_until_it_lands(tmp_path: Path) -> None:
+def _until(predicate, seconds: float = 10.0) -> None:
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        assert time.monotonic() < deadline, "it never happened"
+        time.sleep(0.05)
+
+
+def test_the_first_search_does_not_wait_for_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first query after a restart used to load the whole table inside the
+    request: 37.9 s on the lab. It is answered from disk now, exactly, while
+    the copy loads behind it."""
+
+    load = ResidentVectors._load
+
+    def slow_load(self, table, version):  # a load slower than any query
+        time.sleep(1.0)
+        load(self, table, version)
+
+    monkeypatch.setattr(ResidentVectors, "_load", slow_load)
+    store = _store(tmp_path, resident=True)
+    query = QUERIES[3]
+    assert store._resident._snapshot is None
+    started = time.monotonic()
+    first = store.search(query, 10)
+    assert time.monotonic() - started < 0.8, "the first search waited for the load"
+    assert [cid for cid, _, _ in first] == [cid for cid, _ in _exact(store, query, 10)]
+    _until(lambda: store._resident._snapshot is not None)
+    assert [cid for cid, _, _ in store.search(query, 10)] == [cid for cid, _, _ in first]
+
+
+def test_a_background_reload_serves_the_held_copy_until_it_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.search import vector_resident
+
+    monkeypatch.setattr(vector_resident, "RELOAD_MIN_SECONDS", 0.0)
     store = _store(tmp_path, resident=True)
     query = QUERIES[1]
-    first = store.search(query, 5)  # nothing held yet: the first load blocks
+    store.search(query, 5)
+    _until(lambda: store._resident._snapshot is not None)
+    first = store.search(query, 5)  # from the held copy
     store.upsert(["chunk:new"], [query], [{"source_id": "s0", "artifact_id": "file:new"}])
-    deadline = time.monotonic() + 10
-    while store.search(query, 5)[0][0] != "chunk:new":
-        assert time.monotonic() < deadline, "the reload never landed"
-        time.sleep(0.05)
+    _until(lambda: store.search(query, 5)[0][0] == "chunk:new")
     assert first[0][0] != "chunk:new"
+
+
+def test_reloads_are_throttled_while_the_table_keeps_changing(tmp_path: Path) -> None:
+    """An indexing source writes a version every few seconds; one reload per
+    window, serving the held copy in between, rather than one per write."""
+
+    store = _store(tmp_path, resident=True)
+    query = QUERIES[4]
+    store.search(query, 5)
+    _until(lambda: store._resident._snapshot is not None)
+    held = store._resident._snapshot.version
+    for n in range(3):
+        store.upsert([f"chunk:burst{n}"], [query], [{"source_id": "s0", "artifact_id": "f"}])
+        store.search(query, 5)
+    time.sleep(0.3)
+    assert store._resident._snapshot.version == held, "a write inside the window reloaded"
+    assert store._resident._loading is None
+
+
+def test_warm_loads_without_a_query_and_keeps_the_copy_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.search import vector_resident
+
+    monkeypatch.setattr(vector_resident, "RELOAD_MIN_SECONDS", 0.0)
+    monkeypatch.setattr(vector_resident, "REFRESH_SECONDS", 0.05)
+    store = _store(tmp_path, resident=True)
+    store.warm()
+    _until(lambda: store._resident._snapshot is not None)
+    before = store._resident._snapshot.version
+    store.upsert(["chunk:later"], [QUERIES[5]], [{"source_id": "s0", "artifact_id": "f"}])
+    _until(lambda: store._resident._snapshot.version > before)  # no search needed
+
+
+def _rows_by_id(snapshot) -> dict[str, list[float]]:
+    """What a query can see: each live id's vector (dead rows are not live)."""
+
+    return {
+        chunk_id: snapshot.matrix[i].round(6).tolist() for chunk_id, i in snapshot.position.items()
+    }
+
+
+def _payloads_by_id(snapshot) -> dict[str, str]:
+    return {chunk_id: snapshot.payloads[i] for chunk_id, i in snapshot.position.items()}
+
+
+def test_a_new_version_is_applied_as_a_delta_equal_to_a_full_read(tmp_path: Path) -> None:
+    """Content-addressed ids make an id in both versions the same vector, so
+    added and removed ids are the whole change -- and the result has to be
+    exactly what reading the table again would give."""
+
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=300)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    fresh = _vectors(5, seed=11).tolist()
+    store.upsert(
+        [f"chunk:added{n}" for n in range(5)],
+        fresh,
+        [{"source_id": "s0", "artifact_id": f"file:a{n}"} for n in range(5)],
+    )
+    store.delete([held.ids[0], held.ids[7]])
+    table = store._table()
+    delta = vector_resident._delta(table, int(table.version), held)
+    full = vector_resident._full(table, int(table.version))
+    assert delta is not None, "a small change fell back to a full read"
+    assert set(delta.position) == set(full.position)
+    assert _rows_by_id(delta) == _rows_by_id(full)
+    assert _payloads_by_id(delta) == _payloads_by_id(full)
+    # Appended, not copied: the kept rows are the very buffer `held` holds.
+    assert delta.matrix is held.matrix
+    assert delta.n == held.n + 5 and delta.live == held.live - 2 + 5
+
+
+def test_a_removed_row_is_never_returned_while_it_still_has_its_slot(tmp_path: Path) -> None:
+    """A delta marks a removed row dead rather than compacting it away, so the
+    search has to skip it -- even when it is the best match there is."""
+
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=200)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    target = held.ids[3]
+    query = held.matrix[held.position[target]].tolist()
+    store.delete([target])
+    table = store._table()
+    resident = vector_resident.ResidentVectors(10**9, background=False)
+    resident._snapshot = held
+    resident._last_load = None
+    hits = resident.search(table, query, 5)
+    assert resident._snapshot.matrix is held.matrix, "the removal was not applied as a delta"
+    assert target not in [chunk_id for chunk_id, _score, _payload in hits]
+    assert len(hits) == 5
+
+
+def test_a_delta_that_would_overrun_the_spare_capacity_reads_in_full(tmp_path: Path) -> None:
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=50)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    tight = vector_resident._Snapshot(
+        held.version, held.ids, held.payloads, held.matrix[: held.n], held.n
+    )  # no spare rows at all
+    store.upsert(["chunk:one-more"], [QUERIES[0]], [{"source_id": "s0", "artifact_id": "f"}])
+    table = store._table()
+    assert vector_resident._delta(table, int(table.version), tight) is None
+
+
+def test_a_change_too_large_for_a_delta_is_read_in_full(tmp_path: Path) -> None:
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, n=40)
+    table = store._table()
+    held = vector_resident._full(table, int(table.version))
+    store.upsert(
+        [f"chunk:many{n}" for n in range(30)],
+        _vectors(30, seed=5).tolist(),
+        [{"source_id": "s0", "artifact_id": "f"} for _ in range(30)],
+    )
+    table = store._table()
+    assert vector_resident._delta(table, int(table.version), held) is None
+
+
+def test_a_loading_thread_lowers_its_own_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from pheasant.search import vector_resident
+
+    asked: list[tuple] = []
+    monkeypatch.setattr(os, "PRIO_PROCESS", 0, raising=False)
+    monkeypatch.setattr(os, "setpriority", lambda *a: asked.append(a), raising=False)
+    store = _store(tmp_path, resident=True)
+    store.search(QUERIES[0], 5)
+    _until(lambda: store._resident._snapshot is not None)
+    assert asked and asked[0][2] == vector_resident.LOAD_NICENESS
+
+
+def test_the_fast_decode_matches_the_old_one() -> None:
+    import pyarrow as pa
+
+    from pheasant.search.vector_resident import _unit_rows
+
+    raw = np.vstack([_vectors(5, seed=3), np.zeros((1, 16), dtype=np.float32)])
+    flat = pa.FixedSizeListArray.from_arrays(pa.array(raw.ravel(), pa.float32()), 16)
+    old = raw.astype(np.float32).copy()
+    norms = np.linalg.norm(old, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    old /= norms
+    new = _unit_rows(flat, len(raw))
+    assert new.flags.writeable and new.dtype == np.float32
+    assert np.allclose(new, old, atol=1e-6) and not new[-1].any()
 
 
 def test_a_table_over_the_cap_is_searched_on_disk(tmp_path: Path) -> None:

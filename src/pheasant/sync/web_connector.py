@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import time
+from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -141,7 +143,7 @@ class WebCollectionConnector(SourceConnector):
                     metadata={"url": url},
                 )
             )
-        return items
+        return _distinct_paths(items)
 
     def _allows_url(self, relative: str) -> bool:
         """Depth and excludes always apply; ``include`` only when it was chosen.
@@ -275,6 +277,33 @@ class WebCollectionConnector(SourceConnector):
             },
         )
 
+    def partial_checkpoint_from_items(
+        self,
+        items: list[ConnectorItem],
+        processed: set[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Keep what a cancelled pass learned about the pages it finished.
+
+        Only those: the engine reads ahead of what it commits, so a page can
+        have been fetched -- and its validators and schedule updated here --
+        without its new text ever reaching the index. Saving that entry would
+        mark the page "checked, not due" and the next incremental sync would
+        never read it again. Every other URL keeps the entry the previous
+        checkpoint had, so the next pass is exactly as conditional as this one
+        would have been.
+        """
+
+        finished = {
+            item.uri: self._seen_validators[item.uri]
+            for item in items
+            if item.identity in processed and item.uri in self._seen_validators
+        }
+        saved, self._seen_validators = self._seen_validators, finished
+        try:
+            return self.checkpoint_from_items(items)
+        finally:
+            self._seen_validators = saved
+
     def _cached_validators(self, url: str) -> dict[str, Any]:
         validators = (self._previous_cursor or {}).get("validators") or {}
         cached = validators.get(url)
@@ -326,3 +355,36 @@ def web_source_for_agent(
         urls=urls,
         connector=SourceConnectorSettings(**registration_connector("web_collection", None)),
     )
+
+
+def _distinct_paths(items: list[ConnectorItem]) -> list[ConnectorItem]:
+    """Give every URL its own path, changing only the paths two URLs share.
+
+    A page's path is its artifact id and the prefix of its chunk ids, so two
+    URLs on one path are one artifact rewritten by each in turn: its text flips
+    between two pages on every sync, and a ``full`` sync -- which inserts into
+    a source it has just emptied -- fails on the duplicate chunk id. Two URLs
+    meet on one path in two ways, both found in one boomi.com sitemap: a page
+    listed with and without its trailing slash, and titles in a script the path
+    sanitiser reduces to ``_`` (three Japanese titles all became ``item.txt``).
+
+    Each URL on a shared path gets ``-<8 hex of its own URL's sha256>`` before
+    the suffix. Every other path is unchanged, so no stored id moves except the
+    ones that never named one page; the old shared artifact is not in the
+    listing any more and the next sync removes it (``complete_listing``).
+    Deterministic and order-free: the suffix depends on the URL alone, never on
+    which of the two was listed first.
+    """
+
+    shared = {path for path, n in Counter(item.relative_path for item in items).items() if n > 1}
+    if not shared:
+        return items
+    distinct: list[ConnectorItem] = []
+    for item in items:
+        if item.relative_path in shared:
+            digest = hashlib.sha256(item.uri.encode("utf-8")).hexdigest()[:8]
+            path = Path(item.relative_path)
+            relative = path.with_name(f"{path.stem}-{digest}{path.suffix}").as_posix()
+            item = replace(item, relative_path=relative)
+        distinct.append(item)
+    return distinct

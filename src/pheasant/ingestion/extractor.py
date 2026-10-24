@@ -79,6 +79,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
+from pheasant.ingestion.html_text import (  # noqa: F401 - re-exported
+    HTML_CHROME_VERSION,
+    ChromeStrippingExtractor,
+    extract_html_text,
+    html_chrome_enabled,
+)
 from pheasant.ingestion.pdf_pages import (
     _NATIVE_MUPDF_LOCK,
     PdfPages,
@@ -413,28 +419,8 @@ def extract_docx_text_builtin(content: bytes, math: bool = False) -> str:
 
 
 # ---------------------------------------------------------------------------
-# HTML
+# HTML: read by `pheasant.ingestion.html_text`, re-exported here
 # ---------------------------------------------------------------------------
-
-
-def extract_html_text(content: bytes) -> str:
-    """Strip markup so HTML/XML indexes its prose, not its tags.
-
-    ``bs4`` is a core dependency, but a regex strip stands in when it is
-    missing, so a partial install degrades to something useful rather than
-    indexing raw markup.
-    """
-    raw = content.decode("utf-8", errors="ignore")
-    try:
-        from bs4 import BeautifulSoup
-    except ModuleNotFoundError:
-        no_script = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
-        no_style = re.sub(r"<style[\s\S]*?</style>", " ", no_script, flags=re.I)
-        return _tidy(re.sub(r"<[^>]+>", " ", no_style))
-    soup = BeautifulSoup(raw, "html.parser")
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    return _tidy(soup.get_text("\n", strip=True))
 
 
 def _tidy(text: str) -> str:
@@ -688,6 +674,13 @@ class AutoExtractor:
 
 
 def build_extractor(settings: ExtractorSettings) -> DocumentExtractor:
+    extractor = _build_provider(settings)
+    if html_chrome_enabled(settings):
+        return ChromeStrippingExtractor(extractor)
+    return extractor
+
+
+def _build_provider(settings: ExtractorSettings) -> DocumentExtractor:
     provider = (settings.provider or "auto").lower()
     math = math_enabled(settings)
     if provider == "auto":

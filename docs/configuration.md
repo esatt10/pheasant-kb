@@ -791,6 +791,7 @@ offline and deterministic.
 |---|---|---|
 | `provider` | `auto` | `auto` \| `native` \| `builtin` \| `sandboxed` (see below) |
 | `html_text` | `false` | Strip markup from HTML/XHTML so prose indexes instead of tags |
+| `html_chrome` | `keep` | With `html_text` on, `strip` also removes the site around each page: menus, page-level headers and footers, cookie banners, hidden elements (see below) |
 | `math` | `off` | `latex` writes equations in PDFs and DOCX as TeX (see [Equations](#equations-as-latex)) |
 
 **Providers**
@@ -816,6 +817,21 @@ formats the XML *is* the text, and RTF is a text format by definition. Listing
 contents are used **verbatim** and no extractor runs — the offline way to give
 an image-only scanned PDF real searchable text (mirrors the `.caption.txt` /
 `.transcript.txt` sidecars).
+
+**`html_chrome: strip` — a page without its site.** A marketing site repeats
+its menus and footer on every page, and they index as text: measured on
+boomi.com, 69% of each page's text, so more than half of that collection's
+chunks were exact copies of one another and matched nearly every query.
+`strip` removes `<nav>` everywhere; `<header>`, `<footer>`, `<aside>` and
+their ARIA roles at page level only (inside an `<article>`, `<main>` or
+`<section>` they are a title, a byline or a note, and are kept); anything
+`hidden` or `aria-hidden`; and elements whose class or id names a menu
+(`navbar`, `mbnav`, `mega-menu`, `breadcrumb`, `cookie-…`) outside the page's
+`<main>`/`<article>`, so a restaurant's menu survives. A page that would keep
+under 15% of its text (a sitemap) is kept whole. The rules are per page and
+deterministic. Turning it on re-reads web collections once — it is part of
+their fingerprint — while a local `.html` file is re-extracted when it next
+changes or on a `full` sync. It defaults to `keep` for the reason below.
 
 **Why `html_text` defaults to off.** `.html` and `.xml` have always been
 indexed as *raw markup* (tags, `<script>`, CSS included). Stripping them is an
@@ -844,6 +860,7 @@ ingestion:
   extractor:
     provider: auto
     html_text: false
+    html_chrome: keep
     math: off
 ```
 

@@ -179,3 +179,152 @@ def test_index_is_disposable(tmp_path, workspace_copy) -> None:
         assert engine.rebuild_node_index() == engine.graph_builder.graph.number_of_nodes()
     finally:
         engine.close()
+
+
+# ---------------------------------------------------------------------------
+# The index heals itself
+# ---------------------------------------------------------------------------
+
+
+def _healing_engine(tmp_path):
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.sync.engine import SyncEngine
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    for n in range(4):
+        (corpus / f"note-{n}.md").write_text(
+            f"# Note {n}\n\nThe marker{n} word appears here.\n", encoding="utf-8"
+        )
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "heal",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(corpus),
+                    "include": ["**/*.md"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    engine.sync_source("docs", "full")
+    return engine
+
+
+def _source_nodes(engine) -> set[str]:
+    return {
+        node_id
+        for node_id, source_id, _body in engine.graph_builder.graph.index_rows()
+        if source_id == "docs"
+    }
+
+
+def test_a_lost_removal_is_repaired_by_the_next_sync(tmp_path) -> None:
+    """A process killed between saving the graph and flushing the index left
+    rows for nodes the graph no longer had: 46 on the lab, after four OOM
+    kills. The next sync of the source removes them."""
+
+    engine = _healing_engine(tmp_path)
+    try:
+        graph = engine.graph_builder.graph
+        victim = next(n for n in _source_nodes(engine) if n.startswith("chunk:"))
+        graph.remove_nodes_from([victim])
+        engine.graph_store.save(engine.config.knowledge_base_id, graph)  # a checkpoint
+        graph.take_index_delta()  # the flush that never happened
+        assert victim in engine.node_index.ids("docs"), "the fixture did not leave a stale row"
+
+        engine.sync_source("docs", "incremental")
+        assert victim not in engine.node_index.ids("docs")
+        assert engine.node_index.ids("docs") == _source_nodes(engine)
+    finally:
+        engine.close()
+
+
+def test_a_killed_run_is_noticed_and_its_lost_rows_restored(tmp_path) -> None:
+    """A run that dies never clears its ``sync_runs`` row, so the next run of
+    the source knows its predecessor lost whatever it held in memory -- the
+    index's pending additions included -- and repairs both directions."""
+
+    from pheasant.sync.cancellation import SyncRun
+
+    engine = _healing_engine(tmp_path)
+    try:
+        lost = next(n for n in _source_nodes(engine) if n.startswith("chunk:"))
+        engine.node_index.apply([], [lost])  # an upsert that never landed
+        run = SyncRun(engine.state, "docs")
+        run.__enter__()  # registered, then the process "died" without __exit__
+        run._stop.set()
+
+        engine.sync_source("docs", "incremental")
+        assert lost in engine.node_index.ids("docs")
+        assert engine.node_index.ids("docs") == _source_nodes(engine)
+    finally:
+        engine.close()
+
+
+def test_a_source_missing_from_the_index_is_restored_by_an_ordinary_sync(tmp_path) -> None:
+    """The lab's larger leak: an uploads source with no index rows at all,
+    4,456 nodes the graph arm could not reach, and no crash to set off a
+    repair. An unchanged source has nothing pending to write, so only a
+    comparison with the saved graph finds it."""
+
+    engine = _healing_engine(tmp_path)
+    try:
+        expected = _source_nodes(engine)
+        engine.node_index.apply([], sorted(engine.node_index.ids("docs")))
+        assert engine.node_index.ids("docs") == set(), "the fixture left rows behind"
+
+        result = engine.sync_source("docs", "incremental")
+        assert result.indexed_artifacts == 0, "the repair needed a change to the source"
+        assert engine.node_index.ids("docs") == expected
+    finally:
+        engine.close()
+
+
+def test_a_fresh_process_with_nothing_to_change_keeps_every_row(tmp_path) -> None:
+    """The regression the first version shipped: a sync worker with nothing to
+    change never loads the working graph, and judging rows against that empty
+    graph deleted every row of every source it synced -- 69,000 on the lab.
+    The saved rows are the truth, and nothing here loads the graph."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    first = _healing_engine(tmp_path)
+    config = first.config
+    expected = first.node_index.ids("docs")
+    first.close()
+    assert expected
+
+    # Built the way a sync worker child builds it (cli.py): the graph is loaded
+    # only when a task mutates it, so a no-change sync never holds it.
+    fresh = SyncEngine(config, defer_persisted_graph_load=True)
+    try:
+        assert not fresh._graph_loaded, "the fixture loaded the graph up front"
+        fresh.sync_source("docs", "incremental")
+        assert fresh.node_index.ids("docs") == expected, "a no-change sync removed index rows"
+        assert not fresh._graph_loaded, "the reconcile loaded the graph with nothing to add"
+    finally:
+        fresh.close()
+
+
+def test_a_clean_run_does_not_walk_the_graph_for_missing_rows(tmp_path, monkeypatch) -> None:
+    """The missing-row check walks every node, so it runs only after a death."""
+
+    engine = _healing_engine(tmp_path)
+    try:
+        walked: list[bool] = []
+        graph = engine.graph_builder.graph
+        original = graph.index_rows
+        monkeypatch.setattr(graph, "index_rows", lambda: walked.append(True) or original())
+        engine.sync_source("docs", "incremental")
+        assert not walked
+    finally:
+        engine.close()

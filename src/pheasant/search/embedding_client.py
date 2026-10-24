@@ -127,8 +127,48 @@ _TRANSIENT_ERRORS = (
 #: intentionally not capped: waking before its quota resets causes another 429.
 _MAX_BACKOFF_SECONDS = 30.0
 
-#: Kept-alive provider connections, one per thread per origin.
-_CONNECTIONS = threading.local()
+#: Kept-alive provider connections, shared by every thread, per origin.
+#: Thread-local first, which on a serving replica meant the request thread a
+#: question landed on -- one of dozens -- rarely held a live connection, and
+#: the first question after a quiet spell paid a fresh TLS handshake: 1.3 s on
+#: the lab, past the 1.0 s query-embedding timeout, so the vector arm answered
+#: nothing. A connection is checked out by one request at a time.
+_POOL: dict[tuple, list[tuple[http.client.HTTPConnection, float]]] = {}
+_POOL_LOCK = threading.Lock()
+
+#: A connection idle longer than this is closed rather than reused: providers
+#: close idle keep-alive sessions after a minute or two, and writing into one
+#: they closed costs a failed request before the reconnect.
+IDLE_REUSE_SECONDS = 50.0
+
+#: Idle connections kept per origin; more are closed on return.
+POOL_IDLE_MAX = 16
+
+
+def _checkout(key: tuple) -> http.client.HTTPConnection | None:
+    stale: list[http.client.HTTPConnection] = []
+    found = None
+    now = time.monotonic()
+    with _POOL_LOCK:
+        idle = _POOL.get(key) or []
+        while idle:
+            connection, since = idle.pop()  # the most recently used first
+            if now - since <= IDLE_REUSE_SECONDS:
+                found = connection
+                break
+            stale.append(connection)
+    for connection in stale:
+        connection.close()
+    return found
+
+
+def _checkin(key: tuple, connection: http.client.HTTPConnection) -> None:
+    with _POOL_LOCK:
+        idle = _POOL.setdefault(key, [])
+        if len(idle) < POOL_IDLE_MAX:
+            idle.append((connection, time.monotonic()))
+            return
+    connection.close()
 
 
 def _transport(request: Request, timeout: float) -> bytes:
@@ -152,17 +192,15 @@ def _transport(request: Request, timeout: float) -> bytes:
         with urlopen(request, timeout=timeout) as response:
             return response.read()
     key = (parts.scheme, host, parts.port)
-    pool: dict[tuple, http.client.HTTPConnection] = _CONNECTIONS.__dict__.setdefault("pool", {})
     target = parts.path + (f"?{parts.query}" if parts.query else "")
     headers = dict(request.header_items())
     for attempt in range(2):
-        connection = pool.get(key)
+        connection = _checkout(key)
         reused = connection is not None
         if connection is None:
             https = parts.scheme == "https"
             factory = http.client.HTTPSConnection if https else http.client.HTTPConnection
             connection = factory(host, parts.port, timeout=timeout)
-            pool[key] = connection
         else:
             connection.timeout = timeout
             if connection.sock is not None:
@@ -175,17 +213,16 @@ def _transport(request: Request, timeout: float) -> bytes:
             # Reset, aborted (Windows) or a broken pipe: what writing to a
             # socket the server already closed looks like on each platform.
             connection.close()
-            pool.pop(key, None)
             if reused and attempt == 0:
                 continue  # the server closed an idle connection: once more, on a new one
             raise
         except BaseException:
             connection.close()
-            pool.pop(key, None)
             raise
         if response.will_close:
             connection.close()
-            pool.pop(key, None)
+        else:
+            _checkin(key, connection)
         if response.status >= 400:
             fp = io.BytesIO(body)
             url, status, reason = request.full_url, response.status, response.reason
@@ -346,6 +383,22 @@ class OpenAISpecEmbedder:
         self.texts_embedded = 0
         self._counter_lock = threading.Lock()
         self._rate_gate = _AdaptiveRateGate()
+
+    def ping(self, timeout: float = 5.0) -> bool:
+        """A token-free ``GET {base_url}/models``, to keep a connection warm.
+
+        Used by `search/keep_warm.py`; True when the provider answered 2xx.
+        """
+
+        headers = {"Accept": "application/json"}
+        key = os.environ.get(self.api_key_env or "", "")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        try:
+            _transport(Request(f"{self.base_url}/models", headers=headers, method="GET"), timeout)
+            return True
+        except Exception:  # noqa: BLE001 - a warm-up, never a failure anyone sees
+            return False
 
     def configure_parallelism(self, ceiling: int) -> None:
         """Share the indexer's requested concurrency across all HTTP threads."""

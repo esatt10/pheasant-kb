@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import type { VisualResponse } from "../api/types";
 import { useAppliedTheme } from "../hooks/useTheme";
 
 /**
@@ -44,12 +45,19 @@ interface JsonRpc {
 export function McpAppFrame({
   result,
   onAsk,
+  onRedrawn,
   title = "Visual",
 }: {
   /** The tool result's structured content: an answer, or `{visual, citations}`. */
   result: Record<string, unknown>;
   /** A question the view asks the conversation to go on with. */
   onAsk?: (text: string) => void;
+  /**
+   * The view redrew its visual ("Redraw as"). The redraw lives in the view
+   * until the host keeps it: without this, the next delivery of `result`
+   * replaced it with the original.
+   */
+  onRedrawn?: (drawn: VisualResponse) => void;
   title?: string;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -64,8 +72,11 @@ export function McpAppFrame({
   });
 
   // Latest values for the message handler, which is registered once.
-  const latest = useRef({ result, onAsk, theme, mode });
-  latest.current = { result, onAsk, theme, mode };
+  const latest = useRef({ result, onAsk, onRedrawn, theme, mode });
+  latest.current = { result, onAsk, onRedrawn, theme, mode };
+  // The visual the view is showing, so the host does not send it back the
+  // picture it just drew itself.
+  const shown = useRef<unknown>(null);
 
   useEffect(() => {
     const post = (message: Record<string, unknown>) =>
@@ -132,6 +143,8 @@ export function McpAppFrame({
                 kind: typeof args.kind === "string" ? args.kind : null,
               });
               reply(message.id, { content: [], structuredContent: drawn });
+              shown.current = drawn.visual;
+              latest.current.onRedrawn?.(drawn);
               return;
             }
           } catch (error) {
@@ -169,6 +182,9 @@ export function McpAppFrame({
   // a deferred visual arrives after the answer that asked for it.
   useEffect(() => {
     if (!ready) return;
+    // The redraw the host just adopted is already on screen.
+    if (result.visual !== undefined && result.visual === shown.current) return;
+    shown.current = result.visual;
     frameRef.current?.contentWindow?.postMessage(
       {
         jsonrpc: "2.0",

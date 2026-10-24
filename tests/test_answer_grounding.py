@@ -784,6 +784,112 @@ def test_structure_is_cached_against_the_index_signature(tmp_path) -> None:
     assert retriever.structure(2, 2) is not first
 
 
+def test_a_question_does_not_rescan_the_corpus_vocabulary(tmp_path, monkeypatch) -> None:
+    """The vocabulary was a 5.6 s `ts_stat` on the lab, cached against the
+    chunk count -- so every question during a sync re-ran it. It is held per
+    database now: a new signature re-derives the cheap aggregates, not it."""
+    from pheasant.search import corpus_shape, sqlite_store
+
+    corpus_shape.forget()
+    scans: list[int] = []
+    real = sqlite_store.corpus_vocabulary
+
+    def counting(state, limit=64):
+        scans.append(limit)
+        return real(state, limit)
+
+    monkeypatch.setattr(sqlite_store, "corpus_vocabulary", counting)
+    store = _store(tmp_path)
+    _add_file(store, "file:demo:a.md", "a.md", [("", "checkpointing durable workflows")])
+    store.conn.commit()
+
+    first = _retriever(store).capabilities()
+    assert "checkpointing" in first.structure.concepts
+    _add_file(store, "file:demo:b.md", "b.md", [("", "body")])  # a sync moved the counts
+    store.conn.commit()
+    second = _retriever(store).capabilities()
+
+    assert second.artifact_count == 2
+    assert "checkpointing" in second.structure.concepts
+    assert len(scans) == 1, "a question paid the vocabulary scan again"
+
+
+def test_a_stale_vocabulary_is_served_while_one_thread_refreshes_it(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from pheasant.search import corpus_shape, sqlite_store
+
+    corpus_shape.forget()
+    store = _store(tmp_path)
+    release, started = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def slow(state, limit=64):
+        calls.append(limit)
+        if len(calls) > 1:  # the refresh: hold it open while questions read
+            started.set()
+            release.wait(5)
+            return [("fresh", 1)]
+        return [("held", 1)]
+
+    monkeypatch.setattr(sqlite_store, "corpus_vocabulary", slow)
+    assert corpus_shape.vocabulary(store, 24) == [("held", 1)]
+    monkeypatch.setattr(corpus_shape, "VOCABULARY_SECONDS", 0.0)
+
+    assert corpus_shape.vocabulary(store, 24) == [("held", 1)]  # not waited on
+    assert started.wait(5)
+    assert corpus_shape.vocabulary(store, 24) == [("held", 1)]
+    assert len(calls) == 2, "a second refresh started while one was running"
+    release.set()
+    for _ in range(100):
+        if corpus_shape.vocabulary(store, 24) == [("fresh", 1)]:
+            break
+        threading.Event().wait(0.02)
+    else:
+        raise AssertionError("the refresh never landed")
+
+
+def test_the_vector_count_comes_from_the_resident_copy(tmp_path) -> None:
+    """A LanceDB count was 2.9 s per question; the resident copy knows it."""
+    from pheasant.search import corpus_shape
+
+    corpus_shape.forget()
+
+    class _Snapshot:
+        live = 52_000
+
+    class _Store:
+        _resident = type("R", (), {"_snapshot": _Snapshot()})()
+
+        def count(self):
+            raise AssertionError("counted the table with a resident copy loaded")
+
+    search = type("S", (), {"vector": type("V", (), {"store": _Store()})()})()
+    assert _retriever(_store(tmp_path), search=search).capabilities().vector_count == 52_000
+
+
+def test_a_count_is_reused_but_never_across_objects() -> None:
+    from pheasant.search import corpus_shape
+
+    corpus_shape.forget()
+
+    class Owner:
+        def __init__(self, n):
+            self.n, self.calls = n, 0
+
+        def count(self):
+            self.calls += 1
+            return self.n
+
+    a, b = Owner(1), Owner(2)
+    assert corpus_shape.counted(a, "n", a.count) == 1
+    assert corpus_shape.counted(a, "n", a.count) == 1 and a.calls == 1
+    assert corpus_shape.counted(b, "n", b.count) == 2
+    del a
+    c = Owner(3)  # may reuse a's address; must not inherit its figure
+    assert corpus_shape.counted(c, "n", c.count) == 3
+
+
 def test_structure_survives_a_region_with_no_state() -> None:
     retriever = PheasantRetriever(search=_FakeSearch(), knowledge_base="kb", state=None)
     context = retriever.capabilities().as_prompt_context()

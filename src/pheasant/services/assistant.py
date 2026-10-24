@@ -372,6 +372,31 @@ def visualize(
     }
 
 
+def _owning_artifact(context: ServiceContext, node_id: str) -> tuple[str, str | None]:
+    """The artifact a named node belongs to, and its heading path if it is a heading.
+
+    A visual's own evidence -- what its "Redraw as" sends back -- includes the
+    graph arm's hits, so a heading or a symbol is named as often as a chunk.
+    Refusing them refused every redraw of an answer that had one. They are
+    read under the file that owns them, the rule ``acl_subject`` already
+    applies to search results; a node that resolves to no file is returned as
+    itself, which the caller then refuses as before.
+    """
+
+    from pheasant.security.acl import acl_subject
+
+    try:
+        attrs = context.graph.nodes.get(node_id) if context.graph is not None else None
+    except Exception:  # noqa: BLE001 - an unreachable graph names no owner
+        attrs = None
+    if not attrs:
+        return node_id, None
+    node = dict(attrs)
+    owner = acl_subject(node_id, node.get("type"), node.get("artifact_id"))
+    heading_path = node.get("heading_path") if node.get("type") == "heading" else None
+    return owner, (str(heading_path) if heading_path else None)
+
+
 def _named_citations(context: ServiceContext, request: VisualRequest) -> list[dict[str, Any]]:
     """Citation records for the passages a caller named, in the order named."""
 
@@ -386,6 +411,9 @@ def _named_citations(context: ServiceContext, request: VisualRequest) -> list[di
             "SELECT id, artifact_id, text, heading_path FROM chunks WHERE id=? LIMIT 1", (node_id,)
         )
         artifact_id = str(chunk[0]["artifact_id"]) if chunk else node_id
+        heading_path = None
+        if not chunk:
+            artifact_id, heading_path = _owning_artifact(context, node_id)
         artifact = context.state.rows(
             "SELECT id, relative_path, source_id, type FROM artifacts WHERE id=? LIMIT 1",
             (artifact_id,),
@@ -399,7 +427,15 @@ def _named_citations(context: ServiceContext, request: VisualRequest) -> list[di
         if chunk:
             text = str(chunk[0]["text"] or "")
         else:
-            rows = context.state.rows(
+            rows = (
+                context.state.rows(
+                    "SELECT text FROM chunks WHERE artifact_id=? AND heading_path=? "
+                    "ORDER BY chunk_index LIMIT 4",
+                    (artifact_id, heading_path),
+                )
+                if heading_path
+                else []
+            ) or context.state.rows(
                 "SELECT text FROM chunks WHERE artifact_id=? ORDER BY chunk_index LIMIT 4",
                 (artifact_id,),
             )
