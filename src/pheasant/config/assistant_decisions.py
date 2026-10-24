@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 
 from pheasant.config.model import ModelMixin
 
+#: What a rewrite can be written at; ``full`` is the assistant's own effort.
+REPAIR_EFFORTS = frozenset({"none", "low", "full"})
+
 
 @dataclass
 class AssistantDecisionsSettings(ModelMixin):
@@ -65,8 +68,14 @@ class AssistantDecisionsSettings(ModelMixin):
     #: only — other models write at their normal effort). ``null`` keeps the
     #: assistant's own effort.
     draft_reasoning_effort: str | None = "low"
-    #: Rewrites at the assistant's own effort after a rejected draft.
+    #: Rewrites after a rejected draft.
     max_repairs: int = 1
+    #: Effort for each rewrite in turn (``none`` / ``low`` / ``full``,
+    #: ``gpt-6-luna`` only): ``["low"]`` rewrites cheaply, and with
+    #: ``max_repairs: 2`` escalates to full effort only when the cheap rewrite
+    #: is rejected too. A rewrite past the end of the list is at full effort,
+    #: so the empty default is every rewrite at the assistant's own effort.
+    repair_efforts: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.mode not in {"beta", "shadow", "off"}:
@@ -81,6 +90,10 @@ class AssistantDecisionsSettings(ModelMixin):
         if self.draft_reasoning_effort not in {None, "none", "low"}:
             raise ValueError(
                 "assistant.decisions.draft_reasoning_effort must be 'none', 'low' or unset"
+            )
+        if set(self.repair_efforts) - REPAIR_EFFORTS:
+            raise ValueError(
+                "assistant.decisions.repair_efforts entries must be 'none', 'low' or 'full'"
             )
         if self.max_repairs < 0 or self.prune_min_keep < 1 or self.timeout_seconds <= 0:
             raise ValueError(
