@@ -1,5 +1,6 @@
 {
   "pheasant.name": "pheasant-scalable-worker",
+  "pheasant.defaults": "standalone",
   "pheasant.description": "Stateless gRPC preparation worker for the scalable Pheasant fleet",
   "pheasant.environment": "compose",
   "pheasant.log_level": "INFO",

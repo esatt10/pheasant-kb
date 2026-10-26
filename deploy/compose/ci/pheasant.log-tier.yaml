@@ -9,6 +9,7 @@
 # the whole point.
 pheasant:
   name: log-tier-ci
+  defaults: standalone
   state_path: /state
   workspace_root: /workspace
   exports_path: /exports

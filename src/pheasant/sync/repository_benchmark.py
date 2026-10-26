@@ -161,6 +161,7 @@ def _config(root: Path, workspace: Path, manifest: dict[str, Any]) -> PheasantCo
         {
             "pheasant": {
                 "name": "ci-repository-architecture",
+                "defaults": "standalone",
                 "state_path": str(root / "state"),
                 "workspace_root": str(workspace),
                 "exports_path": str(root / "exports"),

@@ -1,5 +1,11 @@
 # How big can one region get?
 
+!!! tip "pheasant-kb is the default deployment"
+    For pheasant-kb, [Scale up or down](../pheasant-kb/scale.md) turns these
+    measurements into the `.env` knob for each service. This page is the
+    measurement behind it.
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 Every scaling decision in pheasant comes back to one number: **how many nodes
 the knowledge graph has**. The graph is held in memory during a sync and
 written out as one compressed blob, so it sets the container's RAM, the time

@@ -153,10 +153,13 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # `vector` too: tests/test_flagship_defaults.py runs pheasant-kb's own
+      # defaults (Postgres + LanceDB) on stub models here, the one job with a
+      # database to run them against.
       - name: Install project, test and Postgres dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,mcp,postgres]"
+          python -m pip install -e ".[dev,mcp,postgres,vector]"
 
       - name: Run pytest suite against Postgres
         env:
@@ -289,6 +292,9 @@ jobs:
           OPENAI_API_KEY=ci-config-check \
             docker compose -f deploy/compose/docker-compose.advanced.yml config --quiet
           docker compose -f deploy/compose/docker-compose.fresh.yml config --quiet
+          # pheasant-kb, the default deployment, and its on-demand tools.
+          OPENAI_API_KEY=ci-config-check docker compose config --quiet
+          OPENAI_API_KEY=ci-config-check docker compose --profile tools config --quiet
           # The CI-only topologies are published artifacts too, and each is
           # parsed by exactly one workflow. Checking them here as well means a
           # malformed service fails on every PR rather than only on the ones
@@ -307,4 +313,8 @@ jobs:
         run: |
           docker run --rm pheasant:ci python -m pheasant --help
           docker run --rm pheasant:ci python -m pheasant validate /config/pheasant.yaml --no-require-paths
+          # With nothing mounted the image writes its own config, on the
+          # standalone table (one process cannot run pheasant-kb's), so the app
+          # builds with no database and no key.
           docker run --rm pheasant:ci python -c "from pheasant.api.app import create_app; print(create_app(config_path='/config/pheasant.yaml').title)"
+          docker run --rm pheasant:ci grep -q "defaults: standalone" /config/pheasant.yaml

@@ -1,5 +1,6 @@
 {
   "pheasant.name": "pheasant-local-advanced",
+  "pheasant.defaults": "standalone",
   "pheasant.description": "Feature-rich single-node Pheasant profile with SQLite, LanceDB, OpenAI, WASM, MCP, and durable memory",
   "pheasant.environment": "docker",
   "pheasant.log_level": "INFO",

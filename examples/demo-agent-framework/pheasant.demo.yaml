@@ -17,6 +17,7 @@
 
 pheasant:
   name: agent-framework-demo
+  defaults: standalone
   description: microsoft/agent-framework indexed with OpenAI embeddings and agentic chat
   environment: local
   log_level: INFO

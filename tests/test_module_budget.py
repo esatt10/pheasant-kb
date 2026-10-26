@@ -57,7 +57,10 @@ CEILINGS: dict[str, int] = {
     # these cohesive with their owning retriever/workflow and hold a fixed cap.
     "assistant/retrieval.py": 1650,
     "assistant/workflows/agentic.py": 1600,
-    "cli.py": 3200,
+    # Raised to 3206 for `backup`/`restore` refusing a Postgres region (whose
+    # data is not under /state) with the refusal text `persistence/backup.py`
+    # owns, instead of writing an archive that holds none of it.
+    "cli.py": 3206,
     # Typed query budgets, admission, and MCP request-size validation belong
     # with their dataclass settings; this explicit raise accounts for that field.
     # Raised by 14 for the vector store's resident/ANN settings (seven fields,
@@ -65,7 +68,9 @@ CEILINGS: dict[str, int] = {
     # Raised by 10 for `ingestion.extractor.html_chrome`: one field, its
     # validation, and the docstring paragraph every extractor setting carries;
     # the rules themselves live in `ingestion/html_text.py`.
-    "config/schema.py": 2284,
+    # Raised by 7 for `pheasant.defaults` and the two lines that lay a config
+    # over the table it names; the table itself is `config/flagship.py`.
+    "config/schema.py": 2291,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

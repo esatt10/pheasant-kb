@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from pheasant.config.flagship import DEFAULTS_ENV, STANDALONE, default_config_data
 from pheasant.config.profiles import profile_data, profile_names
 from pheasant.config.schema import PheasantConfig
 
@@ -88,8 +90,7 @@ def load_layered_config(
     profile: str | None = "quickstart",
     overrides: dict[str, Any] | None = None,
 ) -> PheasantConfig:
-    data = PheasantConfig().model_dump(mode="json")
-    data = deep_merge(data, profile_data(profile))
+    loaded: dict[str, Any] = {}
     if path is not None and Path(path).exists():
         loaded = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         if not isinstance(loaded, dict):
@@ -97,7 +98,18 @@ def load_layered_config(
         # Check the user's file, not the merged result: the defaults this
         # started from no longer contain the removed keys at all.
         warn_on_removed_settings(loaded)
-        data = deep_merge(data, loaded)
+    # The base is a dump of the defaults, so it has to be the table the file
+    # (or an override) chose: a standalone file laid over a flagship dump
+    # would inherit every flagship value it does not set.
+    chosen = None
+    for layer in (overrides or {}, loaded):
+        identity = layer.get("pheasant")
+        if isinstance(identity, dict) and identity.get("defaults"):
+            chosen = identity["defaults"]
+            break
+    data = default_config_data(chosen)
+    data = deep_merge(data, profile_data(profile))
+    data = deep_merge(data, loaded)
     data = deep_merge(data, overrides or {})
     return PheasantConfig.model_validate(data)
 
@@ -111,7 +123,11 @@ def effective_config_dict(
 
 
 def render_init_config(profile: str = "quickstart") -> str:
-    data = deep_merge(PheasantConfig().model_dump(mode="json"), profile_data(profile))
+    # `pheasant init` starts a config for `pheasant start` on this machine, one
+    # process, like `pheasant up`: built on the standalone table unless
+    # PHEASANT_DEFAULTS asks for the flagship (pheasant.config.flagship).
+    base = default_config_data(os.environ.get(DEFAULTS_ENV) or STANDALONE)
+    data = deep_merge(base, profile_data(profile))
     data["sources"] = []
     header = (
         f"# pheasant {profile} profile configuration\n"

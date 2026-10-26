@@ -48,6 +48,8 @@ def _config(
         {
             "pheasant": {
                 "name": "sync-benchmark",
+                # A local SQLite region, measured as the code has always run it.
+                "defaults": "standalone",
                 "state_path": str(root / f"state-{file_executor}-{workers}-{run_id}"),
                 "workspace_root": str(workspace),
                 "exports_path": str(root / "exports"),

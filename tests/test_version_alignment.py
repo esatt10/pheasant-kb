@@ -65,6 +65,8 @@ IMAGE_REFERENCE_RE = re.compile(r"ghcr\.io/esatt10/(pheasant(?:-ui)?):([0-9A-Za-
 #: is allowed to spell a tag as `<version>`. A wrong tag in one of these starts
 #: the wrong image; there is no reader to notice.
 MACHINE_CONSUMED = (
+    "compose.yaml",
+    ".env.example",
     "deploy/compose/.env.example",
     "deploy/compose/docker-compose.yml",
     "deploy/compose/docker-compose.advanced.yml",

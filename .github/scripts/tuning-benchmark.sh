@@ -51,6 +51,7 @@ for name in ("state", "exports"):
 raw = {
     "pheasant": {
         "name": "scifact",
+        "defaults": "standalone",
         "state_path": str(work / "state"),
         "workspace_root": str(corpus.parent),
         "exports_path": str(work / "exports"),

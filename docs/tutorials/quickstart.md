@@ -1,5 +1,10 @@
 # Quickstart: stand up a knowledge base in 10 minutes
 
+!!! tip "pheasant-kb is the default deployment"
+    This tutorial builds the smallest shape, one process with no key, to show
+    how pheasant works. To run the full product, use pheasant-kb instead.
+    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+
 By the end of this tutorial you will have a running standalone pheasant instance
 that has indexed a folder of files and that you can query over HTTP and MCP. No
 fleet, no API keys, no model downloads — everything here runs offline.

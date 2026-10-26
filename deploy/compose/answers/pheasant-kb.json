@@ -1,6 +1,7 @@
 {
-  "pheasant.name": "pheasant-lab",
-  "pheasant.description": "Pheasant lab fleet instance with PostgreSQL, NATS JetStream, gRPC workers, LanceDB, GPT-6 Luna, taxonomy, and durable memory",
+  "pheasant.name": "pheasant-kb",
+  "pheasant.defaults": "flagship",
+  "pheasant.description": "pheasant-kb: the flagship stack. PostgreSQL, NATS JetStream, a graph service, gRPC preparation workers, LanceDB, GPT-6 Luna, taxonomy and durable memory",
   "pheasant.environment": "compose",
   "pheasant.log_level": "INFO",
   "pheasant.state_path": "/state",
@@ -130,7 +131,8 @@
     "/workspace",
     "/memory",
     "/state",
-    "/exports"
+    "/exports",
+    "/data"
   ],
   "security.allow_user_selected_source_paths": false,
   "security.read_only_sources": true,

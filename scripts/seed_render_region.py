@@ -66,6 +66,7 @@ def config_for(work: Path, docs: Path, port: int) -> dict:
     return {
         "pheasant": {
             "name": "kb",
+            "defaults": "standalone",
             "state_path": str(work / "state"),
             "workspace_root": str(work / "ws"),
             "exports_path": str(work / "exports"),

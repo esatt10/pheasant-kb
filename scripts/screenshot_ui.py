@@ -181,6 +181,7 @@ def _seed(root: Path, benchmark: dict | None = None) -> Path:
     config = {
         "pheasant": {
             "name": "handbook",
+            "defaults": "standalone",
             "description": "Engineering handbook, runbooks and deploy notes.",
             "state_path": str(root / "state"),
             "workspace_root": str(root / "workspace"),

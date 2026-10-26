@@ -53,11 +53,17 @@ pheasant-kb/
 ├── pyproject.toml             ← extras: mcp, vector, agent, a2a, wasm,
 │                                postgres, grpc, queue, tuning, docs, dev
 ├── pheasant.example.yaml      ← reference config, every section
+├── compose.yaml               ← pheasant-kb, THE default deployment (§5 below):
+│                                `docker compose up -d` from the root
+├── .env.example               ← pheasant-kb's .env: OPENAI_API_KEY + size knobs
 ├── Dockerfile                 ← one universal image: API + MCP + UI, port 8765
-├── docker-compose*.yml        ← default / override / fresh reset / scaled
 ├── contracts/                 ← VENDORED Synapse schema + fixtures (never edit)
-├── deploy/                    ← kubernetes/ (+ scaled/), helm/, compose/
-├── docs/                      ← MkDocs Material site (see mkdocs.yml nav)
+├── deploy/                    ← compose/ (pheasant-kb.yaml + its answers,
+│                                init-secrets.sh, the other profiles),
+│                                kubernetes/ (+ scaled/), helm/
+├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
+│                                pheasant-kb/ is the primary guide, every
+│                                other shape is in other-deployments.md
 ├── examples/                  ← demo-agent-framework, vscode MCP config
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
@@ -202,7 +208,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 176 pytest modules, offline by design
+└── tests/                     ← 178 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -217,6 +223,10 @@ references / imports / calls / similar_to / supersedes / about). Full grammar:
 ## 3. Canonical commands
 
 ```bash
+echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d           # pheasant-kb
+docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'  # UI/MCP token
+docker compose run --rm backup | restore <name> [--force]             # pheasant-kb backups
+
 pip install -e ".[dev,mcp]"
 pytest -q                                  # offline by design
 ruff check src tests && ruff format --check src tests
@@ -260,8 +270,8 @@ pheasant mcp --transport stdio
 pheasant client-config claude-code|cursor|vscode
 pheasant config show                       # resolved config after profile+YAML+--set
 
-docker compose --env-file .env -f deploy/compose/docker-compose.yml up
-docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --scale indexer=1 --scale worker=4
+docker compose --env-file .env -f deploy/compose/docker-compose.yml up        # single container
+docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --scale indexer=1 --scale worker=4  # generic fleet (CI)
 ```
 
 For deployment/configuration work, load
@@ -288,11 +298,25 @@ their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
    format + lint, pytest, Python ≥ 3.11, type hints.
 6. **Never import pheasant-flock.** The Synapse boundary is contract JSON over
    HTTP. Never hand-edit vendored files under `contracts/`.
-7. **Standalone mode is sacred.** Every change must leave a router-less,
-   infrastructure-free pheasant fully functional. Postgres, gRPC, the broker
-   and the role split are *selectable backends*; SQLite, HTTP, no queue and
-   `--role all` are the defaults, and each seam owes a test asserting the
-   no-infrastructure path is unchanged.
+7. **The defaults are pheasant-kb's; standalone stays one switch away.**
+   An unset key takes pheasant-kb's value (`config/flagship.py`, pinned to
+   `deploy/compose/pheasant-kb.yaml`): Postgres, NATS, the role split, gRPC
+   workers, OpenAI models. The values written in `schema.py` are the
+   **standalone** table (SQLite, no queue, `--role all`, offline stubs, no
+   key), selected by `pheasant.defaults: standalone` or
+   `PHEASANT_DEFAULTS=standalone`, and every change must leave it fully
+   functional, router-less and infrastructure-free: the offline suite runs on
+   it (`conftest.py`), each seam owes a test asserting that path is
+   unchanged, and anything that builds a one-process deployment (`pheasant
+   up`, `pheasant init`, the image's first-boot config) builds on it. Every config this repo
+   ships names its table (`tests/test_flagship_defaults.py` fails one that
+   does not), because a partial config that names none silently becomes a
+   pheasant-kb config. `PheasantConfig()` is always standalone (a dataclass
+   constructor cannot consult a table); "the default" is `model_validate` or
+   `flagship.default_config()`, and a caller that edits a default dump and
+   builds again takes `default_config_data()`, which leaves the storage paths
+   derived from `state_path` unset (dumped, they pinned `/state/pheasant.db`
+   under a config whose `state_path` `pheasant up` then moved).
 8. **The MCP tool surface is public API.** Renaming or removing a tool breaks
    deployed agents — additive evolution only, deprecate before remove. One
    sanctioned exception to date: `export_obsidian_notes` was removed outright
@@ -751,7 +775,7 @@ spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
 does not; the answering retriever holds it for every search and evidence read.
 
 **The vector arm has two opt-in speed paths**, both measured on the
-pheasant-lab stack (60k x 1536-d, the api tier's one core, where LanceDB's
+pheasant-kb stack (60k x 1536-d, the api tier's one core, where LanceDB's
 exact scan was the floor of every hybrid search at ~280 ms).
 `search.vector_store.resident` holds the table as one unit-norm matrix and
 answers by a matrix-vector product: the *same* top-k, the vector arm 61 ms
@@ -1298,6 +1322,47 @@ histogram and a counter, neither able to name a stage.
   searches, and it reports when its window spans two configurations rather
   than averaging across the change somebody is looking for.
 
+### The default deployment: pheasant-kb
+
+`compose.yaml` at the root is the flagship and the reference the primary docs
+(`docs/pheasant-kb/`) are written against: `api`, `graph`, `indexer`,
+`worker` ×4, `logger`, Postgres 17 + pg_textsearch and NATS, configured by
+`deploy/compose/pheasant-kb.yaml` (generated from
+`answers/pheasant-kb.json`; it was `pheasant-lab` until renamed, and an
+existing lab keeps its volumes with `COMPOSE_PROJECT_NAME=pheasant-lab`).
+Three things make it one line. **Tokens are generated, not asked for:**
+`secrets-init` runs `deploy/compose/init-secrets.sh`, which writes the four
+tokens into `pheasant-secrets` (an `.env` value wins, a stored one is kept,
+otherwise random) and the worker token alone into `pheasant-worker-secret`, so
+a worker never mounts the others; every tier reads its token through the
+entrypoint's `NAME_FILE` convention (`load_file_secrets`). **Every size is a
+variable** (`PHEASANT_<SERVICE>_MEMORY`/`_CPUS`, `PHEASANT_WORKERS`,
+`PHEASANT_WORKER_THREADS`) defaulting to the measured lab values, so scaling
+is an `.env` edit; `docs/pheasant-kb/scale.md` maps each to its metric.
+**The logger is not behind a profile**, because the config turns the
+observation queue on and nothing else drains it. Host folders mount under
+`/data` (allow-listed): the api mounts `/workspace` read-only, and Docker
+cannot create a mountpoint inside a read-only volume (measured). **Backups
+are one command:** `backup`/`restore` (profile `tools`) run
+`deploy/compose/backup.sh`/`restore.sh` in the Postgres image, so pg_dump
+matches the server, and copy the database, `/state`, `/memory` and the
+tokens as one checksummed folder; restore refuses running services and
+populated targets without `--force`, and keeps what it replaces (rule 2).
+`pheasant backup` refuses a Postgres region: it used to write the archive
+without the database and report success. Images: pheasant from GHCR
+(published by `container.yml` on every green merge to main, which then
+rewrites `compose.yaml`'s pin), Postgres and NATS from Docker Hub.
+`docker-compose.scale.yml` + `fleet.yaml` stay as the generic fleet the CI
+smoke tests run; do not grow a third copy of the topology. **Its config is
+also the code's default** (rule 7): `config/flagship.py` lays
+`FLAGSHIP_DEFAULTS` under every `model_validate` unless the config or
+`PHEASANT_DEFAULTS` says `standalone`, records the resolved table on
+`pheasant.defaults` so a dump reloads on it, and the layered loader picks the
+file's table *before* dumping a base (a standalone file over a flagship dump
+inherited every flagship value). `docs/configuration.md`'s defaults table is
+generated (`defaults_table()`) and tested. A test or script that builds its
+own region names `defaults: standalone`; the benchmarks do.
+
 ### Scale
 
 One container until it shouldn't be. Then four independent axes:
@@ -1320,8 +1385,10 @@ set rather than about every replica's.
 Selectable backends, dependency-free side first: `storage.backend`
 sqlite|postgres, `sync.queue.backend` off|local|nats,
 `sync.concurrency.worker_transport` http|grpc,
-`observability.interactions.queue.backend` off|local|nats. Two exceptions,
-both deliberate. `storage.graph_format` defaults to `rows`, the side that is
+`observability.interactions.queue.backend` off|local|nats. The first of each
+is the standalone table's value and the second pheasant-kb's, which is the
+default (rule 7). Within the standalone table, two exceptions, both
+deliberate. `storage.graph_format` defaults to `rows`, the side that is
 *better*, because both sides need the same state store and neither adds a
 dependency — the rule is about not requiring infrastructure, not about
 preferring the older mechanism. And `storage.lexical_index` defaults to

@@ -37,7 +37,10 @@ def resolve_dsn(storage: Any) -> str:
         raise DsnUnavailable(
             f"storage.backend is 'postgres' but environment variable {name!r} is empty "
             "or unset. Set it to a libpq connection string, e.g. "
-            "postgresql://user:password@host:5432/pheasant"
+            "postgresql://user:password@host:5432/pheasant. Postgres is the default "
+            "because pheasant-kb's configuration is (docs/pheasant-kb/); to run on "
+            "SQLite in one process instead, set PHEASANT_DEFAULTS=standalone or "
+            "pheasant.defaults: standalone."
         )
     return value
 

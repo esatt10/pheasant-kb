@@ -1,0 +1,386 @@
+# pheasant-kb — the flagship stack.
+#
+#   echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
+#
+# Then open http://127.0.0.1:8765 and paste the API token printed by
+#
+#   docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'
+#
+# into "Connect API". Everything is documented, with this file as the
+# reference, in docs/pheasant-kb/ — what each service holds, how to change
+# the configuration, and how to scale each part up or down.
+#
+# The services and why they are separate:
+#
+#   api        serves the UI, HTTP API and MCP; reads /state, never writes it
+#   graph      answers graph queries for the api tier over an internal API
+#   indexer    the one writer: syncs sources, commits chunks, graph, vectors
+#   worker     parses and chunks files for the indexer; holds one secret
+#   logger     drains the observation queue into Postgres and Parquet
+#   postgres   operational state, chunks and the BM25 lexical index
+#   nats       the durable index queue and the observation queue
+#
+# Every size is a variable with the measured default beside it, so scaling a
+# part up or down is a line in `.env` (see deploy/compose/.env.example and
+# docs/pheasant-kb/scale.md). Scale workers for ingest, not indexers: extra
+# indexers are hot standbys, because the graph, vectors and full-text index
+# are one ordered commit stream. Past one indexer's commit rate the answer is a
+# second knowledge base (`pheasant shard plan`), not a second writer.
+#
+# Smaller and larger shapes — one container, no Docker, Kubernetes — are in
+# docs/other-deployments.md. They run the same code; this one is the default.
+name: pheasant-kb
+
+# Four secrets, four boundaries, and deliberately no sharing between them:
+#
+#   api-token        callers -> the API (the UI's "Connect API", MCP clients)
+#   graph-token      api -> the internal graph API, which serves the whole graph
+#   worker-token     indexer -> the preparation workers
+#   ingestion-token  api -> the indexer's landing service (manual uploads)
+#
+# `secrets-init` generates them into volumes on first boot and keeps them
+# after that; a value set in `.env` replaces the stored one. `serve` refuses
+# to start when the graph or ingestion token equals the worker token, because
+# the workers are the least trusted tier and hold theirs by necessity.
+x-kb-env: &kb-env
+  PHEASANT_CONFIG: /config/pheasant.yaml
+  PHEASANT_DATABASE_URL: postgresql://pheasant:${POSTGRES_PASSWORD:-pheasant}@postgres:5432/pheasant
+  PHEASANT_API_TOKEN_FILE: /run/pheasant/secrets/api-token
+  PHEASANT_GRAPH_SERVICE_TOKEN_FILE: /run/pheasant/secrets/graph-token
+  PHEASANT_INDEX_WORKER_TOKEN_FILE: /run/pheasant/secrets/worker-token
+  PHEASANT_INGESTION_SERVICE_TOKEN_FILE: /run/pheasant/secrets/ingestion-token
+  OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env — see docs/pheasant-kb/index.md}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GH_TOKEN: ${GH_TOKEN:-}
+
+# The configuration every pheasant tier mounts. Generated from
+# deploy/compose/answers/pheasant-kb.json; point PHEASANT_KB_CONFIG at your own
+# copy to change it (docs/pheasant-kb/configure.md).
+x-kb-config: &kb-config ${PHEASANT_KB_CONFIG:-./deploy/compose/pheasant-kb.yaml}:/config/pheasant.yaml:ro
+
+x-kb-secrets: &kb-secrets pheasant-secrets:/run/pheasant/secrets:ro
+
+services:
+  postgres:
+    # Postgres 17 with pg_textsearch preloaded: the lexical arm ranks with its
+    # BM25 index (storage.lexical_index). Not published on any host port.
+    image: timescale/timescaledb-ha:pg17
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=${PHEASANT_POSTGRES_MAX_CONNECTIONS:-100}"]
+    mem_limit: ${PHEASANT_POSTGRES_MEMORY:-1280m}
+    cpus: ${PHEASANT_POSTGRES_CPUS:-2.0}
+    environment:
+      POSTGRES_USER: pheasant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pheasant}
+      POSTGRES_DB: pheasant
+    volumes:
+      - pheasant-pg17:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pheasant"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: nats:2.10-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    mem_limit: ${PHEASANT_NATS_MEMORY:-256m}
+    cpus: ${PHEASANT_NATS_CPUS:-0.5}
+    volumes:
+      - pheasant-nats:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8222/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  secrets-init:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "/init-secrets.sh"]
+    # Only this one-shot container ever sees a token from `.env`; every tier
+    # reads its token from the volume.
+    environment:
+      PHEASANT_API_TOKEN: ${PHEASANT_API_TOKEN:-}
+      PHEASANT_GRAPH_SERVICE_TOKEN: ${PHEASANT_GRAPH_SERVICE_TOKEN:-}
+      PHEASANT_INDEX_WORKER_TOKEN: ${PHEASANT_INDEX_WORKER_TOKEN:-}
+      PHEASANT_INGESTION_SERVICE_TOKEN: ${PHEASANT_INGESTION_SERVICE_TOKEN:-}
+    volumes:
+      - ./deploy/compose/init-secrets.sh:/init-secrets.sh:ro
+      - pheasant-secrets:/secrets
+      - pheasant-worker-secret:/worker-secret
+
+  db-init:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    restart: "no"
+    command:
+      - python
+      - -c
+      - "from pathlib import Path; from pheasant.cli import _engine; engine = _engine(Path('/config/pheasant.yaml')); engine.close()"
+    environment: *kb-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      secrets-init:
+        condition: service_completed_successfully
+    volumes:
+      - *kb-config
+      - *kb-secrets
+      - pheasant-state:/state
+      - pheasant-exports:/exports
+
+  workspace-init:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    # Named-volume roots are created root-owned; pheasant runs as 10001. Create
+    # the managed-clone parent so a repository added by URL can be cloned.
+    command: ["mkdir -p /workspace/sources && chown 10001:10001 /workspace /workspace/sources && chmod 0755 /workspace /workspace/sources"]
+    volumes:
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
+
+  api:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # No graph is resident here. The budget is result sets, the resident
+    # vector matrix (4 bytes x 1,536 dimensions per chunk) and MCP uploads,
+    # which are parsed in memory up to server.mcp.max_request_body_size_mb.
+    mem_limit: ${PHEASANT_API_MEMORY:-4096m}
+    # Two cores: with one, a refresh of the resident vector copy and the
+    # queries it serves shared a single core, and a question landing during
+    # a reload took 19 s instead of 0.4. The refresh also lowers its own
+    # priority and is a delta now (search/vector_resident.py).
+    cpus: ${PHEASANT_API_CPUS:-2.0}
+    command: ["serve", "--role", "api"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      graph:
+        condition: service_healthy
+    ports:
+      # Loopback by default even with a token: a token is authentication, not
+      # a perimeter, and Docker's iptables rules bypass most host firewalls.
+      - "${PHEASANT_BIND:-127.0.0.1}:${PHEASANT_PORT:-8765}:8765"
+    environment: *kb-env
+    volumes:
+      - *kb-config
+      - *kb-secrets
+      # Read-only: the indexer is the only writer of /state. Uploads are
+      # forwarded to it rather than written here.
+      - pheasant-state:/state:ro
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
+      - pheasant-memory:/memory
+      # Parquet exports, the one volume meant for readers outside pheasant.
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/ready || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  graph:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: ${PHEASANT_GRAPH_MEMORY:-2560m}
+    cpus: ${PHEASANT_GRAPH_CPUS:-1.5}
+    command: ["serve", "--role", "graph"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    environment: *kb-env
+    volumes:
+      - *kb-config
+      - *kb-secrets
+      - pheasant-state:/state:ro
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
+      - pheasant-memory:/memory:ro
+      - pheasant-exports:/exports:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  indexer:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 2m
+    # Holds the graph working set the builder mutates and the enrichment
+    # passes walk; it grows with the corpus (docs/pheasant-kb/scale.md).
+    # 6 GiB, up from 2.5 by way of 4.5: a 4,698-page web collection was
+    # OOM-killed at its end-of-sync vector maintenance (compaction, an
+    # IVF_HNSW_SQ rebuild and the resident matrix over ~52k x 1536-d vectors
+    # measured ~2 GiB on their own) on top of the ~1.8 GiB its item loop
+    # reached -- and at 4.5 GiB still, four times, when it overlapped three
+    # other collections (max_parallel_sources: 4). Needs Docker's VM above the
+    # WSL2 default of half the host's RAM (memory=10GB in ~/.wslconfig).
+    mem_limit: ${PHEASANT_INDEXER_MEMORY:-6144m}
+    cpus: ${PHEASANT_INDEXER_CPUS:-2.0}
+    command: ["serve", "--role", "indexer"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    environment: *kb-env
+    volumes:
+      - *kb-config
+      - *kb-secrets
+      - pheasant-state:/state
+      # Repositories added by URL are cloned, fetched and fast-forwarded here.
+      - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
+      - pheasant-memory:/memory
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  logger:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    # Holds one batch and one Parquet row group at a time, so it stays flat
+    # rather than growing with a day's traffic. Required while
+    # observability.interactions.queue is on, as it is in pheasant-kb.yaml:
+    # nothing else drains that queue.
+    mem_limit: ${PHEASANT_LOGGER_MEMORY:-1024m}
+    cpus: ${PHEASANT_LOGGER_CPUS:-1.0}
+    command: ["serve", "--role", "logger"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    environment: *kb-env
+    volumes:
+      - *kb-config
+      - *kb-secrets
+      - pheasant-state:/state:ro
+      # The only process that writes cold observation partitions.
+      - pheasant-exports:/exports
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    deploy:
+      replicas: ${PHEASANT_WORKERS:-4}
+    mem_limit: ${PHEASANT_WORKER_MEMORY:-512m}
+    cpus: ${PHEASANT_WORKER_CPUS:-1.0}
+    command: ["worker", "--transport", "grpc", "--port", "8766", "--max-workers", "${PHEASANT_WORKER_THREADS:-2}"]
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    # No ports: only the indexer reaches it, by service name, round-robin
+    # across every replica. Its own environment rather than the shared one:
+    # a worker parses bytes it is handed, so the database URL, model keys and
+    # the other three tokens are things it could only leak, and
+    # `pheasant worker` refuses to start holding any of them.
+    environment:
+      PHEASANT_CONFIG: /config/pheasant.yaml
+      PHEASANT_INDEX_WORKER_TOKEN_FILE: /run/pheasant/secrets/worker-token
+    volumes:
+      - ./deploy/compose/worker.yaml:/config/pheasant.yaml:ro
+      - pheasant-worker-secret:/run/pheasant/secrets:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8766), 5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # Backup and restore, on demand only (profile `tools`; `up` never starts
+  # them). Both run in the Postgres image so pg_dump matches the server:
+  #
+  #   docker compose run --rm backup
+  #   docker compose run --rm restore <name> [--force]
+  #
+  # See deploy/compose/backup.sh and restore.sh, and
+  # docs/pheasant-kb/operate.md#back-up-and-restore.
+  backup:
+    image: timescale/timescaledb-ha:pg17
+    profiles: ["tools"]
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["bash", "/scripts/backup.sh"]
+    environment: &pg-client-env
+      PGHOST: postgres
+      PGUSER: pheasant
+      PGPASSWORD: ${POSTGRES_PASSWORD:-pheasant}
+      PGDATABASE: pheasant
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./deploy/compose/backup.sh:/scripts/backup.sh:ro
+      - ${PHEASANT_BACKUP_PATH:-./backups}:/backups
+      - pheasant-state:/state:ro
+      - pheasant-memory:/memory:ro
+      - pheasant-secrets:/secrets:ro
+
+  restore:
+    image: timescale/timescaledb-ha:pg17
+    profiles: ["tools"]
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["bash", "/scripts/restore.sh"]
+    environment: *pg-client-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./deploy/compose/restore.sh:/scripts/restore.sh:ro
+      - ${PHEASANT_BACKUP_PATH:-./backups}:/backups
+      - pheasant-state:/state
+      - pheasant-memory:/memory
+      - pheasant-secrets:/secrets
+      - pheasant-worker-secret:/worker-secret
+
+volumes:
+  pheasant-state:
+  pheasant-workspace:
+  pheasant-memory:
+  pheasant-exports:
+  pheasant-pg17:
+  pheasant-nats:
+  pheasant-secrets:
+  pheasant-worker-secret:

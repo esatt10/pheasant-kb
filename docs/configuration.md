@@ -10,11 +10,148 @@ For a one-line local run, use a profile:
 pheasant start --profile quickstart --config pheasant.yaml
 ```
 
-Config is resolved as base defaults + profile + YAML + `--set` overrides. Inspect the result with:
+Config is resolved as base defaults (pheasant-kb's, or standalone's, see
+[Defaults](#defaults-pheasant-kb-or-standalone)) + profile + YAML + `--set`
+overrides. Inspect the result with:
 
 ```bash
 pheasant config show --effective --profile dev --config pheasant.yaml
 ```
+
+## Defaults: pheasant-kb, or standalone
+
+pheasant's defaults are **pheasant-kb's configuration**: a key your config
+does not set takes the value [pheasant-kb](pheasant-kb/index.md) runs with,
+so an empty config *is* `deploy/compose/pheasant-kb.yaml`. That means
+PostgreSQL, NATS, the graph service and preparation workers at their
+pheasant-kb service names, LanceDB, OpenAI models (`OPENAI_API_KEY`), memory,
+the interaction ledger, and the evaluation, tuning and readiness planes. A
+process started on these defaults without that infrastructure refuses to
+start and says what is missing.
+
+The other table is **standalone**: SQLite, no queue, one process, offline stub
+models, no key. Select it
+
+- in a config, with `pheasant.defaults: standalone` (which wins), or
+- in the environment, with `PHEASANT_DEFAULTS=standalone`.
+
+The configs pheasant writes for itself say which table they were built on:
+`pheasant setup` records the table it answered on, and the things that build
+a one-process deployment (`pheasant up`, `pheasant init`, and the image's
+first-boot config when nothing is mounted) build on standalone unless
+`PHEASANT_DEFAULTS` says `flagship`. Every config shipped under `deploy/` names its table.
+
+**The Default column in the tables below lists the standalone values.** These
+are the keys pheasant-kb sets differently, and so the actual default unless
+standalone is selected:
+
+<!-- defaults-table:start (generated from pheasant.config.flagship; do not edit) -->
+| Key | pheasant-kb (default) | standalone |
+|---|---|---|
+| `pheasant.name` | `pheasant-kb` | `local-pheasant` |
+| `pheasant.description` | `pheasant-kb: the flagship stack. PostgreSQL, NATS JetStream, a graph service, gRPC preparation workers, LanceDB, GPT-6 Luna, taxonomy and durable memory` | `Lightweight MCP knowledge graph and retrieval server` |
+| `pheasant.environment` | `compose` | `local` |
+| `server.mcp.max_request_body_size_mb` | `1024` | `64` |
+| `server.mcp.transports` | `{"stdio": false, "streamable_http": true, "sse": false}` | `{"stdio": true, "streamable_http": true, "sse": false}` |
+| `server.api.max_concurrent_requests` | `32` | `0` |
+| `server.api.drain_seconds` | `20` | `0` |
+| `server.api.cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000", "http://api:8765", "http://host.docker.internal:8765"]` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000"]` |
+| `storage.backend` | `postgres` | `sqlite` |
+| `storage.pool_size` | `16` | `10` |
+| `storage.graph_checkpoint_seconds` | `120` | `60` |
+| `storage.graph_checkpoint_max_seconds` | `300` | `1800` |
+| `storage.max_state_size_gb` | `250` | `10` |
+| `search.max_results_default` | `100` | `10` |
+| `search.embeddings.enabled` | `true` | `false` |
+| `search.embeddings.dimensions` | `1536` | unset |
+| `search.embeddings.batch_size` | `128` | `64` |
+| `search.embeddings.query_timeout_seconds` | `1.0` | unset |
+| `search.embeddings.query_max_retries` | `0` | unset |
+| `search.embeddings.query_rate_limit_max_wait_seconds` | `0.0` | unset |
+| `search.embeddings.max_retries` | `10` | `4` |
+| `search.embeddings.retry_backoff_seconds` | `2.0` | `1.0` |
+| `search.embeddings.rate_limit_max_wait_seconds` | `900.0` | `300.0` |
+| `search.vector_store.path` | `/state/vectors` | unset |
+| `search.vector_store.resident` | `true` | `false` |
+| `search.vector_store.ann_index` | `ivf_hnsw_sq` | `none` |
+| `search.wasm_relationship_search` | `true` | `false` |
+| `ingestion.captioner.provider` | `openai-spec` | `stub` |
+| `ingestion.captioner.model` | `gpt-6-luna` | `gpt-4o-mini` |
+| `ingestion.transcriber.provider` | `openai-spec` | `stub` |
+| `ingestion.extractor.html_text` | `true` | `false` |
+| `ingestion.landing_service_url` | `http://indexer:8765` | unset |
+| `sync.watcher.max_watch_paths` | `20000` | `100` |
+| `sync.watcher.debounce_ms` | `250` | `1500` |
+| `sync.watcher.batch_window_ms` | `1000` | `5000` |
+| `sync.limits.max_files` | unset | `50000` |
+| `sync.limits.max_total_mb` | unset | `4096` |
+| `sync.source_processing.chunk_max_chars` | `2000` | unset |
+| `sync.source_processing.taxonomy_enabled` | `true` | unset |
+| `sync.source_processing.chunk_strategy` | `auto` | unset |
+| `sync.concurrency.max_parallel_files` | `16` | `8` |
+| `sync.concurrency.max_parallel_embeddings` | `8` | `4` |
+| `sync.concurrency.file_executor` | `remote` | `thread` |
+| `sync.concurrency.remote_worker_urls` | `["grpc://worker:8766"]` | `[]` |
+| `sync.concurrency.remote_worker_enabled` | `true` | `false` |
+| `sync.concurrency.remote_worker_batch_size` | `16` | `8` |
+| `sync.concurrency.remote_worker_max_inflight_batches` | `8` | `0` |
+| `sync.concurrency.worker_transport` | `grpc` | `http` |
+| `sync.concurrency.lock_timeout_seconds` | `300` | `120` |
+| `sync.queue.enabled` | `true` | `false` |
+| `sync.queue.backend` | `nats` | `local` |
+| `sync.queue.max_attempts` | `5` | `3` |
+| `sync.queue.nats_servers` | `["nats://nats:4222"]` | `[]` |
+| `graph.wasm_cross_source_resolution` | `true` | `false` |
+| `graph.query_service_url` | `http://graph:8765` | unset |
+| `graph.max_nodes` | unset | `1500000` |
+| `security.allow_workspace_roots` | `["/workspace", "/memory", "/state", "/exports", "/data"]` | `["/workspace", "/exports"]` |
+| `security.allow_user_selected_source_paths` | `false` | `true` |
+| `security.acl_enforced` | `true` | `false` |
+| `memory.default_policy` | `prefer` | `auto` |
+| `memory.steering_enabled` | `true` | `false` |
+| `memory.usage_tracking` | `true` | `false` |
+| `memory.about_max_targets` | `12` | `3` |
+| `assistant.provider` | `openai` | `auto` |
+| `assistant.model` | `gpt-6-luna` | unset |
+| `assistant.base_url` | `https://api.openai.com/v1` | unset |
+| `assistant.api_key_env` | `OPENAI_API_KEY` | unset |
+| `assistant.allow_session_keys` | `false` | `true` |
+| `assistant.max_context_chunks` | `16` | `8` |
+| `assistant.max_output_tokens` | `16384` | `4096` |
+| `assistant.request_timeout_seconds` | `180.0` | `90.0` |
+| `assistant.max_facts` | `16` | `12` |
+| `assistant.workflow` | `agentic` | `auto` |
+| `assistant.workflow_options.agentic.staged_retrieval` | `true` | unset |
+| `assistant.workflow_options.agentic.combine_grade_and_answer` | `true` | unset |
+| `assistant.workflow_options.agentic.defer_graph_until_insufficient` | `true` | unset |
+| `assistant.workflow_options.agentic.output_tokens_by_depth.short` | `512` | unset |
+| `assistant.workflow_options.agentic.output_tokens_by_depth.medium` | `1024` | unset |
+| `assistant.workflow_options.agentic.answer_max_words.short` | `150` | unset |
+| `assistant.workflow_options.agentic.answer_max_words.medium` | `400` | unset |
+| `assistant.latency.max_concurrent_answers` | `4` | `0` |
+| `assistant.retrieval.max_rounds` | `2` | `3` |
+| `assistant.retrieval.per_query_results` | `10` | `8` |
+| `assistant.retrieval.max_context_passages` | `16` | `12` |
+| `assistant.retrieval.retrieval_modes` | `["hybrid", "graph", "vector"]` | `["text", "vector"]` |
+| `assistant.retrieval.grader_model` | `gpt-6-luna` | unset |
+| `assistant.retrieval.max_facts` | `16` | `12` |
+| `evaluation.enabled` | `true` | `false` |
+| `tuning.enabled` | `true` | `false` |
+| `observability.interactions.enabled` | `true` | `false` |
+| `observability.interactions.queue.enabled` | `true` | `false` |
+| `observability.interactions.queue.backend` | `nats` | `local` |
+| `observability.otlp_endpoint` | `` | unset |
+| `readiness.enabled` | `true` | `false` |
+| `readiness.corpus_denylist` | `["benchmark/*", "*.answers.json"]` | `[]` |
+| `sources` | `agent-memory`, `uploads` | none |
+<!-- defaults-table:end -->
+
+!!! warning "Upgrading a config that relies on defaults"
+    A `pheasant.yaml` written before this change names no table, so it is now
+    built on pheasant-kb's defaults: a laptop config that never set
+    `storage.backend` will ask for Postgres. Add `defaults: standalone` under
+    `pheasant:` (or set `PHEASANT_DEFAULTS=standalone`) to keep it exactly as
+    it was. The Compose and Kubernetes files in this repository already do.
 
 ## How to use this guide
 
@@ -493,7 +630,7 @@ where it does.
 | `vector_store.path` | absolute path | `<state>/vectors` | Vector index root; vectors live under `<path>/<kb_id>/`. Created only when embeddings are enabled. |
 | `vector_store.resident` | bool | `false` | LanceDB only. Hold the table in memory and answer by one matrix product: the **same** top-k, about 8× faster (34 ms against 280 ms for 60k 1,536-d vectors on one core). Costs 4 bytes × dimensions per vector in every process that serves search (372 MB at that size), which is why it is opt-in. A write is picked up by a background reload; until it lands, answers come from the previous version. |
 | `vector_store.resident_max_mb` | int | `1024` | A table larger than this is not held; the disk scan answers. |
-| `vector_store.ann_index` | `none` \| `ivf_hnsw_sq` \| `ivf_pq` | `none` | An approximate index, built and kept current by the indexer at the end of a sync. **Trades recall for latency:** on the pheasant-lab corpus `ivf_hnsw_sq` answered in 41–54 ms against a 245 ms exact scan, keeping 81% of the exact top-40 and 68% of the top-300 for short questions (92% for queries drawn from the corpus) — on offline hashed vectors, which cluster far less than a real model's, so measure your own with `python -m pheasant.search.vector_ann_benchmark`, which reports the in-distribution case. With real embeddings (14k × 1,536-d `text-embedding-3-small`, same tier) one-partition `ivf_hnsw_sq` answered in 12.5 ms against a 98 ms exact scan and kept 99.3% of the exact top-40. Setting it back to `none` takes effect on the next query (the index is bypassed) and the indexer drops it on its next sync. `resident`, where the vectors fit in memory, is exact and answers first when both are on. |
+| `vector_store.ann_index` | `none` \| `ivf_hnsw_sq` \| `ivf_pq` | `none` | An approximate index, built and kept current by the indexer at the end of a sync. **Trades recall for latency:** on the pheasant-kb (then pheasant-lab) corpus `ivf_hnsw_sq` answered in 41–54 ms against a 245 ms exact scan, keeping 81% of the exact top-40 and 68% of the top-300 for short questions (92% for queries drawn from the corpus) — on offline hashed vectors, which cluster far less than a real model's, so measure your own with `python -m pheasant.search.vector_ann_benchmark`, which reports the in-distribution case. With real embeddings (14k × 1,536-d `text-embedding-3-small`, same tier) one-partition `ivf_hnsw_sq` answered in 12.5 ms against a 98 ms exact scan and kept 99.3% of the exact top-40. Setting it back to `none` takes effect on the next query (the index is bypassed) and the indexer drops it on its next sync. `resident`, where the vectors fit in memory, is exact and answers first when both are on. |
 | `vector_store.ann_min_rows` | int | `5000` | No index below this many vectors. |
 | `vector_store.ann_nprobes` | int | `32` | Partitions searched per query: more is slower and closer to exact. |
 | `vector_store.ann_ef` | int | `300` | `ivf_hnsw_sq` candidate list size, raised to k when k is larger. The index is built with one partition per 250k vectors (one, below that), so `ann_nprobes` matters only past that. |
