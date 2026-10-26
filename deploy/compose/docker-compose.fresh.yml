@@ -16,7 +16,7 @@ services:
   pheasant:
     build:
       context: ../..
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.3}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
     container_name: ${PHEASANT_CONTAINER_NAME:-pheasant}
     restart: unless-stopped
     ports:
