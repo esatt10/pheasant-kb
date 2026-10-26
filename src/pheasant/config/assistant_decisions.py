@@ -12,6 +12,16 @@ from dataclasses import dataclass, field
 
 from pheasant.config.model import ModelMixin
 
+#: What a rewrite can be written at; ``full`` is the assistant's own effort.
+REPAIR_EFFORTS = frozenset({"none", "low", "full"})
+#: Measured on the lab region (2026-10-26): a rewrite at ``low`` took 5.4 s
+#: mean against 13.9 s at full effort, with the same fact coverage and a
+#: similar acceptance rate after the rewrite (10/13 against 16/22).
+#: Escalating a rejected cheap rewrite to full effort (``max_repairs: 2``)
+#: cost 27-29 s when it fired and saved nothing overall, so a rejected cheap
+#: rewrite is returned, flagged degraded.
+DEFAULT_REPAIR_EFFORTS = ("low",)
+
 
 @dataclass
 class AssistantDecisionsSettings(ModelMixin):
@@ -65,8 +75,14 @@ class AssistantDecisionsSettings(ModelMixin):
     #: only — other models write at their normal effort). ``null`` keeps the
     #: assistant's own effort.
     draft_reasoning_effort: str | None = "low"
-    #: Rewrites at the assistant's own effort after a rejected draft.
+    #: Rewrites after a rejected draft.
     max_repairs: int = 1
+    #: Effort for each rewrite in turn (``none`` / ``low`` / ``full``,
+    #: ``gpt-6-luna`` only). A rewrite past the end of the list is at full
+    #: effort, so ``[]`` is every rewrite at the assistant's own effort, and
+    #: ``["low"]`` with ``max_repairs: 2`` escalates to full effort only when
+    #: the cheap rewrite is rejected too. The default is one cheap rewrite.
+    repair_efforts: list[str] = field(default_factory=lambda: list(DEFAULT_REPAIR_EFFORTS))
 
     def __post_init__(self) -> None:
         if self.mode not in {"beta", "shadow", "off"}:
@@ -81,6 +97,10 @@ class AssistantDecisionsSettings(ModelMixin):
         if self.draft_reasoning_effort not in {None, "none", "low"}:
             raise ValueError(
                 "assistant.decisions.draft_reasoning_effort must be 'none', 'low' or unset"
+            )
+        if set(self.repair_efforts) - REPAIR_EFFORTS:
+            raise ValueError(
+                "assistant.decisions.repair_efforts entries must be 'none', 'low' or 'full'"
             )
         if self.max_repairs < 0 or self.prune_min_keep < 1 or self.timeout_seconds <= 0:
             raise ValueError(

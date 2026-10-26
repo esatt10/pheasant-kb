@@ -1706,6 +1706,17 @@ Both workflows send the model whole **files**, rebuilt from their chunks with
 line spans and metadata, rather than the 500-character search preview. Code and
 config are never excerpted; large prose is cut to the matched neighbourhood.
 
+Three options size what the answering call reads, each settable here or per
+request in `options`: `passage_chars` (prose per document, `6000`),
+`context_budget_chars` (across all documents, `60000`) and, in `agentic`,
+`synthesis_passages` (unset): how many of the `max_context_passages` the answer
+is written from, taken from the top of the ranked window. Unlike lowering
+`max_context_passages`, it leaves the passages the evidence is judged on, and
+the floor a request's `max_results` puts under that window, unchanged — so it
+changes only the answer's prompt. The combined grade-and-answer call judges and
+writes in one call, so it does not apply there. A rewrite after a rejected
+draft reads the same passages as the draft.
+
 Third-party workflows register under the `pheasant.agent_workflows`
 entry-point group, the same plugin shape as the
 [Connector SDK](reference/connector-sdk.md).
@@ -1731,7 +1742,8 @@ p50 for a sufficiency check that took 1.20 s through `/chat/completions`.
 | `relevant_threshold` | 0–1 | `0.2` | `prune` only: passages below it are left out, never below `prune_min_keep`. |
 | `accept_threshold` | 0–1 | `0.55` | Both "grounded" and "responsive" must reach it. |
 | `draft_reasoning_effort` | `none` \| `low` \| null | `low` | Effort for the first draft (`gpt-6-luna` only). |
-| `max_repairs` | integer | `1` | Rewrites at the assistant's own effort after a rejected draft. |
+| `max_repairs` | integer | `1` | Rewrites after a rejected draft. |
+| `repair_efforts` | list of `none` \| `low` \| `full` | `[low]` | Effort for each rewrite in turn (`gpt-6-luna` only); a rewrite past the end of the list is at `full`, the assistant's own effort. `[]` rewrites at full effort, which was the default before it was measured; `[low]` with `max_repairs: 2` escalates to full effort only if the cheap rewrite is rejected too. Measured below. |
 | `model`, `base_url`, `api_key_env`, `timeout_seconds` | | `gpt-6-luna`, inherited, inherited, `10` | The key is `api_key_env` if named, else the answering model's own OpenAI credential, else `OPENAI_API_KEY`. |
 
 In `beta`, nothing is written until the evidence is judged sufficient, so a
@@ -1739,7 +1751,8 @@ thin round costs a judgement and a search instead of a discarded answer. A
 follow-up search is *chosen* from candidates built from the evidence (the hits'
 directories and symbols, the question's terms); "none of these" hands the round
 to the model planner. The answer is written once at `draft_reasoning_effort`,
-then judged; a rejected draft is rewritten once at full effort. Every
+then judged; a rejected draft is rewritten once at low effort (or as
+`repair_efforts` says). Every
 judgement that cannot be had — no key, a refusal, a 503, a timeout — falls back
 to the model-written grade and the trace says so; a 401/403/404 stops further
 calls for the life of the process.
@@ -1756,7 +1769,10 @@ The thresholds were set from SciFact's expert annotations with
 `scripts/calibrate_decisions.py`, which asks the exact questions the workflow
 asks. Run it on your own labelled examples (`--labels`) before trusting them on
 a different corpus. A request can override `decisions` (`beta` / `shadow` /
-`off`) and `decision_gates` in `options`. Answers carry a `decisions` block
+`off`), `decision_gates`, `max_repairs` (0–3) and `repair_efforts` (a list, or
+one effort as a string) in `options`; a `repair_efforts` holding anything other
+than `none`/`low`/`full` is ignored whole, and the answer's `decisions` block
+reports the `max_repairs` and `repair_efforts` that ran. Answers carry a `decisions` block
 with every judgement, and `degraded: true` when the acceptance check rejected
 the answer that was returned. Metrics: `pheasant_assistant_decision_total
 {gate,outcome}`, `pheasant_assistant_decision_seconds{gate}` and
@@ -1768,6 +1784,48 @@ assistant:
     mode: beta              # off keeps the model-written grade
     gates: [sufficiency, followup, accept]
 ```
+
+`repair_efforts`, `synthesis_passages`, `passage_chars` and `prune` all trade
+answer time against answer quality, so a default moves only when a measurement
+says so. To measure them, use the benchmark's A/B mode. It
+runs every case once per arm, in an order shuffled per case, and reports each
+arm against the baseline, paired by case: answer time (p50, p90, and the mean
+difference with an interval), fact coverage, and the acceptance and rewrite
+rates:
+
+```bash
+python scripts/benchmark_assistant_latency.py --base-url http://side-replica:8765 \
+  --token-env PHEASANT_API_TOKEN --transport http --concurrency 1 --repeats 3 \
+  --cases benchmarks/assistant-latency-pheasant-kb.jsonl \
+  --cases benchmarks/assistant-latency-multiturn.jsonl \
+  --arms benchmarks/answer-latency-arms.json --output-dir ./ab
+```
+
+Ship an arm only when the interval is below zero and no case lost fact
+coverage. Otherwise record the run and keep the default.
+
+Measured on the lab region (`gpt-6-luna`, Postgres fleet, 2026-10-26), with
+`repair_efforts: []` as the baseline:
+
+| Arm | Answer time vs baseline (mean, 95% interval) | Fact coverage | Verdict |
+|---|---|---|---|
+| `synthesis_passages: 8` | −0.49 s [−1.43, +0.15] | one case lost a fact once | kept off |
+| `passage_chars: 3000` | −0.60 s [−2.28, +0.45] | one case lost a fact in 4 of 5 runs | kept off |
+| `prune` | −1.89 s [−5.30, +0.01] | unchanged | kept off |
+| `repair_efforts: [low]` | −1.72 s [−5.01, +0.01]; on rewrite-prone cases −1.30 s [−2.60, −0.44] | unchanged | **default** |
+| `[low]` + `max_repairs: 2` | −1.60 s [−5.06, +0.31]; on rewrite-prone cases −0.21 s [−1.15, +0.97] | unchanged | kept off |
+
+The first run was 12 cases × 7 arms × 5 repeats (420 answers). Draft time was
+the same in every arm (3.3–3.8 s p50) and fewer input passages did not shorten
+it, because the cost is output and reasoning tokens, not input. Only 12 of
+the 420 answers were rewritten, so a rewrite arm could not show up end to end.
+The second run was the three cases that get rewritten
+(`benchmarks/assistant-latency-rewrite-prone.jsonl`), 3 arms × 12 repeats
+(`benchmarks/answer-latency-rewrite-arms.json`). Across both runs a full-effort
+rewrite took 3.0–22.1 s (mean 13.9 s, 22 rewrites) and a low-effort one
+2.4–8.0 s (mean 5.4 s, 13 rewrites). Acceptance after the rewrite was 16 of 22
+and 10 of 13, and fact coverage was unchanged. Escalating a rejected cheap
+rewrite cost 27–29 s each time it fired, which cancelled the saving.
 
 ---
 

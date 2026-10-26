@@ -120,7 +120,7 @@ rather than model-written JSON (`assistant.decisions`, default `beta`;
   judgement rather than a discarded answer.
 - `synthesize` then writes once, at `draft_reasoning_effort` (`low`), because
   `accept` checks it afterwards and sends a rejected draft back for one rewrite
-  at full effort.
+  at low effort (`repair_efforts`).
 
 Measured on the lab region, this cut the median answer from 8.7 s to 5.7 s with
 the same fact coverage. `assistant.decisions.mode: off` (or `"options":

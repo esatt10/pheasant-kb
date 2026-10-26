@@ -112,7 +112,7 @@ a model-written grade (`assistant/workflows/decision_gates.py`, default
 |---|---|---|
 | `sufficiency` | the model grader / combined grade-and-answer | Nothing is written until the evidence is judged sufficient; a thin round costs a ~0.3 s judgement and a search. |
 | `followup` | the grader's written `next_query` | A follow-up search is *chosen* from candidates the evidence names; "none" falls back to the model planner. |
-| `accept` | nothing (new) | Judges the written answer against its cited passages, which lets the first draft be written at low reasoning effort and rewritten once at full effort only when rejected. |
+| `accept` | nothing (new) | Judges the written answer against its cited passages, which lets the first draft be written at low reasoning effort and rewritten once, also at low effort, only when rejected. |
 | `prune` (opt-in) | nothing (new) | Leaves passages judged irrelevant out of the answer's context. |
 
 Every judgement that cannot be had falls back to the model-written path, and

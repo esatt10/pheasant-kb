@@ -1211,7 +1211,9 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   written until evidence is judged sufficient, so a thin round costs a
   judgement, not a discarded answer; the answer is then written once at
   `draft_reasoning_effort` (`low`, zero reasoning tokens on `gpt-6-luna`) and
-  a rejected draft is rewritten once at full effort. The API writes nothing,
+  a rejected draft is rewritten once at `repair_efforts` (`[low]`: 5.4 s mean
+  against 13.9 s at full effort, same coverage; escalation measured and
+  left off). The API writes nothing,
   so a follow-up query is *chosen* from candidates the evidence names, and
   "none" hands the round to the model planner. Any unusable judgement falls
   back to the model-written path and the step says so; a 401/403/404 opens a

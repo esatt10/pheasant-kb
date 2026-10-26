@@ -19,9 +19,9 @@ here take the *judgements* out of that call:
   every hit.
 * **accept** — after the answer is written and its citations verified: is
   every claim supported by the passage it cites, and does it answer the
-  question. Because a rejected draft is rewritten once at the assistant's own
-  effort, the first draft can be written at ``draft_reasoning_effort`` —
-  cheap first, escalate on doubt.
+  question. Because a rejected draft is rewritten (at the assistant's own
+  effort unless ``repair_efforts`` says otherwise), the first draft can be
+  written at ``draft_reasoning_effort`` — cheap first, escalate on doubt.
 
 Every judgement that cannot be had (no key, a refusal, a timeout, a circuit
 opened by an earlier 401/404) falls back to the model-written path the loop
@@ -41,7 +41,7 @@ from typing import Any, TypedDict
 
 from pheasant.assistant import decisions
 from pheasant.assistant.decisions import Decider, DecisionUnavailable
-from pheasant.assistant.workflows import WorkflowStep
+from pheasant.assistant.workflows import WorkflowStep, drafting
 
 #: How much of each cited document the acceptance gate reads. The writer read
 #: whole documents (``chat.hydrate_citations``); a judge reading less would
@@ -160,7 +160,7 @@ def for_request(decider: Decider | None, options: dict[str, Any]) -> Decider | N
     gates = options.get("decision_gates")
     if isinstance(gates, (list, tuple)):
         decider = decider.with_gates(tuple(g for g in gates if g in decisions.GATES))
-    return decider.with_mode(mode)
+    return drafting.for_request(decider, options).with_mode(mode)
 
 
 def active(ctx: dict, gate: str, mode: str = "beta") -> bool:
@@ -525,13 +525,11 @@ class Draft:
     steps: list[WorkflowStep] = field(default_factory=list)
 
 
-_EFFORT_ORDER = {"none": 0, "low": 1, None: 2}
-
-
 def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> Draft:
-    """Prune by relevance, and pick the draft's effort and stream."""
+    """Cap and prune the passages, and pick the draft's effort and stream."""
 
     llm = ctx.get("llm")
+    passages = drafting.window(passages, options)
     draft = Draft(passages=passages, llm=llm)
     decider: Decider | None = ctx.get("decider")
     if decider is None or decider.mode != "beta":
@@ -567,23 +565,10 @@ def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> 
             "passage it cites, and answer the question that was asked."
         )
     long_answer = str(state.get("depth") or "short") == "long"
-    if (
-        llm is not None
-        and not repairing
-        and not long_answer
-        and active(ctx, "accept")
-        and decider.draft_reasoning_effort is not None
-        and getattr(llm, "provider", None) == "openai"
-        and getattr(llm, "model_id", None) == "gpt-6-luna"
-        and callable(getattr(llm, "with_reasoning_effort", None))
-    ):
-        configured = getattr(llm, "reasoning_effort", None)
-        effort = min(
-            (decider.draft_reasoning_effort, configured), key=lambda e: _EFFORT_ORDER.get(e, 2)
-        )
-        if effort != configured:
-            draft.llm = llm.with_reasoning_effort(effort)
-            draft.effort = effort
+    if repairing:
+        draft.llm, draft.effort = drafting.repair_llm(llm, decider, int(state["repairs"]))
+    elif not long_answer and active(ctx, "accept"):
+        draft.llm, draft.effort = drafting.at_effort(llm, decider.draft_reasoning_effort)
     request = ctx.get("request")
     if (
         not repairing
@@ -711,10 +696,11 @@ def accept_node(state: dict, ctx: dict) -> dict:
         if responsive < threshold:
             problems.append("not to answer the question that was asked")
         decisions.record("accept", "repaired", result.seconds)
+        _, rewrite_effort = drafting.repair_llm(ctx.get("llm"), decider, repairs + 1)
         return {
             **_accept_step(
                 state,
-                f"draft rejected ({scores}); rewriting at full effort",
+                f"draft rejected ({scores}); rewriting at {rewrite_effort or 'full'} effort",
                 {**entry, "outcome": "repaired"},
             ),
             "acceptance": acceptance,

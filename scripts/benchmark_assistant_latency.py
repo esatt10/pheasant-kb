@@ -11,6 +11,16 @@ independently assigned ``complexity`` (moderate/complex/difficult/negative), a
 ``acceptable_passage_ids`` and ``negative_reason`` labels. The automated
 quality values are lexical checks for triage, not a substitute for reviewing
 claim support against the labeled evidence.
+
+``--arms FILE`` runs an A/B: every case once per arm per repeat, with the
+arm's ``options`` laid over the case's, in a seeded order shuffled per case so
+that drift on the server falls on every arm alike. The summary then has one
+block per arm (p50/p90 answer time, fact coverage, how often the acceptance
+gate accepted or sent a draft to a rewrite, and the time spent writing and
+rewriting) and a comparison of each arm with the baseline arm, paired by case.
+An arms file is ``{"baseline": "name", "arms": [{"name": ..., "options":
+{...}}, ...]}``; ``benchmarks/answer-latency-arms.json`` is the one for the
+answer-time experiments. ``--cases`` may be given more than once.
 """
 
 from __future__ import annotations
@@ -395,6 +405,41 @@ def _request_once(
         "degraded": answer.get("degraded"),
         "retrieval_arm_failures": answer.get("retrieval_arm_failures"),
         "quality_proxy": _quality_proxy(case, answer),
+        **_answer_writing(answer),
+    }
+
+
+def _answer_writing(answer: dict[str, Any]) -> dict[str, Any]:
+    """What the acceptance gate did, and the time spent writing and rewriting.
+
+    The first ``synthesize`` step is the draft; any later ones are rewrites
+    after a rejection. ``repair_efforts`` / ``max_repairs`` are what *ran*, so
+    an arm whose options the server ignored shows it here.
+    """
+    judged = answer.get("decisions") if isinstance(answer.get("decisions"), dict) else {}
+    steps = [step for step in answer.get("steps") or [] if isinstance(step, dict)]
+
+    def seconds(name: str) -> list[float]:
+        return [
+            float(step["duration_seconds"])
+            for step in steps
+            if step.get("name") == name and isinstance(step.get("duration_seconds"), (int, float))
+        ]
+
+    written = seconds("synthesize")
+    return {
+        "accepted": judged.get("accepted"),
+        "repairs": judged.get("repairs"),
+        "draft_effort_used": judged.get("draft_effort_used"),
+        "repair_efforts_ran": judged.get("repair_efforts"),
+        "max_repairs_ran": judged.get("max_repairs"),
+        "gates_ran": judged.get("gates"),
+        "draft_seconds": written[0] if written else None,
+        "rewrite_seconds": sum(written[1:]) if len(written) > 1 else (0.0 if written else None),
+        "history_rewrite_seconds": next(iter(seconds("history_rewrite")), None),
+        "synthesis_passages": next(
+            (step.get("passages") for step in steps if step.get("name") == "synthesize"), None
+        ),
     }
 
 
@@ -886,6 +931,7 @@ def _summarize(rows: list[dict[str, Any]], wall_seconds: float) -> dict[str, Any
             row.get("quality_proxy", {}).get("semantic_support_reviewed") is True for row in rows
         ),
         "completed_answer_p50_ms": _percentile(completed_times, 0.50),
+        "completed_answer_p90_ms": _percentile(completed_times, 0.90),
         "completed_answer_p95_ms": _percentile(completed_times, 0.95),
         "completed_answer_p99_ms": _percentile(completed_times, 0.99),
         "first_answer_text_rate": (
@@ -924,13 +970,175 @@ def _summarize(rows: list[dict[str, Any]], wall_seconds: float) -> dict[str, Any
     }
 
 
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    return _percentile(values, 0.50)
+
+
+def _floats(rows: list[dict[str, Any]], key: str) -> list[float]:
+    return [float(row[key]) for row in rows if isinstance(row.get(key), (int, float))]
+
+
+def _load_arms(path: Path) -> tuple[str, list[dict[str, Any]]]:
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    arms = parsed.get("arms") if isinstance(parsed, dict) else None
+    if not isinstance(arms, list) or not arms:
+        raise ValueError('an arms file is {"baseline": name, "arms": [{name, options}, ...]}')
+    names: list[str] = []
+    for arm in arms:
+        name = str(arm.get("name") or "") if isinstance(arm, dict) else ""
+        if not name or name in names or not isinstance(arm.get("options", {}), dict):
+            raise ValueError("every arm needs a unique name and an options object")
+        names.append(name)
+    baseline = str(parsed.get("baseline") or names[0])
+    if baseline not in names:
+        raise ValueError(f"baseline arm {baseline!r} is not one of the arms")
+    return baseline, arms
+
+
+def _with_arm(case: dict[str, Any], arm: dict[str, Any] | None) -> dict[str, Any]:
+    if arm is None:
+        return case
+    return {**case, "options": {**(case.get("options") or {}), **(arm.get("options") or {})}}
+
+
+def _arm_jobs(
+    cases: list[dict[str, Any]], arms: list[dict[str, Any]] | None, repeats: int, seed: int
+) -> list[tuple[dict[str, Any], int, dict[str, Any] | None]]:
+    """Every (case, repeat, arm), arms in a seeded order shuffled per case."""
+    rng = random.Random(seed)
+    jobs: list[tuple[dict[str, Any], int, dict[str, Any] | None]] = []
+    for repeat in range(repeats):
+        for case in cases:
+            order = list(arms) if arms else [None]
+            rng.shuffle(order)
+            jobs += [(case, repeat, arm) for arm in order]
+    return jobs
+
+
+def _writing_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fact coverage and the acceptance gate's outcomes over one arm's rows."""
+    coverage = [
+        float(value)
+        for row in rows
+        if isinstance(
+            value := (row.get("quality_proxy") or {}).get("expected_fact_coverage"), (int, float)
+        )
+    ]
+    judged = [row for row in rows if isinstance(row.get("accepted"), bool)]
+    repaired = [row for row in rows if isinstance(row.get("repairs"), int) and row["repairs"] > 0]
+    times = [
+        float(row["client_completed_answer_ms"])
+        for row in rows
+        if isinstance(row.get("client_completed_answer_ms"), (int, float))
+    ]
+    repaired_times = [
+        float(row["client_completed_answer_ms"])
+        for row in repaired
+        if isinstance(row.get("client_completed_answer_ms"), (int, float))
+    ]
+    return {
+        "requests": len(rows),
+        "completed_answer_p50_ms": _percentile(times, 0.50),
+        "completed_answer_p90_ms": _percentile(times, 0.90),
+        "expected_fact_coverage_mean": _mean(coverage),
+        "expected_fact_coverage_rows": len(coverage),
+        "judged_answers": len(judged),
+        "acceptance_rate": (
+            sum(row["accepted"] for row in judged) / len(judged) if judged else None
+        ),
+        "repair_rate": len(repaired) / len(rows) if rows else None,
+        "repaired_answer_p50_ms": _percentile(repaired_times, 0.50),
+        "draft_seconds_p50": _percentile(_floats(rows, "draft_seconds"), 0.50),
+        "rewrite_seconds_mean": _mean(_floats(rows, "rewrite_seconds")),
+        "input_tokens_mean": _mean(_floats(rows, "input_tokens")),
+        "output_tokens_mean": _mean(_floats(rows, "output_tokens")),
+        "repair_efforts_ran": sorted(
+            {
+                json.dumps(row.get("repair_efforts_ran"))
+                for row in rows
+                if "repair_efforts_ran" in row
+            }
+        ),
+        "max_repairs_ran": sorted(
+            {row["max_repairs_ran"] for row in rows if isinstance(row.get("max_repairs_ran"), int)}
+        ),
+    }
+
+
+def _paired(
+    rows: list[dict[str, Any]], arm: str, baseline: str, *, seed: int = 20261024
+) -> dict[str, Any]:
+    """``arm`` against ``baseline``, case by case.
+
+    Each case contributes its median answer time and its mean fact coverage
+    under each arm; the differences are what is summarized, so a slow question
+    weighs on both arms alike. The interval resamples cases, not requests.
+    """
+
+    def by_case(name: str, value_of: Any, reduce: Any) -> dict[str, float]:
+        grouped: dict[str, list[float]] = {}
+        for row in rows:
+            value = value_of(row)
+            if row.get("arm") == name and isinstance(value, (int, float)):
+                grouped.setdefault(str(row.get("case_id")), []).append(float(value))
+        return {case: reduce(values) for case, values in grouped.items()}
+
+    def answer_ms(row: dict[str, Any]) -> Any:
+        return row.get("client_completed_answer_ms")
+
+    def fact_coverage(row: dict[str, Any]) -> Any:
+        return (row.get("quality_proxy") or {}).get("expected_fact_coverage")
+
+    base_time = by_case(baseline, answer_ms, _median)
+    arm_time = by_case(arm, answer_ms, _median)
+    deltas = [arm_time[c] - base_time[c] for c in sorted(arm_time.keys() & base_time.keys())]
+    base_cov = by_case(baseline, fact_coverage, _mean)
+    arm_cov = by_case(arm, fact_coverage, _mean)
+    coverage = {c: arm_cov[c] - base_cov[c] for c in sorted(arm_cov.keys() & base_cov.keys())}
+    interval = None
+    if len(deltas) >= 2:
+        rng = random.Random(seed)
+        means = sorted(sum(rng.choice(deltas) for _ in deltas) / len(deltas) for _ in range(1000))
+        interval = [means[24], means[974]]
+    return {
+        "cases": len(deltas),
+        "answer_ms_delta_median": _percentile(deltas, 0.50),
+        "answer_ms_delta_mean": _mean(deltas),
+        "answer_ms_delta_mean_ci95": interval,
+        "cases_faster": sum(delta < 0 for delta in deltas),
+        "fact_coverage_delta_mean": _mean(list(coverage.values())),
+        "cases_with_less_coverage": sorted(c for c, d in coverage.items() if d < 0),
+    }
+
+
+def _arms_summary(rows: list[dict[str, Any]], baseline: str, names: list[str]) -> dict[str, Any]:
+    return {
+        "baseline": baseline,
+        "arms": {
+            name: _writing_summary([row for row in rows if row.get("arm") == name])
+            for name in names
+        },
+        "against_baseline": {
+            name: _paired(rows, name, baseline) for name in names if name != baseline
+        },
+        "decision_rule": "ship an arm only if answer time drops (the interval is below 0) "
+        "and no case loses fact coverage; otherwise record it and keep the default",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
     parser.add_argument(
         "--token-env", required=True, help="environment variable containing the API token"
     )
-    parser.add_argument("--cases", required=True, type=Path)
+    parser.add_argument("--cases", required=True, type=Path, action="append")
+    parser.add_argument("--arms", type=Path, help="A/B arms file (see the module docstring)")
+    parser.add_argument("--seed", type=int, default=20261024, help="arm-order shuffle seed")
     parser.add_argument("--concurrency", required=True, type=int)
     parser.add_argument("--repeats", required=True, type=int)
     parser.add_argument("--transport", choices=("http", "sse", "mcp"), required=True)
@@ -947,10 +1155,13 @@ def main() -> int:
     if not token:
         parser.error(f"environment variable {args.token_env!r} is empty or unset")
 
-    cases = _load_cases(args.cases)
+    cases = [case for path in args.cases for case in _load_cases(path)]
+    if len({case.get("id") for case in cases}) != len(cases):
+        parser.error("case ids must be unique across every --cases file")
+    baseline, arms = _load_arms(args.arms) if args.arms else (None, None)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     before = _server_snapshot(args.base_url, token, min(args.timeout_seconds, 10.0))
-    jobs = [(case, repeat) for repeat in range(args.repeats) for case in cases]
+    jobs = _arm_jobs(cases, arms, args.repeats, args.seed)
     started = time.perf_counter()
     rows: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
@@ -961,11 +1172,11 @@ def main() -> int:
                 token=token,
                 timeout=args.timeout_seconds,
                 transport=args.transport,
-                case=case,
+                case=_with_arm(case, arm),
             )
-            for case, _repeat in jobs
+            for case, _repeat, arm in jobs
         ]
-        for (case, repeat), future in zip(jobs, futures, strict=True):
+        for (case, repeat, arm), future in zip(jobs, futures, strict=True):
             try:
                 row = future.result()
             except Exception as exc:
@@ -980,6 +1191,8 @@ def main() -> int:
                     "client_request_end_ms": None,
                 }
             row["repeat"] = repeat + 1
+            if arm is not None:
+                row["arm"] = arm["name"]
             rows.append(row)
     wall_seconds = time.perf_counter() - started
     after = _server_snapshot(args.base_url, token, min(args.timeout_seconds, 10.0))
@@ -996,7 +1209,10 @@ def main() -> int:
         "git_commit": _git_sha(),
         "transport": args.transport,
         "base_url": args.base_url,
-        "case_manifest": str(args.cases),
+        "case_manifest": [str(path) for path in args.cases],
+        "arms_manifest": str(args.arms) if args.arms else None,
+        "arms": arms,
+        "arm_order_seed": args.seed if arms else None,
         "case_count": len(cases),
         "distinct_question_count": len({case.get("id") for case in cases}),
         "repeats": args.repeats,
@@ -1012,6 +1228,9 @@ def main() -> int:
         and not after["indexing_active"],
         "container": _container_snapshot(args.container),
         "summary": _summarize(rows, wall_seconds),
+        "arms_summary": (
+            _arms_summary(rows, baseline, [arm["name"] for arm in arms]) if arms else None
+        ),
         "raw_results": result_path.name,
         "credentials_written": False,
     }
@@ -1021,7 +1240,11 @@ def main() -> int:
     )
     print(
         json.dumps(
-            {"summary": str(summary_path), "results": str(result_path), **summary["summary"]},
+            {
+                "summary": str(summary_path),
+                "results": str(result_path),
+                **({"arms_summary": summary["arms_summary"]} if arms else summary["summary"]),
+            },
             indent=2,
         )
     )
