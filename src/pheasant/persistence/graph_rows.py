@@ -44,8 +44,10 @@ existing import of this module keeps working.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
@@ -62,6 +64,7 @@ from pheasant.persistence.graph_codec import (
     _endpoint_clauses,
     _pair_clauses,
     edge_attrs,
+    edge_attrs_dict,
     edge_row,
     fold,
     node_attrs,
@@ -77,6 +80,7 @@ __all__ = [
     "PROMOTED_NODE_KEYS",
     "GraphRowStore",
     "edge_attrs",
+    "edge_attrs_dict",
     "edge_row",
     "fold",
     "node_attrs",
@@ -85,6 +89,13 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+#: What a whole-graph read needs of each table: the key, the promoted columns
+#: and the attribute blob. ``kb_id`` is the filter and ``digest`` is the fold's
+#: business (:meth:`GraphRowStore.recompute_folds` reads it with ``*``), so
+#: shipping either for every row of a load was bytes nobody decoded.
+_NODE_READ = ("node_id", *PROMOTED_NODE_KEYS, "attrs")
+_EDGE_READ = (*EDGE_KEY, "source_id", "attrs")
 
 
 def _ranked_frontier(where: str, priority_types: Sequence[str], limited: bool) -> str:
@@ -677,7 +688,7 @@ class GraphRowStore:
         export), which serializes a `dict` and refuses anything else.
         """
 
-        for row in self._stream("graph_nodes", ("node_id",), kb_id):
+        for row in self._stream("graph_nodes", ("node_id",), kb_id, _NODE_READ):
             yield str(row["node_id"]), node_attrs_dict(row)
 
     def iter_edges(self, kb_id: str) -> Iterator[tuple[tuple[str, str], dict[int, dict]]]:
@@ -691,14 +702,14 @@ class GraphRowStore:
 
         current: tuple[str, str] | None = None
         parallel: dict[int, dict] = {}
-        for row in self._stream("graph_edges", EDGE_KEY, kb_id):
+        for row in self._stream("graph_edges", EDGE_KEY, kb_id, _EDGE_READ):
             pair = (str(row["source"]), str(row["target"]))
             if pair != current:
                 if current is not None:
                     yield current, parallel
                 current, parallel = pair, {}
             # Materialized, for the reason `iter_nodes` gives.
-            parallel[len(parallel)] = dict(edge_attrs(row))
+            parallel[len(parallel)] = edge_attrs_dict(row)
         if current is not None:
             yield current, parallel
 
@@ -723,7 +734,13 @@ class GraphRowStore:
     #: never the memory problem the paging exists to avoid.
     PAGE = 5_000
 
-    def _stream(self, table: str, key: tuple[str, ...], kb_id: str) -> Iterator[Any]:
+    def _stream(
+        self,
+        table: str,
+        key: tuple[str, ...],
+        kb_id: str,
+        columns: tuple[str, ...] = ("*",),
+    ) -> Iterator[Any]:
         """Every row of one graph table for one kb, in key order, a page at a time.
 
         Keyset pagination rather than a server-side cursor. ``StateStore.rows``
@@ -734,26 +751,48 @@ class GraphRowStore:
         it needs no new backend method and behaves identically on both
         dialects; ``OFFSET`` would not, because its cost grows with how far in
         the scan has already got.
+
+        ``columns`` must include ``key``. Where the backend allows it the next
+        page is fetched on a helper thread while the caller decodes this one:
+        the wait on the server releases the GIL, so it overlaps the decoding
+        rather than following it. Pages were already separate statements, so
+        reading one early changes no answer.
         """
 
-        columns = ", ".join(key)
+        select = ", ".join(columns)
+        names = ", ".join(key)
         placeholders = ", ".join("?" for _ in key)
-        after: tuple | None = None
-        while True:
+
+        def page_after(after: tuple | None) -> list[Any]:
             if after is None:
-                sql = f"SELECT * FROM {table} WHERE kb_id=? ORDER BY {columns} LIMIT ?"
+                sql = f"SELECT {select} FROM {table} WHERE kb_id=? ORDER BY {names} LIMIT ?"
                 params: tuple = (kb_id, self.PAGE)
             else:
                 sql = (
-                    f"SELECT * FROM {table} WHERE kb_id=? AND ({columns}) > ({placeholders})"
-                    f" ORDER BY {columns} LIMIT ?"
+                    f"SELECT {select} FROM {table} WHERE kb_id=? AND ({names}) > ({placeholders})"
+                    f" ORDER BY {names} LIMIT ?"
                 )
                 params = (kb_id, *after, self.PAGE)
-            page = self.state.rows(sql, params)
-            if not page:
-                return
-            yield from page
-            last = page[-1]
-            after = tuple(last[column] for column in key)
-            if len(page) < self.PAGE:
-                return
+            return self.state.rows(sql, params)
+
+        def last_key(page: list[Any]) -> tuple:
+            return tuple(page[-1][column] for column in key)
+
+        if not self.state.backend.reads_from_any_thread():
+            page = page_after(None)
+            while page:
+                yield from page
+                if len(page) < self.PAGE:
+                    return
+                page = page_after(last_key(page))
+            return
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pheasant-graph-page") as pool:
+            page = page_after(None)
+            while page:
+                ahead = None
+                if len(page) == self.PAGE:
+                    ahead = pool.submit(contextvars.copy_context().run, page_after, last_key(page))
+                yield from page
+                if ahead is None:
+                    return
+                page = ahead.result()

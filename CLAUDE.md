@@ -95,7 +95,8 @@ pheasant-kb/
 │   │                            documents are never read), web_connector (listed
 │   │                            URLs, per-page revalidation), cancellation
 │   │                            (stop a running sync from any process),
-│   │                            watcher,
+│   │                            graph_history (the interval-gated
+│   │                            snapshot), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
@@ -201,7 +202,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 175 pytest modules, offline by design
+└── tests/                     ← 176 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →

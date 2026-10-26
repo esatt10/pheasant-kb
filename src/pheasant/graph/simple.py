@@ -523,6 +523,25 @@ class SimpleMultiDiGraph:
             )
             self._pending_removed_pairs.difference_update(delta.get("edge_removals", ()))
 
+    def settled_node_link(self) -> dict[str, Any] | None:
+        """:meth:`to_node_link`, or ``None`` while the store is owed a delta.
+
+        With nothing pending every mutation has reached the store, so this
+        graph is the published generation and a snapshot can be serialized
+        from it rather than read back. Checked and serialized under one lock
+        hold, so a write cannot land between the two.
+        """
+
+        with self._lock:
+            if (
+                self._pending_nodes
+                or self._pending_pairs
+                or self._pending_removed_nodes
+                or self._pending_removed_pairs
+            ):
+                return None
+            return self.to_node_link()
+
     def mark_all_pending(self) -> None:
         """Treat the whole graph as unwritten.
 
@@ -562,9 +581,16 @@ class SimpleMultiDiGraph:
                 # by their semantic payload so concurrent source/file workers
                 # cannot change persisted graph bytes merely by finishing in a
                 # different order.
-                edge_rows = sorted(
-                    self._edges[(source, target)].values(),
-                    key=lambda data: json.dumps(data, sort_keys=True, separators=(",", ":")),
+                parallel = self._edges[(source, target)]
+                # One edge has one order; `sorted` would still encode it for
+                # its key, which was 761k `json.dumps` calls per snapshot.
+                edge_rows = (
+                    list(parallel.values())
+                    if len(parallel) < 2
+                    else sorted(
+                        parallel.values(),
+                        key=lambda data: json.dumps(data, sort_keys=True, separators=(",", ":")),
+                    )
                 )
                 for key, data in enumerate(edge_rows):
                     links.append({"source": source, "target": target, "key": key, **data})
@@ -575,6 +601,56 @@ class SimpleMultiDiGraph:
                 "nodes": [self._nodes[node_id] for node_id in sorted(self._nodes)],
                 "links": links,
             }
+
+    @classmethod
+    def from_stored(cls, nodes, edges):
+        """Build the graph a store holds, owing that store nothing.
+
+        ``nodes`` yields ``(node_id, attrs)`` and ``edges`` yields
+        ``((source, target), {seq: attrs})`` grouped by pair, which is what
+        :class:`~pheasant.persistence.graph_rows.GraphRowStore` streams. The
+        same graph :meth:`add_node` / :meth:`add_edge` would build, written
+        straight into the maps: per call those took the lock, merged a copy of
+        the attributes and marked the persisted delta, 885k times for a
+        123k-node load, and the load then had to copy that whole delta into a
+        throwaway one to clear it (18.5 s). Each yielded dict is taken over,
+        not copied.
+
+        Nodes are still marked for the search index, as ``add_node`` would
+        mark them: that is the index's own bookkeeping and the caller decides
+        whether to claim it.
+        """
+
+        graph = cls()
+        with graph._lock:
+            node_map = graph._nodes
+            blobs = graph._search_blobs
+            type_counts = graph._type_counts
+            for node_id, attrs in nodes:
+                previous = node_map.get(node_id)
+                if previous is not None:
+                    graph._retype(previous.get("type"), None)
+                    attrs = {**previous, **attrs}
+                node_map[node_id] = attrs
+                blobs[node_id] = _search_blob(attrs)
+                node_type = attrs.get("type")
+                if node_type is not None:
+                    type_counts[str(node_type)] = type_counts.get(str(node_type), 0) + 1
+            graph._dirty_nodes = set(node_map)
+            edge_map = graph._edges
+            out = graph._out
+            count = 0
+            for pair, parallel in edges:
+                existing = edge_map.get(pair)
+                if existing is None:
+                    edge_map[pair] = parallel
+                else:
+                    for attrs in parallel.values():
+                        existing[len(existing)] = attrs
+                count += len(parallel)
+                out.setdefault(pair[0], {})[pair[1]] = None
+            graph._edge_count = count
+        return graph
 
     @classmethod
     def from_node_link(cls, data):

@@ -221,6 +221,22 @@ def edge_attrs(row: Any) -> Any:
     return _LazyAttrs(promoted, row["attrs"])
 
 
+def edge_attrs_dict(row: Any) -> dict[str, Any]:
+    """The same attributes, materialized in one step. See :func:`node_attrs_dict`.
+
+    ``dict(edge_attrs(row))`` goes through the mapping protocol per key, and
+    a whole-graph load does it 761k times: ~8 s of the indexer's working-set
+    load at 123k nodes, for the dict it was already holding.
+    """
+
+    merged: dict[str, Any] = json.loads(row["attrs"] or "{}")
+    merged["type"] = row["type"]
+    source_id = row["source_id"]
+    if source_id is not None:
+        merged["source_id"] = source_id
+    return merged
+
+
 def _text(value: Any) -> str | None:
     if value is None:
         return None

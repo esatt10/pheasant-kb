@@ -46,6 +46,19 @@ STATEMENT_TIMEOUT_MS = 0  # 0 = no limit; indexing commits can be long.
 SCHEMA_LOCK_KEY = 0x5048454153414E54
 
 
+def _result_rows(cursor: Any) -> list[Row]:
+    """Every row of a psycopg result, with one column order shared by all of them.
+
+    ``dict.fromkeys`` because a statement may name a column twice
+    (``SELECT a.id, b.id``): the dict keeps the first position and the last
+    value, and positional access has always followed the dict.
+    """
+
+    columns = [column.name for column in cursor.description]
+    order = list(dict.fromkeys(columns))
+    return [Row(zip(columns, values, strict=True), order) for values in cursor.fetchall()]
+
+
 class StateBackend(ABC):
     """The database operations :class:`StateStore` needs.
 
@@ -102,6 +115,15 @@ class StateBackend(ABC):
         differently (``PRAGMA table_info`` vs ``information_schema``), and the
         one-shot additive migrations in the store need the answer.
         """
+
+    def reads_from_any_thread(self) -> bool:
+        """Whether another thread's read sees what this thread's read would.
+
+        False by default, which is always safe: a caller that would hand a
+        read to a helper thread does it on this one instead.
+        """
+
+        return False
 
     @contextmanager
     def schema_lock(self):
@@ -401,6 +423,15 @@ class PostgresBackend(StateBackend):
             getattr(self._local, "depth", 0) or 0
         )
 
+    def reads_from_any_thread(self) -> bool:
+        """True outside a transaction: every thread then reads committed state.
+
+        Inside one, this thread's reads see its own uncommitted writes and a
+        pooled connection on another thread would not.
+        """
+
+        return not self._pending
+
     def _finish(self) -> None:
         """Return the connection if nothing is pending. Cheap and idempotent.
 
@@ -473,10 +504,7 @@ class PostgresBackend(StateBackend):
                 if cursor.description is None:
                     result: list[Row] = []
                 else:
-                    columns = [column.name for column in cursor.description]
-                    result = [
-                        Row(dict(zip(columns, values, strict=True))) for values in cursor.fetchall()
-                    ]
+                    result = _result_rows(cursor)
         except Exception as exc:
             if timeout_installed and standalone:
                 try:
@@ -584,10 +612,7 @@ class PostgresBackend(StateBackend):
                 if cursor.description is None:
                     result: list[Row] = []
                 else:
-                    columns = [column.name for column in cursor.description]
-                    result = [
-                        Row(dict(zip(columns, values, strict=True))) for values in cursor.fetchall()
-                    ]
+                    result = _result_rows(cursor)
                 rowcount = cursor.rowcount
         except Exception:
             self._abort()
