@@ -96,7 +96,7 @@ services:
       retries: 20
 
   secrets-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     restart: "no"
     user: "0:0"
     entrypoint: ["sh", "/init-secrets.sh"]
@@ -113,7 +113,7 @@ services:
       - pheasant-worker-secret:/worker-secret
 
   db-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     restart: "no"
     command:
       - python
@@ -132,7 +132,7 @@ services:
       - pheasant-exports:/exports
 
   workspace-init:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     restart: "no"
     user: "0:0"
     entrypoint: ["sh", "-c"]
@@ -143,7 +143,7 @@ services:
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace
 
   api:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     build:
       context: .
     restart: unless-stopped
@@ -191,7 +191,7 @@ services:
       start_period: 30s
 
   graph:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     build:
       context: .
     restart: unless-stopped
@@ -221,7 +221,7 @@ services:
       start_period: 60s
 
   indexer:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     build:
       context: .
     restart: unless-stopped
@@ -263,7 +263,7 @@ services:
       start_period: 30s
 
   logger:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     build:
       context: .
     restart: unless-stopped
@@ -296,7 +296,7 @@ services:
       start_period: 30s
 
   worker:
-    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.4}
+    image: ${PHEASANT_IMAGE:-ghcr.io/esatt10/pheasant:0.14.5}
     build:
       context: .
     restart: unless-stopped
