@@ -41,6 +41,7 @@ from typing import Any
 # `_providers._http_json` the one seam the offline suite patches.
 import pheasant.assistant.providers as _providers
 from pheasant.assistant.providers import ProviderError
+from pheasant.config.assistant_decisions import DEFAULT_REPAIR_EFFORTS
 from pheasant.request_budget import DeadlineExceeded
 
 DEFAULT_MODEL = "gpt-6-luna"
@@ -247,7 +248,7 @@ class Decider:
     draft_reasoning_effort: str | None = "low"
     max_repairs: int = 1
     #: Effort per rewrite (``none`` / ``low`` / ``full``); past the end, ``full``.
-    repair_efforts: tuple[str, ...] = ()
+    repair_efforts: tuple[str, ...] = DEFAULT_REPAIR_EFFORTS
     #: ``environment`` / ``assistant`` (the answering model's own OpenAI
     #: credential) — reported, never the key itself.
     source: str = "environment"
@@ -402,7 +403,7 @@ def resolve_decider(
         prune_min_keep=int(getattr(decisions, "prune_min_keep", 3)),
         draft_reasoning_effort=getattr(decisions, "draft_reasoning_effort", "low"),
         max_repairs=int(getattr(decisions, "max_repairs", 1)),
-        repair_efforts=tuple(getattr(decisions, "repair_efforts", None) or ()),
+        repair_efforts=tuple(getattr(decisions, "repair_efforts", DEFAULT_REPAIR_EFFORTS) or ()),
         source=source,
     )
 

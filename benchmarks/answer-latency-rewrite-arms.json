@@ -1,0 +1,8 @@
+{
+  "baseline": "rewrite-full",
+  "arms": [
+    {"name": "rewrite-full", "options": {"repair_efforts": []}},
+    {"name": "rewrite-low", "options": {"repair_efforts": ["low"]}},
+    {"name": "rewrite-low-escalate", "options": {"repair_efforts": ["low"], "max_repairs": 2}}
+  ]
+}

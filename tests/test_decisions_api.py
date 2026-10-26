@@ -503,7 +503,9 @@ def test_irrelevant_passages_are_left_out_but_never_below_the_floor(monkeypatch)
     assert "docs/b.md" in [c["relative_path"] for c in result.citations]
 
 
-def test_a_rejected_draft_is_rewritten_once_at_full_effort(monkeypatch) -> None:
+def test_a_rejected_draft_is_rewritten_once_at_low_effort_by_default(monkeypatch) -> None:
+    from pheasant.config.assistant_decisions import AssistantDecisionsSettings
+
     search = _Search({QUESTION: [_hit("config")]})
     wire = _Wire(
         {"sufficient": 0.95},
@@ -513,6 +515,23 @@ def test_a_rejected_draft_is_rewritten_once_at_full_effort(monkeypatch) -> None:
     llm = _LLM(["A made-up claim [1].", "Set staged_retrieval: true [1]."])
 
     result = _run(search, llm, _decider(), monkeypatch, wire)
+
+    assert [entry["effort"] for entry in llm.log] == ["low", "low"]
+    assert any(s.name == "accept" and "rewriting at low effort" in s.detail for s in result.steps)
+    assert result.decisions["max_repairs"] == 1 and result.decisions["repair_efforts"] == ["low"]
+    assert AssistantDecisionsSettings().repair_efforts == ["low"], "config and client agree"
+
+
+def test_an_empty_repair_ladder_rewrites_once_at_full_effort(monkeypatch) -> None:
+    search = _Search({QUESTION: [_hit("config")]})
+    wire = _Wire(
+        {"sufficient": 0.95},
+        {"grounded": 0.2, "responsive": 0.9},
+        {"grounded": 0.9, "responsive": 0.9},
+    )
+    llm = _LLM(["A made-up claim [1].", "Set staged_retrieval: true [1]."])
+
+    result = _run(search, llm, _decider(repair_efforts=()), monkeypatch, wire)
 
     assert [entry["effort"] for entry in llm.log] == ["low", None]
     assert any(s.name == "accept" and "rewriting at full effort" in s.detail for s in result.steps)
@@ -583,6 +602,9 @@ def test_a_request_picks_its_own_repair_ladder(monkeypatch) -> None:
     assert (judged["max_repairs"], judged["repair_efforts"]) == (2, ["low"])
     # One bad entry voids the ladder rather than shifting it: the config's runs.
     efforts, judged = run(repair_efforts=["medium", "low"])
+    assert efforts == ["low", "low"] and judged["repair_efforts"] == ["low"]
+    # An empty ladder is a request for the assistant's own effort.
+    efforts, judged = run(repair_efforts=[])
     assert efforts == ["low", None] and judged["repair_efforts"] == []
     # Out of range or not an integer: the configured count.
     for bad in (9, -1, True, "2"):

@@ -14,6 +14,13 @@ from pheasant.config.model import ModelMixin
 
 #: What a rewrite can be written at; ``full`` is the assistant's own effort.
 REPAIR_EFFORTS = frozenset({"none", "low", "full"})
+#: Measured on the lab region (2026-10-26): a rewrite at ``low`` took 5.4 s
+#: mean against 13.9 s at full effort, with the same fact coverage and a
+#: similar acceptance rate after the rewrite (10/13 against 16/22).
+#: Escalating a rejected cheap rewrite to full effort (``max_repairs: 2``)
+#: cost 27-29 s when it fired and saved nothing overall, so a rejected cheap
+#: rewrite is returned, flagged degraded.
+DEFAULT_REPAIR_EFFORTS = ("low",)
 
 
 @dataclass
@@ -71,11 +78,11 @@ class AssistantDecisionsSettings(ModelMixin):
     #: Rewrites after a rejected draft.
     max_repairs: int = 1
     #: Effort for each rewrite in turn (``none`` / ``low`` / ``full``,
-    #: ``gpt-6-luna`` only): ``["low"]`` rewrites cheaply, and with
-    #: ``max_repairs: 2`` escalates to full effort only when the cheap rewrite
-    #: is rejected too. A rewrite past the end of the list is at full effort,
-    #: so the empty default is every rewrite at the assistant's own effort.
-    repair_efforts: list[str] = field(default_factory=list)
+    #: ``gpt-6-luna`` only). A rewrite past the end of the list is at full
+    #: effort, so ``[]`` is every rewrite at the assistant's own effort, and
+    #: ``["low"]`` with ``max_repairs: 2`` escalates to full effort only when
+    #: the cheap rewrite is rejected too. The default is one cheap rewrite.
+    repair_efforts: list[str] = field(default_factory=lambda: list(DEFAULT_REPAIR_EFFORTS))
 
     def __post_init__(self) -> None:
         if self.mode not in {"beta", "shadow", "off"}:
