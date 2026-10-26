@@ -79,6 +79,7 @@ from pheasant.sync.fingerprint import (
     source_fingerprint,
 )
 from pheasant.sync.graph_events import notifier_from_config as graph_notifier_from_config
+from pheasant.sync.graph_history import snapshot_after_sync
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
@@ -185,22 +186,6 @@ def _progress_reporter(hook: ProgressHook | None, source_name: str):
             logger.debug("progress hook failed for %s", source_name, exc_info=True)
 
     return report
-
-
-def _restore_iso_ts(filename_ts: str) -> str:
-    """Restore an ISO-8601 timestamp from its filesystem-safe snapshot form.
-
-    ``write_snapshot`` builds filenames as ``utc_ts.replace(":", "-")`` over a
-    ``YYYY-MM-DDTHH:MM:SSZ`` timestamp. The date hyphens must stay; only the
-    time portion's ``-`` separators become ``:`` again. The trailing ``Z`` is
-    dropped so ``datetime.fromisoformat`` parses it on Python 3.11.
-    """
-
-    ts = filename_ts.rstrip("Z")
-    if "T" in ts:
-        date_part, _, time_part = ts.partition("T")
-        return f"{date_part}T{time_part.replace('-', ':')}"
-    return ts
 
 
 @dataclass(frozen=True)
@@ -2365,7 +2350,7 @@ class SyncEngine:
                     total_items,
                     "preserving the published graph generation",
                 )
-                self._snapshot_after_sync()
+                snapshot_after_sync(self)
             now = utc_now()
             cursor, high_watermark = connector.checkpoint_from_items(items)
             high_watermark.update({"indexed_artifacts": indexed, "skipped_artifacts": skipped})
@@ -2538,68 +2523,6 @@ class SyncEngine:
             query,
             max_results=max_results,
         )
-
-    def _snapshot_after_sync(self) -> None:
-        """Write a compressed graph snapshot (interval-throttled) + prune.
-
-        Gated by ``storage.graph_snapshots`` (default on). At most one snapshot
-        per ``graph_snapshot_interval_seconds``: if the newest existing snapshot
-        is younger than the interval, no new snapshot is written. Retention then
-        evicts oldest snapshots beyond ``max_state_size_gb``. Every step is
-        fail-soft — the snapshot is additive history, never load-bearing for a
-        sync.
-        """
-
-        storage = self.config.storage
-        if not storage.graph_snapshots:
-            return
-        kb_id = self.config.knowledge_base_id
-        try:
-            now = utc_now()
-            if self._snapshot_due(kb_id, now, storage.graph_snapshot_interval_seconds):
-                # Only a working set read from the store can stand in for it;
-                # an engine that never loads the persisted graph holds a graph
-                # that was never the published one.
-                resident = (
-                    self.graph_builder.graph
-                    if self._loads_persisted_graph and self._graph_loaded
-                    else None
-                )
-                self.graph_store.snapshot_current(kb_id, now, resident=resident)
-            max_bytes = int(float(storage.max_state_size_gb) * 1024**3)
-            self.graph_store.enforce_retention(kb_id, max_bytes)
-        except Exception as exc:  # noqa: BLE001 - snapshots must not fail sync
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Graph snapshot/retention failed for %s: %s", kb_id, exc
-            )
-
-    def _snapshot_due(self, kb_id: str, now: str, interval_seconds: int) -> bool:
-        """True when no snapshot exists yet or the newest is older than interval."""
-
-        if interval_seconds <= 0:
-            return True
-        snapshots = self.graph_store.list_snapshots(kb_id)
-        if not snapshots:
-            return True
-        from datetime import datetime
-
-        from pheasant.persistence.graph_store import SNAPSHOT_PATTERN
-
-        match = SNAPSHOT_PATTERN.match(snapshots[-1].name)
-        if not match:
-            return True
-        # Filename ts is the ISO-8601 form with ':' -> '-'; restore the time
-        # separators (positions of the two ':' in HH:MM:SS) for parsing.
-        raw = match.group("ts")
-        iso = _restore_iso_ts(raw)
-        try:
-            last = datetime.fromisoformat(iso)
-            current = datetime.fromisoformat(now.rstrip("Z"))
-        except ValueError:
-            return True
-        return (current - last).total_seconds() >= interval_seconds
 
     def _publish_after_sync(
         self,

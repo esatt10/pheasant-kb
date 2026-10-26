@@ -159,6 +159,8 @@ def test_snapshot_interval_respected(config_path: Path, monkeypatch: pytest.Monk
     # Drive snapshot timestamps deterministically.
     clock = {"now": "2026-06-18T01:00:00Z"}
     monkeypatch.setattr("pheasant.sync.engine.utc_now", lambda: clock["now"])
+    # The snapshot names and gates itself by its own clock read.
+    monkeypatch.setattr("pheasant.sync.graph_history.utc_now", lambda: clock["now"])
 
     try:
         run_sync(engine, source_name="architecture-notes", mode="full")

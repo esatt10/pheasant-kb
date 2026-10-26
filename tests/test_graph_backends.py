@@ -30,6 +30,7 @@ from pheasant.graph.traversal import neighbors, slice_
 from pheasant.persistence.graph_rows import GraphRowStore, fold
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.sync.engine import SyncEngine
+from pheasant.sync.graph_history import snapshot_after_sync
 
 KB = "backends"
 FORMATS = ("rows", "node_link_json")
@@ -575,7 +576,7 @@ def test_the_engine_hands_a_snapshot_the_working_set_it_loaded(tmp_path: Path) -
     try:
         engine.config.storage.graph_snapshots = True
         with mock.patch.object(engine.graph_store, "snapshot_current") as snapshot:
-            engine._snapshot_after_sync()
+            snapshot_after_sync(engine)
         assert snapshot.call_args.kwargs["resident"] is engine.graph_builder.graph
     finally:
         engine.close()
