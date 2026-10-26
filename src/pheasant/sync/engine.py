@@ -2226,6 +2226,20 @@ class SyncEngine:
                     # and atomic, so a sync that fails after this leaves an
                     # unreferenced file rather than a referenced missing one.
                     self.media_store.put(parsed.sha256, stored_suffix(parsed) or "", prepared.media)
+                if not self._graph_loaded:
+                    # The first change a sync process commits reads the whole
+                    # graph first: over a minute on a 123k-node region, which
+                    # reported as "preparing" the file before it and looked
+                    # like a hung parse. Its own phase, so it is timed and named.
+                    report(
+                        "loading_graph",
+                        position,
+                        total_items,
+                        "loading the knowledge graph",
+                        indexed=indexed,
+                        skipped=skipped,
+                        bytes_done=indexed_bytes,
+                    )
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)
@@ -2543,7 +2557,15 @@ class SyncEngine:
         try:
             now = utc_now()
             if self._snapshot_due(kb_id, now, storage.graph_snapshot_interval_seconds):
-                self.graph_store.snapshot_current(kb_id, now)
+                # Only a working set read from the store can stand in for it;
+                # an engine that never loads the persisted graph holds a graph
+                # that was never the published one.
+                resident = (
+                    self.graph_builder.graph
+                    if self._loads_persisted_graph and self._graph_loaded
+                    else None
+                )
+                self.graph_store.snapshot_current(kb_id, now, resident=resident)
             max_bytes = int(float(storage.max_state_size_gb) * 1024**3)
             self.graph_store.enforce_retention(kb_id, max_bytes)
         except Exception as exc:  # noqa: BLE001 - snapshots must not fail sync

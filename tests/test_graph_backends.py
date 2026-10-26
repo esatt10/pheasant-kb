@@ -505,6 +505,192 @@ def test_a_snapshot_is_written_from_rows_and_reads_back(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
+def _snapshot_contents(store: GraphStore, path: Path) -> tuple[set[str], list[tuple]]:
+    restored = store.read_snapshot(path)
+    with restored.reading():
+        nodes = set(restored.node_map())
+        edges = sorted(
+            (source, target, attrs["type"])
+            for (source, target), parallel in restored.iter_edges()
+            for attrs in parallel.values()
+        )
+    return nodes, edges
+
+
+def test_a_settled_working_set_snapshots_without_reading_the_rows_back(tmp_path: Path) -> None:
+    """The indexer has just read every row once; a snapshot need not read them twice.
+
+    Reading them back was 87 s of a 172 s snapshot on a 123k-node Postgres
+    region, inline in the sync that triggered it. Asserted by making the
+    row read impossible, and by the snapshot still saying what the rows say.
+    """
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        store = engine.graph_store
+        from_rows = _snapshot_contents(store, store.snapshot_current(KB, "2026-09-04T12:00:00Z"))
+        with mock.patch.object(SqlGraph, "to_node_link", side_effect=AssertionError("read back")):
+            path = store.snapshot_current(
+                KB, "2026-09-04T12:30:00Z", resident=engine.graph_builder.graph
+            )
+        assert _snapshot_contents(store, path) == from_rows
+        assert len(from_rows[0]) > 10, "the fixture is too small to say anything"
+    finally:
+        engine.close()
+
+
+def test_a_working_set_that_owes_the_store_a_write_is_not_the_published_graph(
+    tmp_path: Path,
+) -> None:
+    """A pending delta means the rows are the truth, so the snapshot reads them."""
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        graph = engine.graph_builder.graph
+        graph.add_node("late:node", type="symbol", label="late", source_id="docs")
+        assert graph.settled_node_link() is None
+        path = engine.graph_store.snapshot_current(KB, "2026-09-04T12:00:00Z", resident=graph)
+        nodes, _edges = _snapshot_contents(engine.graph_store, path)
+        assert "late:node" not in nodes
+    finally:
+        engine.close()
+
+
+def test_a_snapshot_is_compact_json(tmp_path: Path) -> None:
+    """`indent=2` put 346 MB through json's pure-Python encoder: 123 s a snapshot."""
+
+    import zstandard as zstd
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        path = engine.graph_store.snapshot_current(KB, "2026-09-04T12:00:00Z")
+        text = zstd.ZstdDecompressor().decompress(path.read_bytes())
+        assert b"\n" not in text
+    finally:
+        engine.close()
+
+
+def test_the_engine_hands_a_snapshot_the_working_set_it_loaded(tmp_path: Path) -> None:
+    engine = _synced(tmp_path, "rows")
+    try:
+        engine.config.storage.graph_snapshots = True
+        with mock.patch.object(engine.graph_store, "snapshot_current") as snapshot:
+            engine._snapshot_after_sync()
+        assert snapshot.call_args.kwargs["resident"] is engine.graph_builder.graph
+    finally:
+        engine.close()
+
+
+def test_a_loaded_graph_owes_the_store_nothing(tmp_path: Path) -> None:
+    """Loading is not a change, and saying so must not cost a copy of the graph."""
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        loaded = engine.graph_store.load(KB)
+        assert loaded.number_of_nodes() > 10
+        delta = loaded.graph_delta()
+        assert delta == {
+            "node_upserts": [],
+            "node_removals": [],
+            "edge_upserts": [],
+            "edge_removals": [],
+        }
+        assert loaded.settled_node_link() is not None
+    finally:
+        engine.close()
+
+
+def test_a_stored_graph_is_the_graph_add_node_and_add_edge_would_build(tmp_path: Path) -> None:
+    """`from_stored` writes the maps directly; every map must come out the same."""
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        rows = engine.graph_store.rows
+        assert rows is not None
+        bulk = SimpleMultiDiGraph.from_stored(rows.iter_nodes(KB), rows.iter_edges(KB))
+        one_by_one = SimpleMultiDiGraph()
+        for node_id, attrs in rows.iter_nodes(KB):
+            one_by_one.add_node(node_id, **attrs)
+        for (source, target), parallel in rows.iter_edges(KB):
+            for attrs in parallel.values():
+                one_by_one.add_edge(source, target, **attrs)
+        assert bulk.number_of_nodes() > 10
+        assert bulk._nodes == one_by_one._nodes
+        assert list(bulk._nodes) == list(one_by_one._nodes)
+        assert dict(bulk._edges) == dict(one_by_one._edges)
+        assert bulk._out == one_by_one._out
+        assert {k: list(v) for k, v in bulk._out.items()} == {
+            k: list(v) for k, v in one_by_one._out.items()
+        }
+        assert bulk.number_of_edges() == one_by_one.number_of_edges()
+        assert bulk.type_counts() == one_by_one.type_counts()
+        assert bulk._search_blobs == one_by_one._search_blobs
+        assert bulk._dirty_nodes == one_by_one._dirty_nodes
+        assert bulk.to_node_link() == one_by_one.to_node_link()
+    finally:
+        engine.close()
+
+
+def test_a_whole_graph_read_fetches_the_next_page_while_this_one_is_read(
+    tmp_path: Path,
+) -> None:
+    """The prefetch reads early, on another thread, and changes nothing it returns."""
+
+    import threading
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        rows = engine.graph_store.rows
+        assert rows is not None
+        backend = engine.state.backend
+        sequential = (list(rows.iter_nodes(KB)), list(rows.iter_edges(KB)))
+        callers: list[str] = []
+        real_rows = engine.state.rows
+
+        def recording(sql: str, params: tuple = ()) -> list:
+            callers.append(threading.current_thread().name)
+            return real_rows(sql, params)
+
+        with (
+            mock.patch.object(GraphRowStore, "PAGE", 3),
+            mock.patch.object(backend, "reads_from_any_thread", return_value=True),
+            mock.patch.object(engine.state, "rows", side_effect=recording),
+        ):
+            prefetched = (list(rows.iter_nodes(KB)), list(rows.iter_edges(KB)))
+        assert prefetched == sequential
+        assert len(callers) > 4, "the fixture must span several pages"
+        assert any(name.startswith("pheasant-graph-page") for name in callers)
+    finally:
+        engine.close()
+
+
+def test_a_read_inside_a_transaction_stays_on_its_own_thread(tmp_path: Path) -> None:
+    """Its uncommitted writes are visible only on this thread's connection."""
+
+    import threading
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        rows = engine.graph_store.rows
+        assert rows is not None
+        assert engine.state.backend.reads_from_any_thread() is False  # SQLite's default
+        callers: list[str] = []
+        real_rows = engine.state.rows
+
+        def recording(sql: str, params: tuple = ()) -> list:
+            callers.append(threading.current_thread().name)
+            return real_rows(sql, params)
+
+        with (
+            mock.patch.object(GraphRowStore, "PAGE", 3),
+            mock.patch.object(engine.state, "rows", side_effect=recording),
+        ):
+            list(rows.iter_edges(KB))
+        assert set(callers) == {threading.current_thread().name}
+    finally:
+        engine.close()
+
+
 def test_the_serving_graph_refuses_to_be_written(tmp_path: Path) -> None:
     """A write here would be a node that exists in one process and nowhere else."""
 
@@ -1235,6 +1421,24 @@ def test_reading_an_edge_does_not_parse_json_it_never_looks_at(tmp_path: Path) -
         assert attrs._parsed is not None, "a non-promoted key must still resolve"
         # And it is still a complete mapping for everything that needs one.
         assert dict(attrs)["type"] == "contains"
+    finally:
+        engine.close()
+
+
+def test_a_materialized_edge_is_the_lazy_one_in_one_step(tmp_path: Path) -> None:
+    """`edge_attrs_dict` is the shape `dict(edge_attrs(row))` has, key order included."""
+
+    from pheasant.persistence.graph_codec import edge_attrs, edge_attrs_dict
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        rows = engine.state.rows("SELECT * FROM graph_edges WHERE kb_id=?", (KB,))
+        assert rows
+        for row in rows:
+            lazy = dict(edge_attrs(row))
+            eager = edge_attrs_dict(row)
+            assert eager == lazy
+            assert list(eager) == list(lazy)
     finally:
         engine.close()
 

@@ -494,17 +494,13 @@ class GraphStore:
         """
 
         if self.rows is not None:
-            graph = SimpleMultiDiGraph()
-            for node_id, attrs in self.rows.iter_nodes(kb_id):
-                graph.add_node(node_id, **attrs)
-            for (source, target), edge_map in self.rows.iter_edges(kb_id):
-                for attrs in edge_map.values():
-                    graph.add_edge(source, target, **attrs)
-            # Loading is not a change. Without this the first commit after a
-            # restart would rewrite every row it had just read — an O(total)
-            # write, which is the exact cost this backend exists to remove.
-            graph.clear_graph_delta(graph.graph_delta())
-            return graph
+            # Loading is not a change, so the graph comes back owing the store
+            # nothing. Otherwise the first commit after a restart would
+            # rewrite every row it had just read — an O(total) write, which is
+            # the exact cost this backend exists to remove.
+            return SimpleMultiDiGraph.from_stored(
+                self.rows.iter_nodes(kb_id), self.rows.iter_edges(kb_id)
+            )
         return self._load_file(kb_id)
 
     def _load_file(self, kb_id: str) -> SimpleMultiDiGraph:
@@ -536,9 +532,10 @@ class GraphStore:
     def write_snapshot(self, kb_id: str, graph: SimpleMultiDiGraph, utc_ts: str) -> Path:
         """Write a zstd-compressed, durably-fsynced graph snapshot.
 
-        The current graph is serialized identically to ``graph.latest.json``
-        (``indent=2, sort_keys=True``) then zstd-compressed. tmp+rename+fsync
-        keeps a crash from leaving a torn ``.zst`` file.
+        The current graph is serialized as ``graph.latest.json.zst`` is
+        (compact, ``sort_keys=True``, zstd level 3), which is also what the file
+        backend's :meth:`snapshot_current` copies. tmp+rename+fsync keeps a
+        crash from leaving a torn ``.zst`` file.
         """
 
         return self.write_snapshot_payload(kb_id, graph.to_node_link(), utc_ts)
@@ -550,14 +547,22 @@ class GraphStore:
         are the same file written by the same code — a history format that
         differed by which backend produced it would be a history nobody could
         diff.
+
+        Compact, not ``indent=2``: ``json`` runs its C encoder only when
+        ``indent`` is ``None``, so the indented form went through the
+        pure-Python one. Measured on a 123k-node / 761k-edge region, a 346 MB
+        document: **123 s** to encode, inline in the sync that triggered it.
+        Every reader is ``json.loads``, which never saw the whitespace. Level 3
+        matches ``graph.latest.json.zst``: 8.3 s at level 10 against 1.0 s, for
+        14 MB against 17 MB.
         """
 
         import zstandard as zstd
 
         path = self.snapshot_path(kb_id, utc_ts)
         tmp = _tmp_for(path)
-        payload = json.dumps(node_link, indent=2, sort_keys=True).encode("utf-8")
-        compressed = zstd.ZstdCompressor(level=10).compress(payload)
+        payload = json.dumps(node_link, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        compressed = zstd.ZstdCompressor(level=3).compress(payload)
         try:
             with self._write_lock:
                 with tmp.open("wb") as fh:
@@ -571,7 +576,9 @@ class GraphStore:
         self._fsync_dir(path.parent)
         return path
 
-    def snapshot_current(self, kb_id: str, utc_ts: str) -> Path:
+    def snapshot_current(
+        self, kb_id: str, utc_ts: str, resident: SimpleMultiDiGraph | None = None
+    ) -> Path:
         """Preserve the already-published immutable generation as history.
 
         Re-serializing the in-memory graph and recompressing it at level 10
@@ -579,17 +586,27 @@ class GraphStore:
         source commit. ``graph.latest.json.zst`` is already complete,
         compressed and durable; copying those exact bytes is both more
         consistent and orders of magnitude cheaper.
+
+        ``resident`` is the working set of a process that loaded this kb's
+        graph from the store. The row backend serializes it instead of reading
+        the rows back, but only while it owes the store nothing
+        (:meth:`SimpleMultiDiGraph.settled_node_link`): then it *is* the
+        published generation.
         """
 
         if self.rows is not None:
             # No file to copy, so the snapshot is materialized. O(graph), and
             # in the right place: snapshots are history, they are interval-gated
             # rather than per-commit, and they are read whole or not at all.
-            from pheasant.graph.sql import SqlGraph
+            # From a settled working set it is 16 s where reading the rows
+            # back is 87 s (123k nodes / 761k edges, Postgres), because the
+            # indexer has just paid for that read once already.
+            node_link = resident.settled_node_link() if resident is not None else None
+            if node_link is None:
+                from pheasant.graph.sql import SqlGraph
 
-            return self.write_snapshot_payload(
-                kb_id, SqlGraph(self.state, kb_id).to_node_link(), utc_ts
-            )
+                node_link = SqlGraph(self.state, kb_id).to_node_link()
+            return self.write_snapshot_payload(kb_id, node_link, utc_ts)
         source = self.graph_path(kb_id)
         if not source.exists():
             raise FileNotFoundError(f"No published graph generation for {kb_id}")

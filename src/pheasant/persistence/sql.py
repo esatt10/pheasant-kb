@@ -67,20 +67,27 @@ class Row(dict):
 
     Subclasses ``dict`` so ``dict(row)``, ``.keys()``, ``.get()`` and
     ``**row`` all keep working unchanged.
+
+    Positions go through ``__missing__`` rather than an overridden
+    ``__getitem__``, so a lookup by name is the C dict lookup with no Python
+    frame. Names are almost every access, and a whole-graph load makes 5.4M of
+    them: ~20 s of a 157 s profile went to the override's two ``isinstance``
+    tests. ``order`` lets a backend share one column list across a result set
+    instead of building one per row.
     """
 
     __slots__ = ("_order",)
 
-    def __init__(self, mapping: dict[str, Any]):
+    def __init__(self, mapping: Any, order: list[str] | None = None):
         super().__init__(mapping)
-        object.__setattr__(self, "_order", list(mapping))
+        object.__setattr__(self, "_order", list(self) if order is None else order)
 
-    def __getitem__(self, key: Any) -> Any:
+    def __missing__(self, key: Any) -> Any:
         if isinstance(key, int):
-            return super().__getitem__(self._order[key])
+            return dict.__getitem__(self, self._order[key])
         if isinstance(key, slice):
-            return [super(Row, self).__getitem__(k) for k in self._order[key]]
-        return super().__getitem__(key)
+            return [dict.__getitem__(self, k) for k in self._order[key]]
+        raise KeyError(key)
 
     def keys(self):  # type: ignore[override]
         return list(self._order)
