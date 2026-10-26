@@ -96,7 +96,9 @@ pheasant-kb/
 │   │                            URLs, per-page revalidation), cancellation
 │   │                            (stop a running sync from any process),
 │   │                            graph_history (the interval-gated
-│   │                            snapshot), watcher,
+│   │                            snapshot, off a supervised sync's path),
+│   │                            working_set (a sync process indexes into
+│   │                            a store-backed graph), watcher,
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
@@ -118,7 +120,11 @@ pheasant-kb/
 │   │                            (the builtin reader's glyphs), pdf_math +
 │   │                            pdf_regions (what on a page is math),
 │   │                            math_layout (geometry to TeX), tex_symbols
-│   ├── graph/                 ← model, simple (the indexer's working set),
+│   ├── graph/                 ← model, simple (the resident graph),
+│   │                            store_backed (a sync process's working
+│   │                            set: reads the rows, never loads them),
+│   │                            node_ids (the id grammar one artifact
+│   │                            mints, and what indexing it touches),
 │   │                            retraction (what re-indexing a file takes
 │   │                            back: stale chunks, embeds, imports, calls,
 │   │                            symbols),
@@ -143,6 +149,8 @@ pheasant-kb/
 │   ├── memory/                ← store, projection, policy, steering, salience,
 │   │                            bridge, maintenance, formation, benchmark
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
+│   │                            graph_selections (what a store-backed
+│   │                            working set reads; snapshot text),
 │   │                            schema, lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
 │   │                            (file|rows), graph_rows
@@ -202,7 +210,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 176 pytest modules, offline by design
+└── tests/                     ← 177 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -544,15 +552,17 @@ commit stream, and the only documented way past it was to shard. The trade is
 disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
 1,637 at 20k files and 1,639 at 100k) and reported by `pheasant scan`.
 
-- **Two objects, two jobs.** `SimpleMultiDiGraph` is the *indexer's working
-  set* — the builder mutates it, the whole-graph enrichment passes walk it, and
-  it belongs in RAM because that is what those passes need.
-  `graph/sql.SqlGraph` is the *serving read surface*, and it holds nothing.
-  `SyncEngine.serving_graph()` picks: a process that builds the graph serves
-  its own copy, a process that only serves gets the store. So the residency
-  the `graph` role exists to stop every replica paying is now paid by whoever
-  writes, and by nobody else — which also makes that role optional rather than
-  the only way out.
+- **Three objects, three jobs.** `SimpleMultiDiGraph` is the *resident*
+  graph: a standalone server serves from it, and an in-process sync builds
+  into it. `graph/store_backed.StoreBackedGraph` is a *sync process's working
+  set* (every `pheasant sync` child on `rows`): a `SimpleMultiDiGraph` holding
+  only what that sync read or wrote, faulting the rest in from the rows (see
+  "A sync process no longer loads the graph" below). `graph/sql.SqlGraph` is
+  the *serving read surface*, and it holds nothing.
+  `SyncEngine.serving_graph()` picks: a process with a resident graph serves
+  it, anything else -- a replica, or a sync process -- gets the store. So the
+  residency the `graph` role exists to stop every replica paying is paid by a
+  standalone server and by nobody else.
 - **The delta, not the graph.** `SimpleMultiDiGraph` tracks dirty and removed
   nodes and endpoint *pairs* (a pair, because parallel edges have no identity
   of their own — `add_edge` keys them by arrival). `graph_delta()` reads and
@@ -586,11 +596,35 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
 - **Migration.** A region upgrading imports its existing file once at boot and
   parks it as `*.migrated` (rule 2). `node_link_json` stays selectable and
   working, so a region that hits trouble reverts with one config line.
-- **The indexer still holds one, and that is now the only place residency is
-  required.** The builder mutates it and the enrichment passes walk it. Those
-  passes were written when "walk the whole graph" was free — because the whole
-  graph was already a dict in front of them — and three of them were doing it
-  for data they never read. Measured at 100k files and fixed:
+- **A sync process no longer loads the graph.** It used to: the builder
+  mutates the graph and four passes walked it, so a `pheasant sync` child read
+  every row before its first commit -- 14-38 s for a 123k-node / 762k-edge
+  region in a 2-CPU indexer, for a sync that changed fifteen files. A
+  columnar format would not have fixed it (measured: Parquet into the same
+  Python graph was no faster, because building the objects is the cost), so
+  the child stopped building them. `StoreBackedGraph` faults in what a read
+  needs -- a node, a node's out-edges, or one endpoint pair *whole* (a delta
+  replaces pairs whole, so holding half of one would delete the rest) -- and
+  `GraphBuilder.add_artifact` declares a file's neighbourhood up front
+  (`prefetch`), so a file costs a few batched queries. The four walks became
+  *selections* on `SimpleMultiDiGraph` (`select_nodes`, `edges_into_types`,
+  `targets_with_incoming`, `out_edges_marked`): scans on the resident graph,
+  one query over promoted columns overlaid with this process's writes on the
+  store-backed one. Writes go through the base class unchanged, so the delta
+  is what it was. A read that truly needs everything still works by loading
+  once (`_whole`, logged); `tests/test_store_backed_graph.py` asserts no sync
+  path takes it, and -- the property that makes the whole thing safe -- runs
+  one sequence of syncs (edits that retract, deletions, a removed directory,
+  a full re-sync, a source removal, OKF, images, cross-source links, a memory
+  correction) through both working sets and requires the saved graph, the
+  generation id and the search-index rows to be identical, on SQLite and
+  Postgres. Eight planted bugs, each caught. Measured on the lab region:
+  a full sync of a 15-file repository 37-56 s -> 10-14 s. The resolvers'
+  inputs are now sorted, because "the order a process met them in" depended
+  on which nodes it had loaded rather than on content.
+- **Those passes were written when "walk the whole graph" was free** —
+  because the whole graph was already a dict in front of them — and three of
+  them were doing it for data they never read. Measured at 100k files and fixed:
   `add_cross_source_edges` copied `dict(attrs)` for **every** node to hand the
   resolver a list it immediately narrowed to 15% (2.95s and +160MB → 319ms and
   +24MB); `_bridge_inputs` built `{node_id: type}` for every node to answer one
@@ -695,8 +729,9 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   and where replicas exist. A standalone SQLite container serving heavily
   concurrent *graph* queries is the one shape that is worse off than before,
   and `storage.graph_format: node_link_json` is still there for it.
-- **The prerequisite for dropping the working set is batching, and Postgres
-  sets the bar.** The builder does a read-modify-write per node (`upsert_node`
+- **Batching was the prerequisite for dropping the working set, and
+  Postgres set the bar** (now met: see "A sync process no longer loads the
+  graph"). The builder does a read-modify-write per node (`upsert_node`
   reads `created_at`, `upsert_edge` reads the existing edge). Against rows
   that is a point lookup: **8.2µs batched / 13.1µs each on SQLite** (630k of
   them ≈ 5–8s, about 2% of a full index) but **46.5µs batched / 456µs each on
@@ -2580,6 +2615,18 @@ Each of these cost real time. They are listed because the shape recurs.
   `503 Decision inference is unavailable` mid-batch. It is why a 5xx does not
   open the circuit (only 401/403/404 do) and why every gate's fallback is the
   path the loop had before the gate existed.
+- **An engine that loads at construction keeps the load's index delta.**
+  `from_stored` marks every node dirty for the search index, as `add_node`
+  would; `_ensure_persisted_graph_loaded` drops that, the constructor's load
+  does not. So such an engine's first flush rewrites every index row from the
+  loaded attributes -- the same words in stored-row key order. Harmless, and
+  it made the first equivalence run report a difference that was the
+  reference, not the change. Compare against the behaviour you are replacing.
+- **A streamed zstd frame has no content size, and `decompress()` needs one.**
+  The first rows-to-text snapshot streamed through `stream_writer`, and
+  `read_snapshot` -- and every older version of it -- refused the file.
+  Compressing the joined text in one call records the size. History written
+  for readers you do not control has to stay in the format they already read.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

@@ -397,6 +397,82 @@ class SimpleMultiDiGraph:
                 if node_id in self._nodes
             }
 
+    # --- selections the indexing passes make -------------------------------
+    # Each is the walk a pass used to write inline, named so that a graph
+    # which does not hold every node (`graph.store_backed.StoreBackedGraph`)
+    # can answer it with a query instead. Here they are the same scans the
+    # passes always made: no copying, order unspecified.
+
+    def prefetch(self, nodes=(), outs=(), pairs=()) -> None:
+        """Say what is about to be read. Everything already is, here."""
+
+    def select_nodes(
+        self, *, types=None, source_id=None, ids=None, artifact_ids=None, promoted_only=False
+    ):
+        """``[(node_id, attrs)]`` matching every filter given. Live attrs.
+
+        ``promoted_only`` says the caller reads only the promoted keys (``type``,
+        ``label``, ``source_id``, ``relative_path``, ``artifact_id``), so a store
+        may skip the rest. Here every attribute is already in hand.
+        """
+
+        wanted_types = None if types is None else set(types)
+        wanted_ids = None if ids is None else set(ids)
+        wanted_artifacts = None if artifact_ids is None else set(artifact_ids)
+        with self._lock:
+            if wanted_ids is not None:
+                candidates = ((n, self._nodes[n]) for n in wanted_ids if n in self._nodes)
+            else:
+                candidates = iter(self._nodes.items())
+            return [
+                (node_id, attrs)
+                for node_id, attrs in candidates
+                if (wanted_types is None or attrs.get("type") in wanted_types)
+                and (source_id is None or attrs.get("source_id") == source_id)
+                and (wanted_artifacts is None or attrs.get("artifact_id") in wanted_artifacts)
+            ]
+
+    def edges_into_types(self, target_types):
+        """``[(source, target, {key: attrs})]`` for pairs whose target has one of the types."""
+
+        wanted = set(target_types)
+        with self._lock:
+            return [
+                (source, target, edge_map)
+                for (source, target), edge_map in self._edges.items()
+                if edge_map and (self._nodes.get(target) or {}).get("type") in wanted
+            ]
+
+    def targets_with_incoming(self, node_ids) -> set:
+        """Which of ``node_ids`` at least one edge points at."""
+
+        wanted = set(node_ids)
+        if not wanted:
+            return set()
+        with self._lock:
+            return {
+                target
+                for (_source, target), edge_map in self._edges.items()
+                if edge_map and target in wanted
+            }
+
+    def out_edges_marked(self, sources, key, value):
+        """``[(source, target, {key: attrs})]``: the edges leaving ``sources`` whose
+        ``attrs[key] == value``, and only those edges of each pair."""
+
+        found = []
+        with self._lock:
+            for source in sources:
+                for target in self._out.get(source, ()):
+                    matching = [
+                        attrs
+                        for attrs in (self._edges.get((source, target)) or {}).values()
+                        if attrs.get(key) == value
+                    ]
+                    if matching:
+                        found.append((source, target, dict(enumerate(matching))))
+        return found
+
     def number_of_nodes(self):
         return len(self._nodes)
 

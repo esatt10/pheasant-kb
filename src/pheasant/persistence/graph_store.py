@@ -8,6 +8,7 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -557,11 +558,14 @@ class GraphStore:
         14 MB against 17 MB.
         """
 
+        payload = json.dumps(node_link, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return self._write_snapshot_bytes(kb_id, payload, utc_ts)
+
+    def _write_snapshot_bytes(self, kb_id: str, payload: bytes, utc_ts: str) -> Path:
         import zstandard as zstd
 
         path = self.snapshot_path(kb_id, utc_ts)
         tmp = _tmp_for(path)
-        payload = json.dumps(node_link, sort_keys=True, separators=(",", ":")).encode("utf-8")
         compressed = zstd.ZstdCompressor(level=3).compress(payload)
         try:
             with self._write_lock:
@@ -575,6 +579,20 @@ class GraphStore:
             raise
         self._fsync_dir(path.parent)
         return path
+
+    def _write_snapshot_text(self, kb_id: str, chunks: Iterable[str], utc_ts: str) -> Path:
+        """A snapshot written from text rather than from a graph.
+
+        The rows' own text (`WorkingSetReads.node_link_text`), so a process that
+        does not hold the graph -- every sync process on the row backend --
+        writes one without decoding it. Compressed in one call rather than
+        streamed, because one call records the content size in the frame and
+        every snapshot reader (``read_snapshot``, and every older version of
+        it) asks for it. The text is the same bytes the old path also held.
+        """
+
+        payload = "".join(chunks).encode("utf-8")
+        return self._write_snapshot_bytes(kb_id, payload, utc_ts)
 
     def snapshot_current(
         self, kb_id: str, utc_ts: str, resident: SimpleMultiDiGraph | None = None
@@ -602,11 +620,12 @@ class GraphStore:
             # back is 87 s (123k nodes / 761k edges, Postgres), because the
             # indexer has just paid for that read once already.
             node_link = resident.settled_node_link() if resident is not None else None
-            if node_link is None:
-                from pheasant.graph.sql import SqlGraph
+            if node_link is not None:
+                return self.write_snapshot_payload(kb_id, node_link, utc_ts)
+            from pheasant.persistence.graph_selections import WorkingSetReads
 
-                node_link = SqlGraph(self.state, kb_id).to_node_link()
-            return self.write_snapshot_payload(kb_id, node_link, utc_ts)
+            text = WorkingSetReads(self.rows).node_link_text(kb_id)
+            return self._write_snapshot_text(kb_id, text, utc_ts)
         source = self.graph_path(kb_id)
         if not source.exists():
             raise FileNotFoundError(f"No published graph generation for {kb_id}")

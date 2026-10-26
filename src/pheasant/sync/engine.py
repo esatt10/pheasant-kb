@@ -95,6 +95,7 @@ from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers 
 from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
 from pheasant.sync.vanished import prune_vanished
+from pheasant.sync.working_set import adopt_store_backed_graph, rebuild_node_index_from_store
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,17 @@ class SyncEngine:
         #: beside the id so the age gauge measures the graph this process is
         #: serving rather than whatever has since been written to /state.
         self.loaded_graph_published_at: float | None = None
-        if self._loads_persisted_graph and not defer_persisted_graph_load:
+        #: A sync process on the row backend indexes into a working set that
+        #: reads the store, never loading the graph (`sync/working_set.py`).
+        self._partial_graph = bool(
+            self._loads_persisted_graph
+            and defer_persisted_graph_load
+            and self.graph_store.rows is not None
+        )
+        self._node_index_rebuild_due = False
+        if self._partial_graph:
+            adopt_store_backed_graph(self)
+        elif self._loads_persisted_graph and not defer_persisted_graph_load:
             existing = self.graph_store.load(config.knowledge_base_id)
             if len(existing):
                 self.graph_builder.graph = existing
@@ -381,6 +392,9 @@ class SyncEngine:
         one assignment.
         """
 
+        if self._partial_graph:
+            adopt_store_backed_graph(self)
+            return 0
         if not self._loads_persisted_graph:
             # Nothing private to reload. On the row backend that is the normal
             # case for a serving replica — it reads the graph out of the shared
@@ -454,7 +468,9 @@ class SyncEngine:
         backend only to whoever writes one.
         """
 
-        if self._loads_persisted_graph or self.graph_store.rows is None:
+        if not self._partial_graph and (
+            self._loads_persisted_graph or self.graph_store.rows is None
+        ):
             return self.graph_builder.graph
         return self.graph_store.serving_graph(self.config.knowledge_base_id)
 
@@ -477,6 +493,9 @@ class SyncEngine:
 
         self._loaded_graph_generation = str(record.get("generation_id") or "") or None
         self.loaded_graph_published_at = _published_timestamp(record.get("published_at"))
+        if self._node_index_rebuild_due:
+            self._node_index_rebuild_due = False
+            rebuild_node_index_from_store(self)
         if self._graph_notifier.enabled:
             self._graph_notifier.publish(kb_id, record)
 
@@ -508,7 +527,7 @@ class SyncEngine:
         a directory/metadata delta scan.
         """
 
-        if self._graph_loaded or not self._loads_persisted_graph:
+        if self._partial_graph or self._graph_loaded or not self._loads_persisted_graph:
             return
         with self._sync_mutex:
             if self._graph_loaded:
@@ -521,6 +540,8 @@ class SyncEngine:
             self._note_loaded_generation()
 
     def _graph_counts(self) -> tuple[int, int]:
+        if self._partial_graph:
+            return self.graph_store.counts(self.config.knowledge_base_id)
         if self._graph_loaded or not self._loads_persisted_graph:
             graph = self.graph_builder.graph
             return graph.number_of_nodes(), graph.number_of_edges()
@@ -555,6 +576,9 @@ class SyncEngine:
             if not upserts and not removals:
                 return 0
             if len(upserts) + len(removals) > self._INDEX_REBUILD_THRESHOLD:
+                if self._partial_graph:  # rebuilt from the rows once they are saved
+                    self._node_index_rebuild_due = True
+                    return 0
                 return self.rebuild_node_index()
             return self.node_index.apply(upserts, removals)
         except Exception as exc:  # pragma: no cover - cache maintenance
@@ -584,6 +608,8 @@ class SyncEngine:
     def rebuild_node_index(self) -> int:
         """Rebuild the whole index from the in-memory graph."""
 
+        if self._partial_graph:
+            return rebuild_node_index_from_store(self)
         graph = self.graph_builder.graph
         rows = graph.index_rows()
         written = self.node_index.replace_all(rows)
@@ -603,6 +629,9 @@ class SyncEngine:
                 self.flush_node_index()
             return 0
         self._ensure_persisted_graph_loaded()
+        if self._partial_graph:
+            nodes, _edges = self._graph_counts()
+            return rebuild_node_index_from_store(self) if nodes > 1 else 0
         graph = self.graph_builder.graph
         if graph.number_of_nodes() <= 1:
             return 0
@@ -740,12 +769,14 @@ class SyncEngine:
         """True when SQLite has artifacts the loaded graph does not know about."""
 
         graph = self.graph_builder.graph
-        for row in self.state.rows(
-            "SELECT id FROM artifacts WHERE source_id=? LIMIT 2000", (source_name,)
-        ):
-            if not graph.has_node(str(row["id"])):
-                return True
-        return False
+        ids = [
+            str(row["id"])
+            for row in self.state.rows(
+                "SELECT id FROM artifacts WHERE source_id=? LIMIT 2000", (source_name,)
+            )
+        ]
+        graph.prefetch(nodes=ids)
+        return any(not graph.has_node(artifact_id) for artifact_id in ids)
 
     def sync_all(
         self,
@@ -2211,7 +2242,7 @@ class SyncEngine:
                     # and atomic, so a sync that fails after this leaves an
                     # unreferenced file rather than a referenced missing one.
                     self.media_store.put(parsed.sha256, stored_suffix(parsed) or "", prepared.media)
-                if not self._graph_loaded:
+                if not (self._graph_loaded or self._partial_graph):
                     # The first change a sync process commits reads the whole
                     # graph first: over a minute on a 123k-node region, which
                     # reported as "preparing" the file before it and looked

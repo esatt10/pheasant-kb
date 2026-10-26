@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
+from pheasant.graph import node_ids
 from pheasant.graph.enrichment import (
     ArtifactEnrichment,
     CodeEnrichmentPass,
@@ -12,6 +12,7 @@ from pheasant.graph.enrichment import (
     resolve_cross_source_edges,
 )
 from pheasant.graph.media_links import MEDIA_NODE_TYPES, resolve_image_edges
+from pheasant.graph.node_ids import artifact_touches, directory_chain
 from pheasant.graph.okf import artifact_attrs as okf_artifact_attrs
 from pheasant.graph.retraction import (
     drop_embeds,
@@ -182,12 +183,9 @@ class GraphBuilder:
     ) -> str:
         source_node = self.add_source(source)
         parent = source_node
-        parts = [part for part in relative_path.replace("\\", "/").split("/")[:-1] if part]
-        prefix: list[str] = []
-        for depth, part in enumerate(parts, start=1):
-            prefix.append(part)
-            relative = "/".join(prefix)
-            node_id = f"directory:{source.name}:{relative}:branch={branch or 'none'}"
+        for depth, (node_id, part, relative) in enumerate(
+            directory_chain(source, relative_path, branch), start=1
+        ):
             self.upsert_node(
                 node_id,
                 "directory",
@@ -213,9 +211,12 @@ class GraphBuilder:
         source: SourceConfig,
         artifact: ParsedArtifact,
     ) -> ArtifactEnrichment:
+        # Enrichment reads only the artifact, so it can go first and the
+        # graph be told everything this index of the artifact will touch.
+        enrichment = self.enrich_artifact(source, artifact)
+        self.graph.prefetch(*artifact_touches(self.kb_id, source, artifact, enrichment))
         source_node = self.add_source(source)
         parent_node = self.add_directory_chain(source, artifact.relative_path, artifact.git_branch)
-        enrichment = self.enrich_artifact(source, artifact)
         # How the file was chunked, under `sections`/`auto` only: a `fixed`
         # source's artifact node carries no new key, so its bytes -- and the
         # content-addressed generation id over them -- do not move.
@@ -247,10 +248,7 @@ class GraphBuilder:
         self.upsert_edge(parent_node, artifact.id, "contains", {"source_id": source.name})
         current_chunks: set[str] = set()
         for chunk in artifact.chunks:
-            chunk_id = (
-                f"chunk:{source.name}:{artifact.relative_path}:"
-                f"sha256={chunk.text_hash}:chunk={chunk.index:04d}"
-            )
+            chunk_id = node_ids.chunk_id(source, artifact, chunk)
             current_chunks.add(chunk_id)
             self.upsert_node(
                 chunk_id,
@@ -330,6 +328,7 @@ class GraphBuilder:
         edges, unbridged = resolve_bridges(
             inputs, max_targets if max_targets is not None else DEFAULT_MAX_TARGETS
         )
+        self.graph.prefetch(pairs=[(edge.artifact_id, edge.target_id) for edge in edges])
         for edge in edges:
             self.upsert_edge(
                 edge.artifact_id,
@@ -412,25 +411,31 @@ class GraphBuilder:
         # whole-graph dict for a bounded lookup, and one of the structures
         # keeping the indexer resident.
         candidate_targets: dict[str, list[str]] = {}
-        with self.graph.reading():
-            for node_id, attrs in self.graph.iter_nodes():
-                node_type = attrs.get("type")
-                if attrs.get("source_id") in memory_sources:
-                    continue
-                if node_type == "heading":
-                    key = normalize_label(attrs.get("title") or attrs.get("label") or "")
-                    if key:
-                        headings.setdefault(key, []).append(node_id)
-                elif node_type == "entity":
-                    key = normalize_label(attrs.get("label") or "")
-                    if key:
-                        entities.setdefault(key, []).append(node_id)
-            for (source, target), edge_map in self.graph.iter_edges():
-                # Rung 1: an explicit link the cross-source pass already
-                # resolved to a real artifact. One pair can carry several edge
-                # types, so the map is what has to be inspected.
-                if source not in memory_artifacts:
-                    continue
+        # Selections rather than walks, so a store-backed working set answers
+        # them with a query (`graph.store_backed`); the result is sorted below
+        # either way, so neither order nor backend reaches the bridge.
+        for node_id, attrs in self.graph.select_nodes(types=("heading",)):
+            if attrs.get("source_id") in memory_sources:
+                continue
+            key = normalize_label(attrs.get("title") or attrs.get("label") or "")
+            if key:
+                headings.setdefault(key, []).append(node_id)
+        # An entity is read by its label alone, a promoted column, so a store
+        # need not decode the 45k blobs a real region holds.
+        for node_id, attrs in self.graph.select_nodes(types=("entity",), promoted_only=True):
+            if attrs.get("source_id") in memory_sources:
+                continue
+            key = normalize_label(attrs.get("label") or "")
+            if key:
+                entities.setdefault(key, []).append(node_id)
+        # Rung 1: an explicit link the cross-source pass already resolved to a
+        # real artifact -- only the edges *leaving* a memory record, which is
+        # all the old whole-edge walk ever kept. One pair can carry several
+        # edge types, so the map is what has to be inspected.
+        record_artifacts = sorted(artifact for artifact in memory_artifacts if artifact)
+        self.graph.prefetch(nodes=record_artifacts, outs=record_artifacts)
+        for source in record_artifacts:
+            for _source, target, edge_map in self.graph.out_edges(source):
                 for data in edge_map.values():
                     if data.get("type") not in {"references", "imports"}:
                         continue
@@ -443,9 +448,10 @@ class GraphBuilder:
                     # one of them reached a file.
                     candidate_targets.setdefault(source, []).append(target)
                     break
-            # One pass over the candidates, not over the graph. `node_map()`
-            # is the live mapping under the lock already held, so this is the
-            # same lookup the old dict served — without materializing it.
+        self.graph.prefetch(
+            nodes=[target for targets in candidate_targets.values() for target in targets]
+        )
+        with self.graph.reading():
             nodes = self.graph.node_map()
             for source, targets in candidate_targets.items():
                 for target in targets:
@@ -503,8 +509,7 @@ class GraphBuilder:
             # repeat the same caption under the same parent, and when it happens
             # the two really are the same section by name — whereas edit churn
             # would be constant.
-            digest = hashlib.sha256(heading.path.encode("utf-8")).hexdigest()[:16]
-            heading_id = f"heading:{source.name}:{artifact.relative_path}:sha256={digest}"
+            heading_id = node_ids.heading_id(source, artifact, heading)
             self.upsert_node(
                 heading_id,
                 "heading",
@@ -604,14 +609,7 @@ class GraphBuilder:
         # Image links resolve separately (`resolve_image_edges`): they target
         # `image` nodes, which the document resolver and its WASM twin must not
         # be handed, since neither was measured or specified on them.
-        media: list[tuple[str, dict[str, Any]]] = []
-        referrers: dict[str, dict[str, Any]] = {}
-        ext_nodes: dict[str, dict[str, Any]] = {}
         image_edges: list[tuple[str, str]] = []
-        # One lock hold, no copying: this walks every edge in the graph, so
-        # snapshotting them first (1.5M dict copies on a real index) cost more
-        # than the pass itself.
-        #
         # The *nodes* are narrowed to the two kinds the resolver reads, which
         # is what both `resolve_cross_source_edges` and its WASM twin already
         # filter to on arrival: artifacts carrying a path, and the
@@ -620,44 +618,47 @@ class GraphBuilder:
         # roughly double peak memory at 100k files, to build a list whose
         # first act was to throw three quarters of it away. Chunks are 55% of
         # a real graph and symbols 20%; neither is looked at here.
-        nodes: list[tuple[str, dict[str, Any]]] = []
-        # Shared nodes an edit detached (`graph.retraction`); the edge
-        # walk below says which of them anything still points at.
-        detached, self._detached = self._detached, set()
-        still_linked: set[str] = set()
-        with self.graph.reading():
-            for node_id, attrs in self.graph.iter_nodes():
-                node_type = attrs.get("type")
-                if node_type == "external_reference" or node_type in ARTIFACT_TYPES:
-                    nodes.append((node_id, dict(attrs)))
-                elif node_type in MEDIA_NODE_TYPES:
-                    media.append((node_id, dict(attrs)))
-            node_map = self.graph.node_map()
-            for (source, target), edge_map in self.graph.iter_edges():
-                if detached and target in detached:
-                    still_linked.add(target)
-                target_attrs = node_map.get(target)
-                if not target_attrs or target_attrs.get("type") != "external_reference":
+        #
+        # Selections, so a store-backed working set answers each with one
+        # query (`graph.store_backed`), and **sorted**: the resolver keeps the
+        # first spelling of a link it meets and breaks path ties by arrival,
+        # and arrival used to be "loaded first, then created by this process"
+        # -- an order that depended on sync history, not on content.
+        resolvable = set(ARTIFACT_TYPES) | {"external_reference"}
+        nodes = sorted(
+            (node_id, dict(attrs)) for node_id, attrs in self.graph.select_nodes(types=resolvable)
+        )
+        media = sorted(
+            (node_id, dict(attrs))
+            for node_id, attrs in self.graph.select_nodes(types=set(MEDIA_NODE_TYPES) - resolvable)
+        )
+        for source, target, edge_map in sorted(
+            self.graph.edges_into_types({"external_reference"}), key=lambda entry: entry[:2]
+        ):
+            for data in edge_map.values():
+                edge_type = data.get("type")
+                if edge_type == "embeds":
+                    image_edges.append((source, target))
                     continue
-                for data in edge_map.values():
-                    edge_type = data.get("type")
-                    if edge_type == "embeds":
-                        image_edges.append((source, target))
-                        continue
-                    if edge_type not in {"imports", "references"}:
-                        continue
-                    ref_edges.append((source, target, edge_type, data.get("reference_type")))
-            if image_edges and media:
-                for source, target in image_edges:
-                    ext_nodes[target] = dict(node_map.get(target) or {})
-                    referrers[source] = dict(node_map.get(source) or {})
-        orphans = detached - still_linked
+                if edge_type not in {"imports", "references"}:
+                    continue
+                ref_edges.append((source, target, edge_type, data.get("reference_type")))
+        # Shared nodes an edit detached (`graph.retraction`); whether anything
+        # still points at them is one more selection.
+        detached, self._detached = self._detached, set()
+        orphans = detached - self.graph.targets_with_incoming(detached)
         if orphans:
             self.graph.remove_nodes_from(orphans)
             nodes = [(node_id, attrs) for node_id, attrs in nodes if node_id not in orphans]
         resolved = self._resolve_cross_source_edges(nodes, ref_edges)
         if image_edges and media:
+            self.graph.prefetch(nodes={node for pair in image_edges for node in pair})
+            with self.graph.reading():
+                node_map = self.graph.node_map()
+                referrers = {source: dict(node_map.get(source) or {}) for source, _ in image_edges}
+                ext_nodes = {target: dict(node_map.get(target) or {}) for _, target in image_edges}
             resolved += resolve_image_edges(referrers, media, ext_nodes, image_edges)
+        self.graph.prefetch(pairs=[(edge.source, edge.target) for edge in resolved])
         for index, edge in enumerate(resolved):
             self.upsert_edge(edge.source, edge.target, edge.type, dict(edge.attrs))
             if index % 500 == 499:
@@ -693,21 +694,16 @@ class GraphBuilder:
     def remove_source_content(self, source_name: str) -> None:
         """Drop everything one source contributed.
 
-        Iterated under ``reading()`` rather than through ``nodes(data=True)``,
-        which materializes ``(node_id, attrs)`` for the **whole graph** before
-        the filter looks at the first one — measured **1.16s** at 100k files,
-        an order of magnitude more than the removal it was preparing for. The
-        live mapping is safe here because the lock is held for the walk and the
-        result is a plain list of ids.
+        A selection on ``source_id`` rather than ``nodes(data=True)``, which
+        materialized ``(node_id, attrs)`` for the **whole graph** before the
+        filter looked at the first one — measured **1.16s** at 100k files, an
+        order of magnitude more than the removal it was preparing for. On a
+        store-backed working set it is one indexed query and no decoding.
         """
 
         source_node = f"source:{self.kb_id}:{source_name}"
-        with self.graph.reading():
-            nodes = [
-                node_id
-                for node_id, attrs in self.graph.iter_nodes()
-                if attrs.get("source_id") == source_name or node_id == source_node
-            ]
+        nodes = [node_id for node_id, _attrs in self.graph.select_nodes(source_id=source_name)]
+        nodes.append(source_node)
         self.graph.remove_nodes_from(nodes)
         self.prune_orphan_source_type_hubs()
 
@@ -720,17 +716,16 @@ class GraphBuilder:
         from leaving a misleading graph fragment behind.
         """
 
-        with self.graph.reading():
-            active_types: set[str] = set()
-            hubs: list[tuple[str, str | None]] = []
-            for node_id, attrs in self.graph.iter_nodes():
-                node_type = attrs.get("type")
-                source_type = attrs.get("source_type")
-                if node_type == "source" and source_type:
-                    active_types.add(str(source_type))
-                elif node_type == "source_type":
-                    hubs.append((node_id, str(source_type) if source_type else None))
-            orphans = [node_id for node_id, source_type in hubs if source_type not in active_types]
+        active_types: set[str] = set()
+        hubs: list[tuple[str, str | None]] = []
+        for node_id, attrs in self.graph.select_nodes(types=("source", "source_type")):
+            node_type = attrs.get("type")
+            source_type = attrs.get("source_type")
+            if node_type == "source" and source_type:
+                active_types.add(str(source_type))
+            elif node_type == "source_type":
+                hubs.append((node_id, str(source_type) if source_type else None))
+        orphans = [node_id for node_id, source_type in hubs if source_type not in active_types]
         self.graph.remove_nodes_from(orphans)
         return len(orphans)
 
@@ -756,16 +751,12 @@ class GraphBuilder:
         ids = set(artifact_ids)
         if not ids:
             return
-        # Same reasoning as `remove_source_content`: under the lock, not
-        # through a whole-graph snapshot. This one is called from memory
-        # maintenance for a handful of archived records, so the snapshot was
-        # the entire cost of the call.
-        with self.graph.reading():
-            nodes = [
-                node_id
-                for node_id, attrs in self.graph.iter_nodes()
-                if node_id in ids or attrs.get("artifact_id") in ids
-            ]
+        # Same reasoning as `remove_source_content`: a selection, not a
+        # whole-graph snapshot. This one is called from memory maintenance for
+        # a handful of archived records, so the snapshot was the entire cost
+        # of the call.
+        nodes = {node_id for node_id, _attrs in self.graph.select_nodes(ids=ids)}
+        nodes |= {node_id for node_id, _attrs in self.graph.select_nodes(artifact_ids=ids)}
         self.graph.remove_nodes_from(nodes)
 
 

@@ -163,14 +163,40 @@ remote-safe and each binary document gets its own bounded task envelope. Images,
 audio, taxonomy-enabled sources and repair passes still prepare locally because
 they rely on credentials, sidecars or live graph state.
 
-## What a sync walks, and what it no longer walks
+## A sync process does not load the graph
 
-The indexer keeps the graph in memory as its working set — the builder mutates
-it and the enrichment passes walk it. Three of those passes were reading the
-whole graph for a slice of it, which is both sync time and the reason the
-working set has to be as large as it is. Measured at 100k files (630k nodes):
+Every sync a server runs happens in a `pheasant sync` child process. On the
+row backend (`storage.graph_format: rows`, the default) that process no
+longer loads the graph before its first commit: it indexes into a working set
+that reads the rows a selection at a time and writes the same delta
+(`graph/store_backed.py`). What a sync reads now scales with what it changed:
 
-| Pass | Was | Now |
+| | Before | Now |
+|---|---|---|
+| Graph load before the first commit | every node and edge, decoded | none |
+| Indexing one file | in-memory reads | a few batched queries for its neighbourhood |
+| Linking passes (cross-source, OKF, memory bridge) | walks of the whole graph | one query each over indexed columns |
+| An unchanged sync | (load deferred, nothing read) | one query |
+
+Measured on a 123k-node / 762k-edge Postgres region in a 2-CPU indexer, a full
+re-sync of a 15-file repository went from 37-56 s to 10-14 s; the load alone
+had been 14-38 s. The saved graph is identical either way -- row for row,
+generation id included -- which `tests/test_store_backed_graph.py` asserts on
+SQLite and Postgres.
+
+The interval's history snapshot (`storage.graph_snapshot_interval_seconds`)
+is taken beside a sync rather than inside it: the server starts it in a
+process of its own once the sync reports, so the first changed sync of an
+interval no longer pays for it. It is written from the rows as stored text,
+and discarded if a commit lands while it is read.
+
+Serving is unchanged: a standalone server still reloads its resident graph
+after a sync and serves from it, and replicas still read the rows.
+
+Three of the passes used to read the whole graph for a slice of it, measured
+at 100k files (630k nodes) when they were narrowed:
+
+| Pass | Was | Then |
 |---|---|---|
 | Cross-source resolution's node list | 2.95 s, +160 MB (every node copied) | 319 ms, +24 MB (the 15% it reads) |
 | Removing a source or an artifact | 1.16 s snapshot before the filter | iterated under the lock |
@@ -181,19 +207,13 @@ retired — so it had been building an index over an empty term set and emitting
 zero `similar_to` edges for as long as that has been true. It is a no-op now,
 asserted as one.
 
-One O(total) cost remains on the indexer: removing nodes walks the edge table,
-because an edge goes when *either* endpoint does and only the outgoing
-direction is indexed. It measured ~120 ms at 100k files and fires once per full
-sync and on a memory-maintenance beat; an in-adjacency index would remove it
-for about 15% more working-set memory, which is the wrong trade against a plan
-to stop holding the graph at all.
-
 ## Delta generations and recovery
 
 Unchanged CLI/worker syncs defer graph deserialization. They list and compare
 content-addressed manifest entries, update the checkpoint, and read counts from
-the publication record; the full graph is loaded only when a changed artifact
-must mutate it. Changed generations publish the graph first and the source
+the publication record. On the file backend the full graph is loaded only when
+a changed artifact must mutate it; on the row backend it is never loaded (see
+above). Changed generations publish the graph first and the source
 manifests last, so a crash causes safe reprocessing instead of an
 ahead-of-graph manifest.
 
