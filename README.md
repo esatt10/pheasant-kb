@@ -52,7 +52,7 @@ git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb && echo "OPEN
 Open <http://127.0.0.1:8765>, then paste the API token into **Connect API**:
 
 ```bash
-docker compose exec api cat /run/pheasant/secrets/api-token
+docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'
 ```
 
 Drop files onto the UI, or add a repository or web page under **Sources**.
@@ -187,7 +187,7 @@ cell would make the picture say something the passages did not.
 
 ```bash
 claude mcp add --transport http pheasant http://127.0.0.1:8765/mcp \
-  --header "Authorization: Bearer $(docker compose exec -T api cat /run/pheasant/secrets/api-token)"
+  --header "Authorization: Bearer $(docker compose exec -T api sh -c 'cat /run/pheasant/secrets/api-token')"
 ```
 
 Any other MCP client takes the same URL and bearer header. Your agent then gets tools to search, to

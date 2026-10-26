@@ -43,8 +43,9 @@ docker compose up -d
 It needs only `OPENAI_API_KEY`: `secrets-init` generates the four distinct
 tokens into volumes on first boot and keeps them. The API token for the UI and
 MCP clients is read with
-`docker compose exec api cat /run/pheasant/secrets/api-token`; never print it
-into a commit or a shared log. Size every service through the variables in
+`docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'`
+(the `sh -c` keeps Git Bash on Windows from rewriting the path); never print
+it into a commit or a shared log. Size every service through the variables in
 the root `.env.example` (`PHEASANT_WORKERS`, `PHEASANT_INDEXER_MEMORY`, ...)
 rather than by editing `compose.yaml`. To change behaviour, copy
 `deploy/compose/pheasant-kb.yaml`, set `PHEASANT_KB_CONFIG` to the copy and

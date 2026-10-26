@@ -223,9 +223,9 @@ references / imports / calls / similar_to / supersedes / about). Full grammar:
 ## 3. Canonical commands
 
 ```bash
-echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d   # pheasant-kb
-docker compose exec api cat /run/pheasant/secrets/api-token  # UI/MCP token
-docker compose run --rm backup | restore <name> [--force]     # pheasant-kb backups
+echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d           # pheasant-kb
+docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'  # UI/MCP token
+docker compose run --rm backup | restore <name> [--force]             # pheasant-kb backups
 
 pip install -e ".[dev,mcp]"
 pytest -q                                  # offline by design

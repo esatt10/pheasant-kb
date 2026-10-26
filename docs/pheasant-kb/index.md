@@ -37,11 +37,12 @@ few minutes. `docker compose ps` shows each service becoming `healthy`.
 2. Print the API token and paste it into **Connect API** at the top right:
 
     ```bash
-    docker compose exec api cat /run/pheasant/secrets/api-token
+    docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'
     ```
 
 The token was generated on first boot and is kept across restarts. The browser
-keeps it for the session only.
+keeps it for the session only. The `sh -c` is there for Git Bash on Windows,
+which rewrites a bare `/run/...` argument into a Windows path.
 
 ## Give it something to know
 
@@ -63,7 +64,7 @@ call carries the API token as a bearer header. For Claude Code:
 
 ```bash
 claude mcp add --transport http pheasant http://127.0.0.1:8765/mcp \
-  --header "Authorization: Bearer $(docker compose exec -T api cat /run/pheasant/secrets/api-token)"
+  --header "Authorization: Bearer $(docker compose exec -T api sh -c 'cat /run/pheasant/secrets/api-token')"
 ```
 
 Any other MCP client takes the same URL and `Authorization: Bearer <token>`

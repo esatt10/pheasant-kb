@@ -4,7 +4,7 @@
 #
 # Then open http://127.0.0.1:8765 and paste the API token printed by
 #
-#   docker compose exec api cat /run/pheasant/secrets/api-token
+#   docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'
 #
 # into "Connect API". Everything is documented, with this file as the
 # reference, in docs/pheasant-kb/ — what each service holds, how to change

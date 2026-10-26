@@ -196,7 +196,7 @@ root. Starting fresh under the new names instead means a full re-index.
 | Symptom | Cause and fix |
 |---|---|
 | `docker compose up` stops with `required variable OPENAI_API_KEY is missing` | `.env` is missing or not beside `compose.yaml`. Run the command from the repository root. |
-| The UI shows **Connect API**, or requests return `401` | Paste the API token: `docker compose exec api cat /run/pheasant/secrets/api-token`. |
+| The UI shows **Connect API**, or requests return `401` | Paste the API token: `docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'`. |
 | MCP returns `421 Misdirected Request` | The client reached the stack under a hostname missing from `server.api.cors_origins`. Add the origin in your config copy. |
 | A service restarts during a large sync | Usually out of memory. `docker inspect --format '{{.State.OOMKilled}}' <container>` confirms it; raise that service's `*_MEMORY` ([Scale](scale.md)). |
 | A pull fails with `429 Too Many Requests` | Docker Hub's anonymous limit, on the `postgres` or `nats` image. `docker login`, then `docker compose up -d` again. |

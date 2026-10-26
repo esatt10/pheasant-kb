@@ -5,7 +5,7 @@ how often:
 
 | Where | What it holds | Changed by |
 |---|---|---|
-| `.env` | Your keys, tokens, port, image, and the size of every service | Editing the file, then `docker compose up -d` |
+| `.env` | Your keys, tokens, port, image, and the size of every service | Editing the file, then `docker compose up -d`; a changed token needs `docker compose up -d --force-recreate` ([Rotate a token](operate.md#rotate-a-token)) |
 | `pheasant.yaml` (shipped as [`deploy/compose/pheasant-kb.yaml`](https://github.com/esatt10/pheasant-kb/blob/main/deploy/compose/pheasant-kb.yaml)) | What pheasant does: models, retrieval, ingestion, memory, security | A copy you own, then a restart |
 | The knowledge base itself | Sources you added, applied tuning bundles, memory records | The UI, the HTTP API and MCP. Stored in Postgres and kept across restarts and upgrades. |
 
