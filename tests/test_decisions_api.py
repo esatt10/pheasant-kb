@@ -13,8 +13,9 @@ Acceptance:
 4. Passages judged irrelevant are left out of the answer's context, never
    below ``prune_min_keep``.
 5. The first draft is written at ``draft_reasoning_effort``; a rejected draft
-   is rewritten once at the assistant's own effort, and a second rejection is
-   returned and reported as degraded.
+   is rewritten once at the assistant's own effort (or as ``repair_efforts``
+   says, per config or per request), and a second rejection is returned and
+   reported as degraded.
 6. Every unusable judgement falls back to the model-written grade the loop
    always had, *and says so* — never silently read as "sufficient".
 7. ``shadow`` acts on nothing: same answer, same model calls as ``off``, with
@@ -277,6 +278,7 @@ def test_the_config_section_refuses_nonsense() -> None:
         {"gates": ["sufficiency", "vibes"]},
         {"accept_threshold": 1.5},
         {"draft_reasoning_effort": "high"},
+        {"repair_efforts": ["low", "medium"]},
         {"prune_min_keep": 0},
     ):
         with pytest.raises(ValueError):
@@ -357,7 +359,9 @@ class _LLM:
         return _LLM(self.replies, effort, self.log)
 
     def complete(self, system, prompt, **kwargs):
-        self.log.append({"system": system, "effort": self.reasoning_effort, **kwargs})
+        self.log.append(
+            {"system": system, "prompt": prompt, "effort": self.reasoning_effort, **kwargs}
+        )
         if not self.replies:
             raise AssertionError("unexpected model call")
         reply = self.replies.pop(0)
@@ -511,6 +515,7 @@ def test_a_rejected_draft_is_rewritten_once_at_full_effort(monkeypatch) -> None:
     result = _run(search, llm, _decider(), monkeypatch, wire)
 
     assert [entry["effort"] for entry in llm.log] == ["low", None]
+    assert any(s.name == "accept" and "rewriting at full effort" in s.detail for s in result.steps)
     assert "REVISION" in llm.log[1]["system"] and "do not state" in llm.log[1]["system"]
     assert result.answer == "Set staged_retrieval: true [1]."
     assert [e["outcome"] for e in result.decisions["calls"] if e["gate"] == "accept"] == [
@@ -518,6 +523,93 @@ def test_a_rejected_draft_is_rewritten_once_at_full_effort(monkeypatch) -> None:
         "accepted",
     ]
     assert result.decisions["repairs"] == 1 and result.decisions["accepted"] is True
+
+
+def test_a_rewrite_runs_at_the_repair_effort_it_is_given(monkeypatch) -> None:
+    search = _Search({QUESTION: [_hit("config")]})
+    wire = _Wire(
+        {"sufficient": 0.95},
+        {"grounded": 0.2, "responsive": 0.9},
+        {"grounded": 0.9, "responsive": 0.9},
+    )
+    llm = _LLM(["A made-up claim [1].", "Set staged_retrieval: true [1]."])
+
+    result = _run(search, llm, _decider(repair_efforts=("low",)), monkeypatch, wire)
+
+    assert [entry["effort"] for entry in llm.log] == ["low", "low"]
+    assert "REVISION" in llm.log[1]["system"]
+    assert any(s.name == "accept" and "rewriting at low effort" in s.detail for s in result.steps)
+    accepts = [e for e in result.decisions["calls"] if e["gate"] == "accept"]
+    assert [e["draft_effort"] for e in accepts] == ["low", "low"], "each judged draft's effort"
+    assert result.decisions["repair_efforts"] == ["low"]
+    assert result.decisions["accepted"] is True
+
+
+def test_a_cheap_rewrite_that_is_rejected_escalates_to_full_effort(monkeypatch) -> None:
+    search = _Search({QUESTION: [_hit("config")]})
+    wire = _Wire(
+        {"sufficient": 0.95},
+        {"grounded": 0.2, "responsive": 0.9},
+        {"grounded": 0.3, "responsive": 0.9},
+        {"grounded": 0.9, "responsive": 0.9},
+    )
+    llm = _LLM(["Draft [1].", "Cheap rewrite [1].", "Set staged_retrieval: true [1]."])
+
+    result = _run(search, llm, _decider(repair_efforts=("low",), max_repairs=2), monkeypatch, wire)
+
+    assert [entry["effort"] for entry in llm.log] == ["low", "low", None]
+    details = [s.detail for s in result.steps if s.name == "accept"]
+    assert "rewriting at low effort" in details[0] and "rewriting at full effort" in details[1]
+    assert result.answer == "Set staged_retrieval: true [1]."
+    assert result.decisions["repairs"] == 2 and result.decisions["accepted"] is True
+
+
+def test_a_request_picks_its_own_repair_ladder(monkeypatch) -> None:
+    def run(**options):
+        wire = _Wire(
+            {"sufficient": 0.95},
+            {"grounded": 0.2, "responsive": 0.9},
+            {"grounded": 0.2, "responsive": 0.9},
+            {"grounded": 0.9, "responsive": 0.9},
+        )
+        llm = _LLM(["Draft [1].", "Rewrite [1].", "Again [1]."])
+        result = _run(
+            _Search({QUESTION: [_hit("config")]}), llm, _decider(), monkeypatch, wire, **options
+        )
+        return [entry["effort"] for entry in llm.log], result.decisions
+
+    efforts, judged = run(repair_efforts="low", max_repairs=2)
+    assert efforts == ["low", "low", None]
+    assert (judged["max_repairs"], judged["repair_efforts"]) == (2, ["low"])
+    # One bad entry voids the ladder rather than shifting it: the config's runs.
+    efforts, judged = run(repair_efforts=["medium", "low"])
+    assert efforts == ["low", None] and judged["repair_efforts"] == []
+    # Out of range or not an integer: the configured count.
+    for bad in (9, -1, True, "2"):
+        assert run(max_repairs=bad)[1]["max_repairs"] == 1
+
+
+def test_synthesis_passages_narrows_the_answer_and_not_the_judgement(monkeypatch) -> None:
+    hits = [_hit(name) for name in ("a", "b", "c", "d", "e")]
+    wire = _Wire({"sufficient": 0.95, "grounded": 0.9, "responsive": 0.9})
+    llm = _LLM(["Answer [1] [2]."])
+
+    result = _run(
+        _Search({QUESTION: hits}), llm, _decider(), monkeypatch, wire, synthesis_passages=2
+    )
+
+    assert [c["relative_path"] for c in result.citations] == ["docs/a.md", "docs/b.md"]
+    judged = wire.requests[0][1]["input"]
+    assert "[5] docs/e.md" in judged, "the sufficiency judgement still read every passage"
+    assert "docs/b.md" in llm.log[0]["prompt"] and "docs/c.md" not in llm.log[0]["prompt"]
+    unset = _run(
+        _Search({QUESTION: hits}),
+        _LLM(["Answer [1]."]),
+        _decider(),
+        monkeypatch,
+        _Wire({"sufficient": 0.95, "grounded": 0.9, "responsive": 0.9}),
+    )
+    assert len(unset.citations) == 5
 
 
 def test_a_second_rejection_is_returned_and_reported(monkeypatch) -> None:

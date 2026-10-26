@@ -117,6 +117,7 @@ DEFAULTS: dict[str, Any] = {
     "per_query_results": 8,
     # Total passages offered to the synthesis step.
     "max_context_passages": 12,
+    "synthesis_passages": None,  # of those, how many it is written from (drafting.py)
     # Ask the model to grade its own evidence before answering.
     "grade_evidence": True,
     "grader_model": None,
