@@ -325,13 +325,21 @@ def _source_inputs(
     owned_edges: set[tuple[str, str, str]] = set()
     owned_nodes: set[str] = set()
 
-    def collect(node_id: str) -> list[str]:
-        targets = []
-        for source, target, edge_map in graph.out_edges(node_id):
+    def collect(node_ids: list[str]) -> dict[str, list[str]]:
+        """Targets of the OKF edges leaving each of ``node_ids``, recording them as owned.
+
+        One selection for a batch of nodes (`SimpleMultiDiGraph.out_edges_marked`),
+        so a working set that reads the store asks once rather than once per
+        artifact of the source.
+        """
+
+        targets: dict[str, list[str]] = {}
+        for source, target, edge_map in graph.out_edges_marked(
+            node_ids, "enrichment_pass", ENRICHMENT_PASS
+        ):
             for data in edge_map.values():
-                if data.get("enrichment_pass") == ENRICHMENT_PASS:
-                    owned_edges.add((source, target, str(data.get("type"))))
-                    targets.append(target)
+                owned_edges.add((source, target, str(data.get("type"))))
+            targets.setdefault(source, []).append(target)
         return targets
 
     with graph.reading():
@@ -339,23 +347,28 @@ def _source_inputs(
         for _, target, edge_map in graph.out_edges(source_node):
             if any(data.get("type") == "indexes" for data in edge_map.values()):
                 artifact_ids.append(target)
-        frontier = collect(source_node)
+        frontier = collect([source_node]).get(source_node, [])
         while frontier:
+            graph.prefetch(nodes=frontier)
             node_id = frontier.pop()
             attrs = graph.nodes.get(node_id) or {}
             if attrs.get("enrichment_pass") != ENRICHMENT_PASS or node_id in owned_nodes:
                 continue
             owned_nodes.add(node_id)
-            frontier.extend(collect(node_id))
-        for artifact_id in artifact_ids:
-            attrs = graph.nodes.get(artifact_id) or {}
-            relative_path = attrs.get("relative_path")
-            if not relative_path:
-                continue
-            artifacts.append(
-                SourceArtifact(artifact_id, str(relative_path), attrs.get("okf") or None)
-            )
-            for target in collect(artifact_id):
+            frontier.extend(collect([node_id]).get(node_id, []))
+        graph.prefetch(nodes=artifact_ids)
+        # Sorted, so bundle detection never depends on the order a source's
+        # artifacts happened to arrive in.
+        located = sorted(
+            (str(attrs["relative_path"]), artifact_id, attrs)
+            for artifact_id in artifact_ids
+            if (attrs := graph.nodes.get(artifact_id) or {}).get("relative_path")
+        )
+        targets = collect([artifact_id for _path, artifact_id, _attrs in located])
+        graph.prefetch(nodes={target for found in targets.values() for target in found})
+        for relative_path, artifact_id, attrs in located:
+            artifacts.append(SourceArtifact(artifact_id, relative_path, attrs.get("okf") or None))
+            for target in targets.get(artifact_id, []):
                 target_attrs = graph.nodes.get(target) or {}
                 if target_attrs.get("enrichment_pass") == ENRICHMENT_PASS:
                     owned_nodes.add(target)

@@ -68,12 +68,16 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     support: dict[str, set[str]] = {}
     members: dict[str, set[str]] = {}
     graph = engine.graph_builder.graph
+    # The edges *leaving* this source's records -- all the old whole-edge walk
+    # ever kept -- so a working set that reads the store fetches only those.
+    origins = sorted(artifact_to_record)
+    graph.prefetch(outs=origins)
+    leaving = [entry for origin in origins for entry in graph.out_edges(origin)]
+    graph.prefetch(nodes={target for _origin, target, _edges in leaving})
     with graph.reading():
         nodes = graph.node_map()
-        for (origin, target), edges in graph.iter_edges():
-            record_id = artifact_to_record.get(origin)
-            if record_id is None:
-                continue
+        for origin, target, edges in leaving:
+            record_id = artifact_to_record[origin]
             if any(edge.get("type") == "subsumes" for edge in edges.values()):
                 member_id = artifact_to_record.get(target)
                 if member_id is not None:

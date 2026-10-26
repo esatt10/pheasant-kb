@@ -143,6 +143,7 @@ def retract_stale_enrichment(
     if not detached:
         return set()
     current_symbols = {node.id for node in enrichment.nodes if node.type == "symbol"}
+    graph.prefetch(nodes=detached)
     nodes = graph.node_map()
     owned: list[str] = []
     shared: set[str] = set()
@@ -183,6 +184,18 @@ def remove_vanished_artifacts(
     remove: set[str] = set()
     shared: set[str] = set()
     directories: set[str] = set()
+    # Batched for a working set that reads the store (`graph.store_backed`):
+    # the artifacts and what they point at, then their directories.
+    artifact_ids = [artifact_id for artifact_id, _path, _branch in vanished]
+    graph.prefetch(nodes=artifact_ids, outs=artifact_ids)
+    graph.prefetch(
+        nodes={
+            target
+            for artifact_id in artifact_ids
+            if artifact_id in graph
+            for _, target, _edges in graph.out_edges(artifact_id)
+        }
+    )
     nodes = graph.node_map()
     for artifact_id, relative_path, branch in vanished:
         if artifact_id not in graph:
@@ -201,6 +214,7 @@ def remove_vanished_artifacts(
         for depth in range(1, len(parts) + 1):
             prefix = "/".join(parts[:depth])
             directories.add(f"directory:{source_name}:{prefix}:branch={branch or 'none'}")
+    graph.prefetch(nodes=directories, outs=directories)
     # Deepest first, so a parent is judged after its emptied children are.
     for directory in sorted(directories, key=lambda d: d.count("/"), reverse=True):
         if directory not in graph:

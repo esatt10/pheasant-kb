@@ -53,6 +53,38 @@ DEFAULT_INACTIVITY_TIMEOUT_S = 30 * 60
 DEFAULT_LEASE_WAIT_S = DEFAULT_TIMEOUT_S - 60
 
 
+#: A history snapshot past this is abandoned; the next due window retries.
+SNAPSHOT_TIMEOUT_S = 30 * 60
+
+#: One background snapshot per server process at a time.
+_snapshot_lock = threading.Lock()
+_snapshot_job: threading.Thread | None = None
+
+
+def run_snapshot(config_path: str | Path, *, timeout: float = SNAPSHOT_TIMEOUT_S) -> dict[str, Any]:
+    """Take the interval's graph snapshot in a child process; return its report.
+
+    A child for the same reason a sync is one: reading a region's rows back
+    is a CPU-bound Python pass, and the server's interpreter answers queries.
+    See :func:`pheasant.sync.graph_history.snapshot_published`.
+    """
+
+    command = [sys.executable, "-m", "pheasant.sync.graph_history", "--config", str(config_path)]
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Graph snapshot child timed out after %ss", timeout)
+        return {"status": "timeout"}
+    if completed.returncode != 0:
+        tail = (completed.stderr or "").strip().splitlines()[-3:]
+        logger.warning("Graph snapshot child failed: %s", " / ".join(tail))
+        return {"status": "failed"}
+    lines = [line for line in completed.stdout.splitlines() if line.startswith("{")]
+    return json.loads(lines[-1]) if lines else {"status": "ok"}
+
+
 class SyncWorkerStalled(RuntimeError):
     """A child stayed alive but emitted no progress for the stall budget."""
 
@@ -165,9 +197,14 @@ def _run_streaming(
     stderr stays fully buffered, because it is only read on failure and
     draining two pipes by hand is how you deadlock on a full one.
     """
+    # This process takes the child's history snapshot once it reports
+    # (`WorkerBackedEngine._snapshot_in_background`), so the child need not.
+    from pheasant.sync.graph_history import SNAPSHOT_BY_SUPERVISOR
+
+    env = {**os.environ, SNAPSHOT_BY_SUPERVISOR: "1"}
     if on_progress is None:
         completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout, check=False
+            command, capture_output=True, text=True, timeout=timeout, check=False, env=env
         )
         return completed.returncode, completed.stdout, completed.stderr
 
@@ -177,6 +214,7 @@ def _run_streaming(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env=env,
     ) as process:
         assert process.stdout is not None
         assert process.stderr is not None
@@ -386,6 +424,7 @@ class WorkerBackedEngine:
             on_progress=on_progress,
         )
         results = self._adopt(report)
+        self._snapshot_in_background(results, mode)
         return results[0] if results else self._empty(source_name, report)
 
     def apply_index_task(self, task: Any, *, on_progress: Any = None) -> Any:
@@ -409,6 +448,7 @@ class WorkerBackedEngine:
             },
         )
         results = self._adopt(report)
+        self._snapshot_in_background(results, str(task.mode))
         return results[0] if results else self._empty(str(task.source_id), report)
 
     def sync_all(
@@ -435,6 +475,7 @@ class WorkerBackedEngine:
             on_progress=on_progress,
         )
         results = self._adopt(report)
+        self._snapshot_in_background(results, mode)
         # A child-process failure has no per-source result payload. Returning
         # an empty list made callers conclude that there were zero failures
         # and mark the UI job succeeded even though the worker exited nonzero.
@@ -465,6 +506,54 @@ class WorkerBackedEngine:
         for name in names:
             results.append(self.sync_source(name, "incremental"))
         return results
+
+    def _snapshot_in_background(self, results: list[Any], mode: str) -> None:
+        """Start the interval's history snapshot, if due, beside rather than in a sync.
+
+        Only on the row backend, whose children defer it (their graph is not
+        in memory, so the snapshot reads the rows back); the file backend's
+        snapshot is a byte copy the child still takes inline. Only after a
+        sync that changed something, by the rule the inline snapshot keeps:
+        history stores changes, so an unchanged generation is never written
+        again just because the interval passed. Single-flight: a sync
+        finishing while one runs does not start a second.
+        """
+
+        global _snapshot_job
+        changed = mode == "full" or any(
+            result.indexed_artifacts or (result.details or {}).get("removed_artifacts")
+            for result in results
+        )
+        if not changed:
+            return
+        from pheasant.ingestion.pipeline import utc_now
+        from pheasant.sync.graph_history import snapshot_due
+
+        engine = self._engine
+        try:
+            storage = engine.config.storage
+            if not storage.graph_snapshots or engine.graph_store.rows is None:
+                return
+            if not snapshot_due(
+                engine.graph_store,
+                engine.config.knowledge_base_id,
+                utc_now(),
+                storage.graph_snapshot_interval_seconds,
+            ):
+                return
+        except Exception:  # noqa: BLE001 - history is never load-bearing for a sync
+            logger.debug("Could not tell whether a graph snapshot is due", exc_info=True)
+            return
+        with _snapshot_lock:
+            if _snapshot_job is not None and _snapshot_job.is_alive():
+                return
+            _snapshot_job = threading.Thread(
+                target=run_snapshot,
+                args=(self._config_path,),
+                name="pheasant-graph-snapshot",
+                daemon=True,
+            )
+            _snapshot_job.start()
 
     def _adopt(self, report: dict[str, Any]) -> list[Any]:
         """Turn the worker's report into SyncResults and pick up its graph."""
