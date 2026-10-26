@@ -74,6 +74,9 @@ class Row(dict):
     them: ~20 s of a 157 s profile went to the override's two ``isinstance``
     tests. ``order`` lets a backend share one column list across a result set
     instead of building one per row.
+
+    No slices: nothing slices a row, and before Python 3.12 a slice is not
+    hashable, so the dict lookup refuses it before ``__missing__`` is asked.
     """
 
     __slots__ = ("_order",)
@@ -85,8 +88,6 @@ class Row(dict):
     def __missing__(self, key: Any) -> Any:
         if isinstance(key, int):
             return dict.__getitem__(self, self._order[key])
-        if isinstance(key, slice):
-            return [dict.__getitem__(self, k) for k in self._order[key]]
         raise KeyError(key)
 
     def keys(self):  # type: ignore[override]

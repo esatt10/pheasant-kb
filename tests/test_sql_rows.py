@@ -16,12 +16,11 @@ from pheasant.persistence.backends import _result_rows
 from pheasant.persistence.sql import Row
 
 
-def test_a_row_answers_by_name_by_position_and_by_slice() -> None:
+def test_a_row_answers_by_name_and_by_position() -> None:
     row = Row({"id": "a", "type": "doc", "size": 3})
     assert row["type"] == "doc"
     assert row[0] == "a"
     assert row[-1] == 3
-    assert row[0:2] == ["a", "doc"]
     assert row.keys() == ["id", "type", "size"]
     assert dict(row) == {"id": "a", "type": "doc", "size": 3}
     assert {**row}["size"] == 3
