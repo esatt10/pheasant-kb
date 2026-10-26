@@ -424,7 +424,7 @@ class WorkerBackedEngine:
             on_progress=on_progress,
         )
         results = self._adopt(report)
-        self._snapshot_in_background()
+        self._snapshot_in_background(results, mode)
         return results[0] if results else self._empty(source_name, report)
 
     def apply_index_task(self, task: Any, *, on_progress: Any = None) -> Any:
@@ -448,7 +448,7 @@ class WorkerBackedEngine:
             },
         )
         results = self._adopt(report)
-        self._snapshot_in_background()
+        self._snapshot_in_background(results, str(task.mode))
         return results[0] if results else self._empty(str(task.source_id), report)
 
     def sync_all(
@@ -475,7 +475,7 @@ class WorkerBackedEngine:
             on_progress=on_progress,
         )
         results = self._adopt(report)
-        self._snapshot_in_background()
+        self._snapshot_in_background(results, mode)
         # A child-process failure has no per-source result payload. Returning
         # an empty list made callers conclude that there were zero failures
         # and mark the UI job succeeded even though the worker exited nonzero.
@@ -507,16 +507,25 @@ class WorkerBackedEngine:
             results.append(self.sync_source(name, "incremental"))
         return results
 
-    def _snapshot_in_background(self) -> None:
+    def _snapshot_in_background(self, results: list[Any], mode: str) -> None:
         """Start the interval's history snapshot, if due, beside rather than in a sync.
 
         Only on the row backend, whose children defer it (their graph is not
         in memory, so the snapshot reads the rows back); the file backend's
-        snapshot is a byte copy the child still takes inline. Single-flight:
-        a sync finishing while one runs does not start a second.
+        snapshot is a byte copy the child still takes inline. Only after a
+        sync that changed something, by the rule the inline snapshot keeps:
+        history stores changes, so an unchanged generation is never written
+        again just because the interval passed. Single-flight: a sync
+        finishing while one runs does not start a second.
         """
 
         global _snapshot_job
+        changed = mode == "full" or any(
+            result.indexed_artifacts or (result.details or {}).get("removed_artifacts")
+            for result in results
+        )
+        if not changed:
+            return
         from pheasant.ingestion.pipeline import utc_now
         from pheasant.sync.graph_history import snapshot_due
 

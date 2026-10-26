@@ -36,7 +36,7 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.graph.store_backed import StoreBackedGraph
 from pheasant.ingestion import pipeline
 from pheasant.memory.store import MemoryStore
-from pheasant.sync.engine import SyncEngine
+from pheasant.sync.engine import SyncEngine, SyncResult
 from tests.test_okf_bundles import write_bundle
 
 KB = "working-set"
@@ -631,14 +631,19 @@ def test_the_supervisor_starts_one_snapshot_job_and_only_when_due(
     monkeypatch.setattr(worker_module, "_snapshot_job", None)
     try:
         backed = WorkerBackedEngine(engine, "/config/pheasant.yaml")
-        backed._snapshot_in_background()
-        backed._snapshot_in_background()  # one is already running
+        unchanged = [SyncResult("docs", 0, 3, 0, 0)]
+        changed = [SyncResult("docs", 2, 1, 0, 0)]
+        # History stores changes: a sync that changed nothing starts nothing.
+        backed._snapshot_in_background(unchanged, "incremental")
+        assert worker_module._snapshot_job is None
+        backed._snapshot_in_background(changed, "incremental")
+        backed._snapshot_in_background(changed, "incremental")  # one is already running
         release.set()
         worker_module._snapshot_job.join(10)
         assert started == ["/config/pheasant.yaml"]
         # Once the interval's snapshot exists, nothing is started.
         engine.graph_store.snapshot_current(KB, "2026-10-26T01:30:00Z")
-        backed._snapshot_in_background()
+        backed._snapshot_in_background(changed, "incremental")
         assert len(started) == 1
     finally:
         engine.close()
