@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.decisions import Decider
 from pheasant.config.assistant_decisions import REPAIR_EFFORTS
 
@@ -75,7 +76,7 @@ def at_effort(llm: Any, effort: str | None) -> tuple[Any, str | None]:
     if (
         llm is None
         or effort is None
-        or getattr(llm, "provider", None) != "openai"
+        or getattr(llm, "provider", None) not in OPENAI_WIRE
         or getattr(llm, "model_id", None) != "gpt-6-luna"
         or not callable(getattr(llm, "with_reasoning_effort", None))
     ):

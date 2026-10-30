@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from pheasant.assistant import decisions
+from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.decisions import Decider, DecisionUnavailable
 from pheasant.assistant.workflows import WorkflowStep, drafting
 
@@ -576,7 +577,7 @@ def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> 
         and state.get("decided")
         and request is not None
         and getattr(request, "on_draft", None) is not None
-        and getattr(llm, "provider", None) == "openai"
+        and getattr(llm, "provider", None) in OPENAI_WIRE
     ):
         from pheasant.assistant.streaming import TextPreview
 

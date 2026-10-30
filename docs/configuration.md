@@ -613,7 +613,7 @@ where it does.
 | `keyword.enabled` | bool | `true` (example) | Enables keyword index/query path. |
 | `keyword.engine` | string | `sqlite_fts5` (example) | Keyword backend engine. |
 | `embeddings.enabled` | bool | `false` | Enables embed-on-sync + `mode=vector` self-search (Synapse 21.4). |
-| `embeddings.provider` | string | `openai-spec` | `openai-spec` (OpenAI-compatible HTTP endpoint) or `stub` (deterministic, offline). |
+| `embeddings.provider` | string | `openai-spec` | `openai-spec` (OpenAI-compatible HTTP endpoint) or `stub` (deterministic, offline). An Azure AI Foundry `base_url` (`*.services.ai.azure.com`, `*.openai.azure.com`) is signed with `api-key` rather than Bearer, and `model` is the deployment name; the captioner and transcriber do the same. |
 | `embeddings.model` | string | `text-embedding-3-small` | Embedding model name (must match the Synapse fleet pin when federated). |
 | `embeddings.base_url` | string | `https://api.openai.com/v1` | OpenAI-spec endpoint base; `POST {base_url}/embeddings`. |
 | `embeddings.api_key_env` | string | `OPENAI_API_KEY` | Name of the env var holding the API key (key never lands in config/state). |
@@ -1682,10 +1682,10 @@ default and works fully offline.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `true` | `false` makes `/assistant/chat` return 403. |
-| `provider` | str | `auto` | `auto` \| `anthropic` \| `openai` \| `gemini` \| `none`. `auto` picks the first provider whose key env var is set, in the order Anthropic → OpenAI → Gemini. |
-| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-6-luna`, `gemini-2.5-flash`). |
-| `base_url` | str \| null | `null` | Point at a gateway or self-hosted OpenAI-spec endpoint. |
-| `api_key_env` | str \| null | `null` | Read the key from a differently-named variable. Defaults to the provider's own (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). |
+| `provider` | str | `auto` | `auto` \| `anthropic` \| `openai` \| `gemini` \| `azure` \| `none`. `auto` picks the first provider whose key env var is set, in the order Anthropic → OpenAI → Gemini; it never picks `azure`, which needs `base_url` too. |
+| `model` | str \| null | `null` | Provider default when unset (`claude-sonnet-5`, `gpt-6-luna`, `gemini-2.5-flash`). For `azure` it is the Foundry *deployment* name (default `gpt-6-luna`). |
+| `base_url` | str \| null | `null` | Point at a gateway or self-hosted OpenAI-spec endpoint. Required for `azure`: the Foundry resource (`https://<resource>.services.ai.azure.com`, its `/openai/v1`, or a project endpoint). |
+| `api_key_env` | str \| null | `null` | Read the key from a differently-named variable. Defaults to the provider's own (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `AZURE_FOUNDRY_API_KEY`). |
 | `allow_session_keys` | bool | `true` | Let a UI user paste a key for their browser session. Held in server memory behind an opaque token — never written to config, `/state`, or logs; dropped on expiry, revoke, or restart. Set `false` to require the env var. |
 | `session_key_ttl_minutes` | int | `720` | Lifetime of a session-supplied key. |
 | `max_context_chunks` | int | `8` | Passages retrieved and offered to the model. |
@@ -1881,7 +1881,8 @@ p50 for a sufficiency check that took 1.20 s through `/chat/completions`.
 | `draft_reasoning_effort` | `none` \| `low` \| null | `low` | Effort for the first draft (`gpt-6-luna` only). |
 | `max_repairs` | integer | `1` | Rewrites after a rejected draft. |
 | `repair_efforts` | list of `none` \| `low` \| `full` | `[low]` | Effort for each rewrite in turn (`gpt-6-luna` only); a rewrite past the end of the list is at `full`, the assistant's own effort. `[]` rewrites at full effort, which was the default before it was measured; `[low]` with `max_repairs: 2` escalates to full effort only if the cheap rewrite is rejected too. Measured below. |
-| `model`, `base_url`, `api_key_env`, `timeout_seconds` | | `gpt-6-luna`, inherited, inherited, `10` | The key is `api_key_env` if named, else the answering model's own OpenAI credential, else `OPENAI_API_KEY`. |
+| `api` | `decisions` \| `systemone` | `decisions` | `decisions` is OpenAI's Decisions API, on api.openai.com or a `gpt-6-luna` deployment on Azure AI Foundry. `systemone` is Microsoft-Decision-1 on Foundry (`{resource}/providers/microsoft/v1/systemone`), translated to and from the same questions; recalibrate the thresholds for it. See [Use Azure AI Foundry models](pheasant-kb/foundry.md). |
+| `model`, `base_url`, `api_key_env`, `timeout_seconds` | | `gpt-6-luna`, inherited, inherited, `10` | The key is `api_key_env` if named, else the answering model's own credential when that is OpenAI or Azure AI Foundry (`provider: azure`), else `OPENAI_API_KEY`. On Foundry `model` is the deployment name. |
 
 In `beta`, nothing is written until the evidence is judged sufficient, so a
 thin round costs a judgement and a search instead of a discarded answer. A

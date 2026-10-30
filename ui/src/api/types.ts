@@ -228,7 +228,7 @@ export interface Overview {
   config_path: string;
 }
 
-export type AssistantProviderId = "anthropic" | "openai" | "gemini";
+export type AssistantProviderId = "anthropic" | "openai" | "gemini" | "azure";
 
 export interface AssistantProvider {
   id: AssistantProviderId;

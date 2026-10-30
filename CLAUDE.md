@@ -208,7 +208,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 178 pytest modules, offline by design
+└── tests/                     ← 179 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1249,6 +1249,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   fact coverage unchanged. `prune` (per-passage relevance) exists and is off:
   it saved no time and, with the cheap draft, cost a detail.
   `tests/test_decisions_api.py`.
+- **Azure AI Foundry is a base URL, not a second client** (`foundry.py`).
+  Any URL on a Foundry host is signed with `api-key` instead of Bearer and
+  read as its `/openai/v1` surface, so embeddings, captions and transcripts
+  reach Foundry as `openai-spec`; `assistant.provider: azure` is the OpenAI
+  chat wire there (never chosen by `auto`: a key without a resource reaches
+  nothing). Luna-only options key on `catalog.OPENAI_WIRE`, not on
+  `"openai"`. Judgements reach a Foundry `gpt-6-luna` deployment's Decisions
+  API or Microsoft-Decision-1's System One API (`assistant.decisions.api:
+  systemone`, translated both ways by `assistant/systemone.py`), whose
+  probabilities the shipped thresholds were not calibrated on. pheasant-kb
+  stays on OpenAI; `deploy/compose/foundry/` is the opt-in overlay
+  (`docs/pheasant-kb/foundry.md`). `tests/test_azure_foundry.py`.
 - **Latency is bounded, not promised.** `assistant.latency` (all off by
   default) gives short/medium/long answers an end-to-end deadline that starts
   before history rewriting (`request_budget.py`) and a per-process cap on

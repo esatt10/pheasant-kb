@@ -1077,6 +1077,7 @@ def test_the_landing_token_is_its_own_boundary_too(tmp_path: Path, monkeypatch: 
     [
         ("PHEASANT_DATABASE_URL", "the state database"),
         ("OPENAI_API_KEY", "provider"),
+        ("AZURE_FOUNDRY_API_KEY", "provider"),
         ("PHEASANT_GRAPH_SERVICE_TOKEN", "graph-query API"),
         # A *write* credential: holding it means being able to put bytes into
         # the corpus. A worker parses bytes the indexer hands it and has no
@@ -1099,6 +1100,7 @@ def test_a_worker_refuses_every_credential_it_can_never_use(
     for name in (
         "PHEASANT_DATABASE_URL",
         "OPENAI_API_KEY",
+        "AZURE_FOUNDRY_API_KEY",
         "PHEASANT_GRAPH_SERVICE_TOKEN",
         "PHEASANT_INGESTION_SERVICE_TOKEN",
     ):

@@ -66,7 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
-from pheasant.assistant.providers import ProviderError, collect_token_usage
+from pheasant.assistant.providers import OPENAI_WIRE, ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import (
     WorkflowRequest,
@@ -921,7 +921,7 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
         if (
             request is not None
             and request.on_draft is not None
-            and getattr(llm, "provider", None) == "openai"
+            and getattr(llm, "provider", None) in OPENAI_WIRE
             and getattr(llm, "model_id", None) == "gpt-6-luna"
         ):
             from pheasant.assistant.streaming import JsonAnswerPreview

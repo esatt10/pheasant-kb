@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.request import Request, urlopen
 
+from pheasant import foundry
 from pheasant.ingestion._modal import sidecar_text, stub_fingerprint
 
 if TYPE_CHECKING:
@@ -116,7 +117,7 @@ class OpenAISpecTranscriber:
         api_key_env: str = "OPENAI_API_KEY",
         timeout: int = 60,
     ):
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = foundry.openai_v1_url(base_url or "https://api.openai.com/v1")
         self.model = model
         self.api_key_env = api_key_env
         self.timeout = timeout
@@ -130,7 +131,8 @@ class OpenAISpecTranscriber:
         headers = {"Content-Type": content_type, "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            # `api-key` on an Azure AI Foundry resource, Bearer everywhere else.
+            headers.update(foundry.auth_headers(self.base_url, api_key))
         request = Request(
             f"{self.base_url}/audio/transcriptions",
             data=body,

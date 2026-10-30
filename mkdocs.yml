@@ -65,6 +65,7 @@ nav:
   - Get started:
       - Run pheasant-kb: pheasant-kb/index.md
       - Configure pheasant-kb: pheasant-kb/configure.md
+      - Use Azure AI Foundry models: pheasant-kb/foundry.md
       - Scale up or down: pheasant-kb/scale.md
       - Operate pheasant-kb: pheasant-kb/operate.md
   - Use it:

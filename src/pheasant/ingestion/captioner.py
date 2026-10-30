@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.request import Request, urlopen
 
+from pheasant import foundry
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
 from pheasant.ingestion._modal import stub_fingerprint
 
@@ -121,7 +122,7 @@ class OpenAISpecVisionCaptioner:
         prompt: str = "Describe this image in one concise sentence for search indexing.",
         timeout: int = 30,
     ):
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = foundry.openai_v1_url(base_url or "https://api.openai.com/v1")
         self.model = model
         self.api_key_env = api_key_env
         self.prompt = prompt
@@ -149,7 +150,8 @@ class OpenAISpecVisionCaptioner:
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            # `api-key` on an Azure AI Foundry resource, Bearer everywhere else.
+            headers.update(foundry.auth_headers(self.base_url, api_key))
         request = Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),

@@ -340,7 +340,7 @@ def test_chat_http_round_trip_and_key_lifecycle(loaded_config, workspace_copy: P
 
     status = client.get("/assistant/status").json()
     assert status["enabled"] is True
-    assert {p["id"] for p in status["providers"]} == {"anthropic", "openai", "gemini"}
+    assert {p["id"] for p in status["providers"]} == {"anthropic", "openai", "gemini", "azure"}
 
     chat = client.post("/assistant/chat", json={"question": "sync engine"})
     assert chat.status_code == 200

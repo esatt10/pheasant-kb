@@ -35,14 +35,24 @@ class AssistantDecisionsSettings(ModelMixin):
     the existing grade and acts on none of them, so they can be compared.
     ``off`` is the agentic workflow exactly as it was before.
 
-    It needs an OpenAI key (``api_key_env``, else the answering model's own
-    OpenAI credential, else ``OPENAI_API_KEY``). Without one, or when the
+    It needs a key (``api_key_env``, else the answering model's own
+    credential when that is OpenAI or Azure AI Foundry, else
+    ``OPENAI_API_KEY``). ``api`` picks the wire: ``decisions`` is OpenAI's
+    Decisions API, on api.openai.com or a Foundry ``gpt-6-luna`` deployment
+    (``{resource}/openai/v1/decisions``); ``systemone`` is Microsoft-Decision-1
+    on a Foundry resource (``{resource}/providers/microsoft/v1/systemone``),
+    whose probabilities the shipped thresholds were not calibrated against. Without one, or when the
     endpoint fails, every gate falls back to the existing behaviour and the
     trace says so. Thresholds are probabilities; set them from labelled
     examples with ``scripts/calibrate_decisions.py``.
     """
 
     mode: str = "beta"  # beta | shadow | off
+    #: ``decisions`` (OpenAI's Decisions API, also served by a Foundry
+    #: ``gpt-6-luna`` deployment) or ``systemone`` (Microsoft-Decision-1 on
+    #: Foundry). With ``systemone``, ``model`` is the deployment name and
+    #: ``base_url`` any URL on the resource; only its host is used.
+    api: str = "decisions"
     model: str = "gpt-6-luna"
     #: Defaults to the answering model's base URL when that is OpenAI, else
     #: ``https://api.openai.com/v1``.
@@ -87,6 +97,8 @@ class AssistantDecisionsSettings(ModelMixin):
     def __post_init__(self) -> None:
         if self.mode not in {"beta", "shadow", "off"}:
             raise ValueError("assistant.decisions.mode must be 'beta', 'shadow' or 'off'")
+        if self.api not in {"decisions", "systemone"}:
+            raise ValueError("assistant.decisions.api must be 'decisions' or 'systemone'")
         unknown = set(self.gates) - {"sufficiency", "followup", "prune", "accept"}
         if unknown:
             raise ValueError(f"assistant.decisions.gates has unknown gate(s): {sorted(unknown)}")

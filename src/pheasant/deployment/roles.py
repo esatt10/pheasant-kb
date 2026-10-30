@@ -218,7 +218,12 @@ def resolve_role(config: object, override: str | None = None) -> RolePolicy:
 #: Provider keys a worker can never need. Drawn from the catalog rather than
 #: from config alone, because ``assistant.provider: auto`` names no variable
 #: and resolves whichever of these is present.
-_MODEL_KEY_ENVS: tuple[str, ...] = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY")
+_MODEL_KEY_ENVS: tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "AZURE_FOUNDRY_API_KEY",
+)
 
 #: Hosts that are not reachable from another machine. A bind outside this set
 #: is a routable one, whatever the operator's firewall happens to say today.
@@ -255,6 +260,7 @@ def _credential_envs(config: object) -> list[tuple[str, str]]:
         (named("ingestion.captioner.api_key_env"), "the captioner provider"),
         (named("ingestion.transcriber.api_key_env"), "the transcriber provider"),
         (named("assistant.api_key_env"), "the chat provider"),
+        (named("assistant.decisions.api_key_env"), "the decisions provider"),
         (named("security.idp.api_key_env"), "the identity provider"),
         (named("graph.query_service_token_env"), "the internal graph-query API"),
         (named("ingestion.landing_service_token_env"), "the internal landing service"),

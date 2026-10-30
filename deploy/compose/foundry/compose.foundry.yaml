@@ -1,0 +1,34 @@
+# pheasant-kb on Azure AI Foundry: a Compose override, layered over
+# compose.yaml without editing it. Turn it on in `.env`:
+#
+#   COMPOSE_FILE=compose.yaml:deploy/compose/foundry/compose.foundry.yaml
+#   PHEASANT_KB_CONFIG=./pheasant.yaml        # your copy of pheasant-kb.foundry.yaml
+#   AZURE_FOUNDRY_API_KEY=<resource key>
+#   OPENAI_API_KEY=unused                     # compose.yaml insists on a value
+#
+# (`;` instead of `:` between the two files on Windows.) Then
+# `docker compose up -d` as usual. Walk-through: docs/pheasant-kb/foundry.md.
+#
+# What it changes, and only this: the tiers that call a model get the Foundry
+# key, and none of them holds an OpenAI key. compose.yaml's `${OPENAI_API_KEY:?}`
+# is interpolated before files merge, so `.env` still needs *a* value for it;
+# the override replaces it with an empty one in every container, so nothing
+# can fall back to api.openai.com with it.
+#
+# The worker tier is deliberately absent: it calls no model, and
+# `pheasant worker` refuses to start holding AZURE_FOUNDRY_API_KEY.
+x-foundry-env: &foundry-env
+  AZURE_FOUNDRY_API_KEY: ${AZURE_FOUNDRY_API_KEY:?set AZURE_FOUNDRY_API_KEY in .env — see docs/pheasant-kb/foundry.md}
+  OPENAI_API_KEY: ""
+
+services:
+  db-init:
+    environment: *foundry-env
+  api:
+    environment: *foundry-env
+  graph:
+    environment: *foundry-env
+  indexer:
+    environment: *foundry-env
+  logger:
+    environment: *foundry-env

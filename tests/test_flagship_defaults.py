@@ -207,6 +207,9 @@ def test_every_shipped_config_names_its_table() -> None:
     assert flagship == {
         "deploy/compose/pheasant-kb.yaml",
         "deploy/compose/answers/pheasant-kb.json",
+        # pheasant-kb with its model calls on Azure AI Foundry: a partial
+        # overlay whose whole point is the flagship table underneath it.
+        "deploy/compose/foundry/pheasant-kb.foundry.yaml",
     }
 
 
