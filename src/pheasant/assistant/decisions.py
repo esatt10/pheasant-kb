@@ -27,6 +27,15 @@ Three things it does not do, which shape everything built on it:
 
 Requests go through :func:`pheasant.assistant.providers._http_json`, the one
 seam the offline suite patches, and nothing here imports an SDK.
+
+**On Azure AI Foundry** the same judgements come from either of two places.
+A ``gpt-6-luna`` deployment serves this exact API at
+``{resource}/openai/v1/decisions`` (``api: decisions``, a Foundry
+``base_url``; the request is signed with ``api-key``). Microsoft-Decision-1,
+Microsoft's own decision model, serves System One instead (``api:
+systemone``), which :mod:`pheasant.assistant.systemone` translates both ways,
+so a gate cannot tell which model judged — and must not be trusted to, until
+its thresholds are recalibrated for that model.
 """
 
 from __future__ import annotations
@@ -40,6 +49,9 @@ from typing import Any
 # reads that spelling as importing the (layer-2) package. Module access keeps
 # `_providers._http_json` the one seam the offline suite patches.
 import pheasant.assistant.providers as _providers
+import pheasant.assistant.systemone as _systemone
+from pheasant import foundry
+from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.providers import ProviderError
 from pheasant.config.assistant_decisions import DEFAULT_REPAIR_EFFORTS
 from pheasant.request_budget import DeadlineExceeded
@@ -238,6 +250,7 @@ class Decider:
     api_key: str
     model: str = DEFAULT_MODEL
     base_url: str | None = None
+    api: str = "decisions"
     timeout: float = 10.0
     mode: str = "beta"
     gates: tuple[str, ...] = DEFAULT_GATES
@@ -260,10 +273,17 @@ class Decider:
         return (self.base_url or DEFAULT_BASE_URL).rstrip("/")
 
     @property
+    def endpoint(self) -> str:
+        """The URL a judgement is posted to, for this ``api``."""
+        if self.api == "systemone":
+            return foundry.systemone_url(self.base)
+        return f"{foundry.openai_v1_url(self.base)}/decisions"
+
+    @property
     def unavailable_reason(self) -> str | None:
         """Why this process stopped asking this endpoint, if it did."""
         with _UNAVAILABLE_LOCK:
-            return _UNAVAILABLE.get((self.base, self.model))
+            return _UNAVAILABLE.get((self.endpoint, self.model))
 
     def with_deadline(self, deadline: float | None) -> Decider:
         return replace(self, deadline_monotonic=deadline)
@@ -289,6 +309,7 @@ class Decider:
     def describe(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
+            "api": self.api,
             "model": self.model,
             "gates": list(self.gates),
             "credential_source": self.source,
@@ -308,6 +329,12 @@ class Decider:
         reason = self.unavailable_reason
         if reason:
             raise DecisionUnavailable(reason)
+        if self.api == "systemone" and not foundry.is_foundry_url(self.base):
+            # Not a failure that asking again could fix, so it opens the circuit.
+            reason = "Microsoft-Decision-1 needs a Foundry resource in assistant.decisions.base_url"
+            with _UNAVAILABLE_LOCK:
+                _UNAVAILABLE[(self.endpoint, self.model)] = reason
+            raise DecisionUnavailable(reason)
         _validate(questions)
         timeout = self.timeout
         if self.deadline_monotonic is not None:
@@ -315,17 +342,21 @@ class Decider:
             if remaining <= 0:
                 raise DeadlineExceeded("assistant request deadline exceeded")
             timeout = min(timeout, remaining)
-        payload = {"model": self.model, "input": input, "questions": questions}
-        headers = {"authorization": f"Bearer {self.api_key}"}
+        if self.api == "systemone":
+            payload = _systemone.request(self.model, input, questions)
+        else:
+            payload = {"model": self.model, "input": input, "questions": questions}
+        url = self.endpoint
+        headers = foundry.auth_headers(url, self.api_key)
         started = time.perf_counter()
         try:
             _providers.note_model_call()
-            data = _providers._http_json(f"{self.base}/decisions", payload, headers, timeout)
+            data = _providers._http_json(url, payload, headers, timeout)
         except ProviderError as exc:
             message = str(exc) or type(exc).__name__
             if message.startswith(_PERMANENT):
                 with _UNAVAILABLE_LOCK:
-                    _UNAVAILABLE[(self.base, self.model)] = _short(message)
+                    _UNAVAILABLE[(url, self.model)] = _short(message)
             if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
                 raise DeadlineExceeded("assistant request deadline exceeded") from None
             self.last_failure = _short(message)
@@ -337,6 +368,8 @@ class Decider:
                 "decision_request", time.perf_counter() - started, model=self.model
             )
         seconds = time.perf_counter() - started
+        if self.api == "systemone":
+            data = _systemone.answers(data, questions)
         usage = data.get("usage") if isinstance(data, dict) else None
         input_tokens = None
         if isinstance(usage, dict):
@@ -363,9 +396,9 @@ def resolve_decider(
 
     ``settings`` is ``assistant``. The key is ``decisions.api_key_env`` when
     one is named; otherwise the answering model's own credential when that is
-    OpenAI (a browser session's key included, since it is the same account),
-    otherwise ``OPENAI_API_KEY``. No key is not an error: the workflow is
-    exactly what it was before this module existed. ``mode`` is the
+    OpenAI or Azure AI Foundry (a browser session's key included, since it is
+    the same account), otherwise ``OPENAI_API_KEY``. No key is not an error:
+    the workflow is exactly what it was before this module existed. ``mode`` is the
     per-request ``decisions`` option, which wins over the configured mode in
     both directions.
     """
@@ -382,7 +415,7 @@ def resolve_decider(
     source = "environment"
     if named_env:
         api_key = env.get(str(named_env))
-    elif llm is not None and getattr(llm, "provider", None) == "openai":
+    elif llm is not None and getattr(llm, "provider", None) in OPENAI_WIRE:
         api_key = getattr(llm, "api_key", None)
         base_url = base_url or getattr(llm, "base_url", None)
         source = "assistant"
@@ -394,6 +427,7 @@ def resolve_decider(
         api_key=str(api_key),
         model=str(getattr(decisions, "model", None) or DEFAULT_MODEL),
         base_url=base_url,
+        api=str(getattr(decisions, "api", None) or "decisions"),
         timeout=float(getattr(decisions, "timeout_seconds", 10.0) or 10.0),
         mode=mode,
         gates=tuple(getattr(decisions, "gates", None) or DEFAULT_GATES),

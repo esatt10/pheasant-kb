@@ -273,6 +273,18 @@ def main() -> int:
     parser.add_argument("--labels", type=Path, help="your own labelled JSONL")
     parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument("--base-url", default=None)
+    parser.add_argument(
+        "--api",
+        choices=("decisions", "systemone"),
+        default="decisions",
+        help="systemone: Microsoft-Decision-1 on Azure AI Foundry (--base-url is the resource, "
+        "--model its deployment name)",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        default="OPENAI_API_KEY",
+        help="the variable holding the key, e.g. AZURE_FOUNDRY_API_KEY",
+    )
     parser.add_argument("--relevance-fn-cost", type=float, default=5.0)
     parser.add_argument("--sufficiency-fp-cost", type=float, default=2.0)
     parser.add_argument("--accept-fp-cost", type=float, default=2.0)
@@ -282,9 +294,9 @@ def main() -> int:
     sys.path.insert(0, str(REPO / "src"))
     from pheasant.assistant.decisions import Decider, DecisionUnavailable, choose_threshold
 
-    key = os.environ.get("OPENAI_API_KEY")
+    key = os.environ.get(args.api_key_env)
     if not key:
-        parser.error("OPENAI_API_KEY is not set")
+        parser.error(f"{args.api_key_env} is not set")
     examples: list[dict[str, Any]] = []
     if args.scifact:
         examples += scifact_examples(args.scifact, args.claims, args.seed)
@@ -295,7 +307,9 @@ def main() -> int:
     if not examples:
         parser.error("give --scifact and/or --labels")
 
-    decider = Decider(api_key=key, model=args.model, base_url=args.base_url, timeout=30.0)
+    decider = Decider(
+        api_key=key, model=args.model, base_url=args.base_url, api=args.api, timeout=30.0
+    )
     samples: dict[str, list[tuple[float, bool]]] = {gate: [] for gate in GATE_SETTING}
     kinds: Counter[str] = Counter()
     failures = 0

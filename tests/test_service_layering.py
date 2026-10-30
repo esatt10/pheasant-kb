@@ -72,6 +72,8 @@ LAYERS: dict[str, int] = {
     # `llm`: a model handle, nothing about answering. Its *policy* — which
     # gate acts on which judgement — is `assistant/workflows/decision_gates`.
     "assistant/decisions": 1,
+    # Its Microsoft-Decision-1 (System One) wire translation, the same adapter.
+    "assistant/systemone": 1,
     # Domain and below. Listed explicitly rather than defaulted so a new
     # package has to say where it belongs.
     "search": 1,
@@ -102,6 +104,9 @@ LAYERS: dict[str, int] = {
     # Stdlib-only request deadlines and stage timings. Persistence, search and
     # the graph client read the active budget, so it sits with them.
     "request_budget": 1,
+    # Stdlib-only: which URLs are an Azure AI Foundry resource and how a
+    # request to one is signed. Read by every model-calling client.
+    "foundry": 1,
     "sharding": 1,
     # Config *generators*, not request handlers: they emit a YAML file or a
     # client's JSON and serve nothing. Classifying them as transport would put

@@ -24,6 +24,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
+from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.chat import (
     _known_workflow_names,
     build_prompt,
@@ -572,7 +573,7 @@ def answer_question(
     assistant_effort = getattr(settings, "reasoning_effort", None)
     planner_effort = merged_options.get("planner_reasoning_effort")
     grader_effort = merged_options.get("grader_reasoning_effort")
-    is_openai = getattr(llm, "provider", None) == "openai"
+    is_openai = getattr(llm, "provider", None) in OPENAI_WIRE
 
     def effective_effort(requested: Any, model: str | None) -> str | None:
         if not is_openai or model != "gpt-6-luna":

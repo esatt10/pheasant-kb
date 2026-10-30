@@ -36,9 +36,28 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "GEMINI_API_KEY",
         "AIza…",
     ),
+    # Azure AI Foundry's OpenAI v1 surface: OpenAI models deployed there and
+    # Foundry's own (MAI and the rest of the catalog). No default base URL,
+    # because the resource is the operator's; `assistant.base_url` names it,
+    # and `model` names a *deployment*. The default assumes the deployment is
+    # named after its model, as Foundry names it unless told otherwise.
+    "azure": ProviderSpec(
+        "azure",
+        "Azure AI Foundry",
+        "gpt-6-luna",
+        "",
+        "AZURE_FOUNDRY_API_KEY",
+        "Foundry resource key",
+    ),
 }
 
+#: Not `azure`: a Foundry key without the resource's URL reaches nothing, so
+#: `auto` would select a provider that cannot answer.
 AUTO_ORDER = ("anthropic", "openai", "gemini")
+
+#: Providers that speak OpenAI's chat wire, and so take its options:
+#: `reasoning_effort` and streamed drafts, where the model is `gpt-6-luna`.
+OPENAI_WIRE = frozenset({"openai", "azure"})
 
 
 def resolve_auto_provider(env: dict[str, str] | None = None) -> str | None:

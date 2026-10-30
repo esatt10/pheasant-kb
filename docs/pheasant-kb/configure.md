@@ -76,6 +76,13 @@ services:
 Embeddings, captions and transcripts run on the indexer, so a key for those
 goes on `indexer` too.
 
+To run every model call (answers, judgements, embeddings, captions and
+transcripts) on an **Azure AI Foundry** resource instead of api.openai.com,
+including Microsoft's own models, follow
+[Use Azure AI Foundry models](foundry.md). It needs four lines in `.env` and a
+copy of `deploy/compose/foundry/pheasant-kb.foundry.yaml`, and changes nothing
+in the shipped files.
+
 ## Sources
 
 pheasant-kb ships with two sources: `agent-memory` (`/memory`) and `uploads`

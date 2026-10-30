@@ -1,0 +1,79 @@
+# pheasant-kb on Azure AI Foundry — every model call goes to your Foundry
+# resource instead of api.openai.com. Everything else is pheasant-kb as shipped.
+#
+#   cp deploy/compose/foundry/pheasant-kb.foundry.yaml pheasant.yaml   # gitignored
+#   # replace YOUR-RESOURCE (four places) and the deployment names, then in .env:
+#   #   PHEASANT_KB_CONFIG=./pheasant.yaml
+#   #   COMPOSE_FILE=compose.yaml:deploy/compose/foundry/compose.foundry.yaml
+#   #   AZURE_FOUNDRY_API_KEY=<a key from the resource's "Keys and Endpoint">
+#
+# The whole walk-through, including deploying the models and choosing between
+# GPT-6 Luna and Microsoft-Decision-1 for judgements: docs/pheasant-kb/foundry.md.
+#
+# Only the keys below differ from pheasant-kb.yaml; the rest is laid underneath
+# from pheasant-kb's defaults (`defaults: flagship`).
+#
+# Two rules for every section here:
+#
+# * `base_url` is the resource's OpenAI v1 surface. The resource root or a
+#   project endpoint (…/api/projects/<name>) works too: any URL on a Foundry
+#   host is read as its …/openai/v1 surface.
+# * `model` is the *deployment* name. Foundry names a deployment after its
+#   model unless told otherwise, which is what these values assume.
+pheasant:
+  name: pheasant-kb
+  defaults: flagship
+
+search:
+  embeddings:
+    provider: openai-spec
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    # The same model and size as pheasant-kb's OpenAI default. A different
+    # model or dimension re-embeds every chunk on the next sync.
+    model: text-embedding-3-small
+    dimensions: 1536
+
+ingestion:
+  captioner:
+    provider: openai-spec
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    model: gpt-6-luna
+  transcriber:
+    provider: openai-spec
+    base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
+    api_key_env: AZURE_FOUNDRY_API_KEY
+    # A Whisper (or gpt-4o-transcribe) deployment. No audio in your sources?
+    # `provider: stub` and no deployment needed.
+    model: whisper
+
+assistant:
+  provider: azure
+  base_url: https://YOUR-RESOURCE.services.ai.azure.com/openai/v1
+  api_key_env: AZURE_FOUNDRY_API_KEY
+  # Any chat deployment on the resource: gpt-6-luna, or one of Foundry's own
+  # models (MAI-Thinking-1 and the rest of the catalog). Luna-only tuning --
+  # reasoning effort, streamed drafts -- applies only to a deployment named
+  # `gpt-6-luna`; other models answer at their own defaults.
+  model: gpt-6-luna
+  retrieval:
+    grader_model: gpt-6-luna
+  decisions:
+    # Judgements reuse the assistant's resource and key unless
+    # `base_url`/`api_key_env` are set here.
+    #
+    # `decisions`: OpenAI's Decisions API on your gpt-6-luna deployment. The
+    # shipped thresholds were calibrated against it.
+    api: decisions
+    model: gpt-6-luna
+    # Microsoft-Decision-1 instead (Microsoft's own decision model, served as
+    # System One). Deploy it under a name without "Microsoft" in it -- Azure
+    # refuses those -- and recalibrate the thresholds for it:
+    #   python scripts/calibrate_decisions.py --api systemone \
+    #     --base-url https://YOUR-RESOURCE.services.ai.azure.com \
+    #     --model ms-decision-1 --api-key-env AZURE_FOUNDRY_API_KEY --scifact .cache/scifact
+    # api: systemone
+    # model: ms-decision-1
+    # sufficient_threshold: 0.25   # from the calibration run
+    # accept_threshold: 0.55       # from the calibration run

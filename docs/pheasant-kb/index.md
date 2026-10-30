@@ -9,7 +9,8 @@ what to scale, and how to operate it.
 ## The one line
 
 You need Docker with Compose v2 (Docker Desktop on macOS and Windows, or Docker
-Engine with the compose plugin on Linux) and an OpenAI API key.
+Engine with the compose plugin on Linux) and an OpenAI API key. To use an Azure
+AI Foundry resource instead, see [Use Azure AI Foundry models](foundry.md).
 
 === "macOS / Linux"
 

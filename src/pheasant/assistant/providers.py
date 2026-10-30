@@ -1,4 +1,4 @@
-"""Chat-completion clients for OpenAI, Anthropic and Gemini.
+"""Chat-completion clients for OpenAI, Azure AI Foundry, Anthropic and Gemini.
 
 Deliberately vendor-neutral and dependency-free: the region already talks
 to OpenAI-spec embedding/caption/transcribe endpoints and a SCIM directory
@@ -10,6 +10,9 @@ Wire shapes (all POST + JSON):
 
 * openai     ``{base_url}/chat/completions`` — Bearer auth; text at
   ``choices[0].message.content``.
+* azure      the openai wire on a Foundry resource's ``{resource}/openai/v1``
+  surface — ``api-key`` header instead of Bearer, ``model`` is the deployment
+  name (:mod:`pheasant.foundry`). There is no default base URL.
 * anthropic  ``{base_url}/v1/messages`` — ``x-api-key`` +
   ``anthropic-version`` headers; text is the first ``type == "text"``
   block of ``content``. ``temperature`` is NOT sent: current models
@@ -29,9 +32,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from pheasant import foundry
 from pheasant.assistant.catalog import (
     AUTO_ORDER as CATALOG_AUTO_ORDER,
 )
+from pheasant.assistant.catalog import OPENAI_WIRE as OPENAI_WIRE
 from pheasant.assistant.catalog import (
     PROVIDERS as CATALOG_PROVIDERS,
 )
@@ -362,12 +367,19 @@ def complete(
         raise ProviderError(f"no API key available for {spec.label}")
     model = model or spec.default_model
     base = (base_url or spec.default_base_url).rstrip("/")
+    if provider == "azure":
+        if not base:
+            raise ProviderError(
+                "Azure AI Foundry needs its resource endpoint: set assistant.base_url to "
+                "https://<resource>.services.ai.azure.com/openai/v1"
+            )
+        base = foundry.openai_v1_url(base)
 
     if provider == "anthropic":
         if reasoning_effort is not None:
-            raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
+            raise ProviderError("reasoning_effort is only supported by OpenAI-wire providers")
         return _anthropic(base, api_key, model, system, prompt, max_output_tokens, timeout)
-    if provider == "openai":
+    if provider in OPENAI_WIRE:
         return _openai(
             base,
             api_key,
@@ -379,9 +391,10 @@ def complete(
             json_mode=json_mode,
             reasoning_effort=reasoning_effort,
             on_delta=on_delta,
+            label=spec.label,
         )
     if reasoning_effort is not None:
-        raise ProviderError("reasoning_effort is only supported by the OpenAI provider")
+        raise ProviderError("reasoning_effort is only supported by OpenAI-wire providers")
     return _gemini(
         base, api_key, model, system, prompt, max_output_tokens, timeout, json_mode=json_mode
     )
@@ -438,6 +451,7 @@ def _openai(
     json_mode: bool = False,
     reasoning_effort: str | None = None,
     on_delta: Callable[[str], None] | None = None,
+    label: str = "OpenAI",
 ) -> str:
     # GPT-6 models reject the legacy cap. Other OpenAI-compatible endpoints
     # keep their existing spelling and the error-driven retry below.
@@ -452,7 +466,7 @@ def _openai(
     }
     if reasoning_effort is not None:
         if model != "gpt-6-luna":
-            raise ProviderError(f"reasoning_effort is not enabled for OpenAI model {model!r}")
+            raise ProviderError(f"reasoning_effort is not enabled for {label} model {model!r}")
         if reasoning_effort not in {"none", "low"}:
             raise ProviderError(f"unsupported reasoning_effort {reasoning_effort!r}")
         payload["reasoning_effort"] = reasoning_effort
@@ -461,7 +475,7 @@ def _openai(
     if on_delta is not None:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
-    headers = {"authorization": f"Bearer {key}"}
+    headers = foundry.auth_headers(base, key)
     url = f"{base}/chat/completions"
     # Each rejection names the one field an endpoint does not accept, and each
     # is adjusted at most once, so this is bounded by the number of fields.
@@ -511,16 +525,16 @@ def _openai(
     if choice.get("finish_reason") == "length":
         if not text:
             raise OutputBudgetExhausted(
-                f"OpenAI model {model} spent its {max_tokens}-token output budget "
+                f"{label} model {model} spent its {max_tokens}-token output budget "
                 "(reasoning included) before writing any text"
             )
         raise OutputTruncated(
-            f"OpenAI model {model} stopped at its {max_tokens}-token output limit"
+            f"{label} model {model} stopped at its {max_tokens}-token output limit"
         )
     if not text:
         if message.get("refusal"):
             raise ProviderError("the model declined to answer this question")
-        raise ProviderError("empty response from OpenAI")
+        raise ProviderError(f"empty response from {label}")
     return text
 
 

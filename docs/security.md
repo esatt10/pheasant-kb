@@ -273,7 +273,11 @@ key in reach, the same evidence also goes to OpenAI's Decisions API to judge
 it, **even when the answering model is another vendor's**, because the key it
 falls back to is `OPENAI_API_KEY`. A region that must not send evidence to
 OpenAI sets `assistant.decisions.mode: off` (or keeps that key out of the
-environment). Nothing is sent at indexing time either way.
+environment). With `assistant.provider: azure` the judgements go to the same
+Azure AI Foundry resource as the answers, using the same key, and the Foundry
+override for pheasant-kb blanks `OPENAI_API_KEY` in every tier so nothing can
+fall back to OpenAI ([Use Azure AI Foundry models](pheasant-kb/foundry.md)).
+Nothing is sent at indexing time either way.
 
 ## Prompt injection posture
 

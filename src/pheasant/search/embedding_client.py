@@ -2,13 +2,13 @@
 
 Split from ``vector_store``, which holds vectors and searches them: this module
 only talks to a provider. ``OpenAISpecEmbedder`` speaks the standard
-``POST {base_url}/embeddings`` shape (OpenAI, Azure-compatible gateways, vLLM,
-Ollama's compatibility endpoint) with stdlib HTTP and no SDK: a kept-alive
-connection per thread and origin, bounded retry on transient failures, a
-shared adaptive gate under rate limiting, and a request deadline that every
-wait honours. ``QueryEmbeddingMetrics`` is the per-request accounting the
-assistant reads back (cache hits, provider requests and retries) for a query
-being answered.
+``POST {base_url}/embeddings`` shape (OpenAI, Azure AI Foundry's ``/openai/v1``,
+Azure-compatible gateways, vLLM, Ollama's compatibility endpoint) with stdlib
+HTTP and no SDK: a kept-alive connection per thread and origin, bounded retry
+on transient failures, a shared adaptive gate under rate limiting, and a
+request deadline that every wait honours. ``QueryEmbeddingMetrics`` is the
+per-request accounting the assistant reads back (cache hits, provider requests
+and retries) for a query being answered.
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import numpy as np
+
+from pheasant import foundry
 
 logger = logging.getLogger(__name__)
 
@@ -368,7 +370,7 @@ class OpenAISpecEmbedder:
         retry_backoff_seconds: float = 1.0,
         rate_limit_max_wait_seconds: float = 300.0,
     ):
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = foundry.openai_v1_url(base_url or "https://api.openai.com/v1")
         self._base64 = urlsplit(self.base_url).hostname == "api.openai.com"
         self.model = model
         self.api_key_env = api_key_env
@@ -393,7 +395,7 @@ class OpenAISpecEmbedder:
         headers = {"Accept": "application/json"}
         key = os.environ.get(self.api_key_env or "", "")
         if key:
-            headers["Authorization"] = f"Bearer {key}"
+            headers.update(foundry.auth_headers(self.base_url, key))
         try:
             _transport(Request(f"{self.base_url}/models", headers=headers, method="GET"), timeout)
             return True
@@ -562,7 +564,8 @@ class OpenAISpecEmbedder:
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
         if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+            # `api-key` on a Foundry resource, Bearer everywhere else.
+            headers.update(foundry.auth_headers(self.base_url, api_key))
         request = Request(
             f"{self.base_url}/embeddings",
             data=json.dumps(body).encode("utf-8"),
