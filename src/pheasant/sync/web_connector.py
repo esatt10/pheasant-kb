@@ -41,7 +41,7 @@ from pheasant.sync.connectors import (
     logger,
     require_fetchable_url,
 )
-from pheasant.sync.web_adapters import TerraformRegistryAdapter, adapter_for
+from pheasant.sync.web_adapters import SiteAdapter, adapter_for
 
 
 def registration_connector(source_type: str, connector: dict[str, Any] | None) -> dict[str, Any]:
@@ -101,7 +101,7 @@ class WebCollectionConnector(SourceConnector):
         self.script_shells = []
         self._adapter_cache = {}
 
-    def _adapter(self, url: str) -> TerraformRegistryAdapter | None:
+    def _adapter(self, url: str) -> SiteAdapter | None:
         return adapter_for(url) if self.source.connector.site_adapters else None
 
     def list_items(self) -> list[ConnectorItem]:

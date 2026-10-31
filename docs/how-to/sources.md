@@ -120,7 +120,7 @@ and it is on by default (`connector.site_adapters`):
 A shell from a site with no adapter is still indexed (it is what the server
 sent), but the sync logs a warning naming the page, and the checkpoint lists
 it under `script_shells`. Index that site's documentation source instead,
-such as its repository.
+such as its repository, or [add a site adapter](site-adapters.md) for it.
 
 ### How web pages stay fresh
 

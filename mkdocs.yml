@@ -76,6 +76,7 @@ nav:
       - MCP for agents: mcp_client.md
       - Agent memory: how-to/agent-memory.md
       - Configure sources: how-to/sources.md
+      - Add a site adapter (JavaScript-only pages): how-to/site-adapters.md
       - Ingest PDFs & Word documents: how-to/document-ingest.md
       - Extract a taxonomy from structured documents: how-to/structured-documents.md
       - Open Knowledge Format (OKF) bundles: how-to/okf-bundles.md

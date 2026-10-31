@@ -21,6 +21,9 @@ the one thing this module exists to stop indexing.
 Sites with no adapter are unchanged, except that a page that looks like a
 script shell is now *said* to be one (``html_text.looks_like_script_shell``)
 instead of indexing silently as a page with something in it.
+
+Adding a site is one class satisfying ``SiteAdapter`` and one entry in
+``SITE_ADAPTERS``; ``docs/how-to/site-adapters.md`` walks through it.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote, urlparse
 
 from pheasant.sync.connectors import logger
@@ -41,6 +44,28 @@ WEB_ADAPTERS_VERSION = 1
 #: ``fetch(url) -> response`` in ``connectors._urlopen``'s shape. The
 #: connector supplies it with the source's headers and timeout bound.
 Fetch = Callable[[str], dict[str, Any]]
+
+
+class SiteAdapter(Protocol):
+    """What the web connector asks of an adapter. ``TerraformRegistryAdapter`` is the example.
+
+    ``matches`` decides by URL alone, before any request, and must be cheap
+    and pure: it runs at listing time, and the artifact path is built from
+    ``suffix`` then. ``fetch`` returns a response in ``connectors._urlopen``'s
+    shape with ``content`` holding the document itself, plus ``adapter`` and
+    ``api_url``; it makes its requests only through ``fetch`` (the source's
+    headers and timeout, and the seam the offline tests stub), may keep
+    anything shared between pages in ``cache`` (emptied every sync), and
+    raises ``SiteAdapterError`` when the URL names nothing the site has.
+    """
+
+    name: str
+    suffix: str
+    mime_type: str
+
+    def matches(self, url: str) -> bool: ...
+
+    def fetch(self, url: str, fetch: Fetch, cache: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class SiteAdapterError(RuntimeError):
@@ -147,10 +172,10 @@ def _json(response: dict[str, Any], url: str) -> dict[str, Any]:
 
 
 #: Every adapter, tried in order; the first that matches a URL answers for it.
-SITE_ADAPTERS: tuple[TerraformRegistryAdapter, ...] = (TerraformRegistryAdapter(),)
+SITE_ADAPTERS: tuple[SiteAdapter, ...] = (TerraformRegistryAdapter(),)
 
 
-def adapter_for(url: str) -> TerraformRegistryAdapter | None:
+def adapter_for(url: str) -> SiteAdapter | None:
     return next((adapter for adapter in SITE_ADAPTERS if adapter.matches(url)), None)
 
 
