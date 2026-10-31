@@ -24,6 +24,7 @@ from pheasant.config.schema import (
     SourceConnectorSettings,
     SourceType,
 )
+from pheasant.ingestion.html_text import looks_like_script_shell
 from pheasant.ingestion.pipeline import _match_any, utc_now, within_max_depth
 from pheasant.persistence.state_store import StateStore
 from pheasant.security.url_policy import require_public_urls
@@ -40,6 +41,7 @@ from pheasant.sync.connectors import (
     logger,
     require_fetchable_url,
 )
+from pheasant.sync.web_adapters import TerraformRegistryAdapter, adapter_for
 
 
 def registration_connector(source_type: str, connector: dict[str, Any] | None) -> dict[str, Any]:
@@ -86,12 +88,21 @@ class WebCollectionConnector(SourceConnector):
         self._seen_validators: dict[str, dict[str, Any]] = {}
         self.revalidated = 0
         self.deferred = 0
+        #: Pages whose server sent a JavaScript shell and no content, this sync.
+        self.script_shells: list[str] = []
+        #: What site adapters fetched once and share across pages, this sync.
+        self._adapter_cache: dict[str, Any] = {}
 
     def begin_sync(self, mode: str = "incremental") -> None:
         super().begin_sync(mode)
         self._seen_validators = {}
         self.revalidated = 0
         self.deferred = 0
+        self.script_shells = []
+        self._adapter_cache = {}
+
+    def _adapter(self, url: str) -> TerraformRegistryAdapter | None:
+        return adapter_for(url) if self.source.connector.site_adapters else None
 
     def list_items(self) -> list[ConnectorItem]:
         github_tree_urls = [
@@ -121,7 +132,10 @@ class WebCollectionConnector(SourceConnector):
                     "/".join(sorted(FETCHABLE_SCHEMES)),
                 )
                 continue
-            relative = _relative_url_path(url, index)
+            adapter = self._adapter(url)
+            # An adapted page's format is known before it is fetched, so its
+            # path says so (``….md``) and it chunks and renders as what it is.
+            relative = _relative_url_path(url, index, adapter.suffix if adapter else None)
             if not self._allows_url(relative):
                 # Say so: the operator named this URL, and a page dropped
                 # without a word reads as a page that was indexed and has
@@ -139,8 +153,10 @@ class WebCollectionConnector(SourceConnector):
                     identity=f"web:{url}",
                     relative_path=relative,
                     uri=url,
-                    mime_type=mimetypes.guess_type(urlparse(url).path)[0],
-                    metadata={"url": url},
+                    mime_type=adapter.mime_type
+                    if adapter
+                    else mimetypes.guess_type(urlparse(url).path)[0],
+                    metadata={"url": url, **({"adapter": adapter.name} if adapter else {})},
                 )
             )
         return _distinct_paths(items)
@@ -214,13 +230,17 @@ class WebCollectionConnector(SourceConnector):
             self.deferred += 1
             raise ItemNotModified(f"not due for revalidation: {item.uri}")
         self.revalidated += 1
-        response = _urlopen(
-            item.uri,
-            headers=self.source.connector.headers,
-            timeout=self.source.connector.request_timeout_seconds,
-            etag=cached.get("etag"),
-            last_modified=cached.get("last_modified"),
-        )
+        adapter = self._adapter(item.uri)
+        if adapter is not None:
+            response = adapter.fetch(item.uri, self._fetch, self._adapter_cache)
+        else:
+            response = _urlopen(
+                item.uri,
+                headers=self.source.connector.headers,
+                timeout=self.source.connector.request_timeout_seconds,
+                etag=cached.get("etag"),
+                last_modified=cached.get("last_modified"),
+            )
         if response.get("not_modified"):
             # Carry validators forward so the next sync stays conditional.
             self._seen_validators[item.uri] = {
@@ -229,6 +249,18 @@ class WebCollectionConnector(SourceConnector):
             }
             raise ItemNotModified(f"not modified (HTTP 304): {item.uri}")
         content = response["content"]
+        if adapter is None and _served_html(response) and looks_like_script_shell(content):
+            # Indexed anyway -- it is what the server sent -- but said, so a
+            # page that holds "please enable JavaScript" is not mistaken for
+            # one that was read.
+            self.script_shells.append(item.uri)
+            logger.warning(
+                "source %s: %s is a JavaScript application shell - its server sent no "
+                "page content, and pheasant does not run page scripts. Index the "
+                "site's documentation source or API instead.",
+                self.source.name,
+                item.uri,
+            )
         digest = hashlib.sha256(content).hexdigest()
         changed = cached.get("sha256") != digest
         self._seen_validators[item.uri] = {
@@ -246,7 +278,20 @@ class WebCollectionConnector(SourceConnector):
             size_bytes=len(content),
             sha256=digest,
             mtime=response["last_modified"],
-            metadata={"url": item.uri, "headers": response["headers"]},
+            metadata={
+                "url": item.uri,
+                "headers": response["headers"],
+                **({"adapter": adapter.name, "api_url": response["api_url"]} if adapter else {}),
+            },
+        )
+
+    def _fetch(self, url: str) -> dict[str, Any]:
+        """An unconditional GET with this source's headers and timeout, for adapters."""
+
+        return _urlopen(
+            url,
+            headers=self.source.connector.headers,
+            timeout=self.source.connector.request_timeout_seconds,
         )
 
     def checkpoint_from_items(
@@ -274,6 +319,8 @@ class WebCollectionConnector(SourceConnector):
                 # URLs left alone because they were not due.
                 "revalidated": self.revalidated,
                 "deferred": self.deferred,
+                # Pages whose server sent only a JavaScript shell.
+                "script_shells": list(self.script_shells),
             },
         )
 
@@ -308,6 +355,11 @@ class WebCollectionConnector(SourceConnector):
         validators = (self._previous_cursor or {}).get("validators") or {}
         cached = validators.get(url)
         return cached if isinstance(cached, dict) else {}
+
+
+def _served_html(response: dict[str, Any]) -> bool:
+    mime = str(response.get("mime_type") or "").split(";", 1)[0].strip().lower()
+    return mime in {"text/html", "application/xhtml+xml"}
 
 
 def _max_age(headers: dict[str, Any]) -> float | None:

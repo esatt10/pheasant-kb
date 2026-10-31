@@ -2119,6 +2119,7 @@ Experimental non-filesystem connectors are disabled until explicitly enabled per
 | `api_items_field` | string | `items` | JSON field containing API item records. |
 | `api_content_field` | string | `content` | JSON field containing inline item content. |
 | `max_refresh_seconds` | integer | `259200` | `web_collection`: the longest a page goes unchecked (3 days). See `sources[].sync.interval_seconds`. |
+| `site_adapters` | bool | `true` | `web_collection`: read a page whose server sends only a JavaScript shell from that site's own API instead. Today: Terraform Registry provider docs (`registry.terraform.io/providers/…/docs/…`), indexed as the page's Markdown. `false` indexes what the URL returns. See [Web pages](how-to/sources.md#javascript-application-pages). |
 
 Example `web_collection` source:
 

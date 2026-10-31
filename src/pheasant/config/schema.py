@@ -1471,6 +1471,10 @@ class SourceConnectorSettings(ModelMixin):
     #: changes. The scheduler beat stays the same; a page that is not due costs
     #: no request. See ``WebCollectionConnector``.
     max_refresh_seconds: int = 259200
+    #: Web collections: read a page whose server sends only a JavaScript shell
+    #: from that site's own API instead (``sync/web_adapters.py``; today the
+    #: Terraform Registry's provider docs). Off indexes what the URL returns.
+    site_adapters: bool = True
 
 
 @dataclass

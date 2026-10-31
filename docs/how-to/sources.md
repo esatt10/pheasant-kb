@@ -100,6 +100,28 @@ extension. With `html_text: true` that means its text, without tags,
 `<script>` or `<style>` bodies. A listed `.pdf` (or other document
 format) is extracted like a local one.
 
+### JavaScript application pages
+
+Some sites send a script, not the page: the HTML is an empty shell, often
+just "Please enable JavaScript", and the browser fetches the content from an
+API afterwards. pheasant does not run page scripts, so for those sites it
+reads the content from the site's own API instead. That is a *site adapter*,
+and it is on by default (`connector.site_adapters`):
+
+- **Terraform Registry provider docs.** A URL such as
+  `https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/ai_foundry`
+  is indexed as that page's Markdown source, read through the registry's
+  public API. `latest` follows the provider's current release, as the URL
+  does in a browser. The artifact is `….md`, so it is chunked by heading and
+  shown in the Markdown view, and its link still opens the registry page. A
+  page the registry does not list is reported as that page's read error, and
+  whatever was indexed before is kept.
+
+A shell from a site with no adapter is still indexed (it is what the server
+sent), but the sync logs a warning naming the page, and the checkpoint lists
+it under `script_shells`. Index that site's documentation source instead,
+such as its repository.
+
 ### How web pages stay fresh
 
 The scheduler beat (`sync.scheduler.interval_seconds`, 15 minutes) is shared
