@@ -26,12 +26,14 @@ from typing import Any
 
 from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.chat import (
+    INTENTS,
     _known_workflow_names,
     build_prompt,
     resolve_provider,
 )
 from pheasant.assistant.figure_markers import number_figures as number_figures
 from pheasant.assistant.figure_markers import verify_figures as verify_figures
+from pheasant.search.criteria import scoped_sources
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +231,8 @@ def answer_question(
     current_document: str | None = None,
     current_directory: str | None = None,
     remove_documents: Any = None,
+    source_names: list[str] | None = None,
+    intent: str | None = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -276,6 +280,9 @@ def answer_question(
     )
     if directives.used:
         question = directives.text
+    # Several sources at once is a post-filter every search applies; one name
+    # is the ordinary single-source scope (`search.criteria.scoped_sources`).
+    source_name, source_names = scoped_sources(source_name, source_names)
     # Where to look (`services.scope`): `@current` / `@dir` read against what
     # the caller has open, `@exclude` and `exclude_documents` resolved within.
     scope = None
@@ -322,6 +329,7 @@ def answer_question(
         source_types=source_types,
         exclude_source_types=exclude_source_types,
         source_name=source_name,
+        source_names=source_names,
         principal=principal,
         principal_groups=principal_groups,
         path_prefix=path_prefix,
@@ -356,6 +364,14 @@ def answer_question(
     merged_options.update(options or {})
     if directives.form:
         merged_options["form"] = directives.form
+    # An answer shape pinned by `@compose` or the request's `intent` wins over
+    # the configured one, the same order `depth` follows.
+    pinned_intent = directives.intent or str(intent or "").strip().lower()
+    if pinned_intent in INTENTS:
+        merged_options["intent"] = pinned_intent
+        merged_options["intent_pinned_by"] = (
+            f"asked with @{pinned_intent}" if directives.intent else "pinned by the request"
+        )
     # A depth named on the request pins it, exactly like a pinned intent;
     # "auto" (or nothing) leaves it to the router.
     if depth and str(depth).lower() in routing.DEPTHS:
@@ -568,6 +584,9 @@ def answer_question(
             route.setdefault("why", {})[axis] = f"asked with {' '.join(directives.used)}"
     if directives.form and route.get("intent") not in {"inventory", "search"}:
         route["form"] = directives.form
+    if directives.intent and route.get("intent") == directives.intent:
+        route.setdefault("decided_by", {})["intent"] = "keyword"
+        route.setdefault("why", {})["intent"] = f"asked with {' '.join(directives.used)}"
     routing.record_route(route)
 
     assistant_effort = getattr(settings, "reasoning_effort", None)

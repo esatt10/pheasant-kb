@@ -74,6 +74,18 @@ from pheasant.assistant.workflows import (
     WorkflowStep,
     decision_gates,
 )
+from pheasant.assistant.workflows.agentic_prompts import (
+    GRADER_CRITERIA,
+    GRADER_SYSTEM,
+    PLANNER_SYSTEM,
+)
+from pheasant.assistant.workflows.compose import (
+    COMPOSE_DEFAULTS,
+    PLANNER_COMPOSE_RULE,
+    document_sizes,
+    review_artifact,
+    synthesis_window,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +136,17 @@ DEFAULTS: dict[str, Any] = {
     # Drop [n] markers that do not resolve to a real citation.
     "verify_citations": True,
     "max_facts": 12,
+    # How many queries the planner may add to the question itself, and how
+    # many of a grader's follow-ups one round searches.
+    "planned_queries": 3,
+    "followup_queries": 2,
+    # At most this many of the passages an answer is written from may come
+    # from one document. None keeps the plain top-N by score. Every citation
+    # of a file hydrates the same whole file, so the third chunk of one
+    # document buys nothing a passage from another document would not.
+    "passages_per_document": None,
+    # Overrides for compose questions only, over COMPOSE_DEFAULTS.
+    "compose_options": {},
     # Read whole files behind the hits, not 500-char chunk previews.
     **CONTENT_DEFAULTS,
 }
@@ -155,93 +178,6 @@ INTENT_PROFILES: dict[str, dict[str, Any]] = {
         "expand_per_node": 2,
         "passage_chars": 9000,
     },
-}
-
-PLANNER_SYSTEM = """You plan retrieval over a private knowledge base. \
-Given a question and a STRUCTURAL DESCRIPTION of the knowledge base, produce \
-the search queries most likely to surface the answer.
-
-The description tells you what this corpus actually is: its sources and \
-their types, its directory layout, its file types and languages, the \
-vocabulary its own documents use, and the symbols its code defines. Plan \
-against that structure. Queries reusing the corpus's real directory names, \
-file names, identifiers and vocabulary hit the lexical index exactly; \
-generic paraphrases of the question do not.
-
-Reply with JSON only, no prose:
-{"queries": ["...", "..."], "modes": ["text"], "intent": "knowledge", \
-"reasoning": "one short line"}
-
-Rules:
-- 1 to 3 queries. Where the question is compound, split it into its parts.
-- Do not restate the question verbatim as the only query; add the specific \
-terms a document answering it would contain.
-- Ground at least one query in something structural from the description: a \
-real directory, module, file name, symbol or corpus term. If the question \
-names a thing that appears in the vocabulary or symbol list, use that exact \
-spelling.
-- LOCATION IS A SEARCH TERM. Many files share a name — a repository has one \
-README.md per package, an __init__.py per module — so a bare file name cannot \
-identify one of them. When the question is about a specific component, put \
-its directory or package name IN the query beside the file kind: prefer \
-"devui readme" or "packages/devui README" over "devui package overview". \
-Ranking prefers files nearer the root, so a nested file needs its location \
-said out loud to be found; a query that names only the file kind will return \
-the project-wide one.
-- Say the file kind plainly when the question implies one ("readme", \
-"changelog", "pyproject", "test") — it matches the filename directly, which \
-ranks far above a paraphrase of what the file contains.
-- "modes" may include only the modes listed as available. Prefer "vector" \
-when the question is conceptual and "text" when it names an exact \
-identifier, path or symbol.
-- "intent" is "procedural" when the asker wants to DO something (steps, \
-usage, configuration, code examples) and "knowledge" when they want to \
-UNDERSTAND something (what it is, what it does, how it is organised). A \
-first reading is given to you below; change it only if it is clearly wrong.
-- "depth" is "short" for a direct answer, "medium" for an overview in a few \
-sections, "long" for a detailed, sectioned write-up. A first reading is given \
-below; change it only if the question clearly asks for more or less.
-- If an earlier conversation is shown, the question may refer back to it: \
-plan queries for what it refers to, by name."""
-
-GRADER_SYSTEM = """You judge whether retrieved passages are sufficient to \
-answer a question.
-
-Reply with JSON only, no prose:
-{"sufficient": true|false, "missing": "what is absent", "next_query": "a \
-better search query, or empty"}
-
-Each passage is labelled with its file metadata — type, language, size, and \
-the symbols it defines. Use it. The *shape* of the result set is evidence in \
-its own right: passages that all come from documentation when the question \
-needs source, or all from one directory when the question spans several, are \
-a miss even when each one reads plausibly.
-
-Be strict about sufficiency but realistic: if the passages substantially \
-answer the question, say true. Only say false when a specific, nameable \
-piece of information is missing that a different search might find — and let \
-"next_query" go after that gap by name (a symbol, a path, a file type).
-
-If the passages are the RIGHT KIND of file from the WRONG PLACE — a README \
-from another package, a test instead of the implementation — that is a \
-location miss, not a content miss. Say false and make "next_query" name the \
-directory or package explicitly alongside the file kind."""
-
-#: Sufficiency means different things for the two intents, and this is where
-#: the replan loop earns its keep: "the right file, with no runnable example
-#: in it" is a *pass* for a summary and a *fail* for a how-to.
-GRADER_CRITERIA = {
-    "knowledge": """
-This is a knowledge-summary question. Sufficient means the passages let you \
-say what the thing is, what its main parts are, and what each is for. \
-Exhaustive coverage is not required — orientation is.""",
-    "procedural": """
-This is a procedural question. Sufficient means the passages contain a \
-followable sequence AND at least one real example with the actual \
-identifiers, imports, arguments or config keys. Passages that merely name \
-the right file, or describe a capability in prose without showing its use, \
-are NOT sufficient — say false and ask for the usage or example directly \
-(e.g. the symbol name plus "example", "usage", or the caller's file).""",
 }
 
 
@@ -304,6 +240,9 @@ def resolve_options(state: AgentState) -> dict:
     # Depth layers over intent: a long procedural answer still reads files
     # deeply, it just reads more of them into more sections.
     options = routing.depth_options(str(state.get("depth") or "short"), options, explicit)
+    if state.get("intent") == "compose":
+        options.update(COMPOSE_DEFAULTS)
+        options.update(options.get("compose_options") or {})
     floor = int(options.get("min_context_passages") or 0)
     options["max_context_passages"] = max(int(options["max_context_passages"]), floor)
     return options
@@ -335,6 +274,7 @@ def _defer_graph_for_request(state: AgentState, ctx: dict, options: dict) -> boo
 INTENT_LABELS = {
     "knowledge": "knowledge summary",
     "procedural": "procedural steps and examples",
+    "compose": "composed artifact",
 }
 
 
@@ -353,7 +293,8 @@ def classify_node(state: AgentState, ctx: dict) -> dict:
     """
     configured = str((state.get("options") or {}).get("intent") or "auto").strip().lower()
     if configured in INTENTS:
-        intent, why = configured, "pinned by configuration"
+        pinned_by = (state.get("options") or {}).get("intent_pinned_by")
+        intent, why = configured, str(pinned_by or "pinned by configuration")
     else:
         intent, why = classify_intent(state["question"])
     depth, depth_why, depth_by = routing.classify_depth(
@@ -426,7 +367,9 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
         searched = {_query_key(query) for query in state.get("searched_queries", [])}
         followups = [query for query in followups if _query_key(str(query)) not in searched]
         return {
-            "queries": _dedupe([str(query) for query in followups])[:2],
+            "queries": _dedupe([str(query) for query in followups])[
+                : max(1, int(options.get("followup_queries") or 2))
+            ],
             "round_start_evidence_ids": [
                 passage.key() for passage in state.get("passages", []) if passage.key()
             ],
@@ -450,15 +393,20 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     steps = list(state.get("steps", []))
     depth = str(state.get("depth") or "short")
     depth_update: dict = {}
+    planned_queries = max(1, int(options.get("planned_queries") or 3))
     if llm is not None:
+        planner_system = PLANNER_SYSTEM.replace("{planned_queries}", str(planned_queries))
+        if intent == "compose":
+            planner_system += PLANNER_COMPOSE_RULE
         raw = llm.try_complete(
-            PLANNER_SYSTEM,
+            planner_system,
             f"{capabilities.as_prompt_context()}\n\n"
             f"{conversation.history_block(history)}"
             f"First reading of the question: {intent}, {depth} answer\n"
             f"Question: {question}"
             + (f"\nStandalone form: {searched}" if searched != question else ""),
-            max_output_tokens=400,
+            # ~40 tokens a query plus the reasoning line; 400 was sized for 3.
+            max_output_tokens=max(400, 60 * planned_queries + 160),
             json_mode=True,
         )
         parsed = _parse_json(raw)
@@ -471,7 +419,7 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
             if planned:
                 # Always keep the original question: a planner that drifts
                 # should not be able to lose the user's actual words.
-                queries = _dedupe([searched, *planned])[:4]
+                queries = _dedupe([searched, *planned])[: planned_queries + 1]
                 notes = str(parsed.get("reasoning") or "planned")
             planned_modes = [str(m) for m in parsed.get("modes", []) if m in capabilities.modes]
             # In the standard flow an explicit retrieval_modes list pins the
@@ -1033,7 +981,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     options = resolve_options(state)
     intent = str(state.get("intent") or "knowledge")
     depth = str(state.get("depth") or "short")
-    passages = state.get("passages", [])[: int(options["max_context_passages"])]
+    ranked = state.get("passages", [])
+    passages = synthesis_window(ranked, options, document_sizes(retriever, ranked, options))
     draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
     passages, llm = draft.passages, draft.llm
     citations = passages_to_citations(passages, int(options["max_context_passages"]))
@@ -1069,24 +1018,37 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
         )
     history_text = conversation.history_block(state.get("history") or [])
     evidence = {"citations": citations, "facts": facts, "figures": figures}
+    # A composed artifact is written in one call at any depth: sections
+    # written apart cannot reference each other's names, and the length is
+    # the artifact's, not a word budget's.
+    whole = intent == "compose"
     try:
-        if depth == "long":
+        if depth == "long" and not whole:
             answer, long_steps = longform.write_long(
                 state, ctx, options, documents, history_text, evidence
             )
             steps.extend(long_steps)
         else:
+            system = (
+                system_prompt_for(
+                    intent,
+                    "short" if whole else depth,
+                    figures=bool(figures),
+                    form=options.get("form"),
+                )
+                + draft.system_suffix
+            )
+            prompt = build_prompt(
+                state["question"],
+                citations,
+                facts,
+                documents,
+                history_text=history_text,
+                figures=figures,
+            )
             answer = llm.complete(
-                system_prompt_for(intent, depth, figures=bool(figures), form=options.get("form"))
-                + draft.system_suffix,
-                build_prompt(
-                    state["question"],
-                    citations,
-                    facts,
-                    documents,
-                    history_text=history_text,
-                    figures=figures,
-                ),
+                system,
+                prompt,
                 max_output_tokens=options.get("max_output_tokens"),
                 **({"on_delta": draft.on_delta} if draft.on_delta else {}),
             )
@@ -1094,11 +1056,16 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                 WorkflowStep(
                     name="synthesize",
                     detail=f"wrote a {INTENT_LABELS[intent]} answer from {len(citations)} passages"
-                    + ("" if depth == "short" else f" ({depth})")
+                    + (f" of {len(documents)} documents" if whole and documents else "")
+                    + ("" if depth == "short" or whole else f" ({depth})")
                     + (f" at {draft.effort} effort" if draft.effort else ""),
                     passages=len(citations),
                 )
             )
+            if whole and options.get("compose_review", True) and documents:
+                answer = review_artifact(state, ctx, options, answer, documents, system, prompt)
+                steps.extend(answer.steps)
+                answer = answer.text
         finished = decision_gates.finish_synthesis(state, ctx, answer, citations, documents, draft)
         return {**evidence, "answer_mode": "llm", "steps": steps, **finished}
     except ProviderError as exc:

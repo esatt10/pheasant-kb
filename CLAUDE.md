@@ -193,9 +193,14 @@ pheasant-kb/
 │   │                            (@taxonomy), inventory_scope (@current /
 │   │                            @dir / @exclude on a lookup), keywords (first-word
 │   │                            @table, @doc, @search …), search_answer,
-│   │                            conversation, longform, decisions (the
+│   │                            conversation, longform, compose_review
+│   │                            (a composed artifact checked identifier
+│   │                            by identifier), decisions (the
 │   │                            Decisions API client), workflows/
-│   │                            decision_gates (the loop's judgements),
+│   │                            decision_gates (the loop's judgements;
+│   │                            decision_questions, what they ask),
+│   │                            compose (the compose shape's breadth,
+│   │                            window and review), agentic_prompts,
 │   │                            visuals, visual_specs (the shape grammar),
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
@@ -208,7 +213,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 180 pytest modules, offline by design
+└── tests/                     ← 182 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -761,9 +766,13 @@ Postgres way out. SQLite ignores the setting (rule 7). `docs/configuration.md`,
 Ranking carries deliberate structure: `chunks_fts.title` holds the file's
 **basename** with BM25 column weights `8/3/2/1`, and structural priors divide
 by path depth and by tests/samples membership. Query expansion drops framing
-stopwords. Criteria (`source_name`, `exclude_sources`, `node_types`,
-`min_score`, `section`, `path_prefix`, `exclude_documents`, `principal`) are
-available identically on MCP and HTTP. `exclude_documents` names documents to
+stopwords. Criteria (`source_name`, `source_names`, `exclude_sources`,
+`node_types`, `min_score`, `section`, `path_prefix`, `exclude_documents`,
+`principal`) are available identically on MCP and HTTP. `source_names` is the
+UI rail's multi-select: one name is folded into `source_name`
+(`search.criteria.scoped_sources`, so it still filters inside the index), two
+or more a post-filter with the shared over-fetch that the answering retriever
+also re-applies to graph neighbours and cached hits. `exclude_documents` names documents to
 leave out (a file name, path, `source/path` or id), resolved once per request
 under the inventory ACL by `services/scope.py` into an `Exclusion` of artifact
 ids (`NOT IN` in the text arm's SQL) and (source, path) pairs (the other
@@ -1187,6 +1196,30 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is
   written from its passages and the trace says so (`assistant.longform`).
+- **A new artifact is composed, not looked up** (intent `compose`, read off a
+  leading build verb plus an artifact noun, or the planner). "Write the
+  configuration that…" asks for something no passage contains, and every other
+  shape treated its absence as the answer: the procedural prompt declined, the
+  sufficiency judge rated a corpus documenting all 18 requested components
+  p=0.09, the long form wrote 5 disconnected 350-word sections, and the accept
+  gate's rewrite deleted most of a correct artifact. Compose plans one query per
+  component, judges sufficiency as "every component documented", writes in ONE
+  call at full effort with values it was not given as placeholder variables,
+  then `compose_review` checks it — every key looked up in its own component's
+  evidence without a model, and one review call that confirms or clears those
+  suspects, catches an identifier documented on a different component, and
+  names requested components left out — and rewrites once with exactly that
+  list. The accept gate reports on an artifact but never rewrites it. Read
+  off the words, pinned by `@compose` (`@build`, `@scaffold`) or by `intent`
+  on MCP `ask_knowledge_base` / `POST /assistant/chat`. A document's share of
+  the window is proportional to its size (`passages_per_document: auto`: a
+  quarter of its chunks, floor 2, at most 75% of the window — 30 passages of a
+  120-chunk PDF, 2 of a note), and `scale_document_chars` makes hydration read
+  what the window kept: a fixed per-document cap read two passages of a long
+  PDF, and a larger cap alone still read only `passage_chars` of it. Its knobs
+  are `compose_options` over `COMPOSE_DEFAULTS`, applied for compose and nothing
+  else. Measured on an 18-resource Terraform request: 0/18 → 18/18 resource
+  types and `terraform validate` clean. `tests/test_compose_answers.py`.
 - **The region keeps no chat state.** The caller sends `history`; a follow-up
   is rewritten into a standalone *search* question (model when connected,
   joined to the previous question otherwise), the previous question is
@@ -2661,6 +2694,23 @@ Each of these cost real time. They are listed because the shape recurs.
   `503 Decision inference is unavailable` mid-batch. It is why a 5xx does not
   open the circuit (only 401/403/404 do) and why every gate's fallback is the
   path the loop had before the gate existed.
+- **A config that sets a key pins it against every profile.** The agentic
+  loop's intent and depth profiles apply only to keys the caller did not set,
+  and `workflow_options`/`assistant.retrieval` from the config arrive as the
+  caller's — so the flagship's `max_context_passages: 16` silently held every
+  `long` answer to 16 passages where the long profile asks for 24, and no
+  profile could widen it. Compose got its own namespaced block
+  (`compose_options`) for exactly this reason; a new shape that needs different
+  breadth should too, rather than a profile that will never fire.
+- **A judge calibrated on one answer shape misreads another.** The accept
+  gate's thresholds came from short SciFact answers. On a composed artifact it
+  scored grounded p=0.01–0.06 on configurations a real validator accepted,
+  every time — wiring documented parts together reads as unsupported claims —
+  and acting on it rewrote a correct artifact into a fraction of itself; a
+  responsive miss's rewrite dropped two requested components from another. The
+  scores are still reported for compose and never acted on. Where an answer
+  shape has a checkable form, check the form
+  (`compose_review`) rather than trusting a judgement nobody calibrated for it.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

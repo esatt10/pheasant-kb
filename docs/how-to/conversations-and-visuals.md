@@ -5,7 +5,7 @@ can also make yourself:
 
 | Axis | Values | Decided by |
 |---|---|---|
-| **intent** | `knowledge` · `procedural` · `inventory` · `search` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)); `search` by `@search` |
+| **intent** | `knowledge` · `procedural` · `compose` · `inventory` · `search` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)); `search` by `@search` |
 | **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned; or a [first-word keyword](#first-word-keywords) |
 | **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned; or a keyword |
 | **form** | prose (default) · `table` · `list` · `steps` · `compare` · `quotes` · `brief` | a first-word keyword only |
@@ -197,6 +197,7 @@ keywords later in a sentence and email addresses are just text.
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
 | `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
+| `@compose` (`@build`, `@scaffold`) | A new artifact — a configuration, script or set of files — assembled from what the sources document, written in one pass and checked identifier by identifier before it returns; the same pin as `intent: compose`. |
 | `@diagram`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A grounded picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
 
 The keyword is removed before the question is searched or written about, and

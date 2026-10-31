@@ -62,6 +62,13 @@ class ChatRequest(BaseModel):
     exclude_documents: list[str] | None = None
     current_document: str | None = None
     current_directory: str | None = None
+    # The answer shape, pinned: "knowledge", "procedural" or "compose" (a new
+    # artifact assembled from what the sources document). `@compose` leading
+    # the question says the same. Unset or "auto" reads it off the question.
+    intent: str | None = None
+    # Several sources at once — the sources rail's multi-select. One name
+    # means what `source_name` means.
+    source_names: list[str] | None = None
 
     def service_request(self) -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
@@ -83,6 +90,8 @@ class ChatRequest(BaseModel):
             exclude_documents=self.exclude_documents,
             current_document=self.current_document,
             current_directory=self.current_directory,
+            intent=self.intent,
+            source_names=self.source_names,
         )
 
 

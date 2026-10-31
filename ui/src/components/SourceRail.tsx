@@ -12,6 +12,11 @@ import { colorForNode } from "../graph/graphStyles";
  * Selecting a source scopes both retrieval and the graph to it — the same
  * "which of my sources am I asking about" control, applied once. "browse"
  * opens it as folders and files in the taxonomy view beside the chat.
+ *
+ * Several sources at once: "+ scope" on a row (or Ctrl/⌘-click its name) adds
+ * it to the selection, and questions are answered from all of them
+ * (`source_names`). A plain click still selects that one source alone. The
+ * graph and the taxonomy view follow the first selected source.
  */
 export function SourceRail({
   sources,
@@ -21,11 +26,17 @@ export function SourceRail({
   onSelectType,
   onChanged,
   onBrowse,
+  alsoSelected = [],
+  onToggle,
 }: {
   sources: SourceRecord[];
   selected: string | null;
   selectedType: string | null;
   onSelect: (name: string | null) => void;
+  /** Further sources in the selection, beside `selected`. */
+  alsoSelected?: string[];
+  /** Add a source to the selection, or take it out. */
+  onToggle?: (name: string) => void;
   onSelectType: (type: string | null) => void;
   onChanged: () => void;
   /** Open a source (or, with null, every source) in the taxonomy view. */
@@ -107,19 +118,25 @@ export function SourceRail({
             </span>
           </button>
 
-          {visible.map((source) => (
+          {visible.map((source) => {
+            const inScope = selected === source.name || alsoSelected.includes(source.name);
+            return (
             // The row is a plain container holding two siblings — selecting the
             // source and syncing it are separate actions, so nesting the sync
             // button inside the select button would be invalid markup and would
             // give screen readers one control where there are two.
             <div
               key={source.id ?? source.name}
-              className={`source-item${selected === source.name ? " active" : ""}`}
+              className={`source-item${inScope ? " active" : ""}`}
             >
               <button
                 className="source-item__select"
-                onClick={() => onSelect(selected === source.name ? null : source.name)}
-                title={source.path}
+                onClick={(event) =>
+                  onToggle && (event.ctrlKey || event.metaKey)
+                    ? onToggle(source.name)
+                    : onSelect(selected === source.name && !alsoSelected.length ? null : source.name)
+                }
+                title={`${source.path}${onToggle ? " — Ctrl/⌘-click to add to the selection" : ""}`}
               >
                 <span className="source-item__top">
                   <span className="source-dot" style={{ background: colorForNode("source") }} />
@@ -146,6 +163,20 @@ export function SourceRail({
                 </span>
               </button>
               <div className="source-item__actions">
+                {onToggle ? (
+                  <button
+                    className="btn btn--small btn--ghost"
+                    aria-pressed={inScope}
+                    onClick={() => onToggle(source.name)}
+                    title={
+                      inScope
+                        ? `Stop asking ${source.name}`
+                        : `Ask ${source.name} too, beside the sources already selected`
+                    }
+                  >
+                    {inScope ? "− scope" : "+ scope"}
+                  </button>
+                ) : null}
                 {onBrowse ? (
                   <button
                     className="btn btn--small btn--ghost"
@@ -166,7 +197,8 @@ export function SourceRail({
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

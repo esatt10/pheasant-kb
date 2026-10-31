@@ -95,12 +95,57 @@ passages. If the passages show the pieces but no complete example, give the \
 steps you can support and say plainly which part is not covered."""
 )
 
+# The third shape. "Write the configuration that does X" asks for something
+# no passage contains, assembled from parts every passage documents — and the
+# procedural prompt, whose rule is "no complete example: say what is missing",
+# measured as a refusal on exactly that question (3 of 18 requested resources
+# written, every one of the other 15 documented in the passages it had). The
+# grounding moves from "copy the example" to "every type, argument and API you
+# use is documented, and every value you were not given is a variable".
+COMPOSE_SYSTEM = (
+    SYSTEM_PROMPT
+    + """
+
+This is a COMPOSE request — the reader wants a NEW artifact (a configuration, \
+a set of files, a script, a module) assembled from parts the passages \
+document. No passage is expected to contain the finished artifact: putting \
+the documented parts together correctly IS the task, so do not decline \
+because a complete example is absent.
+
+Shape the answer:
+- One line saying what the artifact builds, then the artifact itself, \
+complete. When files are asked for, give each file as its own fenced block \
+headed by its file name. Never elide with "..." or "the rest is similar".
+- Every resource type, block, argument, attribute, function, flag and API you \
+use must be documented in the passages, spelled EXACTLY as they spell it. \
+Cite the passage that documents each component in a comment on or above it \
+(for example `# [3]`), not in the code itself.
+- Any value the passages do not give you (names, IDs, regions, sizes, \
+addresses, secrets) becomes a declared variable or parameter with an obvious \
+placeholder default (e.g. "<your-subscription-id>"). Never invent a real-looking value. \
+Placeholders live ONLY in those variable defaults and in example-value files; \
+every component refers to the variable, never to a literal placeholder.
+- Wire the parts to each other by reference, with one consistent naming \
+scheme, so the artifact is internally consistent: everything referenced is \
+declared, nothing is declared twice.
+- Prefer the argument names of the current documented form over a \
+deprecated one when the passages show both. When passages disagree about a \
+component, its OWN reference page wins over an example inside another \
+component's page, and every argument that page marks Required is set.
+- Never copy an exact version pin out of an example — examples lag the \
+documentation they sit in. State the documented minimum as a lower bound \
+(e.g. ">= 5.0") so the current release, which the passages describe, satisfies it.
+- End with a short list of anything requested that the passages do not \
+document, and what the reader must fill in."""
+)
+
 #: Answer shapes the agent can be asked for. ``auto`` classifies per question.
-INTENTS = ("knowledge", "procedural")
+INTENTS = ("knowledge", "procedural", "compose")
 
 INTENT_SYSTEM_PROMPTS = {
     "knowledge": KNOWLEDGE_SYSTEM,
     "procedural": PROCEDURAL_SYSTEM,
+    "compose": COMPOSE_SYSTEM,
 }
 
 # Deterministic intent classification. Runs before (and without) any model, so
@@ -126,6 +171,21 @@ _KNOWLEDGE_PATTERNS = (
     r"\bwhere (?:is|does|are)\b",
     r"\bhow (?:does|do|is|are) \w+ (?:work|structured|organi[sz]ed|related)\b",
 )
+# A compose request leads with the verb that makes something and names the
+# kind of artifact it makes. Both halves, because "create a source" is a
+# procedural question about the product and "write a report on X" is a long
+# knowledge answer; neither is an artifact assembled from documented parts.
+_COMPOSE_LEAD = re.compile(
+    r"^(?:please |can you |could you |would you |i need you to |help me )?"
+    r"(?:write|generate|draft|compose|scaffold|assemble|produce|author|create|build)"
+    r"(?: me| us)?\b"
+)
+_COMPOSE_ARTIFACT = re.compile(
+    r"\b(?:configurations?|configs?|scripts?|modules?|templates?|manifests?|pipelines?|"
+    r"programs?|implementations?|files?|codebase|playbooks?|charts?|schemas?|dockerfiles?|"
+    r"terraform|hcl|bicep|yaml|helm|kubernetes|infrastructure as code|iac|stack|"
+    r"functions?|classes|service skeleton|scaffold(?:ing)?|boilerplate)\b"
+)
 
 
 def classify_intent(question: str) -> tuple[str, str]:
@@ -143,6 +203,8 @@ def classify_intent(question: str) -> tuple[str, str]:
     text = " ".join((question or "").lower().split())
     if not text:
         return "knowledge", "empty question"
+    if _COMPOSE_LEAD.search(text) and _COMPOSE_ARTIFACT.search(text):
+        return "compose", "asks for a new artifact assembled from documented parts"
     procedural = next((p for p in _PROCEDURAL_PATTERNS if re.search(p, text)), None)
     knowledge = next((p for p in _KNOWLEDGE_PATTERNS if re.search(p, text)), None)
     # "how does X work" is a knowledge question that trips the procedural
@@ -672,6 +734,16 @@ def hydrate_citations(retriever: Any, citations: list[dict], options: dict | Non
 
     if not node_ids:
         return {}
+    # A document the window gave many passages is read further: its allowance
+    # grows with how many of its chunks were cited, so thirty passages of a
+    # long PDF are thirty passages read rather than `passage_chars` of them.
+    allowances: dict[str, int] = {}
+    if settings.get("scale_document_chars"):
+        base = int(settings["passage_chars"])
+        per_passage = int(settings.get("chars_per_passage") or 4000)
+        allowances = {
+            node_id: max(base, len(anchors.get(node_id, ())) * per_passage) for node_id in node_ids
+        }
     try:
         documents = retriever.documents(
             node_ids,
@@ -680,6 +752,7 @@ def hydrate_citations(retriever: Any, citations: list[dict], options: dict | Non
             code_max_chars=int(settings["code_passage_chars"]),
             large_file_bytes=int(settings["large_file_bytes"]),
             budget_chars=int(settings["context_budget_chars"]),
+            **({"allowances": allowances} if allowances else {}),
         )
     except Exception:  # pragma: no cover - degrade to snippets, never fail
         logger.debug("could not hydrate citation content", exc_info=True)

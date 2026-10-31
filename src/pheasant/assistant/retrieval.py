@@ -47,6 +47,14 @@ from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any
 
+from pheasant.assistant.document_assembly import (
+    LARGE_FILE_BYTES,
+    _chunk_label,
+    _descriptor_selection,
+    _is_code,
+    _reassemble_selected,
+    _selected_output_length,
+)
 from pheasant.graph.traversal import neighbors as _graph_neighbors
 from pheasant.graph.traversal import slice_ as _graph_slice
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
@@ -255,278 +263,6 @@ class Document:
         return line
 
 
-# Extensions whose files are read whole or not at all. Source and config
-# files are *structurally* meaningful: an excerpt of a Python module with the
-# imports cut off, or of a YAML file with half the keys, is not a smaller
-# answer — it is a misleading one, and it is what makes a model invent the
-# import it cannot see. They are also small: the threshold below exists for
-# the pathological vendored bundle, not for anything a human wrote.
-CODE_EXTENSIONS = frozenset(
-    {
-        ".py",
-        ".pyi",
-        ".js",
-        ".jsx",
-        ".ts",
-        ".tsx",
-        ".java",
-        ".go",
-        ".rs",
-        ".rb",
-        ".cs",
-        ".cpp",
-        ".cc",
-        ".c",
-        ".h",
-        ".hpp",
-        ".swift",
-        ".kt",
-        ".scala",
-        ".php",
-        ".sh",
-        ".bash",
-        ".ps1",
-        ".sql",
-        ".r",
-        ".m",
-        ".lua",
-        ".pl",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".json",
-        ".ini",
-        ".cfg",
-        ".env",
-        ".tf",
-        ".dockerfile",
-        ".gradle",
-        ".proto",
-        ".graphql",
-    }
-)
-
-#: Original-file size above which a *prose* document is excerpted rather than
-#: read whole. Deliberately measured against ``artifacts.size_bytes`` — what
-#: the file actually is — not against the reassembled text, so the policy is a
-#: property of the corpus rather than of whatever the budget happened to be.
-LARGE_FILE_BYTES = 40_000
-
-#: Chunks kept either side of a match when excerpting a large document.
-ADJACENT_CHUNKS = 1
-
-
-def _is_code(relative_path: str | None, language: str | None) -> bool:
-    """Whether a file is source/config, and so must never be excerpted."""
-    if language:  # the pipeline extracted symbols: something parsed it as code
-        return True
-    if not relative_path:
-        return False
-    suffix = relative_path[relative_path.rfind(".") :].lower() if "." in relative_path else ""
-    name = relative_path.rsplit("/", 1)[-1].lower()
-    return suffix in CODE_EXTENSIONS or name in ("dockerfile", "makefile")
-
-
-def _reassemble(
-    rows: list,
-    anchor_ids: set[str],
-    allowance: int,
-    *,
-    focused: bool = False,
-) -> tuple[str, int, bool]:
-    """Join a file's chunks back together, inside ``allowance`` characters.
-
-    Returns ``(text, chunks_included, truncated)``.
-
-    ``focused`` is the large-document policy: keep the chunks search matched
-    plus their immediate neighbours and stop, **even when the allowance would
-    permit more**. Filling the remaining budget with unrelated chunks of a
-    400 KB document is not free — it dilutes the evidence the answer is
-    supposed to be grounded in, and buries the matched region in the middle
-    of the prompt. Small files and every code/config file are assembled whole
-    instead (``focused=False``): there, the surrounding lines *are* the
-    context.
-    """
-    blocks: list[str] = []
-    for row in rows:
-        label_bits = []
-        if row["start_line"] is not None and row["end_line"] is not None:
-            label_bits.append(f"lines {row['start_line']}-{row['end_line']}")
-        heading = str(row["heading_path"] or "").strip()
-        if heading:
-            label_bits.append(heading)
-        label = f"--- {' · '.join(label_bits)} ---\n" if label_bits else ""
-        blocks.append(label + str(row["text"] or ""))
-
-    anchors = [i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids]
-
-    if focused:
-        # Only the matched neighbourhood, plus chunk 0 so the reader can still
-        # tell which document this is (title, frontmatter, opening).
-        wanted = {0}
-        for anchor in anchors:
-            for offset in range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1):
-                if 0 <= anchor + offset < len(rows):
-                    wanted.add(anchor + offset)
-        order = sorted(wanted)
-    else:
-        total = sum(len(block) + 2 for block in blocks)
-        if total <= allowance:
-            return "\n\n".join(blocks), len(blocks), False
-        # Over budget: claim positions by value rather than lopping off the
-        # tail. Head first (what this file is), then what search matched (why
-        # it came back), then outward from those.
-        order = [0, *anchors]
-        for anchor in anchors:
-            for offset in (1, -1, 2, -2):
-                if 0 <= anchor + offset < len(rows):
-                    order.append(anchor + offset)
-        order.extend(range(len(rows)))
-
-    chosen: set[int] = set()
-    spent = 0
-    for index in order:
-        if index in chosen:
-            continue
-        cost = len(blocks[index]) + 2
-        if spent + cost > allowance:
-            continue
-        chosen.add(index)
-        spent += cost
-    if not chosen:  # a single chunk larger than the whole allowance
-        return blocks[order[0]][:allowance], 1, True
-
-    parts: list[str] = []
-    previous = -1
-    for index in sorted(chosen):
-        gap = index - previous - 1
-        if gap > 0 and previous >= 0:
-            parts.append(f"--- … {gap} chunk(s) omitted … ---")
-        parts.append(blocks[index])
-        previous = index
-    if previous < len(rows) - 1:
-        parts.append(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---")
-    return "\n\n".join(parts), len(chosen), len(chosen) < len(rows)
-
-
-def _chunk_label(row: Any) -> str:
-    label_bits = []
-    if row["start_line"] is not None and row["end_line"] is not None:
-        label_bits.append(f"lines {row['start_line']}-{row['end_line']}")
-    heading = str(row["heading_path"] or "").strip()
-    if heading:
-        label_bits.append(heading)
-    return f"--- {' · '.join(label_bits)} ---\n" if label_bits else ""
-
-
-def _descriptor_selection(
-    rows: list[Any], anchor_ids: set[str], allowance: int, *, focused: bool
-) -> tuple[list[int], bool, bool]:
-    """Choose chunk positions from metadata without transferring their text.
-
-    Returns ``(positions, truncated, all_fit)`` with the same priority and
-    character accounting as :func:`_reassemble`.
-    """
-    lengths = [len(_chunk_label(row)) + int(row["text_length"] or 0) for row in rows]
-    anchors = [i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids]
-    if focused:
-        wanted = {0}
-        for anchor in anchors:
-            for offset in range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1):
-                if 0 <= anchor + offset < len(rows):
-                    wanted.add(anchor + offset)
-        order = sorted(wanted)
-    else:
-        if sum(length + 2 for length in lengths) <= allowance:
-            return list(range(len(rows))), False, True
-        order = [0, *anchors]
-        for anchor in anchors:
-            for offset in (1, -1, 2, -2):
-                if 0 <= anchor + offset < len(rows):
-                    order.append(anchor + offset)
-        order.extend(range(len(rows)))
-
-    chosen: list[int] = []
-    spent = 0
-    for index in order:
-        if index in chosen:
-            continue
-        cost = lengths[index] + 2
-        if spent + cost <= allowance:
-            chosen.append(index)
-            spent += cost
-    if not chosen and order:
-        return [order[0]], True, False
-    return sorted(chosen), len(chosen) < len(rows), False
-
-
-def _selected_output_length(
-    rows: list[Any],
-    selected: list[int],
-    text_limits: dict[str, int],
-    allowance: int,
-    *,
-    truncated: bool,
-    all_fit: bool,
-) -> int:
-    """Predict rendered characters from descriptors before fetching bodies."""
-    if not selected:
-        return 0
-    block_lengths = {
-        index: len(_chunk_label(rows[index]))
-        + min(int(rows[index]["text_length"] or 0), text_limits[str(rows[index]["id"])])
-        for index in selected
-    }
-    if all_fit:
-        return sum(block_lengths.values()) + 2 * max(0, len(selected) - 1)
-    if (
-        truncated
-        and len(selected) == 1
-        and len(_chunk_label(rows[selected[0]])) + int(rows[selected[0]]["text_length"] or 0)
-        > allowance
-    ):
-        return allowance
-    parts: list[int] = []
-    previous = -1
-    for index in selected:
-        gap = index - previous - 1
-        if gap > 0 and previous >= 0:
-            parts.append(len(f"--- … {gap} chunk(s) omitted … ---"))
-        parts.append(block_lengths[index])
-        previous = index
-    if previous < len(rows) - 1:
-        parts.append(len(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---"))
-    return sum(parts) + 2 * max(0, len(parts) - 1)
-
-
-def _reassemble_selected(
-    rows: list[Any],
-    selected: list[int],
-    texts: dict[str, str],
-    allowance: int,
-    *,
-    truncated: bool,
-    all_fit: bool,
-) -> tuple[str, int, bool]:
-    """Render selected chunks and omission markers after the bounded text read."""
-    blocks = [_chunk_label(row) + str(texts.get(str(row["id"]), "")) for row in rows]
-    if all_fit:
-        return "\n\n".join(blocks), len(blocks), False
-    if truncated and len(selected) == 1 and len(blocks[selected[0]]) > allowance:
-        return blocks[selected[0]][:allowance], 1, True
-    parts: list[str] = []
-    previous = -1
-    for index in selected:
-        gap = index - previous - 1
-        if gap > 0 and previous >= 0:
-            parts.append(f"--- … {gap} chunk(s) omitted … ---")
-        parts.append(blocks[index])
-        previous = index
-    if previous < len(rows) - 1:
-        parts.append(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---")
-    return "\n\n".join(parts), len(selected), truncated
-
-
 @dataclass
 class RetrievalCapabilities:
     """What this knowledge base can answer with, right now."""
@@ -581,6 +317,7 @@ class PheasantRetriever:
         principal_groups: list[str] | None = None,
         path_prefix: str | None = None,
         exclusion: Any = None,
+        source_names: list[str] | None = None,
     ) -> None:
         self.search_engine = search
         self.knowledge_base = knowledge_base
@@ -601,6 +338,10 @@ class PheasantRetriever:
         self.source_types = list(source_types) if source_types else None
         self.exclude_source_types = list(exclude_source_types) if exclude_source_types else None
         self.source_name = source_name
+        # Several sources at once: a post-filter every search applies and every
+        # graph or document read re-checks (`_artifact_allowed`), like the
+        # source-type scope above.
+        self.source_names = set(source_names) if source_names else None
         # One file or folder of the source (the taxonomy view's "search only
         # here"), held for the same reason: every search and every graph or
         # document read in this answer must stay inside it.
@@ -631,12 +372,14 @@ class PheasantRetriever:
     ) -> bool:
         """Reapply caller scope before graph or cached content becomes evidence."""
         if self.state is not None and (
-            self.source_name or self.source_types or self.exclude_source_types
+            self.source_name or self.source_names or self.source_types or self.exclude_source_types
         ):
             self._load_source_mappings()
         raw_source = str(source_id or "")
         canonical_source = (self._source_name_cache or {}).get(raw_source, raw_source)
         if self.source_name and self.source_name not in {raw_source, canonical_source}:
+            return False
+        if self.source_names and not self.source_names & {raw_source, canonical_source}:
             return False
         if self.path_prefix and not path_within(relative_path, self.path_prefix):
             return False
@@ -764,6 +507,7 @@ class PheasantRetriever:
             str(self.memory),
             tuple(self.source_types or ()),
             tuple(self.exclude_source_types or ()),
+            tuple(sorted(self.source_names or ())),
             self.path_prefix,
             id(self.exclusion),
         )
@@ -780,7 +524,7 @@ class PheasantRetriever:
         # a grounded answer built on a type-filtered corpus silently had fewer
         # passages to work from than the caller asked for — the failure mode
         # is a thinner answer, which reads as the corpus being thin.
-        filtering = bool(self.source_types or self.exclude_source_types)
+        filtering = bool(self.source_types or self.exclude_source_types or self.source_names)
         resolve = getattr(self.search_engine, "ranking_parameters", None)
         fetch = resolve().overfetch(limit, filtering=filtering) if callable(resolve) else limit
         payload = self.search_engine.search_context(
@@ -814,6 +558,7 @@ class PheasantRetriever:
                 hits,
                 source_types=self.source_types,
                 exclude_source_types=self.exclude_source_types,
+                source_names=sorted(self.source_names) if self.source_names else None,
             )[:limit]
         passages = [self._passage(item, mode) for item in hits]
         self._cache[cache_key] = passages
@@ -1284,6 +1029,7 @@ class PheasantRetriever:
         code_max_chars: int = 24_000,
         large_file_bytes: int = LARGE_FILE_BYTES,
         budget_chars: int = 60_000,
+        allowances: dict[str, int] | None = None,
     ) -> dict[str, Document]:
         """Reassemble whole files from their chunks, with metadata attached.
 
@@ -1322,6 +1068,10 @@ class PheasantRetriever:
         ``budget_chars`` caps the whole batch; documents are funded in the
         order given, which callers should keep as citation order so the
         best-scoring hit is never the one that gets starved.
+
+        ``allowances`` replaces ``max_chars`` per document (prose only; code
+        keeps ``code_max_chars``): how a caller says a document it cited many
+        times should be read further than one it cited once.
         """
         if self.state is None or not node_ids:
             return {}
@@ -1336,6 +1086,7 @@ class PheasantRetriever:
             code_max_chars,
             large_file_bytes,
             budget_chars,
+            tuple(sorted((allowances or {}).items())),
         )
         cached_documents = self._document_cache.get(cache_key)
         if cached_documents is not None:
@@ -1414,9 +1165,11 @@ class PheasantRetriever:
             if _is_code(relative_path, language):
                 allowance, focused = min(code_max_chars, budget_chars - planned_spent), False
             elif size_bytes > large_file_bytes:
-                allowance, focused = min(max_chars, budget_chars - planned_spent), True
+                own = (allowances or {}).get(node_id, max_chars)
+                allowance, focused = min(own, budget_chars - planned_spent), True
             else:
-                allowance, focused = min(max_chars, budget_chars - planned_spent), False
+                own = (allowances or {}).get(node_id, max_chars)
+                allowance, focused = min(own, budget_chars - planned_spent), False
 
             selected, truncated, all_fit = _descriptor_selection(
                 rows,

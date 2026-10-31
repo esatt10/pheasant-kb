@@ -84,6 +84,8 @@ class AssistantTools:
         exclude_documents: list[str] | None = None,
         current_document: str | None = None,
         current_directory: str | None = None,
+        intent: str | None = None,
+        source_names: list[str] | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -125,6 +127,8 @@ class AssistantTools:
                 exclude_documents=exclude_documents,
                 current_document=current_document,
                 current_directory=current_directory,
+                intent=intent,
+                source_names=source_names,
             ),
         )
 
@@ -267,6 +271,8 @@ def register_assistant_tools(
         exclude_documents: list[str] | None = None,
         current_document: str | None = None,
         current_directory: str | None = None,
+        intent: str | None = None,
+        source_names: list[str] | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -312,6 +318,18 @@ def register_assistant_tools(
         @docs", "@current @doc", "@dir @exclude README.md how is it built").
         The answer's "scope" says what was searched and left out.
 
+        intent pins the answer's shape: "knowledge" (what it is), "procedural"
+        (how to do it, with real examples) or "compose" (a NEW artifact — a
+        configuration, script or set of files — assembled from what the
+        sources document, each identifier checked against them before the
+        answer returns; values the sources do not give become placeholder
+        variables). Unset reads it off the question; starting the question
+        with @compose says the same as intent="compose".
+
+        source_names keeps every retrieval inside several sources at once
+        (["tf-foundry-core", "tf-security-network"]); one name means what
+        source_name means.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -339,6 +357,8 @@ def register_assistant_tools(
             exclude_documents=exclude_documents,
             current_document=current_document,
             current_directory=current_directory,
+            intent=intent,
+            source_names=source_names,
         )
 
     @mcp.tool(meta=app_meta())
@@ -421,8 +441,9 @@ def register_assistant_tools(
           answer — is it supported by the passages it cites with [n] markers
           (numbered as you sent them), and does it answer the question?
 
-        intent is "knowledge" (understand it) or "procedural" (do it: needs a
-        real example); unset reads it off the question. Nothing is read from
+        intent is "knowledge" (understand it), "procedural" (do it: needs a
+        real example) or "compose" (build a new artifact: needs every
+        component documented); unset reads it off the question. Nothing is read from
         the index — the text you send is what is judged. Refused with
         DECISIONS_NOT_CONFIGURED when this region has no OpenAI key for the
         Decisions API (or assistant.decisions.mode is off), and with the

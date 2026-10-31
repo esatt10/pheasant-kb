@@ -132,6 +132,13 @@ class AnswerRequest:
     #: as ``source/path`` (``source`` alone for its root).
     current_document: str | None = None
     current_directory: str | None = None
+    #: Several sources at once (the sources rail's multi-select). One name
+    #: means exactly what ``source_name`` means.
+    source_names: list[str] | None = None
+    #: The answer shape, pinned: ``knowledge``, ``procedural`` or ``compose``
+    #: (``@compose`` in a question says the same). ``None``/``auto`` reads it
+    #: off the question.
+    intent: str | None = None
 
 
 def admit(context: ServiceContext, request: AnswerRequest) -> None:
@@ -153,6 +160,12 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
         normalize_history(request.history)
     except HistoryError as exc:
         raise InvalidRequest(str(exc)) from exc
+    from pheasant.assistant import chat
+
+    if request.intent and str(request.intent).strip().lower() not in {"auto", *chat.INTENTS}:
+        raise InvalidRequest(
+            f"intent must be one of auto, {', '.join(chat.INTENTS)}; got {request.intent!r}"
+        )
 
 
 def answer(
@@ -224,6 +237,8 @@ def answer(
                 current_document=request.current_document,
                 current_directory=request.current_directory,
                 remove_documents=_remover(context, request),
+                source_names=request.source_names,
+                intent=request.intent,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["admission_ms"] = admission_ms
@@ -590,7 +605,7 @@ def assess_evidence(
         raise DecisionsNotConfigured()
     shown = [gates.Shown(title=title, snippet=text) for title, text in items]
     questions = [
-        decisions.predicate("sufficient", gates.SUFFICIENCY + gates.CRITERIA.get(intent, "")),
+        decisions.predicate("sufficient", gates.sufficiency_question(intent)),
         decisions.choice(
             "miss",
             "What, if anything, is the main gap between the passages and what the question needs?",

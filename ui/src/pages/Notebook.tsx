@@ -81,13 +81,19 @@ export function Notebook() {
     if (state.sourceFilter && !overview.data.sources.some((s) => s.name === state.sourceFilter)) {
       dispatch({ type: "filter-source", source: null });
     }
+    // A source removed since it was added to the selection leaves it.
+    for (const name of state.alsoSources) {
+      if (!overview.data.sources.some((s) => s.name === name)) {
+        dispatch({ type: "toggle-source", source: name });
+      }
+    }
     if (
       state.sourceTypeFilter &&
       !overview.data.sources.some((s) => s.type === state.sourceTypeFilter)
     ) {
       dispatch({ type: "filter-source-type", sourceType: null });
     }
-  }, [overview.data, state.sourceFilter, state.sourceTypeFilter, dispatch]);
+  }, [overview.data, state.sourceFilter, state.alsoSources, state.sourceTypeFilter, dispatch]);
   const status = useQuery({
     queryKey: ["assistant-status", sessionId],
     queryFn: () => api.assistantStatus(sessionId),
@@ -356,6 +362,8 @@ export function Notebook() {
                   selected={state.sourceFilter}
                   selectedType={state.sourceTypeFilter}
                   onSelect={(source) => dispatch({ type: "filter-source", source })}
+                  alsoSelected={state.alsoSources}
+                  onToggle={(source) => dispatch({ type: "toggle-source", source })}
                   onSelectType={(sourceType) => dispatch({ type: "filter-source-type", sourceType })}
                   onChanged={() => overview.refetch()}
                   onBrowse={(source) => dispatch({ type: "open-browser", source, path: "" })}

@@ -84,6 +84,10 @@ export function ChatPanel({
   // exactly where it was — including a half-typed question.
   const { state, dispatch } = useSession();
   const { turns, draft, sourceFilter, sourceTypeFilter, workflow, answerDepth, pathScope, browser } = state;
+  // Several sources selected in the rail: answered from all of them. A folder
+  // scope is always inside one source, so it never travels with a list.
+  const scopedSources =
+    !pathScope && sourceFilter && state.alsoSources.length ? [sourceFilter, ...state.alsoSources] : null;
   const omitted = excludedInScope(state.excluded, pathScope?.source ?? sourceFilter, pathScope);
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
@@ -118,7 +122,8 @@ export function ChatPanel({
           question,
           session_id: sessionId,
           // A folder or file scope names its own source.
-          source_name: pathScope?.source ?? sourceFilter,
+          source_name: scopedSources ? null : (pathScope?.source ?? sourceFilter),
+          source_names: scopedSources,
           path_prefix: pathScope?.path ?? null,
           exclude_documents: omitted.length ? omitted : null,
           // What `@current` and `@dir` mean: whatever the taxonomy view shows.
@@ -319,6 +324,8 @@ export function ChatPanel({
             placeholder={
               pathScope
                 ? `Ask about ${pathScope.source}/${pathScope.path}…`
+                : scopedSources
+                ? `Ask about ${scopedSources.join(", ")}…`
                 : sourceFilter
                 ? `Ask about ${sourceFilter}…`
                 : sourceTypeFilter
@@ -371,6 +378,10 @@ export function ChatPanel({
               >
                 ✕
               </button>
+            </span>
+          ) : scopedSources ? (
+            <span className="pill pill--accent" title="Answered from every selected source">
+              scoped to {scopedSources.length} sources: {scopedSources.join(", ")}
             </span>
           ) : sourceFilter ? (
             <span className="pill pill--accent">scoped to {sourceFilter}</span>

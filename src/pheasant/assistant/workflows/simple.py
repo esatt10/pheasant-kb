@@ -23,6 +23,7 @@ from typing import Any
 
 from pheasant.assistant import conversation, routing
 from pheasant.assistant.chat import (
+    INTENTS,
     build_prompt,
     classify_intent,
     extractive_answer,
@@ -43,7 +44,7 @@ class SimpleWorkflow:
 
     def run(self, request: WorkflowRequest, retriever: Any, llm: Any) -> WorkflowResult:
         intent = str(request.options.get("intent") or "").strip().lower()
-        intent_pinned = intent in ("knowledge", "procedural")
+        intent_pinned = intent in INTENTS
         if not intent_pinned:
             intent, intent_why = classify_intent(request.question)
         else:

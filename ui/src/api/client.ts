@@ -467,6 +467,10 @@ export const api = {
       mode?: string;
       max_results?: number;
       source_name?: string | null;
+      /** Several sources at once (the rail's "+ scope"); one means `source_name`. */
+      source_names?: string[] | null;
+      /** The answer shape, pinned: knowledge, procedural or compose. */
+      intent?: "knowledge" | "procedural" | "compose" | null;
       /** One file, or everything under one folder, of `source_name`. */
       path_prefix?: string | null;
       /** Documents to leave out: names, `source/path`s or artifact ids. */

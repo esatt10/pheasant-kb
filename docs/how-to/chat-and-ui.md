@@ -151,7 +151,11 @@ structure worth drawing.)
 - Asking a question **outlines the cited nodes** and fades the rest to
   context strength.
 - Selecting a source in the left rail scopes both retrieval and the graph to
-  it.
+  it. **+ scope** on another source (or Ctrl/⌘-click its name) adds it to the
+  selection: questions are then answered from every selected source
+  (`source_names`), and the composer says "scoped to N sources". A plain click
+  selects one source alone again. The graph and the taxonomy view follow the
+  first selected source.
 
 ### The Columns layout
 

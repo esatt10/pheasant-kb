@@ -36,7 +36,12 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pheasant.search.criteria import apply_retrieval_criteria, criteria_active, criteria_dict
+from pheasant.search.criteria import (
+    apply_retrieval_criteria,
+    criteria_active,
+    criteria_dict,
+    scoped_sources,
+)
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 from pheasant.telemetry import metrics
@@ -188,6 +193,9 @@ class SearchRequest:
     min_score: float | None = None
     source_types: list[str] | None = None
     exclude_source_types: list[str] | None = None
+    #: Several sources at once (the sources rail's multi-select). One name is
+    #: folded into `source_name` by `scoped_sources`, so it filters in the index.
+    source_names: list[str] | None = None
     #: Ask the arms to report what each stage did. The tuning plane's whole
     #: diagnosis is this block; see `search.explain`.
     explain: bool = False
@@ -218,6 +226,7 @@ class SearchRequest:
             self.min_score,
             self.source_types,
             self.exclude_source_types,
+            self.source_names,
         )
 
     def criteria_block(self) -> dict[str, Any]:
@@ -229,6 +238,7 @@ class SearchRequest:
             self.memory,
             self.source_types,
             self.exclude_source_types,
+            self.source_names,
         )
 
 
@@ -258,7 +268,13 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
 
     kb_id = context.knowledge_base(request.knowledge_base)
     # A malformed expansion is refused before anything is retrieved.
-    request = replace(request, expand=parse_expansion(request.expand))
+    source_name, source_names = scoped_sources(request.source_name, request.source_names)
+    request = replace(
+        request,
+        expand=parse_expansion(request.expand),
+        source_name=source_name,
+        source_names=source_names,
+    )
     # Before the arms run, not after. A pinned search whose corpus has moved
     # must not spend the retrieval and then discard it: the caller is going to
     # attribute whatever comes back to the snapshot it named, so the only safe
@@ -335,6 +351,7 @@ def _search(
             min_score=request.min_score,
             source_types=request.source_types,
             exclude_source_types=request.exclude_source_types,
+            source_names=request.source_names,
         )[: request.max_results]
         payload["criteria"] = request.criteria_block()
     else:
@@ -518,7 +535,12 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
     # of a batch overlap, and a walk per query would repeat the same
     # neighbourhoods up to 25 times over.
     expansion = parse_expansion(request.criteria.expand)
-    criteria = replace(request.criteria, expand=None)
+    source_name, source_names = scoped_sources(
+        request.criteria.source_name, request.criteria.source_names
+    )
+    criteria = replace(
+        request.criteria, expand=None, source_name=source_name, source_names=source_names
+    )
     snapshot = _require_snapshot(context, request.criteria.snapshot_id)
 
     started = time.perf_counter()
