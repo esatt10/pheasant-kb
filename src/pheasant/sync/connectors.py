@@ -619,10 +619,18 @@ def _urlopen(
         raise
 
 
-def _relative_url_path(url: str, index: int) -> str:
+def _relative_url_path(url: str, index: int, suffix: str | None = None) -> str:
+    """A URL's artifact path; ``suffix`` is appended when the format is known up front.
+
+    Appended rather than substituted: a Terraform guide's slug
+    ``3.0-upgrade-guide`` already "has" the suffix ``.0-upgrade-guide``.
+    """
+
     parsed = urlparse(url)
     host = _safe_segment(parsed.netloc or parsed.scheme or "url")
     path = unquote(parsed.path or "").strip("/")
+    if suffix:
+        return f"{host}/{_safe_path(path or f'index-{index}')}{suffix}"
     if not path:
         path = f"index-{index}.html"
     relative = f"{host}/{_safe_path(path)}"

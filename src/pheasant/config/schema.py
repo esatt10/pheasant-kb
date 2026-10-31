@@ -1464,13 +1464,13 @@ class SourceConnectorSettings(ModelMixin):
     # Path to a guest module (.wat text or compiled .wasm) for a sandboxed
     # connector. None uses the connector class's bundled reference guest.
     wasm_module_path: str | None = None
-    #: Web collections: the longest a listed page goes without being checked.
-    #: Each URL is revalidated on its own schedule — from
-    #: ``sources[].sync.interval_seconds`` (default one hour), doubling each
-    #: time the page is found unchanged, capped here, and reset when it
-    #: changes. The scheduler beat stays the same; a page that is not due costs
-    #: no request. See ``WebCollectionConnector``.
+    #: Web collections: the longest a listed page goes unchecked. Each URL is
+    #: revalidated on its own schedule, from ``sources[].sync.interval_seconds``
+    #: (default one hour), doubling while unchanged up to this and reset by a
+    #: change; a page that is not due costs no request (``WebCollectionConnector``).
     max_refresh_seconds: int = 259200
+    #: Web collections: read JavaScript-shell pages from the site's API (``web_adapters``).
+    site_adapters: bool = True
 
 
 @dataclass

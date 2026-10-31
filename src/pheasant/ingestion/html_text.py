@@ -86,6 +86,41 @@ def extract_html_text(content: bytes, *, strip_chrome: bool = False) -> str:
     return stripped
 
 
+#: Visible body text below this many characters, on a page that loads
+#: scripts, is a page whose content a script was going to fetch.
+_SHELL_MAX_TEXT = 200
+_SHELL_INVISIBLE = re.compile(
+    r"<(head|script|style|noscript|template|svg)\b[\s\S]*?</\1\s*>", flags=re.I
+)
+_SHELL_ASKS_FOR_SCRIPT = re.compile(
+    r"(?:enable|turn on|activate)\s+javascript|javascript\s+(?:is\s+)?(?:required|disabled"
+    r"|must be enabled|needs to be enabled)|requires?\s+javascript",
+    flags=re.I,
+)
+
+
+def looks_like_script_shell(content: bytes) -> bool:
+    """Whether an HTML page is a single-page application's empty shell.
+
+    True when the body shows almost no text and the page either loads a
+    script or asks for JavaScript. The Terraform Registry serves exactly this
+    for every doc page: "Terraform Registry / Please enable Javascript to use
+    this application", the documentation arriving later from an API. A
+    heuristic used only to *say* so (``WebCollectionConnector`` logs it and
+    reports it on the checkpoint); it never changes what is indexed.
+    """
+
+    raw = content[:2_000_000].decode("utf-8", errors="ignore")
+    if "<script" not in raw.lower() and not _SHELL_ASKS_FOR_SCRIPT.search(raw):
+        return False
+    visible = re.sub(r"<[^>]+>", " ", _SHELL_INVISIBLE.sub(" ", raw))
+    visible = re.sub(r"\s+", " ", visible).strip()
+    if _SHELL_ASKS_FOR_SCRIPT.search(visible):
+        # The ask itself is the page's text ("please enable JavaScript").
+        visible = _SHELL_ASKS_FOR_SCRIPT.sub(" ", visible)
+    return len(visible) < _SHELL_MAX_TEXT
+
+
 def _strip_chrome(soup: Any) -> None:
     """Remove the site around a page's content, in place. See the constants above.
 

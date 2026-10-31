@@ -37,6 +37,7 @@ from pheasant.ingestion.extractor import (
     source_includes_documents,
 )
 from pheasant.ingestion.pdf_math import MATH_VERSION
+from pheasant.sync.web_adapters import WEB_ADAPTERS_VERSION, adapted_names
 
 SOURCE_SCOPE = "source:{name}"
 EMBEDDING_SCOPE = "embeddings"
@@ -124,6 +125,16 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     if source_type == "web_collection":
         payload["text_pipeline"] = WEB_TEXT_PIPELINE
         payload["html_text"] = bool(getattr(extractor, "html_text", False))
+        adapters = (
+            adapted_names(list(source.urls or []))
+            if getattr(source.connector, "site_adapters", True)
+            else []
+        )
+        if adapters:
+            # Only a collection listing an adapted URL carries it, so adding
+            # an adapter re-reads that collection once (its pages' text and
+            # paths both change) and no other fingerprint moves.
+            payload["site_adapters"] = {"names": adapters, "version": WEB_ADAPTERS_VERSION}
         if html_chrome_enabled(extractor):
             # Omitted while off, so no stored fingerprint moves until someone
             # turns it on; bumping HTML_CHROME_VERSION re-reads exactly the
