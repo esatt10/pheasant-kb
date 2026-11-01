@@ -43,6 +43,8 @@ class SearchCriteria(BaseModel):
     # differently depending on which protocol asked; the router, which reaches
     # this region over HTTP, could not scope a search at all.
     exclude_sources: list[str] | None = None
+    # Several sources at once; one name behaves exactly like `source_name`.
+    source_names: list[str] | None = None
     node_types: list[str] | None = None
     min_score: float | None = None
     # Scope by the *kind* of source (repository, gdrive, web_collection, ...) rather
@@ -89,6 +91,7 @@ class SearchCriteria(BaseModel):
             principal_groups=self.principal_groups,
             memory=self.memory,
             exclude_sources=self.exclude_sources,
+            source_names=self.source_names,
             node_types=self.node_types,
             min_score=self.min_score,
             source_types=self.source_types,

@@ -824,6 +824,7 @@ class PheasantTools(
         expand: Any = None,
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
+        source_names: list[str] | None = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -905,6 +906,7 @@ class PheasantTools(
                 min_score=min_score,
                 source_types=source_types,
                 exclude_source_types=exclude_source_types,
+                source_names=source_names,
                 snapshot_id=snapshot_id,
                 as_of=as_of,
                 expand=expand,

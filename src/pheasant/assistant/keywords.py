@@ -12,6 +12,11 @@ question so a rule notices. A keyword says it directly:
   unchanged, so every cell, bullet and step still cites its passage.
 * **Length**: ``@overview`` (medium) and ``@detailed`` (long), the same pins
   the request's ``depth`` takes.
+* **Kind of answer**: ``@compose`` (aliases ``@build``, ``@scaffold``) pins
+  the request's ``intent`` to ``compose``: a new artifact assembled from what
+  the sources document (``chat.COMPOSE_SYSTEM``), the shape a "write the
+  configuration that…" question is read as anyway, for a question that does not
+  happen to lead with the verb.
 * **Pictures**: ``@diagram`` and any diagram shape by name
   (``@timeline``, ``@flow``, ``@mindmap`` ...), the same pins as ``visual``.
 * **Deterministic answers**, with no model in the path: ``@search`` (the
@@ -263,6 +268,16 @@ KEYWORDS: tuple[Keyword, ...] = (
         ("draw", "visual"),
         group="Pictures",
     ),
+    Keyword(
+        "compose",
+        "intent",
+        "compose",
+        "Write a new artifact — a configuration, script or set of files — assembled from "
+        "what the sources document, checked identifier by identifier before it is returned.",
+        "@compose a Terraform module for the storage account and its private endpoint",
+        ("build", "scaffold", "artifact"),
+        group="Kind of answer",
+    ),
 )
 
 #: Every name and alias a keyword answers to, without the ``@``.
@@ -349,6 +364,8 @@ class Directives:
     exclude: tuple[str, ...] = ()
     #: Names ``@remove`` gave (empty for ``@current @remove``); ``None`` without it.
     remove: tuple[str, ...] | None = None
+    #: An answer shape the message pins (``@compose``), the request's ``intent``.
+    intent: str | None = None
 
     @property
     def any(self) -> bool:
@@ -366,6 +383,7 @@ class Directives:
             **({"scope": self.scope} if self.scope else {}),
             **({"exclude": list(self.exclude)} if self.exclude else {}),
             **({"remove": list(self.remove)} if self.remove is not None else {}),
+            **({"intent": self.intent} if self.intent else {}),
         }
 
 
@@ -407,6 +425,8 @@ def read(question: str) -> Directives:
             found["depth"] = keyword.value
         elif keyword.kind == "visual":
             found["visual"] = keyword.value
+        elif keyword.kind == "intent":
+            found["intent"] = keyword.value
     return Directives(
         text=text.strip(),
         used=tuple(used),
@@ -419,6 +439,7 @@ def read(question: str) -> Directives:
         scope=scope,
         exclude=exclude,
         remove=found.get("remove"),  # type: ignore[arg-type]
+        intent=found.get("intent"),  # type: ignore[arg-type]
     )
 
 

@@ -125,7 +125,7 @@ export function WorkflowPanel({
 const OPTION_HELP: [string, string][] = [
   [
     "intent",
-    "Answer shape: auto reads it off the question, or pin knowledge / procedural. " +
+    "Answer shape: auto reads it off the question, or pin knowledge / procedural / compose. " +
       "Also sets retrieval breadth-vs-depth and the sufficiency bar.",
   ],
   ["max_rounds", "How many plan → retrieve → grade loops before answering with what it has."],

@@ -431,6 +431,16 @@ def test_content_can_be_switched_off(tmp_path) -> None:
         ("show me an example of a workflow", "procedural"),
         ("walk me through setting up a source", "procedural"),
         ("How can I install the agent extra?", "procedural"),
+        ("Write a Terraform configuration for a storage account and key vault", "compose"),
+        ("generate the Kubernetes manifests for the api and worker tiers", "compose"),
+        ("Can you build me a GitHub Actions pipeline that runs the tests?", "compose"),
+        ("scaffold a connector plugin module", "compose"),
+        # A build verb without an artifact, or an artifact without the verb
+        # leading, is not a request to compose one.
+        ("create a source for my notes folder", "procedural"),
+        ("Write a report on the sync engine", "knowledge"),
+        ("how do I write a config file for a connector", "procedural"),
+        ("what does the deploy pipeline do", "knowledge"),
         ("", "knowledge"),
         ("checkpoints", "knowledge"),
     ],

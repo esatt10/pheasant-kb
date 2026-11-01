@@ -43,6 +43,16 @@ from pheasant.assistant import decisions
 from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.decisions import Decider, DecisionUnavailable
 from pheasant.assistant.workflows import WorkflowStep, drafting
+from pheasant.assistant.workflows.decision_questions import (
+    CRITERIA,
+    GROUNDED,
+    GROUNDED_COMPOSE,
+    MISS_KINDS,
+    RESPONSIVE,
+    SUFFICIENCY,
+    SUFFICIENCY_COMPOSE,
+    UNCLEAR,
+)
 
 #: How much of each cited document the acceptance gate reads. The writer read
 #: whole documents (``chat.hydrate_citations``); a judge reading less would
@@ -50,23 +60,6 @@ from pheasant.assistant.workflows import WorkflowStep, drafting
 #: region, a 4,000-character cut sent a correct answer to a rewrite.
 ACCEPT_DOCUMENT_CHARS = 16_000
 ACCEPT_TOTAL_CHARS = 120_000
-
-#: Kinds of miss, as the sufficiency request offers them. The description is
-#: what the trace says is missing, since the API writes no prose of its own.
-MISS_KINDS: dict[str, str] = {
-    "none": "Nothing the question needs is missing.",
-    "content": "The passages are about the right thing but lack the specific facts, steps "
-    "or examples the answer needs.",
-    "location": "The passages are the right kind of file from the wrong package, directory "
-    "or component.",
-    "kind": "The passages are the wrong kind of file: documentation where source code or a "
-    "usage example is needed, or tests instead of the implementation.",
-    "absent": "Nothing in the passages bears on the question; the knowledge base may not cover it.",
-}
-#: Insufficient, yet the miss choice said "none": the two judgements are
-#: independent questions and can disagree. Said as it is rather than reported
-#: as "missing: none" beside "insufficient".
-UNCLEAR = "Below the sufficiency threshold, with no specific gap named."
 
 
 def miss_of(choice: Any, sufficient: bool) -> str:
@@ -83,31 +76,14 @@ def miss_description(kind: str) -> str:
     return UNCLEAR if kind == "unclear" else MISS_KINDS.get(kind, UNCLEAR)
 
 
-SUFFICIENCY = (
-    "Taken together, do the passages contain enough evidence to answer the question "
-    "correctly and specifically? Judge the substance, not the wording, and use the file "
-    "metadata: a result set from the wrong place or of the wrong kind is not enough even "
-    "when each passage reads plausibly."
-)
-CRITERIA = {
-    "knowledge": " This is a knowledge-summary question: enough means one could say what the "
-    "thing is, what its main parts are and what each is for. Exhaustive coverage is not "
-    "required.",
-    "procedural": " This is a procedural question: enough means a followable sequence AND at "
-    "least one real example with the actual identifiers, arguments or config keys. Naming the "
-    "right file, or describing a capability in prose, is not enough.",
-}
-GROUNDED = (
-    "Is the ANSWER supported by the passages it cites with [n] markers? Say no if it states "
-    "something a cited passage contradicts, attributes a claim to a passage that does not "
-    "support it, or makes a substantive factual claim that none of the passages supports. "
-    "Summaries, paraphrases and connecting sentences that follow from the passages count as "
-    "supported, and saying that evidence is missing is not a claim."
-)
-RESPONSIVE = (
-    "Does the ANSWER respond to the QUESTION that was asked? An answer that says plainly what "
-    "the knowledge base does not cover counts as responding."
-)
+def sufficiency_question(intent: str) -> str:
+    """The sufficiency predicate's text for an intent (one spelling, two callers)."""
+
+    if intent == "compose":
+        return SUFFICIENCY_COMPOSE
+    return SUFFICIENCY + CRITERIA.get(intent, "")
+
+
 NONE_OF_THESE = "none"
 
 _STOPWORDS = frozenset(
@@ -256,9 +232,10 @@ def followup_candidates(
         for symbol in meta.get("symbols") or []:
             if symbol.lower() not in lowered and symbol not in symbols:
                 symbols.append(str(symbol))
-    suffix = "example usage" if intent == "procedural" else ""
+    wants_examples = intent in ("procedural", "compose")
+    suffix = "example usage" if wants_examples else ""
     candidates += [f"{symbol} {suffix}".strip() for symbol in symbols[:3]]
-    if intent == "procedural":
+    if wants_examples:
         candidates.append(f"{base} example configuration")
     else:
         candidates.append(f"{base} overview")
@@ -364,7 +341,7 @@ def _ask_sufficiency(state: dict, ctx: dict, options: dict, acting: bool) -> dic
     shapes = retriever.metadata([p.node_id for p in window if p.node_id])
     round_index = int(state.get("round", 0)) + 1
     questions = [
-        decisions.predicate("sufficient", SUFFICIENCY + CRITERIA.get(intent, "")),
+        decisions.predicate("sufficient", sufficiency_question(intent)),
         decisions.choice(
             "miss",
             "What, if anything, is the main gap between the passages and what the question needs?",
@@ -566,9 +543,13 @@ def prepare_synthesis(state: dict, ctx: dict, options: dict, passages: list) -> 
             "passage it cites, and answer the question that was asked."
         )
     long_answer = str(state.get("depth") or "short") == "long"
+    # An artifact is never drafted cheap: a low-effort first draft is a bet that
+    # a short answer comes out right, and an artifact is not rewritten by this
+    # gate at all (compose_review checks it), so nothing would catch the miss.
+    artifact = state.get("intent") == "compose"
     if repairing:
         draft.llm, draft.effort = drafting.repair_llm(llm, decider, int(state["repairs"]))
-    elif not long_answer and active(ctx, "accept"):
+    elif not long_answer and not artifact and active(ctx, "accept"):
         draft.llm, draft.effort = drafting.at_effort(llm, decider.draft_reasoning_effort)
     request = ctx.get("request")
     if (
@@ -592,18 +573,32 @@ def finish_synthesis(
 
     out: dict[str, Any] = {"repair_pending": False}
     grade = state.get("grade") or {}
-    if state.get("decided") and not grade.get("sufficient") and "Evidence gap:" not in answer:
+    artifact = state.get("intent") == "compose"
+    # An artifact ends with its own list of what the passages did not document
+    # (chat.COMPOSE_SYSTEM); a generic gap line under it repeats that list less
+    # precisely, and reads as a judgement on the artifact.
+    if (
+        state.get("decided")
+        and not grade.get("sufficient")
+        and not artifact
+        and "Evidence gap:" not in answer
+    ):
         gap = grade.get("missing") or "the available passages are incomplete"
         answer = f"{answer}\n\nEvidence gap: {gap}" if answer else f"Evidence gap: {gap}"
     out["answer"] = answer
     if ctx.get("decider") is not None and "accept" in ctx["decider"].gates:
         texts: dict[int, str] = {}
-        budget = ACCEPT_TOTAL_CHARS
+        # The judge reads what the writer read. An artifact draws on many more
+        # documents than a short answer, and a judge cut off before the last of
+        # them calls every component taken from those unsupported.
+        whole = sum(len(doc.text or "") for doc in documents.values()) if artifact else 0
+        budget = max(ACCEPT_TOTAL_CHARS, whole)
         for citation in citations:
             index = citation["index"]
             text = documents[index].text if index in documents else ""
+            per_document = len(text or "") if artifact else ACCEPT_DOCUMENT_CHARS
             text = (text or str(citation.get("snippet") or ""))[
-                : min(ACCEPT_DOCUMENT_CHARS, budget)
+                : min(max(per_document, ACCEPT_DOCUMENT_CHARS), budget)
             ]
             budget -= len(text)
             texts[int(index)] = text
@@ -641,7 +636,10 @@ def accept_node(state: dict, ctx: dict) -> dict:
         result = decider.decide(
             "\n".join(lines),
             [
-                decisions.predicate("grounded", GROUNDED),
+                decisions.predicate(
+                    "grounded",
+                    GROUNDED + (GROUNDED_COMPOSE if state.get("intent") == "compose" else ""),
+                ),
                 decisions.predicate("responsive", RESPONSIVE),
             ],
         )
@@ -685,10 +683,17 @@ def accept_node(state: dict, ctx: dict) -> dict:
             **_accept_step(state, f"answer accepted ({scores})", {**entry, "outcome": "accepted"}),
             "acceptance": acceptance,
         }
+    artifact = state.get("intent") == "compose"
     can_repair = (
         repairs < decider.max_repairs
         and ctx.get("llm") is not None
         and str(state.get("depth") or "short") != "long"
+        # The acceptance thresholds were calibrated on short answers, and on an
+        # artifact neither score is evidence yet: grounded p=0.01 on
+        # configurations `terraform validate` accepts, and a responsive miss
+        # whose rewrite dropped two of the components asked for. An artifact
+        # is checked by compose_review instead; these scores are reported.
+        and not artifact
     )
     if can_repair:
         problems = []
@@ -713,7 +718,10 @@ def accept_node(state: dict, ctx: dict) -> dict:
     return {
         **_accept_step(
             state,
-            f"answer rejected ({scores}); returned as written",
+            f"artifact judged ({scores}); returned as written, the scores are reported "
+            "for artifacts rather than acted on"
+            if artifact
+            else f"answer rejected ({scores}); returned as written",
             {**entry, "outcome": "rejected"},
         ),
         "acceptance": acceptance,

@@ -264,7 +264,7 @@ export interface AssistantStatus {
 export interface AnswerKeyword {
   keyword: string;
   aliases: string[];
-  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope" | "remove";
+  kind: "inventory" | "search" | "form" | "depth" | "visual" | "scope" | "remove" | "intent";
   group: string;
   summary: string;
   example: string;

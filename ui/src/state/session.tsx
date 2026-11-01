@@ -97,6 +97,12 @@ export interface ChatTurn {
 export interface SessionState {
   /** Restrict retrieval + graph to one source, or null for everything. */
   sourceFilter: string | null;
+  /**
+   * Further sources asked beside `sourceFilter` (the rail's "+ scope"): a
+   * question is then answered from all of them, sent as `source_names`. Empty
+   * for a single source. The graph and the taxonomy view follow `sourceFilter`.
+   */
+  alsoSources: string[];
   /** Restrict retrieval further, to one folder or file of `sourceFilter`. */
   pathScope: PathScope | null;
   /**
@@ -181,6 +187,7 @@ export const MAX_DEPTH = 6;
 
 const INITIAL: SessionState = {
   sourceFilter: null,
+  alsoSources: [],
   pathScope: null,
   sourceTypeFilter: null,
   hiddenTypes: NOISY_NODE_TYPES,
@@ -218,6 +225,7 @@ const INITIAL: SessionState = {
 
 export type SessionAction =
   | { type: "filter-source"; source: string | null }
+  | { type: "toggle-source"; source: string }
   | { type: "set-path-scope"; scope: PathScope | null }
   | { type: "toggle-excluded"; document: string }
   | { type: "clear-excluded"; source?: string | null }
@@ -304,8 +312,26 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return {
         ...state,
         sourceFilter: action.source,
+        alsoSources: [],
         pathScope: state.pathScope?.source === action.source ? state.pathScope : null,
       };
+    case "toggle-source": {
+      // Add a source to the selection or take it out. Taking out the primary
+      // promotes the next; a folder scope lives in one source, so a second
+      // source ends it.
+      const selected = [state.sourceFilter, ...state.alsoSources].filter(
+        (name): name is string => Boolean(name),
+      );
+      const next = selected.includes(action.source)
+        ? selected.filter((name) => name !== action.source)
+        : [...selected, action.source];
+      return {
+        ...state,
+        sourceFilter: next[0] ?? null,
+        alsoSources: next.slice(1),
+        pathScope: next.length === 1 && state.pathScope?.source === next[0] ? state.pathScope : null,
+      };
+    }
     case "toggle-excluded":
       return {
         ...state,
@@ -324,7 +350,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       // Scoping to a folder scopes to its source too, so the rail, the graph
       // and the composer all say the same thing.
       return action.scope
-        ? { ...state, pathScope: action.scope, sourceFilter: action.scope.source }
+        ? { ...state, pathScope: action.scope, sourceFilter: action.scope.source, alsoSources: [] }
         : { ...state, pathScope: null };
     case "filter-source-type":
       // Selecting a type clears a source selected under a different one, so
@@ -603,6 +629,7 @@ const STORAGE_KEY = "pheasant.workspace.v1";
  */
 const PERSISTED_KEYS = [
   "sourceFilter",
+  "alsoSources",
   "pathScope",
   "sourceTypeFilter",
   "hiddenTypes",
@@ -631,6 +658,10 @@ function hydrate(): SessionState {
     return {
       ...INITIAL,
       sourceFilter: saved.sourceFilter ?? INITIAL.sourceFilter,
+      alsoSources:
+        Array.isArray(saved.alsoSources) && saved.sourceFilter
+          ? saved.alsoSources.filter((name): name is string => typeof name === "string")
+          : INITIAL.alsoSources,
       pathScope: hydrateScope(saved.pathScope, saved.sourceFilter ?? null),
       sourceTypeFilter: saved.sourceTypeFilter ?? INITIAL.sourceTypeFilter,
       hiddenTypes: Array.isArray(saved.hiddenTypes) ? saved.hiddenTypes : INITIAL.hiddenTypes,

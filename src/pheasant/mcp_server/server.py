@@ -361,6 +361,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         expand: dict | int | bool | None = None,
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
+        source_names: list[str] | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -409,6 +410,10 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         is usually what you want when you do not already know every source in
         the region. Every hit reports its own under provenance.source_type.
 
+        source_names keeps several sources at once (["notes", "runbooks"]);
+        one name means exactly what source_name means, and a source_name given
+        beside it joins the list.
+
         source_name/exclude_sources/node_types/min_score are retrieval
         criteria you can set per call instead of relying on how the region
         was configured. Call describe_retrieval to see what this region
@@ -455,6 +460,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             expand=expand,
             path_prefix=path_prefix,
             exclude_documents=exclude_documents,
+            source_names=source_names,
         )
 
     @mcp.tool()
@@ -479,6 +485,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         snapshot_id: str | None = None,
         as_of: str | None = None,
         expand: dict | int | bool | None = None,
+        source_names: list[str] | None = None,
     ) -> dict:
         """Search for many queries in one call and return one merged context.
 
@@ -519,6 +526,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             snapshot_id=snapshot_id,
             as_of=as_of,
             expand=expand,
+            source_names=source_names,
         )
 
     @mcp.tool()
@@ -1092,6 +1100,7 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
             in (
                 "mode",
                 "source_name",
+                "source_names",
                 "exclude_sources",
                 "node_types",
                 "min_score",

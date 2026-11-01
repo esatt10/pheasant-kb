@@ -118,7 +118,7 @@ standalone is selected:
 | `assistant.allow_session_keys` | `false` | `true` |
 | `assistant.max_context_chunks` | `16` | `8` |
 | `assistant.max_output_tokens` | `16384` | `4096` |
-| `assistant.request_timeout_seconds` | `180.0` | `90.0` |
+| `assistant.request_timeout_seconds` | `300.0` | `90.0` |
 | `assistant.max_facts` | `16` | `12` |
 | `assistant.workflow` | `agentic` | `auto` |
 | `assistant.workflow_options.agentic.staged_retrieval` | `true` | unset |
@@ -128,6 +128,18 @@ standalone is selected:
 | `assistant.workflow_options.agentic.output_tokens_by_depth.medium` | `1024` | unset |
 | `assistant.workflow_options.agentic.answer_max_words.short` | `150` | unset |
 | `assistant.workflow_options.agentic.answer_max_words.medium` | `400` | unset |
+| `assistant.workflow_options.agentic.compose_options.planned_queries` | `8` | unset |
+| `assistant.workflow_options.agentic.compose_options.followup_queries` | `4` | unset |
+| `assistant.workflow_options.agentic.compose_options.per_query_results` | `10` | unset |
+| `assistant.workflow_options.agentic.compose_options.max_context_passages` | `40` | unset |
+| `assistant.workflow_options.agentic.compose_options.passages_per_document` | `auto` | unset |
+| `assistant.workflow_options.agentic.compose_options.document_fraction` | `0.25` | unset |
+| `assistant.workflow_options.agentic.compose_options.document_floor` | `2` | unset |
+| `assistant.workflow_options.agentic.compose_options.document_window_share` | `0.75` | unset |
+| `assistant.workflow_options.agentic.compose_options.scale_document_chars` | `true` | unset |
+| `assistant.workflow_options.agentic.compose_options.chars_per_passage` | `4000` | unset |
+| `assistant.workflow_options.agentic.compose_options.context_budget_chars` | `240000` | unset |
+| `assistant.workflow_options.agentic.compose_options.max_output_tokens` | `24000` | unset |
 | `assistant.latency.max_concurrent_answers` | `4` | `0` |
 | `assistant.retrieval.max_rounds` | `2` | `3` |
 | `assistant.retrieval.per_query_results` | `10` | `8` |
@@ -1825,7 +1837,7 @@ pip install 'pheasant-kb[agent]'
 assistant:
   workflow: agentic
   workflow_options:
-    intent: auto            # auto | knowledge | procedural
+    intent: auto            # auto | knowledge | procedural | compose
     max_rounds: 3
     retrieval_modes: [hybrid, vector, graph]
     expand_depth: 2
@@ -1838,6 +1850,93 @@ retrieval, the sufficiency bar and the answering prompt to match — breadth
 over depth for the first, depth and real code examples for the second.
 `knowledge-summary` is the same graph with that reading pinned. See
 [Customize the question-answering workflow](how-to/agent-workflows.md).
+
+A third reading, **compose**, is for a request whose deliverable is a *new*
+artifact assembled from parts the corpus documents — "write the Terraform
+configuration that…", "generate the manifests for…". It is read off a leading
+build verb (`write`, `generate`, `build`, `scaffold` …) together with an
+artifact noun (`configuration`, `script`, `module`, `files`, `manifests` …),
+or chosen by the planner. The finished artifact is never expected to exist in
+the corpus, so compose changes every step that assumed it would:
+
+* the planner splits the request into one query per component
+  (`planned_queries`), and staged retrieval and the combined grade-and-answer
+  call are skipped, because one search of a dozen components returns the two
+  its words weigh most;
+* sufficiency means *every component is documented*, not *a passage shows the
+  whole thing* — the question that, asked the ordinary way, rated a corpus
+  documenting all 18 requested components p=0.09;
+* the answer is written in **one** call at any depth (sections written apart
+  cannot reference each other's names), with every type and argument taken from
+  the passages and every value they do not give turned into a placeholder
+  variable;
+* the artifact is then **checked** (`assistant/compose_review.py`,
+  `compose_review`, on by default). Without a model, every key inside a
+  labelled block (`kind "type" "name" {`) is looked up in that type's own
+  evidence — its reference page and every example block of that type — and
+  any other key in every passage; the artifact's own names (labels, `var.` /
+  `local.` / `each.` chains) are never suspects. One JSON review call then
+  reports or clears each suspect, finds identifiers documented for a different
+  component than the one they are written on, and lists requested components
+  the artifact omits. A typed suspect it neither reports nor clears is still
+  corrected, and so, without asking anyone, are a `var.x` reference the
+  artifact never declares and an argument the component's own reference page
+  marks `(Required)` that the block leaves out. A component's own page
+  outranks an example of it inside another page (those go stale), and only
+  the artifact's primary declaration kind is held to a page — a lookup of the
+  same type is documented elsewhere. The passages outrank the reviewer: a claim that an
+  identifier is wrong where its component's own evidence documents it is
+  dropped. Anything found is rewritten once, with exactly that list; nothing
+  found costs only the review call;
+* the first draft is never written at the low draft effort, and the acceptance
+  gate's scores are reported but never trigger a rewrite of an artifact — its
+  thresholds were calibrated on short answers, and the rewrites it asked for
+  deleted most of one correct artifact and dropped two requested components
+  from another.
+
+Compose questions run with `compose_options` over everything else, defaults
+in `COMPOSE_DEFAULTS` (`assistant/workflows/agentic.py`):
+
+```yaml
+assistant:
+  workflow_options:
+    agentic:
+      compose_options:
+        planned_queries: 8          # queries beside the question itself
+        followup_queries: 4         # a grader's follow-ups searched per round
+        per_query_results: 10
+        max_context_passages: 40
+        passages_per_document: auto # proportional to each document's size (below)
+        document_fraction: 0.25
+        document_floor: 2
+        document_window_share: 0.75
+        scale_document_chars: true  # read further into a document cited many times
+        chars_per_passage: 4000
+        context_budget_chars: 240000
+        max_output_tokens: 24000
+```
+
+**How many passages one document may give.** `passages_per_document` is an
+integer (a fixed cap), `auto`, or unset (no cap). `auto` scales with the
+document: `document_fraction` of its chunks, never below `document_floor` and
+never more than `document_window_share` of the window. With the values above, a
+one-page note contributes at most 2 passages, a 40-chunk guide 10, and a
+120-chunk PDF 30 of the 40. A fixed cap of two would read two passages of a
+long PDF whose overview is spread across thirty; no cap lets one long file push
+every other component out of a composed artifact. Sizes are the index's own
+chunk counts, read once per answer.
+
+**Reading what the window kept.** A cap alone does not read more of a large
+file: hydration gives each prose document `passage_chars`, and excerpts a
+large one to its cited chunks within that. With `scale_document_chars` on, a
+document's allowance is `max(passage_chars, its cited passages ×
+chars_per_passage)`, still inside `context_budget_chars`. Thirty passages of a
+long PDF are then thirty passages read.
+
+`planned_queries`, `followup_queries`, `passages_per_document` and
+`scale_document_chars` are ordinary options too (`3`, `2`, unset and off by
+default), so any intent can widen its own breadth; compose is the one that sets
+them.
 
 Both workflows send the model whole **files**, rebuilt from their chunks with
 line spans and metadata, rather than the 500-character search preview. Code and

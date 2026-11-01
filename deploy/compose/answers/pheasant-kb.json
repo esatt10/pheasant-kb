@@ -158,7 +158,7 @@
   "assistant.allow_session_keys": false,
   "assistant.max_context_chunks": 16,
   "assistant.max_output_tokens": 16384,
-  "assistant.request_timeout_seconds": 180.0,
+  "assistant.request_timeout_seconds": 300.0,
   "assistant.max_facts": 16,
   "assistant.workflow": "agentic",
   "assistant.workflow_options.agentic.staged_retrieval": true,
@@ -171,6 +171,20 @@
   "assistant.workflow_options.agentic.answer_max_words": {
     "short": 150,
     "medium": 400
+  },
+  "assistant.workflow_options.agentic.compose_options": {
+    "planned_queries": 8,
+    "followup_queries": 4,
+    "per_query_results": 10,
+    "max_context_passages": 40,
+    "passages_per_document": "auto",
+    "document_fraction": 0.25,
+    "document_floor": 2,
+    "document_window_share": 0.75,
+    "scale_document_chars": true,
+    "chars_per_passage": 4000,
+    "context_budget_chars": 240000,
+    "max_output_tokens": 24000
   },
   "assistant.latency.max_concurrent_answers": 4,
   "assistant.retrieval.max_rounds": 2,

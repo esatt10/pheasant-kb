@@ -25,6 +25,7 @@ def apply_retrieval_criteria(
     min_score: float | None = None,
     source_types: list[str] | None = None,
     exclude_source_types: list[str] | None = None,
+    source_names: list[str] | None = None,
 ) -> list[dict]:
     """Filter search hits by caller-supplied criteria. Order is preserved.
 
@@ -34,6 +35,10 @@ def apply_retrieval_criteria(
     which is exactly the surprise a retrieval-tuning surface must not have.
     """
     excluded = {str(name) for name in (exclude_sources or [])}
+    # Several sources at once — the multi-select in the sources rail. One name
+    # never arrives here: `scoped_sources` hands it to the arms as
+    # `source_name`, which filters inside the index instead of after it.
+    included = {str(name) for name in (source_names or [])}
     wanted_types = {str(name) for name in (node_types or [])}
     # Source *type* (repository, gdrive, web_collection, ...) is a different axis from
     # node type (chunk, symbol, entity) and from source *name*. Scoping by name
@@ -44,6 +49,8 @@ def apply_retrieval_criteria(
     kept: list[dict] = []
     for item in results:
         if excluded and source_of(item) in excluded:
+            continue
+        if included and source_of(item) not in included:
             continue
         if wanted_types and str(item.get("type") or "") not in wanted_types:
             continue
@@ -191,6 +198,27 @@ def scope_hits(
     )
 
 
+def scoped_sources(
+    source_name: str | None, source_names: list[str] | None
+) -> tuple[str | None, list[str] | None]:
+    """``(source_name, source_names)`` with one spelling for each scope.
+
+    No list, or a list naming one source, is the single-source scope every
+    arm already filters inside the index. Two or more is a post-filter, and the
+    single name, if both were given, joins the list rather than silently
+    winning or losing.
+    """
+    names = [str(n).strip() for n in (source_names or []) if str(n).strip()]
+    if source_name and names:
+        names = [source_name, *names]
+    names = list(dict.fromkeys(names))
+    if not names:
+        return source_name, None
+    if len(names) == 1:
+        return names[0], None
+    return None, names
+
+
 def source_of(item: dict) -> str:
     """The source a search hit came from.
 
@@ -212,6 +240,7 @@ def criteria_active(
     min_score: float | None,
     source_types: list[str] | None = None,
     exclude_source_types: list[str] | None = None,
+    source_names: list[str] | None = None,
 ) -> bool:
     """Whether any post-filter will run, and therefore whether to over-fetch.
 
@@ -224,6 +253,7 @@ def criteria_active(
         or min_score is not None
         or source_types
         or exclude_source_types
+        or source_names
     )
 
 
@@ -235,9 +265,12 @@ def criteria_dict(
     memory: Any = None,
     source_types: list[str] | None = None,
     exclude_source_types: list[str] | None = None,
+    source_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """The echo of what was applied, reported back on a filtered payload."""
     return {
+        # Only when given: a single-source search echoes what it always did.
+        **({"source_names": source_names} if source_names else {}),
         "source_name": source_name,
         "exclude_sources": exclude_sources,
         "node_types": node_types,
