@@ -181,6 +181,7 @@ pheasant-kb/
 │   │                            sync)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
+│   │                            compose_tools (compose_artifact as a job),
 │   │                            apps/knowledge_view.html (the MCP App view)
 │   ├── api/app.py             ← the HTTP surface (+ per-plane routers:
 │   │                            assistant_routes, readiness_routes, …)
@@ -282,7 +283,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --s
 For deployment/configuration work, load
 `.agents/skills/pheasant-deploy/SKILL.md` before changing files or containers.
 Agents *querying* a region (raw hybrid search + graph traversal, judged by
-their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
+their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`; agents
+*offloading a composition* (a new artifact built from documented parts, as a
+job: MCP `compose_artifact` + `get_job`) use `.agents/skills/pheasant-compose/SKILL.md`.
 
 ---
 

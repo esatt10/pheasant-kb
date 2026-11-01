@@ -33,6 +33,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from pheasant.mcp_server.compose_tools import ComposeTools
+
 APP_URI = "ui://pheasant/knowledge-view.html"
 APP_MIME = "text/html;profile=mcp-app"
 APP_PATH = Path(__file__).parent / "apps" / "knowledge_view.html"
@@ -54,8 +56,8 @@ def app_meta() -> dict[str, Any]:
     return {"ui": {"resourceUri": APP_URI}, "ui/resourceUri": APP_URI}
 
 
-class AssistantTools:
-    """Answering, visuals and images over MCP."""
+class AssistantTools(ComposeTools):
+    """Answering, visuals and images over MCP, and compose as a job (``ComposeTools``)."""
 
     config: Any
     services: Any
