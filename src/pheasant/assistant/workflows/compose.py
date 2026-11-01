@@ -222,7 +222,12 @@ def lost_code(draft: str, revised: str) -> bool:
     after = "\n".join(compose_review.code_blocks(revised))
     declared = len(_DECLARATION.findall(before))
     if declared:
-        return len(_DECLARATION.findall(after)) < declared
+        # A component type the draft declared and the rewrite does not is lost
+        # too, however many declarations remain: measured, a rewrite folded the
+        # subnets into the network as inline blocks it then could not index.
+        kinds = {kind for kind, _ in compose_review.components(before) if kind}
+        kept = {kind for kind, _ in compose_review.components(after) if kind}
+        return len(_DECLARATION.findall(after)) < declared or not kinds <= kept
     return len(compose_review.code_blocks(revised)) < len(compose_review.code_blocks(draft))
 
 
@@ -240,7 +245,17 @@ def reference_for_review(retriever: Any, answer: str, documents: dict) -> dict:
     """
     code = "\n".join(compose_review.code_blocks(answer))
     wanted = dict.fromkeys(kind for kind, _ in compose_review.declared_components(code) if kind)
-    missing = [kind for kind in wanted if not compose_review.reference_pages(kind, documents)]
+
+    def whole(kind: str) -> bool:
+        # An excerpt is not the page: measured, the excerpt of a project page
+        # left out the Arguments section, so the Required check found nothing.
+        return any(
+            compose_review.names_page(kind, compose_review.page_name(document))
+            and not getattr(document, "truncated", False)
+            for document in documents.values()
+        )
+
+    missing = [kind for kind in wanted if not whole(kind)]
     index_of = getattr(retriever, "document_index", None)
     read = getattr(retriever, "documents", None)
     if not missing or not callable(index_of) or not callable(read):
@@ -286,13 +301,14 @@ def review_artifact(
 
     llm = ctx["llm"]
     started = time.perf_counter()
+    reference = reference_for_review(ctx.get("retriever"), answer, documents)
     checked = compose_review.review(
         llm,
         state["question"],
         answer,
         documents,
         max_chars=int(options.get("context_budget_chars") or 400_000),
-        reference=reference_for_review(ctx.get("retriever"), answer, documents),
+        reference=reference,
     )
     steps = [
         WorkflowStep(
@@ -311,18 +327,23 @@ def review_artifact(
     steps.append(step)
     if revised is None:
         return _Reviewed(answer, steps)
-    # The rewrite is checked too, by the two checks that need no model and are
-    # never wrong about what they report: measured, a rewrite asked to add a
-    # missing component added it without the block its page marks Required.
+    # The rewrite is checked too, without a model: undeclared references,
+    # Required arguments, and keys it introduced that its component's whole
+    # page does not have. Measured: a rewrite asked to add a missing component
+    # added it without the block its page marks Required, and another gave a
+    # resource an argument of a different one.
+    recheck_reference = reference_for_review(ctx.get("retriever"), revised, documents)
     recheck = compose_review.review(
-        None,
-        state["question"],
-        revised,
-        documents,
-        max_chars=0,
-        reference=reference_for_review(ctx.get("retriever"), revised, documents),
+        None, state["question"], revised, documents, max_chars=0, reference=recheck_reference
     )
-    left = compose_review.Review(unresolved=recheck.unresolved, required=recheck.required)
+    before = compose_review.suspects(answer, {**documents, **reference})
+    introduced = [key for key in recheck.unknown if recheck.where.get(key) and key not in before]
+    left = compose_review.Review(
+        unresolved=recheck.unresolved,
+        required=recheck.required,
+        unknown=introduced,
+        where={key: recheck.where[key] for key in introduced},
+    )
     if not left.found():
         return _Reviewed(revised, steps)
     fixed, step = _edit(
@@ -332,8 +353,8 @@ def review_artifact(
         options,
         left,
         revised,
-        f"completing {len(left.unresolved) + len(left.required)} reference(s) or "
-        "required argument(s) the rewrite left",
+        f"correcting {len(left.unresolved) + len(left.required) + len(introduced)} "
+        "reference(s), required argument(s) or argument(s) the rewrite left",
     )
     steps.append(step)
     return _Reviewed(fixed or revised, steps)

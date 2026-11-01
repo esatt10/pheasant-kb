@@ -713,3 +713,57 @@ def test_a_rewrite_that_leaves_a_required_block_out_gets_one_more_edit() -> None
     clean = _LLM([{"issues": [], "omitted": ["a Foundry project"]}, complete])
     out = review_artifact({"question": "q"}, {"llm": clean}, {}, draft, window, "SYS", "EV")
     assert [s.name for s in out.steps] == ["review", "revise"], "nothing left, no second edit"
+
+
+def test_an_excerpted_own_page_is_read_whole_for_the_checks() -> None:
+    from pheasant.assistant.retrieval import Document
+    from pheasant.assistant.workflows.compose import reference_for_review
+
+    whole = Document(
+        node_id="file:p", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
+    )
+    excerpt = Document(
+        node_id="file:p",
+        text="Example Usage only",
+        relative_path="r/cognitive_account_project.md",
+        truncated=True,
+    )
+
+    class Retriever:
+        def document_index(self):
+            return {"cognitive_account_project": "file:p"}
+
+        def documents(self, node_ids, **kwargs):
+            return {"file:p": whole}
+
+    assert list(reference_for_review(Retriever(), PROJECT, {1: excerpt})) == ["reference:file:p"]
+    assert reference_for_review(Retriever(), PROJECT, {1: whole}) == {}, "a whole page is enough"
+
+
+def test_a_rewrite_that_drops_a_component_type_lost_code() -> None:
+    from pheasant.assistant.workflows.compose import lost_code
+
+    draft = '```hcl\nresource "net" "v" {}\nresource "subnet" "a" {}\nresource "subnet" "b" {}\n```'
+    folded = '```hcl\nresource "net" "v" {}\nresource "endpoint" "e" {}\nresource "dns" "d" {}\n```'
+    assert lost_code(draft, folded), "same count, but no subnet any more"
+
+
+def test_a_key_the_rewrite_brought_from_another_resource_gets_one_more_edit() -> None:
+    from pheasant.assistant.retrieval import Document
+    from pheasant.assistant.workflows.compose import review_artifact
+
+    page = Document(
+        node_id="file:p", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
+    )
+    draft = '```hcl\nresource "azurerm_key_vault" "kv" {\n  name = "kv"\n}\n```'
+    project = (
+        '```hcl\nresource "azurerm_cognitive_account_project" "p" {\n  name = "p"\n'
+        "  ai_services_hub_id = var.hub\n  identity {}\n}\n```"
+    )
+    added = draft + "\n" + project
+    fixed = added.replace("  ai_services_hub_id = var.hub\n", "")
+    llm = _LLM([{"issues": [], "omitted": ["a Foundry project"]}, added, fixed])
+    out = review_artifact({"question": "q"}, {"llm": llm}, {}, draft, {1: page}, "SYS", "EV")
+
+    assert out.text == fixed and [s.name for s in out.steps] == ["review", "revise", "revise"]
+    assert "`ai_services_hub_id` on azurerm_cognitive_account_project" in llm.log[2]["system"]

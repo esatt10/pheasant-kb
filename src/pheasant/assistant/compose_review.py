@@ -404,11 +404,8 @@ def suspects(answer: str, documents: dict) -> dict[str, str | None]:
         if component:
             if component not in scopes:
                 scopes[component] = component_evidence(component, documents)
-                partial[component] = any(
-                    getattr(document, "truncated", False)
-                    and names_page(component, page_name(document))
-                    for document in documents.values()
-                )
+                own = [d for d in documents.values() if names_page(component, page_name(d))]
+                partial[component] = bool(own) and all(getattr(d, "truncated", False) for d in own)
             scope = everything if partial[component] else scopes[component] or everything
         for key in _KEY.findall(body):
             if key not in declared and key not in found and not _present(key, scope):

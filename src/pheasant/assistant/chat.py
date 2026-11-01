@@ -127,7 +127,9 @@ Placeholders live ONLY in those variable defaults and in example-value files; \
 every component refers to the variable, never to a literal placeholder.
 - Wire the parts to each other by reference, with one consistent naming \
 scheme, so the artifact is internally consistent: everything referenced is \
-declared, nothing is declared twice.
+declared, nothing is declared twice. Refer to another component's attributes \
+exactly as the passages' own examples refer to them, including any index \
+they use.
 - Prefer the argument names of the current documented form over a \
 deprecated one when the passages show both. When passages disagree about a \
 component, its OWN reference page wins over an example inside another \
