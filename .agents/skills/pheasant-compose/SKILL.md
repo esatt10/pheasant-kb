@@ -27,7 +27,8 @@ checking in one call, inside its own context budget rather than yours.
 3. **Start it.** `compose_artifact(knowledge_base, request, source_names=[...])`
    returns a job at once (`job_id`, `status: "running"`).
 4. **Follow it.** Call `get_job(job_id)` every 30-60 seconds until `status` is
-   `succeeded` or `failed`. A composition of two dozen components takes about
+   `succeeded` or `failed`; `progress.phase` names the step it is on (plan,
+   retrieve, synthesize, review, revise). A composition of two dozen components takes about
    4-6 minutes. (`wait=true` blocks instead, for a client whose tool calls may
    run that long.)
 5. **Read the result** (`get_job(...).result`):
@@ -42,11 +43,16 @@ checking in one call, inside its own context budget rather than yours.
 6. **Validate it with the artifact's own tool** — the region cannot run it:
    write the files out and run the compiler, linter or validator
    (`terraform init -backend=false && terraform validate`, `tsc`, `ruff`, ...).
-7. **If it fails, iterate.** Call `compose_artifact` again with the same
-   `source_names`, `history=[{"question": <the request>, "answer": <the
-   files, as returned>}]`, and a request naming the errors to fix ("terraform
-   validate reports: …; fix exactly these"). The region keeps no conversation
-   state, so the history you send is the continuity.
+7. **Review what the validator cannot judge**: references that should be
+   attributes but are free variables, credentials where an identity would do,
+   design that does not match a stated purpose.
+8. **Iterate with `previous_job`.** Call `compose_artifact` again with the same
+   `source_names`, `previous_job=<the job_id>`, and a request naming exactly
+   what to change ("terraform validate reports: …; fix exactly these", or your
+   review's list). The region reads the earlier artifact from its own job, so
+   you send only the changes, not the files (34 KB for a 41-resource
+   configuration). If the job is gone — another region, or after a restart —
+   pass `history=[{"question": <the request>, "answer": <the files>}]` instead.
 
 ## Writing the request
 

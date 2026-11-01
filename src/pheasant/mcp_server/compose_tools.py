@@ -76,6 +76,18 @@ def artifact_payload(result: dict) -> dict:
     }
 
 
+def artifact_text(payload: dict) -> str:
+    """A composed artifact back as an answer, for the history of a revision."""
+
+    files = "\n\n".join(
+        f"### `{f['name']}`\n```{f.get('language') or ''}\n{f['content']}```"
+        for f in payload.get("files") or []
+    )
+    return "\n\n".join(
+        part for part in (payload.get("summary"), files, payload.get("not_covered")) if part
+    )
+
+
 class ComposeTools:
     """``services.assistant.answer`` (intent "compose") as a followable job."""
 
@@ -95,36 +107,61 @@ class ComposeTools:
         principal: str | None = None,
         principal_groups: list[str] | None = None,
         options: dict | None = None,
+        previous_job: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
+        from pheasant.services.errors import InvalidRequest
+
         if not str(request or "").strip():
-            from pheasant.services.errors import InvalidRequest
-
             raise InvalidRequest("compose_artifact needs a request: what to build, and from what.")
+        turns = list(history or [])
+        if previous_job:
+            # The region already holds the artifact being revised: sending it
+            # back costs the caller every byte of it again (34 KB, measured,
+            # for a 41-resource configuration) to say what the region produced.
+            earlier = self.jobs.get(previous_job)
+            done = (earlier or {}).get("result") or {}
+            if (earlier or {}).get("kind") != "compose" or not done.get("files"):
+                raise InvalidRequest(
+                    f"previous_job {previous_job} is not a finished composition this region "
+                    "holds; send its files in history instead."
+                )
+            turns.append({"question": done.get("request") or "", "answer": artifact_text(done)})
 
-        def compose() -> dict:
-            return artifact_payload(
+        def compose(on_step: Any = None) -> dict:
+            payload = artifact_payload(
                 self.ask_knowledge_base(
                     knowledge_base,
                     request,
                     intent="compose",
                     source_names=source_names,
                     source_name=source_name,
-                    history=history,
+                    history=turns,
                     principal=principal,
                     principal_groups=principal_groups,
                     options=options,
+                    on_step=on_step,
                 )
             )
+            return {**payload, "request": request}
 
         if wait:
             return compose()
         job = self.jobs.create("compose", f"Composing: {request.strip()[:60]}", ["compose"])
 
+        def step(done: Any) -> None:
+            # The workflow's own steps, so a caller polling get_job sees where
+            # a several-minute composition is rather than one fixed phase.
+            self.jobs.progress(
+                job.id,
+                phase=str(getattr(done, "name", "") or "composing"),
+                detail=str(getattr(done, "detail", "") or "")[:200],
+            )
+
         def run() -> None:
             self.jobs.progress(job.id, phase="composing", detail="planning, retrieving, writing")
             try:
-                payload = compose()
+                payload = compose(step)
             except Exception as exc:  # background tool work cannot propagate
                 self.jobs.finish(job.id, "failed", error=str(exc))
                 return
@@ -160,6 +197,7 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         principal: str | None = None,
         principal_groups: list[str] | None = None,
         options: dict | None = None,
+        previous_job: str | None = None,
     ) -> dict:
         """Offload building a NEW artifact to the region: a configuration, a
         script, a module or a set of files assembled from parts the sources
@@ -198,10 +236,14 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         timeout.
 
         The region cannot run the artifact's own tool (a compiler, terraform
-        validate, a linter). Run it yourself; when it fails, call again with
-        history=[{"question": request, "answer": <the files as returned>}]
-        and a request naming the errors to fix, and the next composition
-        corrects them with the same sources.
+        validate, a linter). Run it yourself, and review what it cannot judge.
+        To revise, call again with previous_job=<that job_id> and a request
+        naming exactly what to change (the validator's errors, a design fix):
+        the region reads the earlier artifact from its own job, so you send
+        only the changes. (Without the job -- another region, or after a
+        restart -- pass history=[{"question": request, "answer": <the files>}].)
+        While a job runs, get_job's progress names the step it is on (plan,
+        retrieve, synthesize, review, revise).
         """
 
         return tools.compose_artifact(
@@ -214,4 +256,5 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             principal=principal,
             principal_groups=principal_groups,
             options=options,
+            previous_job=previous_job,
         )

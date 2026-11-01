@@ -71,6 +71,11 @@ class _Facade(ComposeTools):
             raise ValueError(f"Unknown knowledge base: {knowledge_base}")
 
     def ask_knowledge_base(self, knowledge_base, question, **kwargs):
+        on_step = kwargs.pop("on_step", None)
+        if on_step is not None:
+            from types import SimpleNamespace
+
+            on_step(SimpleNamespace(name="review", detail="nothing to correct"))
         self.asked.append({"question": question, **kwargs})
         return self.result
 
@@ -92,13 +97,15 @@ def test_a_composition_runs_as_a_job_and_get_job_returns_the_artifact() -> None:
     assert "get_job" in started["poll"]
     job = _settle(tools, started["job_id"])
     assert job["status"] == "succeeded" and job["result"]["files"][1]["name"] == "main.tf"
+    assert job["result"]["request"] == "Write it", "kept, so a revision can name it"
+    assert job["progress"]["phase"] == "review", "the workflow's own step, not a fixed phase"
     assert tools.asked == [
         {
             "question": "Write it",
             "intent": "compose",
             "source_names": ["tf-core"],
             "source_name": None,
-            "history": None,
+            "history": [],
             "principal": None,
             "principal_groups": None,
             "options": None,
@@ -198,3 +205,21 @@ def test_the_compose_skill_names_only_published_tools(tmp_path) -> None:
     assert not named - published, f"the skill names tools the server lacks: {named - published}"
     metadata = yaml.safe_load((skill.parent / "agents" / "openai.yaml").read_text())
     assert "$pheasant-compose" in metadata["interface"]["default_prompt"]
+
+
+def test_a_revision_reads_the_earlier_artifact_from_its_job() -> None:
+    tools = _Facade(RESULT)
+    first = _settle(tools, tools.compose_artifact("kb", "Write it")["job_id"])
+    tools.compose_artifact("kb", "Fix the vault SKU", wait=True, previous_job=first["id"])
+
+    (turn,) = tools.asked[-1]["history"]
+    assert turn["question"] == "Write it"
+    assert "### `main.tf`\n```hcl\n# [1]" in turn["answer"] and "var.sku" in turn["answer"]
+    assert tools.asked[-1]["question"] == "Fix the vault SKU"
+
+
+def test_a_previous_job_the_region_does_not_hold_is_refused() -> None:
+    from pheasant.services.errors import InvalidRequest
+
+    with pytest.raises(InvalidRequest, match="send its files in history instead"):
+        _Facade(RESULT).compose_artifact("kb", "Fix it", previous_job="nope")

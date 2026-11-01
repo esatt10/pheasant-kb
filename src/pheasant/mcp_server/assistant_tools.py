@@ -88,6 +88,7 @@ class AssistantTools(ComposeTools):
         current_directory: str | None = None,
         intent: str | None = None,
         source_names: list[str] | None = None,
+        on_step: Any = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -132,6 +133,9 @@ class AssistantTools(ComposeTools):
                 intent=intent,
                 source_names=source_names,
             ),
+            # A progress sink, for a caller that follows the answer as a job
+            # (compose_artifact); the MCP tool itself passes none.
+            on_step=on_step,
         )
 
     def create_visual(
