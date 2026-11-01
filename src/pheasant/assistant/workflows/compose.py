@@ -11,6 +11,7 @@ these; this module reads neither it nor ``decision_gates``.
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -37,10 +38,13 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
     "defer_graph_until_insufficient": False,
     # The combined call writes a capped, JSON-wrapped short answer.
     "combine_grade_and_answer": False,
-    "planned_queries": 8,
+    # One query per component, and a request can name two dozen of them:
+    # eight queries for 26 components bundled three a query, and a bundled
+    # query's ten results were the overview pages, not the components' own.
+    "planned_queries": 24,
     "followup_queries": 4,
     "per_query_results": 10,
-    "max_context_passages": 40,
+    "max_context_passages": 64,
     # Proportional to each document's size, not a fixed count: a 120-chunk
     # PDF's overview may need 30 of its passages, a one-page note needs two.
     "passages_per_document": "auto",
@@ -54,7 +58,11 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
     "expand_per_node": 2,
     "passage_chars": 12_000,
     "code_passage_chars": 24_000,
-    "context_budget_chars": 240_000,
+    # Documents are read in window order until this runs out, so it has to
+    # cover the window: at 320k a 64-passage window over 46 documents read 40
+    # of them, and the six it starved were components the writer then called
+    # undocumented.
+    "context_budget_chars": 400_000,
     # One call writes the whole artifact: sections written apart from each
     # other cannot reference each other's names.
     "max_output_tokens": 24_000,
@@ -64,8 +72,23 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
 PLANNER_COMPOSE_RULE = """
 - This request composes a new artifact from many documented parts. List the \
 components it needs and plan ONE query per component, each naming that \
-component exactly as the corpus vocabulary spells it. Breadth across \
-components matters more than depth on any one."""
+component exactly as the corpus vocabulary spells it, in full. When the \
+documents in scope are listed and one of them is that component's own page, \
+add that document's name to the query too. Breadth across components matters \
+more than depth on any one."""
+
+
+def documents_in_scope(retriever: Any) -> str:
+    """The planner's line naming the documents in scope, or ``""``.
+
+    A component's own page is usually named after it, and a query naming it
+    is what finds that page (``own_pages_first``): measured, the planner
+    searched "API policy llm-token-limit" for a component whose page is
+    ``api_management_api_policy``, and the page was never retrieved.
+    """
+    read = getattr(retriever, "document_names", None)
+    names = read() if callable(read) else []
+    return f"\nDocuments in scope, by name: {', '.join(names)}" if names else ""
 
 
 def document_quota(chunk_count: int | None, options: dict) -> int | None:
@@ -113,6 +136,48 @@ def document_sizes(retriever: Any, passages: list, options: dict) -> dict[str, i
     except Exception:  # noqa: BLE001 - sizes refine the window, never block it
         return {}
     return {node: int(meta.get("chunk_count") or 0) for node, meta in shapes.items()}
+
+
+#: A name spelled as an artifact spells a component — ``azurerm_key_vault``,
+#: ``Microsoft.ApiManagement/service/backends`` — rather than a plain word.
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[._/][A-Za-z0-9]+)+")
+#: A plain word long enough to be a document's whole name.
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
+
+
+def own_pages_first(passages: list, texts: list[str]) -> list:
+    """Each named component's own page ahead of the rest of ``passages``.
+
+    ``texts`` are the question and the queries searched for it; a name in them
+    whose own page (``compose_review.names_page``, the rule the review checks
+    keys against) was retrieved gets that page's best passage moved to the
+    front, in rank order, and everything else keeps its order behind them.
+    Measured on a 26-component request: every per-component query found the
+    component's reference page, at ranks 3 to 10 behind two overview pages
+    that ranked first for every query, so the merged window was the
+    overviews' and the writer said the components were undocumented.
+
+    A plain word names a page only by being its whole name (``subnet``,
+    ``subscription``): the planner is shown the documents in scope by name
+    (``documents_in_scope``) and writes them as they are listed.
+    """
+    names = {match.group(0) for text in texts for match in _NAME.finditer(text or "")}
+    words = {match.group(0).lower() for text in texts for match in _WORD.finditer(text or "")}
+    if not names and not words:
+        return passages
+    first, rest, seen = [], [], set()
+    for passage in passages:
+        key = str(getattr(passage, "node_id", "") or passage.key())
+        title = str(getattr(passage, "relative_path", None) or getattr(passage, "title", "") or "")
+        stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
+        if key not in seen and (
+            stem in words or any(compose_review.names_page(name, title) for name in names)
+        ):
+            seen.add(key)
+            first.append(passage)
+        else:
+            rest.append(passage)
+    return first + rest
 
 
 def synthesis_window(passages: list, options: dict, sizes: dict[str, int] | None = None) -> list:
@@ -166,7 +231,7 @@ def review_artifact(
         state["question"],
         answer,
         documents,
-        max_chars=int(options.get("context_budget_chars") or 240_000),
+        max_chars=int(options.get("context_budget_chars") or 400_000),
     )
     steps = [
         WorkflowStep(

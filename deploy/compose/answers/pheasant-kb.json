@@ -173,17 +173,17 @@
     "medium": 400
   },
   "assistant.workflow_options.agentic.compose_options": {
-    "planned_queries": 8,
+    "planned_queries": 24,
     "followup_queries": 4,
     "per_query_results": 10,
-    "max_context_passages": 40,
+    "max_context_passages": 64,
     "passages_per_document": "auto",
     "document_fraction": 0.25,
     "document_floor": 2,
     "document_window_share": 0.75,
     "scale_document_chars": true,
     "chars_per_passage": 4000,
-    "context_budget_chars": 240000,
+    "context_budget_chars": 400000,
     "max_output_tokens": 24000
   },
   "assistant.latency.max_concurrent_answers": 4,

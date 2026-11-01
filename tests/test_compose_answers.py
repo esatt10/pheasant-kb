@@ -48,7 +48,7 @@ def test_compose_plans_one_query_per_component_and_writes_once_at_full_effort(
     result = _run(_search_everything(), llm, _decider(), monkeypatch, wire, intent="compose")
 
     planner, writer = llm.log
-    assert "1 to 8 queries" in planner["system"] and PLANNER_COMPOSE_RULE in planner["system"]
+    assert "1 to 24 queries" in planner["system"] and PLANNER_COMPOSE_RULE in planner["system"]
     assert writer["system"].startswith(COMPOSE_SYSTEM), "the compose prompt, no length rule"
     assert writer["max_output_tokens"] == COMPOSE_DEFAULTS["max_output_tokens"]
     assert writer["effort"] is None, "an artifact is never drafted at the low draft effort"
@@ -121,6 +121,41 @@ def test_the_synthesis_window_caps_passages_per_document_in_rank_order() -> None
 
     plain = synthesis_window(ranked, {"max_context_passages": 4, "passages_per_document": None})
     assert plain == ranked[:4], "unset keeps the plain top-N"
+
+
+def _page(path: str, n: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(node_id=path, relative_path=path, title=path, key=lambda: f"{path}#{n}")
+
+
+def test_each_named_components_own_page_enters_the_window_ahead_of_overviews() -> None:
+    from pheasant.assistant.workflows.compose import own_pages_first
+
+    # Two overviews top every per-component query; the components' own pages
+    # rank third and below, and a window of four would hold none of them.
+    ranked = [_page("learn/gateway-overview.txt", n) for n in range(3)]
+    ranked += [_page("learn/backends.txt"), _page("r/api_management_backend.html.markdown")]
+    ranked += [_page("r/api_management.html.markdown", n) for n in (1, 2)]
+    queries = ["azurerm_api_management StandardV2", "azurerm_api_management_backend circuit"]
+
+    window = synthesis_window(
+        own_pages_first(ranked, ["Write the gateway", *queries]),
+        {"max_context_passages": 4, "passages_per_document": 2},
+    )
+    assert [(p.node_id, p.key()) for p in window[:2]] == [
+        ("r/api_management_backend.html.markdown", "r/api_management_backend.html.markdown#0"),
+        ("r/api_management.html.markdown", "r/api_management.html.markdown#1"),
+    ], "one passage per own page, in rank order; its second passage keeps its rank"
+    assert [p.node_id for p in window[2:]] == ["learn/gateway-overview.txt"] * 2
+
+
+def test_a_type_path_or_a_whole_document_name_names_its_page_and_other_words_do_not() -> None:
+    from pheasant.assistant.workflows.compose import own_pages_first
+
+    ranked = [_page("learn/overview.txt"), _page("templates/2024-05-01/service/backends.txt")]
+    moved = own_pages_first(ranked, ["Microsoft.ApiManagement/service/backends pool"])
+    assert moved[0].node_id == "templates/2024-05-01/service/backends.txt"
+    assert own_pages_first(ranked, ["a backend pool with a circuit breaker"]) == ranked
+    assert own_pages_first(ranked, ["backends pool"])[0].node_id == ranked[1].node_id
 
 
 # ------------------------------------------------------------- the review pass
@@ -476,3 +511,41 @@ def test_compose_keyword_pins_the_answer_shape() -> None:
     assert read("@detailed @compose the pipeline").intent == "compose"
     assert read("what is compose").intent is None
     assert "intent" not in read("@table the ports").as_dict(), "payload unchanged without it"
+
+
+# --------------------------------------------- the planner names what exists
+
+
+class _Artifacts:
+    def __init__(self, paths: dict[str, str]) -> None:
+        self.paths = paths
+
+    def rows(self, sql: str, params: tuple = ()) -> list[dict]:
+        if "FROM artifacts ORDER BY relative_path" not in sql:
+            return []
+        return [
+            {"id": f"{source}:{path}", "relative_path": path, "source_id": source, "type": "file"}
+            for path, source in sorted(self.paths.items())
+        ]
+
+
+def test_the_planner_is_told_the_documents_in_scope_by_name() -> None:
+    from pheasant.assistant.retrieval import PheasantRetriever
+    from pheasant.assistant.workflows.compose import documents_in_scope
+
+    state = _Artifacts(
+        {
+            "r/api_management_api_policy.html.markdown": "gateway",
+            "learn/llm-token-limit-policy.txt": "gateway",
+            "r/key_vault.html.markdown": "security",
+        }
+    )
+    scoped = PheasantRetriever(
+        search=None, knowledge_base="kb", state=state, source_names=["gateway"]
+    )
+    assert scoped.document_names() == ["llm-token-limit-policy", "api_management_api_policy"]
+    assert documents_in_scope(scoped).endswith("llm-token-limit-policy, api_management_api_policy")
+
+    everything = PheasantRetriever(search=None, knowledge_base="kb", state=state)
+    assert everything.document_names(limit=2) == [], "past the limit a scope is a corpus"
+    assert documents_in_scope(SimpleNamespace()) == "", "a retriever without names adds nothing"

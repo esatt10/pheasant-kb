@@ -83,6 +83,8 @@ from pheasant.assistant.workflows.compose import (
     COMPOSE_DEFAULTS,
     PLANNER_COMPOSE_RULE,
     document_sizes,
+    documents_in_scope,
+    own_pages_first,
     review_artifact,
     synthesis_window,
 )
@@ -396,11 +398,13 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     planned_queries = max(1, int(options.get("planned_queries") or 3))
     if llm is not None:
         planner_system = PLANNER_SYSTEM.replace("{planned_queries}", str(planned_queries))
+        corpus = capabilities.as_prompt_context()
         if intent == "compose":
             planner_system += PLANNER_COMPOSE_RULE
+            corpus += documents_in_scope(retriever)
         raw = llm.try_complete(
             planner_system,
-            f"{capabilities.as_prompt_context()}\n\n"
+            f"{corpus}\n\n"
             f"{conversation.history_block(history)}"
             f"First reading of the question: {intent}, {depth} answer\n"
             f"Question: {question}"
@@ -982,6 +986,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     intent = str(state.get("intent") or "knowledge")
     depth = str(state.get("depth") or "short")
     ranked = state.get("passages", [])
+    if intent == "compose":
+        ranked = own_pages_first(ranked, [state["question"], *state.get("searched_queries", [])])
     passages = synthesis_window(ranked, options, document_sizes(retriever, ranked, options))
     draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
     passages, llm = draft.passages, draft.llm

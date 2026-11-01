@@ -234,17 +234,28 @@ def declared_components(code: str) -> list[tuple[str | None, str]]:
     return [(kind if keyword == primary else None, body) for keyword, kind, body in blocks]
 
 
+def names_page(component: str, title: str) -> bool:
+    """Whether ``title`` is ``component``'s own page: a file named after it.
+
+    The file stem is the component's name or its trailing segment —
+    ``azurerm_subnet`` and ``subnet.html.markdown``,
+    ``Microsoft.ApiManagement/service/backends`` and ``backends``.
+    """
+    wanted = component.lower()
+    stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
+    return len(stem) >= 4 and (
+        wanted == stem or wanted.endswith(("_" + stem, "." + stem, "/" + stem))
+    )
+
+
 def reference_pages(component: str, documents: dict) -> list[str]:
     """The passages that are ``component``'s own page, named after it."""
 
-    wanted = component.lower()
-    pages = []
-    for document in documents.values():
-        title = str(getattr(document, "title", "") or "")
-        stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
-        if len(stem) >= 4 and (wanted == stem or wanted.endswith(("_" + stem, "." + stem))):
-            pages.append(document.text or "")
-    return pages
+    return [
+        document.text or ""
+        for document in documents.values()
+        if names_page(component, str(getattr(document, "title", "") or ""))
+    ]
 
 
 def component_evidence(component: str, documents: dict) -> str | None:
