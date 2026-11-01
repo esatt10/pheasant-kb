@@ -325,6 +325,25 @@ def review_artifact(
         llm, system, prompt, options, checked, answer, f"correcting {named} identifier(s)"
     )
     steps.append(step)
+    essential = compose_review.Review(
+        omitted=checked.omitted, unresolved=checked.unresolved, required=checked.required
+    )
+    if revised is None and essential.found() and essential.revision() != checked.revision():
+        # An edit carrying every finding can be too big to land: measured, an
+        # eight-item edit dropped part of the artifact and was discarded, and
+        # the two components the review had found missing went out missing.
+        # What the artifact lacks outright is retried alone.
+        revised, step = _edit(
+            llm,
+            system,
+            prompt,
+            options,
+            essential,
+            answer,
+            f"adding {len(essential.omitted)} missing component(s) and "
+            f"{len(essential.unresolved) + len(essential.required)} declaration(s)",
+        )
+        steps.append(step)
     if revised is None:
         return _Reviewed(answer, steps)
     # The rewrite is checked too, without a model: undeclared references,

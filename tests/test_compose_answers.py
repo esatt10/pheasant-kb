@@ -767,3 +767,19 @@ def test_a_key_the_rewrite_brought_from_another_resource_gets_one_more_edit() ->
 
     assert out.text == fixed and [s.name for s in out.steps] == ["review", "revise", "revise"]
     assert "`ai_services_hub_id` on azurerm_cognitive_account_project" in llm.log[2]["system"]
+
+
+def test_a_discarded_edit_is_retried_with_only_what_is_missing() -> None:
+    from pheasant.assistant.workflows.compose import review_artifact
+
+    draft = '```hcl\nresource "azurerm_key_vault" "kv" {\n  name = "kv"\n}\n```'
+    unfit = {"component": "azurerm_key_vault.kv", "problem": "not private"}
+    lost = "```hcl\n# nothing\n```"
+    added = draft + '\n```hcl\nresource "azurerm_storage_account" "sa" {\n  name = "sa"\n}\n```'
+    llm = _LLM([{"issues": [], "omitted": ["a storage account"], "purpose": [unfit]}, lost, added])
+    out = review_artifact({"question": "q"}, {"llm": llm}, {}, draft, DOCS, "SYS", "EV")
+
+    assert out.text == added
+    assert [s.name for s in out.steps] == ["review", "revise", "revise"]
+    retry = llm.log[2]["system"]
+    assert "a storage account was asked for" in retry and "not private" not in retry
