@@ -207,6 +207,66 @@ def synthesis_window(passages: list, options: dict, sizes: dict[str, int] | None
     return window
 
 
+_DECLARATION = re.compile(r'^\s*[A-Za-z_][\w-]*\s+"[^"]+"(?:\s+"[^"]+")?\s*\{', re.M)
+
+
+def lost_code(draft: str, revised: str) -> bool:
+    """Whether a rewrite lost part of the artifact it was asked to correct.
+
+    Counted in declarations (``kind "type" "name" {`` and ``kind "name" {``)
+    where the artifact has them, and in fenced blocks otherwise. Counting
+    fences alone discarded a rewrite that added the one component the review
+    asked for, because it returned the same declarations in fewer blocks.
+    """
+    before = "\n".join(compose_review.code_blocks(draft))
+    after = "\n".join(compose_review.code_blocks(revised))
+    declared = len(_DECLARATION.findall(before))
+    if declared:
+        return len(_DECLARATION.findall(after)) < declared
+    return len(compose_review.code_blocks(revised)) < len(compose_review.code_blocks(draft))
+
+
+#: At most this many reference pages are read for the review's checks.
+REVIEW_PAGES = 16
+
+
+def reference_for_review(retriever: Any, answer: str, documents: dict) -> dict:
+    """Own reference pages of components the artifact declares and the window left out.
+
+    Read for the review's deterministic checks only -- the writer and the
+    model reviewer keep the evidence the answer was written from. Measured: a
+    project resource whose page the window lacked went out without the block
+    that page marks Required, because the check had nothing to read it from.
+    """
+    code = "\n".join(compose_review.code_blocks(answer))
+    wanted = dict.fromkeys(kind for kind, _ in compose_review.declared_components(code) if kind)
+    missing = [kind for kind in wanted if not compose_review.reference_pages(kind, documents)]
+    index_of = getattr(retriever, "document_index", None)
+    read = getattr(retriever, "documents", None)
+    if not missing or not callable(index_of) or not callable(read):
+        return {}
+    index = index_of()
+    ids = []
+    for kind in missing:
+        node_id = next(
+            (i for stem, i in index.items() if compose_review.names_page(kind, stem)), None
+        )
+        if node_id and node_id not in ids:
+            ids.append(node_id)
+    if not ids:
+        return {}
+    try:
+        pages = read(
+            ids[:REVIEW_PAGES],
+            max_chars=24_000,
+            large_file_bytes=10**9,
+            budget_chars=24_000 * REVIEW_PAGES,
+        )
+    except Exception:  # noqa: BLE001 - a check's extra evidence, never a blocker
+        return {}
+    return {f"reference:{node_id}": page for node_id, page in pages.items()}
+
+
 @dataclass
 class _Reviewed:
     text: str
@@ -232,6 +292,7 @@ def review_artifact(
         answer,
         documents,
         max_chars=int(options.get("context_budget_chars") or 400_000),
+        reference=reference_for_review(ctx.get("retriever"), answer, documents),
     )
     steps = [
         WorkflowStep(
@@ -243,37 +304,74 @@ def review_artifact(
     ]
     if not checked.found():
         return _Reviewed(answer, steps)
+    named = len(checked.unknown) + len(checked.issues)
+    revised, step = _edit(
+        llm, system, prompt, options, checked, answer, f"correcting {named} identifier(s)"
+    )
+    steps.append(step)
+    if revised is None:
+        return _Reviewed(answer, steps)
+    # The rewrite is checked too, by the two checks that need no model and are
+    # never wrong about what they report: measured, a rewrite asked to add a
+    # missing component added it without the block its page marks Required.
+    recheck = compose_review.review(
+        None,
+        state["question"],
+        revised,
+        documents,
+        max_chars=0,
+        reference=reference_for_review(ctx.get("retriever"), revised, documents),
+    )
+    left = compose_review.Review(unresolved=recheck.unresolved, required=recheck.required)
+    if not left.found():
+        return _Reviewed(revised, steps)
+    fixed, step = _edit(
+        llm,
+        system,
+        prompt,
+        options,
+        left,
+        revised,
+        f"completing {len(left.unresolved) + len(left.required)} reference(s) or "
+        "required argument(s) the rewrite left",
+    )
+    steps.append(step)
+    return _Reviewed(fixed or revised, steps)
+
+
+def _edit(
+    llm: Any,
+    system: str,
+    prompt: str,
+    options: dict,
+    checked: compose_review.Review,
+    answer: str,
+    what: str,
+) -> tuple[str | None, WorkflowStep]:
+    """One rewrite of ``answer`` correcting exactly what ``checked`` found.
+
+    The rewrite edits the draft rather than writing a new one. Sent only the
+    passages and the corrections, it regenerated from scratch: measured, a
+    rewrite asked to add one missing component dropped two others and broke
+    names the draft had right, and "change nothing else" meant nothing with
+    nothing to keep. ``None`` when the rewrite is unavailable or lost code.
+    """
     started = time.perf_counter()
+    draft = "" if checked.no_artifact else f"\n\nDRAFT TO CORRECT:\n{answer}"
     try:
         revised = llm.complete(
             system + checked.revision(),
-            prompt,
+            prompt + draft,
             max_output_tokens=options.get("max_output_tokens"),
         )
     except ProviderError as exc:
-        steps.append(
-            WorkflowStep(
-                name="revise",
-                detail=f"rewrite unavailable ({short_reason(str(exc))}); returned as written",
-            )
-        )
-        return _Reviewed(answer, steps)
+        detail = f"rewrite unavailable ({short_reason(str(exc))}); returned as written"
+        return None, WorkflowStep(name="revise", detail=detail)
+    elapsed = time.perf_counter() - started
     # A rewrite that lost the artifact is worse than the identifiers it fixed.
-    if len(compose_review.code_blocks(revised)) < len(compose_review.code_blocks(answer)):
-        steps.append(
-            WorkflowStep(
-                name="revise",
-                detail="the rewrite dropped part of the artifact; kept the first draft",
-                duration_seconds=time.perf_counter() - started,
-            )
-        )
-        return _Reviewed(answer, steps)
-    named = len(checked.unknown) + len(checked.issues)
-    steps.append(
-        WorkflowStep(
-            name="revise",
-            detail=f"rewrote the artifact correcting {named} identifier(s)",
-            duration_seconds=time.perf_counter() - started,
-        )
+    if lost_code(answer, revised):
+        detail = "the rewrite dropped part of the artifact; kept the previous version"
+        return None, WorkflowStep(name="revise", detail=detail, duration_seconds=elapsed)
+    return revised, WorkflowStep(
+        name="revise", detail=f"rewrote the artifact {what}", duration_seconds=elapsed
     )
-    return _Reviewed(revised, steps)

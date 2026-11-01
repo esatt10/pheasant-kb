@@ -1886,8 +1886,18 @@ the corpus, so compose changes every step that assumed it would:
   the artifact's primary declaration kind is held to a page — a lookup of the
   same type is documented elsewhere. The passages outrank the reviewer: a claim that an
   identifier is wrong where its component's own evidence documents it is
-  dropped. Anything found is rewritten once, with exactly that list; nothing
-  found costs only the review call;
+  dropped. A component's own page that the window left out is read from the
+  index for these checks (not for the model). An own page that was only
+  excerpted cannot prove a key absent, so there a key must be missing from
+  every passage to be a suspect. The review call also lists components whose
+  configuration would not do what the question says they are for, a kind or
+  mode field left unset included. An answer with no artifact at all is sent
+  back to write one. Anything found is corrected in one **edit of the draft**:
+  the rewrite is given the draft and the list, and keeps every other line.
+  The edit is rechecked for undeclared references and missing required
+  arguments, and if it left any, one more edit corrects exactly those. A
+  rewrite that loses declarations is discarded. Nothing found costs only the
+  review call;
 * the first draft is never written at the low draft effort, and the acceptance
   gate's scores are reported but never trigger a rewrite of an artifact — its
   thresholds were calibrated on short answers, and the rewrites it asked for

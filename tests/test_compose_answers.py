@@ -221,6 +221,24 @@ def test_a_key_documented_only_for_another_component_is_a_suspect() -> None:
     }
 
 
+def test_an_excerpted_own_page_cannot_prove_a_key_absent() -> None:
+    from pheasant.assistant.compose_review import suspects
+
+    excerpt = {
+        **DOCS,
+        3: SimpleNamespace(
+            title="r/cognitive_account.html.markdown",
+            text='resource "azurerm_cognitive_account" "x" {\n  custom_subdomain_name = ""\n}',
+            truncated=True,
+        ),
+    }
+    # application_insights_id is in another passage, so on an excerpted page it
+    # is undecidable; the key no passage has anywhere stays a suspect.
+    assert suspects(ARTIFACT, excerpt) == {
+        "enforce_private_link_endpoint_network_policies": "azurerm_subnet"
+    }
+
+
 def test_a_suspect_the_reviewer_neither_reports_nor_clears_is_still_corrected() -> None:
     from pheasant.assistant.compose_review import review
 
@@ -271,7 +289,7 @@ def test_the_reviewer_finds_an_identifier_on_the_wrong_component() -> None:
     # Reported is an issue; neither reported nor cleared stays a suspect.
     assert checked.unknown == ["enforce_private_link_endpoint_network_policies"]
     revision = checked.revision()
-    assert "application_insights_id" in revision and "Change nothing else" in revision
+    assert "application_insights_id" in revision and "Keep every other line" in revision
 
 
 def test_the_artifacts_own_map_keys_are_not_suspects() -> None:
@@ -309,6 +327,65 @@ def test_a_requested_component_the_artifact_omits_is_added_back() -> None:
     assert checked.found() and checked.omitted == ["a Key Vault"]
     assert "a Key Vault was asked for and is missing" in checked.revision()
     assert "1 requested component(s) missing" in checked.summary()
+
+
+def test_a_component_that_would_not_do_its_stated_job_is_redesigned() -> None:
+    from pheasant.assistant.compose_review import review
+
+    clean = ARTIFACT.replace("  enforce_private_link_endpoint_network_policies = true\n", "")
+    clean = clean.replace("  application_insights_id = azurerm_application_insights.ai.id\n", "")
+    unfit = {"component": "the pool", "problem": "its two members serve different models"}
+    checked = review(
+        _LLM([{"issues": [], "purpose": [unfit, {"problem": "no component named"}]}]),
+        "q",
+        clean,
+        DOCS,
+        max_chars=10_000,
+    )
+    assert checked.found() and checked.purpose == [unfit], "an entry naming nothing is dropped"
+    assert "the pool would not do what the question asks of it" in checked.revision()
+    assert "1 component(s) not fit for their stated purpose (the pool)" in checked.summary()
+    assert not review(
+        _LLM([{"issues": [], "purpose": []}]), "q", clean, DOCS, max_chars=10_000
+    ).found()
+
+
+def test_an_answer_with_no_artifact_is_sent_back_to_write_one() -> None:
+    from pheasant.assistant.compose_review import review
+
+    declined = "A complete configuration cannot be assembled from these passages. [1]"
+    llm = _LLM([])
+    checked = review(llm, "q", declined, DOCS, max_chars=10_000)
+    assert checked.no_artifact and checked.found()
+    assert llm.calls == 0, "nothing to review, so no review call"
+    assert "contains no artifact. Write it" in checked.revision()
+    assert checked.summary() == "no artifact in the answer"
+
+
+def test_the_rewrite_keeps_each_file_in_its_own_block() -> None:
+    from pheasant.assistant.compose_review import Review
+
+    assert "same files each in its own fenced code block" in Review(omitted=["x"]).revision()
+
+
+def test_the_rewrite_edits_the_draft_rather_than_writing_a_new_one() -> None:
+    from pheasant.assistant.workflows.compose import review_artifact
+
+    clean = ARTIFACT.replace("  enforce_private_link_endpoint_network_policies = true\n", "")
+    clean = clean.replace("  application_insights_id = azurerm_application_insights.ai.id\n", "")
+    added = clean + "\n```hcl\n# kv\n```"
+    llm = _LLM([{"issues": [], "omitted": ["a Key Vault"]}, added])
+    out = review_artifact({"question": "q"}, {"llm": llm}, {}, clean, DOCS, "SYS", "EVIDENCE")
+
+    _, rewrite = llm.log
+    assert rewrite["prompt"] == "EVIDENCE\n\nDRAFT TO CORRECT:\n" + clean
+    assert "a Key Vault was asked for" in rewrite["system"]
+    assert [s.name for s in out.steps] == ["review", "revise"] and out.text == added
+
+    declined = _LLM([clean])
+    state, ctx = {"question": "q"}, {"llm": declined}
+    review_artifact(state, ctx, {}, "Cannot be done. [1]", DOCS, "SYS", "EV")
+    assert declined.log[0]["prompt"] == "EV", "no draft to correct when there was no artifact"
 
 
 def test_an_untyped_suspect_needs_the_reviewer_to_confirm_it() -> None:
@@ -549,3 +626,90 @@ def test_the_planner_is_told_the_documents_in_scope_by_name() -> None:
     everything = PheasantRetriever(search=None, knowledge_base="kb", state=state)
     assert everything.document_names(limit=2) == [], "past the limit a scope is a corpus"
     assert documents_in_scope(SimpleNamespace()) == "", "a retriever without names adds nothing"
+
+
+# ------------------------------------- the review reads real evidence objects
+
+PROJECT_PAGE = (
+    "## Arguments Reference\n\n"
+    "* `name` - (Required) The name.\n\n"
+    "* `identity` - (Required) An `identity` block as defined below.\n\n"
+    "An `identity` block supports the following:\n"
+)
+PROJECT = '```hcl\nresource "azurerm_cognitive_account_project" "p" {\n  name = "p"\n}\n```'
+
+
+def test_a_hydrated_document_is_found_as_its_components_own_page() -> None:
+    from pheasant.assistant.compose_review import missing_required
+    from pheasant.assistant.retrieval import Document
+
+    # Hydrated evidence has a path and no title; the checks read only titles,
+    # so no real answer ever had a component's own page.
+    page = Document(
+        node_id="file:x", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
+    )
+    assert missing_required(PROJECT, {1: page}) == [
+        ("azurerm_cognitive_account_project", "identity")
+    ]
+
+
+def test_the_review_reads_an_own_page_the_window_left_out() -> None:
+    from pheasant.assistant.compose_review import review
+    from pheasant.assistant.retrieval import Document
+    from pheasant.assistant.workflows.compose import reference_for_review
+
+    page = Document(
+        node_id="file:p", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
+    )
+    asked = {}
+
+    class Retriever:
+        def document_index(self):
+            return {"key_vault": "file:kv", "cognitive_account_project": "file:p"}
+
+        def documents(self, node_ids, **kwargs):
+            asked["ids"] = node_ids
+            return {"file:p": page}
+
+    window = {1: DOCS[1]}
+    reference = reference_for_review(Retriever(), PROJECT, window)
+    assert asked["ids"] == ["file:p"] and list(reference) == ["reference:file:p"]
+    checked = review(None, "q", PROJECT, window, max_chars=10_000, reference=reference)
+    assert checked.required == [("azurerm_cognitive_account_project", "identity")]
+    assert reference_for_review(None, PROJECT, window) == {}, "no retriever, nothing read"
+
+
+def test_a_rewrite_is_kept_when_it_loses_no_declarations() -> None:
+    from pheasant.assistant.workflows.compose import lost_code
+
+    draft = '```hcl\nvariable "a" {}\n```\n```hcl\nresource "t" "x" {}\n```'
+    merged = '```hcl\nvariable "a" {}\nresource "t" "x" {}\nresource "t" "y" {}\n```'
+    dropped = '```hcl\nresource "t" "x" {}\nresource "t" "y" {}\n```'
+    assert not lost_code(draft, merged), "same declarations in fewer blocks is not a loss"
+    assert lost_code(draft, '```hcl\nresource "t" "x" {}\n```')
+    assert not lost_code(draft, dropped + '\n```hcl\nvariable "a" {}\n```')
+    assert lost_code("```sh\necho a\n```\n```sh\necho b\n```", "```sh\necho a\n```")
+
+
+def test_a_rewrite_that_leaves_a_required_block_out_gets_one_more_edit() -> None:
+    from pheasant.assistant.retrieval import Document
+    from pheasant.assistant.workflows.compose import review_artifact
+
+    page = Document(
+        node_id="file:p", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
+    )
+    window = {1: page}
+    draft = '```hcl\nresource "azurerm_key_vault" "kv" {\n  name = "kv"\n}\n```'
+    added = draft + "\n" + PROJECT
+    complete = draft + "\n" + PROJECT.replace('  name = "p"\n', '  name = "p"\n  identity {}\n')
+    llm = _LLM([{"issues": [], "omitted": ["a Foundry project"]}, added, complete])
+    out = review_artifact({"question": "q"}, {"llm": llm}, {}, draft, window, "SYS", "EV")
+
+    assert out.text == complete
+    assert [s.name for s in out.steps] == ["review", "revise", "revise"]
+    assert "leaves out `identity`" in llm.log[2]["system"]
+    assert llm.log[2]["prompt"].endswith(added), "the second edit corrects the first rewrite"
+
+    clean = _LLM([{"issues": [], "omitted": ["a Foundry project"]}, complete])
+    out = review_artifact({"question": "q"}, {"llm": clean}, {}, draft, window, "SYS", "EV")
+    assert [s.name for s in out.steps] == ["review", "revise"], "nothing left, no second edit"

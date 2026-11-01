@@ -1208,8 +1208,15 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   then `compose_review` checks it — every key looked up in its own component's
   evidence without a model, and one review call that confirms or clears those
   suspects, catches an identifier documented on a different component, and
-  names requested components left out — and rewrites once with exactly that
-  list. The accept gate reports on an artifact but never rewrites it. Read
+  names requested components left out and components that would not do what
+  the question says they are for — and corrects them in one edit of the draft
+  (the rewrite is handed the draft; without it, "change nothing else" was a
+  regeneration that dropped components), rechecked for undeclared references
+  and required arguments with one more edit if it left any. Own pages are
+  found by `page_name` (title, else path: hydrated `Document`s have no title,
+  so until 1 Nov no real answer had one), read from the index when the window
+  lacked them, and the compose planner is shown the document names in scope.
+  The accept gate reports on an artifact but never rewrites it. Read
   off the words, pinned by `@compose` (`@build`, `@scaffold`) or by `intent`
   on MCP `ask_knowledge_base` / `POST /assistant/chat`. A document's share of
   the window is proportional to its size (`passages_per_document: auto`: a
