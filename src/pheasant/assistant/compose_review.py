@@ -114,6 +114,8 @@ class Review:
     purpose: list[dict[str, str]] = field(default_factory=list)
     #: The answer to a request for an artifact contains no code at all.
     no_artifact: bool = False
+    #: Component types the artifact declares that no passage mentions at all.
+    types: list[str] = field(default_factory=list)
     reviewed: bool = False
     error: str | None = None
 
@@ -126,6 +128,7 @@ class Review:
             or self.required
             or self.purpose
             or self.no_artifact
+            or self.types
         )
 
     def revision(self) -> str:
@@ -160,6 +163,11 @@ class Review:
             lines.append(
                 f"- `var.{name}` is referenced but never declared: declare it as a variable "
                 "with a placeholder default."
+            )
+        for kind in self.types:
+            lines.append(
+                f"- `{kind}` is a component type no passage documents: use the type the "
+                "passages document for that component, or remove it."
             )
         for component in self.omitted:
             lines.append(
@@ -217,6 +225,9 @@ class Review:
             )
         if self.no_artifact:
             parts.append("no artifact in the answer")
+        if self.types:
+            shown = ", ".join(f"`{t}`" for t in self.types[:4])
+            parts.append(f"{len(self.types)} component type(s) no passage documents ({shown})")
         return "; ".join(parts)
 
 
@@ -379,6 +390,20 @@ def missing_required(answer: str, documents: dict) -> list[tuple[str, str]]:
     return missing
 
 
+def undocumented_types(answer: str, documents: dict) -> list[str]:
+    """Component types the artifact declares that appear in no passage at all.
+
+    An invented type is the one identifier a key check cannot see, because it
+    has no page to check keys against. Measured: told to prefer one provider,
+    the writer declared a resource type that provider does not have, and the
+    target tool refused the artifact.
+    """
+    code = "\n".join(code_blocks(answer))
+    everything = "\n".join(document.text or "" for document in documents.values()).lower()
+    kinds = dict.fromkeys(kind for kind, _ in declared_components(code) if kind)
+    return [kind for kind in kinds if not _present(kind.lower(), everything)]
+
+
 def suspects(answer: str, documents: dict) -> dict[str, str | None]:
     """Assignment keys the passages do not document where the artifact uses them.
 
@@ -490,6 +515,7 @@ def review(
         where=where,
         unresolved=unresolved(answer),
         required=missing_required(answer, pages),
+        types=undocumented_types(answer, pages),
     )
     if not code_blocks(answer):
         # A request for an artifact answered with none: measured, a writer told

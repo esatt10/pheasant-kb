@@ -631,12 +631,19 @@ def test_the_planner_is_told_the_documents_in_scope_by_name() -> None:
 # ------------------------------------- the review reads real evidence objects
 
 PROJECT_PAGE = (
+    "# azurerm_cognitive_account_project\n\n"
     "## Arguments Reference\n\n"
     "* `name` - (Required) The name.\n\n"
     "* `identity` - (Required) An `identity` block as defined below.\n\n"
     "An `identity` block supports the following:\n"
 )
 PROJECT = '```hcl\nresource "azurerm_cognitive_account_project" "p" {\n  name = "p"\n}\n```'
+#: Documents the two other types these tests declare, so only what a test means is found.
+KV_PAGE = SimpleNamespace(
+    title="r/key_vault.html.markdown",
+    text='resource "azurerm_key_vault" "x" {\n  name = ""\n}\n'
+    'resource "azurerm_storage_account" "x" {\n  name = ""\n}',
+)
 
 
 def test_a_hydrated_document_is_found_as_its_components_own_page() -> None:
@@ -698,7 +705,7 @@ def test_a_rewrite_that_leaves_a_required_block_out_gets_one_more_edit() -> None
     page = Document(
         node_id="file:p", text=PROJECT_PAGE, relative_path="r/cognitive_account_project.md"
     )
-    window = {1: page}
+    window = {1: page, 2: KV_PAGE}
     draft = '```hcl\nresource "azurerm_key_vault" "kv" {\n  name = "kv"\n}\n```'
     added = draft + "\n" + PROJECT
     complete = draft + "\n" + PROJECT.replace('  name = "p"\n', '  name = "p"\n  identity {}\n')
@@ -777,9 +784,24 @@ def test_a_discarded_edit_is_retried_with_only_what_is_missing() -> None:
     lost = "```hcl\n# nothing\n```"
     added = draft + '\n```hcl\nresource "azurerm_storage_account" "sa" {\n  name = "sa"\n}\n```'
     llm = _LLM([{"issues": [], "omitted": ["a storage account"], "purpose": [unfit]}, lost, added])
-    out = review_artifact({"question": "q"}, {"llm": llm}, {}, draft, DOCS, "SYS", "EV")
+    docs = {**DOCS, 4: KV_PAGE}
+    out = review_artifact({"question": "q"}, {"llm": llm}, {}, draft, docs, "SYS", "EV")
 
     assert out.text == added
     assert [s.name for s in out.steps] == ["review", "revise", "revise"]
     retry = llm.log[2]["system"]
     assert "a storage account was asked for" in retry and "not private" not in retry
+
+
+def test_a_component_type_no_passage_mentions_is_corrected() -> None:
+    from pheasant.assistant.compose_review import review, undocumented_types
+
+    invented = (
+        '```hcl\nresource "azurerm_subnet" "pe" {\n  address_prefixes = []\n}\n'
+        'resource "azurerm_cognitive_account_connection" "c" {\n  name = "c"\n}\n```'
+    )
+    assert undocumented_types(invented, DOCS) == ["azurerm_cognitive_account_connection"]
+    checked = review(None, "q", invented, DOCS, max_chars=10_000)
+    assert checked.found() and checked.types == ["azurerm_cognitive_account_connection"]
+    assert "is a component type no passage documents" in checked.revision()
+    assert "1 component type(s) no passage documents" in checked.summary()

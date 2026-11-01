@@ -326,7 +326,10 @@ def review_artifact(
     )
     steps.append(step)
     essential = compose_review.Review(
-        omitted=checked.omitted, unresolved=checked.unresolved, required=checked.required
+        omitted=checked.omitted,
+        unresolved=checked.unresolved,
+        required=checked.required,
+        types=checked.types,
     )
     if revised is None and essential.found() and essential.revision() != checked.revision():
         # An edit carrying every finding can be too big to land: measured, an
@@ -362,6 +365,7 @@ def review_artifact(
         required=recheck.required,
         unknown=introduced,
         where={key: recheck.where[key] for key in introduced},
+        types=recheck.types,
     )
     if not left.found():
         return _Reviewed(revised, steps)
@@ -373,7 +377,7 @@ def review_artifact(
         left,
         revised,
         f"correcting {len(left.unresolved) + len(left.required) + len(introduced)} "
-        "reference(s), required argument(s) or argument(s) the rewrite left",
+        f"reference(s) or argument(s) and {len(left.types)} type(s) the rewrite left",
     )
     steps.append(step)
     return _Reviewed(fixed or revised, steps)
