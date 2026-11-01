@@ -45,8 +45,14 @@ def artifact_payload(result: dict) -> dict:
         )
         end = match.end()
     first = _FENCE.search(answer)
+    summary = (answer[: first.start()] if first else answer).strip()
+    # The first file's heading sits above its block, not in the summary.
+    if files and not files[0]["name"].startswith("block-"):
+        head, _, last = summary.rpartition("\n")
+        if files[0]["name"] in last:
+            summary = head.strip()
     return {
-        "summary": (answer[: first.start()] if first else answer).strip(),
+        "summary": summary,
         "files": files,
         "not_covered": answer[end:].strip() if files else "",
         "citations": [

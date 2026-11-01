@@ -50,9 +50,7 @@ def test_the_payload_is_the_artifact_without_the_evidence() -> None:
     assert [f["name"] for f in payload["files"]] == ["providers.tf", "main.tf", "block-3"]
     assert payload["files"][1]["content"].startswith("# [1]\nresource")
     assert payload["files"][0]["language"] == "hcl" and payload["files"][2]["language"] is None
-    assert (
-        payload["summary"].startswith("This builds") and "### `providers.tf`" in payload["summary"]
-    )
+    assert payload["summary"] == "This builds a resource group and a vault.", "no file heading"
     assert payload["not_covered"] == "- The passages do not give the vault's SKU; fill in var.sku."
     assert payload["citations"] == [
         {"index": 1, "source": "tf-core", "path": "r/resource_group.md", "section": "Example Usage"}
