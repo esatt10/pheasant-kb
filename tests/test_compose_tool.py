@@ -129,6 +129,7 @@ def test_an_answer_with_no_artifact_fails_the_job_and_says_why() -> None:
     tools = _Facade(unreachable)
     job = _settle(tools, tools.compose_artifact("kb", "Write it")["job_id"])
     assert job["status"] == "failed" and job["error"] == "model unreachable"
+    assert job["result"]["files"] == [], "quoted passages are not files"
 
 
 def test_an_empty_request_and_an_unknown_region_are_refused() -> None:

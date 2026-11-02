@@ -31,9 +31,12 @@ def artifact_payload(result: dict) -> dict:
     """The compose answer as an artifact: files by name, gaps, compact evidence."""
 
     answer = str(result.get("answer") or "")
+    # Only a written answer holds an artifact: an extractive fallback (the
+    # model was unreachable) quotes passages whose code is not files.
+    written = result.get("answer_mode") in (None, "llm")
     files: list[dict] = []
     end = 0
-    for number, match in enumerate(_FENCE.finditer(answer), 1):
+    for number, match in enumerate(_FENCE.finditer(answer) if written else (), 1):
         lines = [line for line in answer[end : match.start()].splitlines() if line.strip()]
         heading = lines[-1].strip().strip("#*`: ").strip("`") if lines else ""
         named = _FILE_NAME.search(heading)
