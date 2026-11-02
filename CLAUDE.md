@@ -64,7 +64,9 @@ pheasant-kb/
 ├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
 │                                pheasant-kb/ is the primary guide, every
 │                                other shape is in other-deployments.md
-├── examples/                  ← demo-agent-framework, vscode MCP config
+├── examples/                  ← demo-agent-framework, vscode MCP config,
+│                                compose-ai-platform (a compose_artifact
+│                                session: requests, jobs, Terraform)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← up/host/setup/mount/start/serve/worker/sync/
@@ -214,7 +216,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 182 pytest modules, offline by design
+└── tests/                     ← 185 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
