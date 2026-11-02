@@ -23,6 +23,7 @@ _FENCE = re.compile(r"```([^\n]*)\n(.*?)```", re.S)
 #: A file name as an answer heads a block with: "### `main.tf`", "**main.tf**".
 _FILE_NAME = re.compile(r"([A-Za-z0-9_][\w.\-/]*\.[A-Za-z0-9]+)$")
 #: Trace steps a caller deciding whether to trust the artifact reads.
+_CITED = re.compile(r"\[(\d+)\]")
 _TRACE_STEPS = {"classify", "plan", "retrieve", "decide", "read", "synthesize", "review", "revise"}
 
 
@@ -44,6 +45,7 @@ def artifact_payload(result: dict) -> dict:
             }
         )
         end = match.end()
+    cited = set(_CITED.findall(answer))
     first = _FENCE.search(answer)
     summary = (answer[: first.start()] if first else answer).strip()
     # The first file's heading sits above its block, not in the summary.
@@ -63,6 +65,10 @@ def artifact_payload(result: dict) -> dict:
                 "section": citation.get("heading_path"),
             }
             for citation in result.get("citations") or []
+            # Only the passages the artifact cites: the window holds 64 and a
+            # 41-resource configuration cited 30, and the rest was 8 KB of a
+            # result that has to fit an MCP client's limit.
+            if not cited or str(citation.get("index")) in cited
         ],
         "trace": [
             {"step": step.get("name"), "detail": step.get("detail")}
@@ -74,6 +80,15 @@ def artifact_payload(result: dict) -> dict:
         "error": result.get("error"),
         "server_seconds": round(float(result.get("server_processing_ms") or 0) / 1000, 1),
     }
+
+
+_DECLARED = re.compile(r'^\s*[A-Za-z_][\w-]*\s+"([^"]+)"\s+"[^"]+"\s*\{', re.M)
+
+
+def declared_types(payload: dict) -> set[str]:
+    """Component types the artifact's files declare (``kind "type" "name" {``)."""
+
+    return {kind for f in payload.get("files") or [] for kind in _DECLARED.findall(f["content"])}
 
 
 def artifact_text(payload: dict) -> str:
@@ -114,19 +129,23 @@ class ComposeTools:
 
         if not str(request or "").strip():
             raise InvalidRequest("compose_artifact needs a request: what to build, and from what.")
-        turns = list(history or [])
+        settings = dict(options or {})
+        previous: dict = {}
         if previous_job:
             # The region already holds the artifact being revised: sending it
             # back costs the caller every byte of it again (34 KB, measured,
             # for a 41-resource configuration) to say what the region produced.
+            # And it is the draft the writer edits, not a turn of conversation:
+            # handed over as history, a revision asked for five changes wrote a
+            # new artifact that dropped the API policy and both backends.
             earlier = self.jobs.get(previous_job)
-            done = (earlier or {}).get("result") or {}
-            if (earlier or {}).get("kind") != "compose" or not done.get("files"):
+            previous = (earlier or {}).get("result") or {}
+            if (earlier or {}).get("kind") != "compose" or not previous.get("files"):
                 raise InvalidRequest(
                     f"previous_job {previous_job} is not a finished composition this region "
                     "holds; send its files in history instead."
                 )
-            turns.append({"question": done.get("request") or "", "answer": artifact_text(done)})
+            settings["compose_draft"] = artifact_text(previous)
 
         def compose(on_step: Any = None) -> dict:
             payload = artifact_payload(
@@ -136,14 +155,20 @@ class ComposeTools:
                     intent="compose",
                     source_names=source_names,
                     source_name=source_name,
-                    history=turns,
+                    history=list(history or []),
                     principal=principal,
                     principal_groups=principal_groups,
-                    options=options,
+                    options=settings or None,
                     on_step=on_step,
                 )
             )
-            return {**payload, "request": request}
+            if previous:
+                # Said outright, so a revision that lost something is seen at
+                # once rather than found by diffing the files.
+                payload["dropped_from_previous"] = sorted(
+                    declared_types(previous) - declared_types(payload)
+                )
+            return payload
 
         if wait:
             return compose()
@@ -239,11 +264,14 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         validate, a linter). Run it yourself, and review what it cannot judge.
         To revise, call again with previous_job=<that job_id> and a request
         naming exactly what to change (the validator's errors, a design fix):
-        the region reads the earlier artifact from its own job, so you send
-        only the changes. (Without the job -- another region, or after a
+        the region edits the earlier artifact from its own job, keeping what
+        the request does not change, so you send only the changes. The
+        result's dropped_from_previous lists component types the revision no
+        longer declares. (Without the job -- another region, or after a
         restart -- pass history=[{"question": request, "answer": <the files>}].)
-        While a job runs, get_job's progress names the step it is on (plan,
-        retrieve, synthesize, review, revise).
+        While a job runs, get_job's progress.phase names the last workflow step
+        it finished (plan, retrieve, decide, synthesize, review, revise) and its
+        log lists every step so far.
         """
 
         return tools.compose_artifact(

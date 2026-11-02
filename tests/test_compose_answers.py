@@ -805,3 +805,39 @@ def test_a_component_type_no_passage_mentions_is_corrected() -> None:
     assert checked.found() and checked.types == ["azurerm_cognitive_account_connection"]
     assert "is a component type no passage documents" in checked.revision()
     assert "1 component type(s) no passage documents" in checked.summary()
+
+
+def test_a_revision_writes_an_edit_of_the_earlier_artifact(monkeypatch) -> None:
+    from pheasant.assistant.workflows.compose import REVISE_RULE
+
+    earlier = '```hcl\nresource "azurerm_key_vault" "kv" {}\n```'
+    llm = _LLM([PLAN, '```hcl\nresource "x" "y" {}\n```\n# [1]'])
+    wire = _Wire({"sufficient": 0.9}, {"grounded": 0.9, "responsive": 0.9})
+    _run(
+        _search_everything(),
+        llm,
+        _decider(),
+        monkeypatch,
+        wire,
+        intent="compose",
+        compose_draft=earlier,
+        compose_review=False,
+    )
+    writer = llm.log[1]
+    assert writer["system"].endswith(REVISE_RULE)
+    assert writer["prompt"].endswith("DRAFT TO CORRECT:\n" + earlier)
+
+    plain = _LLM([PLAN, '```hcl\nresource "x" "y" {}\n```\n# [1]'])
+    _run(
+        _search_everything(),
+        plain,
+        _decider(),
+        monkeypatch,
+        wire,
+        intent="compose",
+        compose_review=False,
+    )
+    assert (
+        REVISE_RULE not in plain.log[1]["system"]
+        and "DRAFT TO CORRECT" not in plain.log[1]["prompt"]
+    )

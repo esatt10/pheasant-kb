@@ -78,6 +78,27 @@ add that document's name to the query too. Breadth across components matters \
 more than depth on any one."""
 
 
+#: Added to the writing prompt when a compose request revises an earlier
+#: artifact (``options["compose_draft"]``). A revision handed the earlier
+#: artifact as conversation history wrote a new one: measured, asked for five
+#: changes, it dropped the API policy and both backends the draft had right.
+REVISE_RULE = """
+
+REVISION: the question lists changes to the artifact given after the passages \
+as DRAFT TO CORRECT. Return the WHOLE artifact again, complete, with the same \
+files each in its own fenced code block, making exactly the changes the \
+question asks for and keeping every other line of the draft as it is. Where \
+the passages do not document what a change needs, keep the draft's version of \
+that part and say so after the artifact; never drop a component the draft has \
+unless the question asks for it to go."""
+
+
+def revision_draft(options: dict) -> str:
+    """The earlier artifact a compose request revises, or ``""``."""
+
+    return str(options.get("compose_draft") or "").strip()
+
+
 def documents_in_scope(retriever: Any) -> str:
     """The planner's line naming the documents in scope, or ``""``.
 

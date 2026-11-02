@@ -82,10 +82,12 @@ from pheasant.assistant.workflows.agentic_prompts import (
 from pheasant.assistant.workflows.compose import (
     COMPOSE_DEFAULTS,
     PLANNER_COMPOSE_RULE,
+    REVISE_RULE,
     document_sizes,
     documents_in_scope,
     own_pages_first,
     review_artifact,
+    revision_draft,
     synthesis_window,
 )
 
@@ -1052,9 +1054,12 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                 history_text=history_text,
                 figures=figures,
             )
+            # A revision edits the artifact it revises: the draft follows the
+            # passages, and the review below edits against this answer, not it.
+            earlier = revision_draft(options) if whole else ""
             answer = llm.complete(
-                system,
-                prompt,
+                system + (REVISE_RULE if earlier else ""),
+                prompt + (f"\n\nDRAFT TO CORRECT:\n{earlier}" if earlier else ""),
                 max_output_tokens=options.get("max_output_tokens"),
                 **({"on_delta": draft.on_delta} if draft.on_delta else {}),
             )
