@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pheasant.assistant.markup import outside_code
+
 #: Turns kept, newest last. Older turns rarely change what a follow-up means
 #: and every one of them is prompt the model reads on every answer.
 MAX_HISTORY_TURNS = 6
@@ -90,7 +92,8 @@ def normalize_history(raw: Any) -> list[Turn]:
 
 
 def _clean_answer(answer: str) -> str:
-    text = _MARKER_RE.sub("", answer).strip()
+    # Prose only: an earlier artifact's code keeps its indexes (``identity[0]``).
+    text = outside_code(answer, lambda prose: _MARKER_RE.sub("", prose)).strip()
     if len(text) > MAX_ANSWER_CHARS:
         text = text[:MAX_ANSWER_CHARS].rstrip() + "…"
     return text

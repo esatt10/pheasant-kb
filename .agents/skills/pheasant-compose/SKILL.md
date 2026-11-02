@@ -54,7 +54,8 @@ checking in one call, inside its own context budget rather than yours.
    changes, not the files (34 KB for a 41-resource configuration). Check the
    result's `dropped_from_previous`: it lists component types the revision no
    longer declares. If the job is gone — another region, or after a restart —
-   pass `history=[{"question": <the request>, "answer": <the files>}]` instead.
+   pass `history=[{"question": <the request>, "answer": <the files>}]` instead;
+   an artifact in the last turn is used as the draft to edit, whole.
 
 ## Writing the request
 

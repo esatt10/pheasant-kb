@@ -66,6 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
+from pheasant.assistant.markup import outside_code
 from pheasant.assistant.providers import OPENAI_WIRE, ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import (
@@ -1132,8 +1133,11 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
         dangling.add(index)
         return ""
 
-    cleaned = re.sub(r"\[(\d{1,2})\]", replace, answer)
-    cleaned = re.sub(r" +([.,;:])", r"\1", cleaned)
+    # Prose only: inside code ``[0]`` is an index, not a marker.
+    cleaned = outside_code(
+        answer,
+        lambda prose: re.sub(r" +([.,;:])", r"\1", re.sub(r"\[(\d{1,2})\]", replace, prose)),
+    )
     mark_used_citations(cleaned, citations)
     return {
         "answer": cleaned,

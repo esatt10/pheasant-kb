@@ -146,6 +146,12 @@ class ComposeTools:
                     "holds; send its files in history instead."
                 )
             settings["compose_draft"] = artifact_text(previous)
+        turns = list(history or [])
+        if not previous_job and turns and "```" in str(turns[-1].get("answer") or ""):
+            # An artifact sent back in history is the draft to edit too: as a
+            # history turn it reaches the prompt cut to its first 1,200
+            # characters, which of a 34 KB configuration is its providers.tf.
+            settings["compose_draft"] = str(turns.pop()["answer"])
 
         def compose(on_step: Any = None) -> dict:
             payload = artifact_payload(
@@ -155,14 +161,16 @@ class ComposeTools:
                     intent="compose",
                     source_names=source_names,
                     source_name=source_name,
-                    history=list(history or []),
+                    history=turns,
                     principal=principal,
                     principal_groups=principal_groups,
                     options=settings or None,
                     on_step=on_step,
                 )
             )
-            if previous:
+            if previous and payload.get("files"):
+                # Only against an artifact: a run with none (the model was
+                # unreachable) dropped nothing, it wrote nothing.
                 # Said outright, so a revision that lost something is seen at
                 # once rather than found by diffing the files.
                 payload["dropped_from_previous"] = sorted(
@@ -268,7 +276,8 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         the request does not change, so you send only the changes. The
         result's dropped_from_previous lists component types the revision no
         longer declares. (Without the job -- another region, or after a
-        restart -- pass history=[{"question": request, "answer": <the files>}].)
+        restart -- pass history=[{"question": request, "answer": <the files>}];
+        an artifact in the last turn is used as the draft to edit, whole.)
         While a job runs, get_job's progress.phase names the last workflow step
         it finished (plan, retrieve, decide, synthesize, review, revise) and its
         log lists every step so far.

@@ -230,6 +230,13 @@ def test_a_revision_says_what_it_dropped_from_the_previous_artifact() -> None:
     payload = tools.compose_artifact("kb", "Fix it", wait=True, previous_job=first["id"])
     assert payload["dropped_from_previous"] == ["azurerm_resource_group"]
     assert "dropped_from_previous" not in _Facade(RESULT).compose_artifact("kb", "x", wait=True)
+    tools.result = {
+        **RESULT,
+        "answer": "The model could not be reached.",
+        "answer_mode": "extractive",
+    }
+    failed = tools.compose_artifact("kb", "Fix it", wait=True, previous_job=first["id"])
+    assert "dropped_from_previous" not in failed, "no artifact, nothing dropped"
 
 
 def test_a_previous_job_the_region_does_not_hold_is_refused() -> None:
@@ -237,3 +244,15 @@ def test_a_previous_job_the_region_does_not_hold_is_refused() -> None:
 
     with pytest.raises(InvalidRequest, match="send its files in history instead"):
         _Facade(RESULT).compose_artifact("kb", "Fix it", previous_job="nope")
+
+
+def test_an_artifact_sent_back_in_history_is_the_draft_to_edit() -> None:
+    tools = _Facade(RESULT)
+    earlier = [{"question": "q0", "answer": "hi"}, {"question": "Write it", "answer": ANSWER}]
+    tools.compose_artifact("kb", "Fix the SKU", wait=True, history=earlier)
+    revision = tools.asked[-1]
+    assert revision["options"]["compose_draft"] == ANSWER, "whole, not cut to 1,200 characters"
+    assert revision["history"] == [{"question": "q0", "answer": "hi"}]
+
+    tools.compose_artifact("kb", "Again", wait=True, history=[{"question": "q", "answer": "prose"}])
+    assert tools.asked[-1]["options"] is None, "a turn with no code stays a turn"
