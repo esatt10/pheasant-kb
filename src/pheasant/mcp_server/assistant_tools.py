@@ -33,6 +33,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from pheasant.mcp_server.compose_tools import ComposeTools
+
 APP_URI = "ui://pheasant/knowledge-view.html"
 APP_MIME = "text/html;profile=mcp-app"
 APP_PATH = Path(__file__).parent / "apps" / "knowledge_view.html"
@@ -54,8 +56,8 @@ def app_meta() -> dict[str, Any]:
     return {"ui": {"resourceUri": APP_URI}, "ui/resourceUri": APP_URI}
 
 
-class AssistantTools:
-    """Answering, visuals and images over MCP."""
+class AssistantTools(ComposeTools):
+    """Answering, visuals and images over MCP, and compose as a job (``ComposeTools``)."""
 
     config: Any
     services: Any
@@ -86,6 +88,7 @@ class AssistantTools:
         current_directory: str | None = None,
         intent: str | None = None,
         source_names: list[str] | None = None,
+        on_step: Any = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -130,6 +133,9 @@ class AssistantTools:
                 intent=intent,
                 source_names=source_names,
             ),
+            # A progress sink, for a caller that follows the answer as a job
+            # (compose_artifact); the MCP tool itself passes none.
+            on_step=on_step,
         )
 
     def create_visual(

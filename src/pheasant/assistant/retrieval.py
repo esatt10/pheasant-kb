@@ -1019,6 +1019,51 @@ class PheasantRetriever:
         self._metadata_cache[cache_key] = {node_id: dict(value) for node_id, value in out.items()}
         return out
 
+    def document_names(self, limit: int = 300) -> list[str]:
+        """The file names in this answer's scope, or ``[]`` past ``limit``.
+
+        For a planner that must name each component exactly: a component's own
+        page is usually named after it (``api_management_api_policy``), and a
+        planner that does not know the page exists searches its description
+        instead and misses it. Past ``limit`` documents a scope is a corpus
+        rather than a vocabulary, so nothing is returned. Each name passes the
+        scope and ACL rule evidence passes (``_artifact_allowed``), and the
+        scan stops at the first name over the limit.
+        """
+        return list(self.document_index(limit))
+
+    def document_index(self, limit: int = 300) -> dict[str, str]:
+        """``{file name: artifact id}`` for :meth:`document_names`, same rules.
+
+        The first document of each name wins, in path order. Also how the
+        compose review finds a component's own reference page that the
+        answer's window did not include.
+        """
+        if self.state is None:
+            return {}
+        index: dict[str, str] = {}
+        try:
+            rows = self.state.rows(
+                "SELECT id, relative_path, source_id, type FROM artifacts ORDER BY relative_path"
+            )
+            for row in rows:
+                path = str(row["relative_path"] or "")
+                if not path or not self._artifact_allowed(
+                    str(row["id"]),
+                    source_id=str(row["source_id"] or ""),
+                    artifact_type=str(row["type"] or ""),
+                    relative_path=path,
+                ):
+                    continue
+                stem = path.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0]
+                if stem and stem not in index:
+                    index[stem] = str(row["id"])
+                    if len(index) > limit:
+                        return {}
+        except Exception:  # an aid, never a blocker
+            return {}
+        return index
+
     @_timed_request_stage("evidence_hydration")
     def documents(
         self,

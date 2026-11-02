@@ -81,9 +81,18 @@ the artifact's own name, the language's own syntax, or a passage does document \
 it for that component. A suspect on a component that you neither report nor \
 clear is corrected as if reported.
 
-Finally, list in "omitted" every component the QUESTION asks for by name that \
+List in "omitted" every component the QUESTION asks for by name that \
 the artifact does not contain at all — {"omitted": ["what was asked for", ...]}. \
-Leave it empty when everything asked for is there."""
+Leave it empty when everything asked for is there.
+
+Finally, where the QUESTION says what a component is for or how it must \
+behave, check that the artifact's configuration of it would do that. List in \
+"purpose" each one that would not — {"purpose": [{"component": "...", \
+"problem": "what it would do instead"}]} — and leave it empty when every \
+stated purpose is met. A component whose kind or mode field (a type, kind or \
+mode the passages document) is unset, or set to something other than what its \
+stated purpose needs, does not meet it. Judge only against what the question \
+states, not against preferences of your own."""
 
 
 @dataclass
@@ -100,16 +109,38 @@ class Review:
     unresolved: list[str] = field(default_factory=list)
     #: ``(component, argument)`` its reference page requires and it leaves out.
     required: list[tuple[str, str]] = field(default_factory=list)
+    #: Components whose configuration would not do what the question says
+    #: they are for: ``{"component", "problem"}``.
+    purpose: list[dict[str, str]] = field(default_factory=list)
+    #: The answer to a request for an artifact contains no code at all.
+    no_artifact: bool = False
+    #: Component types the artifact declares that no passage mentions at all.
+    types: list[str] = field(default_factory=list)
     reviewed: bool = False
     error: str | None = None
 
     def found(self) -> bool:
-        return bool(self.issues or self.unknown or self.omitted or self.unresolved or self.required)
+        return bool(
+            self.issues
+            or self.unknown
+            or self.omitted
+            or self.unresolved
+            or self.required
+            or self.purpose
+            or self.no_artifact
+            or self.types
+        )
 
     def revision(self) -> str:
         """The rewrite instruction: exactly what to correct, nothing else."""
 
         lines = []
+        if self.no_artifact:
+            lines.append(
+                "- The answer contains no artifact. Write it: a value the passages leave "
+                "open becomes a placeholder variable, and what they do not document is "
+                "listed after the artifact, never instead of it."
+            )
         for name in self.unknown:
             on = self.where.get(name)
             lines.append(
@@ -133,18 +164,39 @@ class Review:
                 f"- `var.{name}` is referenced but never declared: declare it as a variable "
                 "with a placeholder default."
             )
+        for kind in self.types:
+            lines.append(
+                f"- `{kind}` is a component type no passage documents: use the type the "
+                "passages document for that component, or remove it."
+            )
         for component in self.omitted:
             lines.append(
                 f"- {component} was asked for and is missing: add it, using only what the "
                 "passages document for it."
             )
+        for entry in self.purpose:
+            lines.append(
+                f"- {entry.get('component') or 'A component'} would not do what the question "
+                f"asks of it ({entry.get('problem') or 'its configuration contradicts it'}): "
+                "change its design so it does, using only what the passages document."
+            )
+        if self.no_artifact:
+            closing = (
+                "\nWrite the WHOLE artifact now, complete, each file in its own fenced code block."
+            )
+        else:
+            closing = (
+                "\nThe draft follows the passages as DRAFT TO CORRECT. Return the WHOLE draft "
+                "again, complete, with the same files each in its own fenced code block, "
+                "making exactly these corrections — use the documented identifier for each "
+                "component, remove a line the passages document nothing for, and add what is "
+                "missing. Keep every other line of the draft as it is."
+            )
         return (
             "\n\nREVISION: the artifact was checked against the question and, identifier by "
             "identifier, against the passages. Correct exactly these:\n"
             + "\n".join(lines)
-            + "\nWrite the WHOLE artifact again, complete — use the documented identifier for "
-            "each component, remove a line the passages document nothing for, and add what "
-            "is missing. Change nothing else."
+            + closing
         )
 
     def summary(self) -> str:
@@ -166,6 +218,16 @@ class Review:
         if self.omitted:
             shown = ", ".join(self.omitted[:4]) + ("…" if len(self.omitted) > 4 else "")
             parts.append(f"{len(self.omitted)} requested component(s) missing ({shown})")
+        if self.purpose:
+            shown = ", ".join(str(p.get("component")) for p in self.purpose[:3])
+            parts.append(
+                f"{len(self.purpose)} component(s) not fit for their stated purpose ({shown})"
+            )
+        if self.no_artifact:
+            parts.append("no artifact in the answer")
+        if self.types:
+            shown = ", ".join(f"`{t}`" for t in self.types[:4])
+            parts.append(f"{len(self.types)} component type(s) no passage documents ({shown})")
         return "; ".join(parts)
 
 
@@ -234,17 +296,39 @@ def declared_components(code: str) -> list[tuple[str | None, str]]:
     return [(kind if keyword == primary else None, body) for keyword, kind, body in blocks]
 
 
+def page_name(document: Any) -> str:
+    """What a document is called: its title, else its path.
+
+    Hydrated evidence (``retrieval.Document``) has a ``relative_path`` and no
+    ``title``. Reading ``title`` alone found no component's own page in a real
+    answer, so every per-page check fell back silently, while every test,
+    whose documents carried a title, passed.
+    """
+    return str(getattr(document, "title", None) or getattr(document, "relative_path", None) or "")
+
+
+def names_page(component: str, title: str) -> bool:
+    """Whether ``title`` is ``component``'s own page: a file named after it.
+
+    The file stem is the component's name or its trailing segment —
+    ``azurerm_subnet`` and ``subnet.html.markdown``,
+    ``Microsoft.ApiManagement/service/backends`` and ``backends``.
+    """
+    wanted = component.lower()
+    stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
+    return len(stem) >= 4 and (
+        wanted == stem or wanted.endswith(("_" + stem, "." + stem, "/" + stem))
+    )
+
+
 def reference_pages(component: str, documents: dict) -> list[str]:
     """The passages that are ``component``'s own page, named after it."""
 
-    wanted = component.lower()
-    pages = []
-    for document in documents.values():
-        title = str(getattr(document, "title", "") or "")
-        stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
-        if len(stem) >= 4 and (wanted == stem or wanted.endswith(("_" + stem, "." + stem))):
-            pages.append(document.text or "")
-    return pages
+    return [
+        document.text or ""
+        for document in documents.values()
+        if names_page(component, page_name(document))
+    ]
 
 
 def component_evidence(component: str, documents: dict) -> str | None:
@@ -306,12 +390,31 @@ def missing_required(answer: str, documents: dict) -> list[tuple[str, str]]:
     return missing
 
 
+def undocumented_types(answer: str, documents: dict) -> list[str]:
+    """Component types the artifact declares that appear in no passage at all.
+
+    An invented type is the one identifier a key check cannot see, because it
+    has no page to check keys against. Measured: told to prefer one provider,
+    the writer declared a resource type that provider does not have, and the
+    target tool refused the artifact.
+    """
+    code = "\n".join(code_blocks(answer))
+    everything = "\n".join(document.text or "" for document in documents.values()).lower()
+    kinds = dict.fromkeys(kind for kind, _ in declared_components(code) if kind)
+    return [kind for kind in kinds if not _present(kind.lower(), everything)]
+
+
 def suspects(answer: str, documents: dict) -> dict[str, str | None]:
     """Assignment keys the passages do not document where the artifact uses them.
 
     A key inside a labelled block must be documented for that block's type;
     any other key must appear in some passage. The artifact's own names are
     never suspects. Returns ``{key: component or None}`` in artifact order.
+
+    A component whose own page was read only in part (an excerpt) cannot
+    show that a key is absent from it, so there a key is a suspect only when
+    no passage has it at all. Measured: eleven arguments of excerpted pages,
+    every one valid, were sent to a rewrite as undocumented.
     """
     code = "\n".join(code_blocks(answer))
     if not code:
@@ -319,13 +422,16 @@ def suspects(answer: str, documents: dict) -> dict[str, str | None]:
     declared = _declared(code)
     everything = "\n".join(document.text or "" for document in documents.values()).lower()
     scopes: dict[str, str | None] = {}
+    partial: dict[str, bool] = {}
     found: dict[str, str | None] = {}
     for component, body in declared_components(code):
         scope = everything
         if component:
             if component not in scopes:
                 scopes[component] = component_evidence(component, documents)
-            scope = scopes[component] or everything
+                own = [d for d in documents.values() if names_page(component, page_name(d))]
+                partial[component] = bool(own) and all(getattr(d, "truncated", False) for d in own)
+            scope = everything if partial[component] else scopes[component] or everything
         for key in _KEY.findall(body):
             if key not in declared and key not in found and not _present(key, scope):
                 found[key] = component
@@ -387,23 +493,37 @@ def review(
     *,
     max_chars: int,
     max_output_tokens: int = 2000,
+    reference: dict | None = None,
 ) -> Review:
-    """Run both passes. Never raises: an unavailable reviewer is a note."""
+    """Run both passes. Never raises: an unavailable reviewer is a note.
+
+    ``reference`` holds components' own pages read for the deterministic
+    checks only; the model reviewer sees the passages the answer was written
+    from, so what it is asked about is what the writer had.
+    """
 
     texts = []
     for index in sorted(documents):
         document = documents[index]
-        texts.append(f"[{index}] {getattr(document, 'title', '') or ''}\n{document.text or ''}")
+        texts.append(f"[{index}] {page_name(document)}\n{document.text or ''}")
     evidence = "\n\n".join(texts)
-    suspected = suspects(answer, documents)
+    pages = {**documents, **(reference or {})}
+    suspected = suspects(answer, pages)
     where = {key: component for key, component in suspected.items() if component}
     result = Review(
         unknown=list(suspected),
         where=where,
         unresolved=unresolved(answer),
-        required=missing_required(answer, documents),
+        required=missing_required(answer, pages),
+        types=undocumented_types(answer, pages),
     )
-    if llm is None or not code_blocks(answer):
+    if not code_blocks(answer):
+        # A request for an artifact answered with none: measured, a writer told
+        # every component must work declined the whole request in prose, and
+        # with nothing to check the review used to report "nothing to correct".
+        result.no_artifact = True
+        return result
+    if llm is None:
         return result
     listed = ", ".join(f"{k} (on {c})" if c else k for k, c in suspected.items())
     hint = (
@@ -445,7 +565,7 @@ def review(
         # evidence documents is not wrong there, however the reviewer read a
         # deprecation note elsewhere (measured: a correct subnet argument
         # "fixed" back to the name the provider had removed).
-        if documented_where_used(identifier, code, documents):
+        if documented_where_used(identifier, code, pages):
             continue
         result.issues.append(
             {
@@ -470,4 +590,12 @@ def review(
         for item in parsed.get("omitted") or []
         if isinstance(item, str) and item.strip()
     ][:12]
+    result.purpose = [
+        {
+            "component": " ".join(str(entry.get("component") or "").split())[:120],
+            "problem": " ".join(str(entry.get("problem") or "").split())[:200],
+        }
+        for entry in parsed.get("purpose") or []
+        if isinstance(entry, dict) and str(entry.get("component") or "").strip()
+    ][:8]
     return result

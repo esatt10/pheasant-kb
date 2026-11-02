@@ -11,6 +11,7 @@ these; this module reads neither it nor ``decision_gates``.
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -37,10 +38,13 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
     "defer_graph_until_insufficient": False,
     # The combined call writes a capped, JSON-wrapped short answer.
     "combine_grade_and_answer": False,
-    "planned_queries": 8,
+    # One query per component, and a request can name two dozen of them:
+    # eight queries for 26 components bundled three a query, and a bundled
+    # query's ten results were the overview pages, not the components' own.
+    "planned_queries": 24,
     "followup_queries": 4,
     "per_query_results": 10,
-    "max_context_passages": 40,
+    "max_context_passages": 64,
     # Proportional to each document's size, not a fixed count: a 120-chunk
     # PDF's overview may need 30 of its passages, a one-page note needs two.
     "passages_per_document": "auto",
@@ -54,7 +58,11 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
     "expand_per_node": 2,
     "passage_chars": 12_000,
     "code_passage_chars": 24_000,
-    "context_budget_chars": 240_000,
+    # Documents are read in window order until this runs out, so it has to
+    # cover the window: at 320k a 64-passage window over 46 documents read 40
+    # of them, and the six it starved were components the writer then called
+    # undocumented.
+    "context_budget_chars": 400_000,
     # One call writes the whole artifact: sections written apart from each
     # other cannot reference each other's names.
     "max_output_tokens": 24_000,
@@ -64,8 +72,44 @@ COMPOSE_DEFAULTS: dict[str, Any] = {
 PLANNER_COMPOSE_RULE = """
 - This request composes a new artifact from many documented parts. List the \
 components it needs and plan ONE query per component, each naming that \
-component exactly as the corpus vocabulary spells it. Breadth across \
-components matters more than depth on any one."""
+component exactly as the corpus vocabulary spells it, in full. When the \
+documents in scope are listed and one of them is that component's own page, \
+add that document's name to the query too. Breadth across components matters \
+more than depth on any one."""
+
+
+#: Added to the writing prompt when a compose request revises an earlier
+#: artifact (``options["compose_draft"]``). A revision handed the earlier
+#: artifact as conversation history wrote a new one: measured, asked for five
+#: changes, it dropped the API policy and both backends the draft had right.
+REVISE_RULE = """
+
+REVISION: the question lists changes to the artifact given after the passages \
+as DRAFT TO CORRECT. Return the WHOLE artifact again, complete, with the same \
+files each in its own fenced code block, making exactly the changes the \
+question asks for and keeping every other line of the draft as it is. Where \
+the passages do not document what a change needs, keep the draft's version of \
+that part and say so after the artifact; never drop a component the draft has \
+unless the question asks for it to go."""
+
+
+def revision_draft(options: dict) -> str:
+    """The earlier artifact a compose request revises, or ``""``."""
+
+    return str(options.get("compose_draft") or "").strip()
+
+
+def documents_in_scope(retriever: Any) -> str:
+    """The planner's line naming the documents in scope, or ``""``.
+
+    A component's own page is usually named after it, and a query naming it
+    is what finds that page (``own_pages_first``): measured, the planner
+    searched "API policy llm-token-limit" for a component whose page is
+    ``api_management_api_policy``, and the page was never retrieved.
+    """
+    read = getattr(retriever, "document_names", None)
+    names = read() if callable(read) else []
+    return f"\nDocuments in scope, by name: {', '.join(names)}" if names else ""
 
 
 def document_quota(chunk_count: int | None, options: dict) -> int | None:
@@ -115,6 +159,48 @@ def document_sizes(retriever: Any, passages: list, options: dict) -> dict[str, i
     return {node: int(meta.get("chunk_count") or 0) for node, meta in shapes.items()}
 
 
+#: A name spelled as an artifact spells a component — ``azurerm_key_vault``,
+#: ``Microsoft.ApiManagement/service/backends`` — rather than a plain word.
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[._/][A-Za-z0-9]+)+")
+#: A plain word long enough to be a document's whole name.
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
+
+
+def own_pages_first(passages: list, texts: list[str]) -> list:
+    """Each named component's own page ahead of the rest of ``passages``.
+
+    ``texts`` are the question and the queries searched for it; a name in them
+    whose own page (``compose_review.names_page``, the rule the review checks
+    keys against) was retrieved gets that page's best passage moved to the
+    front, in rank order, and everything else keeps its order behind them.
+    Measured on a 26-component request: every per-component query found the
+    component's reference page, at ranks 3 to 10 behind two overview pages
+    that ranked first for every query, so the merged window was the
+    overviews' and the writer said the components were undocumented.
+
+    A plain word names a page only by being its whole name (``subnet``,
+    ``subscription``): the planner is shown the documents in scope by name
+    (``documents_in_scope``) and writes them as they are listed.
+    """
+    names = {match.group(0) for text in texts for match in _NAME.finditer(text or "")}
+    words = {match.group(0).lower() for text in texts for match in _WORD.finditer(text or "")}
+    if not names and not words:
+        return passages
+    first, rest, seen = [], [], set()
+    for passage in passages:
+        key = str(getattr(passage, "node_id", "") or passage.key())
+        title = str(getattr(passage, "relative_path", None) or getattr(passage, "title", "") or "")
+        stem = title.replace("\\", "/").rsplit("/", 1)[-1].split(".", 1)[0].lower()
+        if key not in seen and (
+            stem in words or any(compose_review.names_page(name, title) for name in names)
+        ):
+            seen.add(key)
+            first.append(passage)
+        else:
+            rest.append(passage)
+    return first + rest
+
+
 def synthesis_window(passages: list, options: dict, sizes: dict[str, int] | None = None) -> list:
     """The top ``max_context_passages``, each document within its quota.
 
@@ -142,6 +228,81 @@ def synthesis_window(passages: list, options: dict, sizes: dict[str, int] | None
     return window
 
 
+_DECLARATION = re.compile(r'^\s*[A-Za-z_][\w-]*\s+"[^"]+"(?:\s+"[^"]+")?\s*\{', re.M)
+
+
+def lost_code(draft: str, revised: str) -> bool:
+    """Whether a rewrite lost part of the artifact it was asked to correct.
+
+    Counted in declarations (``kind "type" "name" {`` and ``kind "name" {``)
+    where the artifact has them, and in fenced blocks otherwise. Counting
+    fences alone discarded a rewrite that added the one component the review
+    asked for, because it returned the same declarations in fewer blocks.
+    """
+    before = "\n".join(compose_review.code_blocks(draft))
+    after = "\n".join(compose_review.code_blocks(revised))
+    declared = len(_DECLARATION.findall(before))
+    if declared:
+        # A component type the draft declared and the rewrite does not is lost
+        # too, however many declarations remain: measured, a rewrite folded the
+        # subnets into the network as inline blocks it then could not index.
+        kinds = {kind for kind, _ in compose_review.components(before) if kind}
+        kept = {kind for kind, _ in compose_review.components(after) if kind}
+        return len(_DECLARATION.findall(after)) < declared or not kinds <= kept
+    return len(compose_review.code_blocks(revised)) < len(compose_review.code_blocks(draft))
+
+
+#: At most this many reference pages are read for the review's checks.
+REVIEW_PAGES = 16
+
+
+def reference_for_review(retriever: Any, answer: str, documents: dict) -> dict:
+    """Own reference pages of components the artifact declares and the window left out.
+
+    Read for the review's deterministic checks only -- the writer and the
+    model reviewer keep the evidence the answer was written from. Measured: a
+    project resource whose page the window lacked went out without the block
+    that page marks Required, because the check had nothing to read it from.
+    """
+    code = "\n".join(compose_review.code_blocks(answer))
+    wanted = dict.fromkeys(kind for kind, _ in compose_review.declared_components(code) if kind)
+
+    def whole(kind: str) -> bool:
+        # An excerpt is not the page: measured, the excerpt of a project page
+        # left out the Arguments section, so the Required check found nothing.
+        return any(
+            compose_review.names_page(kind, compose_review.page_name(document))
+            and not getattr(document, "truncated", False)
+            for document in documents.values()
+        )
+
+    missing = [kind for kind in wanted if not whole(kind)]
+    index_of = getattr(retriever, "document_index", None)
+    read = getattr(retriever, "documents", None)
+    if not missing or not callable(index_of) or not callable(read):
+        return {}
+    index = index_of()
+    ids = []
+    for kind in missing:
+        node_id = next(
+            (i for stem, i in index.items() if compose_review.names_page(kind, stem)), None
+        )
+        if node_id and node_id not in ids:
+            ids.append(node_id)
+    if not ids:
+        return {}
+    try:
+        pages = read(
+            ids[:REVIEW_PAGES],
+            max_chars=24_000,
+            large_file_bytes=10**9,
+            budget_chars=24_000 * REVIEW_PAGES,
+        )
+    except Exception:  # noqa: BLE001 - a check's extra evidence, never a blocker
+        return {}
+    return {f"reference:{node_id}": page for node_id, page in pages.items()}
+
+
 @dataclass
 class _Reviewed:
     text: str
@@ -161,12 +322,14 @@ def review_artifact(
 
     llm = ctx["llm"]
     started = time.perf_counter()
+    reference = reference_for_review(ctx.get("retriever"), answer, documents)
     checked = compose_review.review(
         llm,
         state["question"],
         answer,
         documents,
-        max_chars=int(options.get("context_budget_chars") or 240_000),
+        max_chars=int(options.get("context_budget_chars") or 400_000),
+        reference=reference,
     )
     steps = [
         WorkflowStep(
@@ -178,37 +341,102 @@ def review_artifact(
     ]
     if not checked.found():
         return _Reviewed(answer, steps)
+    named = len(checked.unknown) + len(checked.issues)
+    revised, step = _edit(
+        llm, system, prompt, options, checked, answer, f"correcting {named} identifier(s)"
+    )
+    steps.append(step)
+    essential = compose_review.Review(
+        omitted=checked.omitted,
+        unresolved=checked.unresolved,
+        required=checked.required,
+        types=checked.types,
+    )
+    if revised is None and essential.found() and essential.revision() != checked.revision():
+        # An edit carrying every finding can be too big to land: measured, an
+        # eight-item edit dropped part of the artifact and was discarded, and
+        # the two components the review had found missing went out missing.
+        # What the artifact lacks outright is retried alone.
+        revised, step = _edit(
+            llm,
+            system,
+            prompt,
+            options,
+            essential,
+            answer,
+            f"adding {len(essential.omitted)} missing component(s) and "
+            f"{len(essential.unresolved) + len(essential.required)} declaration(s)",
+        )
+        steps.append(step)
+    if revised is None:
+        return _Reviewed(answer, steps)
+    # The rewrite is checked too, without a model: undeclared references,
+    # Required arguments, and keys it introduced that its component's whole
+    # page does not have. Measured: a rewrite asked to add a missing component
+    # added it without the block its page marks Required, and another gave a
+    # resource an argument of a different one.
+    recheck_reference = reference_for_review(ctx.get("retriever"), revised, documents)
+    recheck = compose_review.review(
+        None, state["question"], revised, documents, max_chars=0, reference=recheck_reference
+    )
+    before = compose_review.suspects(answer, {**documents, **reference})
+    introduced = [key for key in recheck.unknown if recheck.where.get(key) and key not in before]
+    left = compose_review.Review(
+        unresolved=recheck.unresolved,
+        required=recheck.required,
+        unknown=introduced,
+        where={key: recheck.where[key] for key in introduced},
+        types=recheck.types,
+    )
+    if not left.found():
+        return _Reviewed(revised, steps)
+    fixed, step = _edit(
+        llm,
+        system,
+        prompt,
+        options,
+        left,
+        revised,
+        f"correcting {len(left.unresolved) + len(left.required) + len(introduced)} "
+        f"reference(s) or argument(s) and {len(left.types)} type(s) the rewrite left",
+    )
+    steps.append(step)
+    return _Reviewed(fixed or revised, steps)
+
+
+def _edit(
+    llm: Any,
+    system: str,
+    prompt: str,
+    options: dict,
+    checked: compose_review.Review,
+    answer: str,
+    what: str,
+) -> tuple[str | None, WorkflowStep]:
+    """One rewrite of ``answer`` correcting exactly what ``checked`` found.
+
+    The rewrite edits the draft rather than writing a new one. Sent only the
+    passages and the corrections, it regenerated from scratch: measured, a
+    rewrite asked to add one missing component dropped two others and broke
+    names the draft had right, and "change nothing else" meant nothing with
+    nothing to keep. ``None`` when the rewrite is unavailable or lost code.
+    """
     started = time.perf_counter()
+    draft = "" if checked.no_artifact else f"\n\nDRAFT TO CORRECT:\n{answer}"
     try:
         revised = llm.complete(
             system + checked.revision(),
-            prompt,
+            prompt + draft,
             max_output_tokens=options.get("max_output_tokens"),
         )
     except ProviderError as exc:
-        steps.append(
-            WorkflowStep(
-                name="revise",
-                detail=f"rewrite unavailable ({short_reason(str(exc))}); returned as written",
-            )
-        )
-        return _Reviewed(answer, steps)
+        detail = f"rewrite unavailable ({short_reason(str(exc))}); returned as written"
+        return None, WorkflowStep(name="revise", detail=detail)
+    elapsed = time.perf_counter() - started
     # A rewrite that lost the artifact is worse than the identifiers it fixed.
-    if len(compose_review.code_blocks(revised)) < len(compose_review.code_blocks(answer)):
-        steps.append(
-            WorkflowStep(
-                name="revise",
-                detail="the rewrite dropped part of the artifact; kept the first draft",
-                duration_seconds=time.perf_counter() - started,
-            )
-        )
-        return _Reviewed(answer, steps)
-    named = len(checked.unknown) + len(checked.issues)
-    steps.append(
-        WorkflowStep(
-            name="revise",
-            detail=f"rewrote the artifact correcting {named} identifier(s)",
-            duration_seconds=time.perf_counter() - started,
-        )
+    if lost_code(answer, revised):
+        detail = "the rewrite dropped part of the artifact; kept the previous version"
+        return None, WorkflowStep(name="revise", detail=detail, duration_seconds=elapsed)
+    return revised, WorkflowStep(
+        name="revise", detail=f"rewrote the artifact {what}", duration_seconds=elapsed
     )
-    return _Reviewed(revised, steps)

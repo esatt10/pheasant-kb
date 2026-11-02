@@ -64,7 +64,9 @@ pheasant-kb/
 ├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
 │                                pheasant-kb/ is the primary guide, every
 │                                other shape is in other-deployments.md
-├── examples/                  ← demo-agent-framework, vscode MCP config
+├── examples/                  ← demo-agent-framework, vscode MCP config,
+│                                compose-ai-platform (a compose_artifact
+│                                session: requests, jobs, Terraform)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← up/host/setup/mount/start/serve/worker/sync/
@@ -181,6 +183,7 @@ pheasant-kb/
 │   │                            sync)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
+│   │                            compose_tools (compose_artifact as a job),
 │   │                            apps/knowledge_view.html (the MCP App view)
 │   ├── api/app.py             ← the HTTP surface (+ per-plane routers:
 │   │                            assistant_routes, readiness_routes, …)
@@ -213,7 +216,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 182 pytest modules, offline by design
+└── tests/                     ← 185 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -282,7 +285,9 @@ docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --s
 For deployment/configuration work, load
 `.agents/skills/pheasant-deploy/SKILL.md` before changing files or containers.
 Agents *querying* a region (raw hybrid search + graph traversal, judged by
-their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`.
+their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`; agents
+*offloading a composition* (a new artifact built from documented parts, as a
+job: MCP `compose_artifact` + `get_job`) use `.agents/skills/pheasant-compose/SKILL.md`.
 
 ---
 
@@ -1208,8 +1213,15 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   then `compose_review` checks it — every key looked up in its own component's
   evidence without a model, and one review call that confirms or clears those
   suspects, catches an identifier documented on a different component, and
-  names requested components left out — and rewrites once with exactly that
-  list. The accept gate reports on an artifact but never rewrites it. Read
+  names requested components left out and components that would not do what
+  the question says they are for — and corrects them in one edit of the draft
+  (the rewrite is handed the draft; without it, "change nothing else" was a
+  regeneration that dropped components), rechecked for undeclared references
+  and required arguments with one more edit if it left any. Own pages are
+  found by `page_name` (title, else path: hydrated `Document`s have no title,
+  so until 1 Nov no real answer had one), read from the index when the window
+  lacked them, and the compose planner is shown the document names in scope.
+  The accept gate reports on an artifact but never rewrites it. Read
   off the words, pinned by `@compose` (`@build`, `@scaffold`) or by `intent`
   on MCP `ask_knowledge_base` / `POST /assistant/chat`. A document's share of
   the window is proportional to its size (`passages_per_document: auto`: a

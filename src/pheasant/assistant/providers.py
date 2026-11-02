@@ -25,6 +25,7 @@ Wire shapes (all POST + JSON):
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -234,7 +235,35 @@ def _http_json(
     headers: dict[str, str],
     timeout: float,
 ) -> dict:
-    """POST JSON, return parsed JSON. The single monkeypatch seam."""
+    """POST JSON, return parsed JSON. The single monkeypatch seam.
+
+    A connection that fails before an answer (a TLS record error, a reset, an
+    unreachable endpoint) is retried twice with a short backoff, as the
+    provider SDKs do by default: measured, one call in eight failed that way
+    on one host for an evening, and each failure ended a four-minute
+    composition at its writing call. An HTTP error status and a timeout are
+    raised at once, as before.
+    """
+    for attempt in range(len(CONNECTION_RETRY_DELAYS) + 1):
+        try:
+            return _post_json(url, payload, headers, timeout)
+        except _TransientConnection as exc:
+            if attempt == len(CONNECTION_RETRY_DELAYS):
+                raise ProviderError(str(exc)) from exc.__cause__
+            note_model_retry()
+            time.sleep(CONNECTION_RETRY_DELAYS[attempt])
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+#: Seconds before each retry of a connection that failed before answering.
+CONNECTION_RETRY_DELAYS = (0.5, 2.0)
+
+
+class _TransientConnection(Exception):
+    """A connection that failed before the provider answered; worth retrying."""
+
+
+def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: float) -> dict:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -247,14 +276,14 @@ def _http_json(
     except urllib.error.HTTPError as exc:  # pragma: no cover - network path
         detail = exc.read().decode("utf-8", "replace")[:600]
         raise ProviderError(f"{exc.code} from provider: {detail}") from exc
-    except urllib.error.URLError as exc:  # pragma: no cover - network path
-        raise ProviderError(f"could not reach provider: {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise _TransientConnection(f"could not reach provider: {exc.reason}") from exc
     except TimeoutError as exc:
         # A read that times out after the connection opened is not a URLError,
         # and a model that thinks first is the kind that takes long enough.
         raise ProviderError(f"provider did not answer within {timeout:g}s") from exc
-    except OSError as exc:  # pragma: no cover - network path
-        raise ProviderError(f"connection to provider failed: {exc}") from exc
+    except OSError as exc:
+        raise _TransientConnection(f"connection to provider failed: {exc}") from exc
     except ValueError as exc:
         raise ProviderError("provider returned a response that is not JSON") from exc
 

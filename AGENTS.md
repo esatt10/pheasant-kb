@@ -36,4 +36,6 @@ troubleshooting, use `.agents/skills/pheasant-deploy/SKILL.md`.
 
 For *querying* a region — raw hybrid search and graph traversal judged by
 your own harness rather than the region's answering workflow — use
-`.agents/skills/pheasant-retrieval/SKILL.md`.
+`.agents/skills/pheasant-retrieval/SKILL.md`. To offload building a new artifact
+(a configuration, script or set of files assembled from documented parts) to the
+region, use `.agents/skills/pheasant-compose/SKILL.md` (MCP `compose_artifact`).

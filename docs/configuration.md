@@ -128,17 +128,17 @@ standalone is selected:
 | `assistant.workflow_options.agentic.output_tokens_by_depth.medium` | `1024` | unset |
 | `assistant.workflow_options.agentic.answer_max_words.short` | `150` | unset |
 | `assistant.workflow_options.agentic.answer_max_words.medium` | `400` | unset |
-| `assistant.workflow_options.agentic.compose_options.planned_queries` | `8` | unset |
+| `assistant.workflow_options.agentic.compose_options.planned_queries` | `24` | unset |
 | `assistant.workflow_options.agentic.compose_options.followup_queries` | `4` | unset |
 | `assistant.workflow_options.agentic.compose_options.per_query_results` | `10` | unset |
-| `assistant.workflow_options.agentic.compose_options.max_context_passages` | `40` | unset |
+| `assistant.workflow_options.agentic.compose_options.max_context_passages` | `64` | unset |
 | `assistant.workflow_options.agentic.compose_options.passages_per_document` | `auto` | unset |
 | `assistant.workflow_options.agentic.compose_options.document_fraction` | `0.25` | unset |
 | `assistant.workflow_options.agentic.compose_options.document_floor` | `2` | unset |
 | `assistant.workflow_options.agentic.compose_options.document_window_share` | `0.75` | unset |
 | `assistant.workflow_options.agentic.compose_options.scale_document_chars` | `true` | unset |
 | `assistant.workflow_options.agentic.compose_options.chars_per_passage` | `4000` | unset |
-| `assistant.workflow_options.agentic.compose_options.context_budget_chars` | `240000` | unset |
+| `assistant.workflow_options.agentic.compose_options.context_budget_chars` | `400000` | unset |
 | `assistant.workflow_options.agentic.compose_options.max_output_tokens` | `24000` | unset |
 | `assistant.latency.max_concurrent_answers` | `4` | `0` |
 | `assistant.retrieval.max_rounds` | `2` | `3` |
@@ -1886,8 +1886,18 @@ the corpus, so compose changes every step that assumed it would:
   the artifact's primary declaration kind is held to a page — a lookup of the
   same type is documented elsewhere. The passages outrank the reviewer: a claim that an
   identifier is wrong where its component's own evidence documents it is
-  dropped. Anything found is rewritten once, with exactly that list; nothing
-  found costs only the review call;
+  dropped. A component's own page that the window left out is read from the
+  index for these checks (not for the model). An own page that was only
+  excerpted cannot prove a key absent, so there a key must be missing from
+  every passage to be a suspect. The review call also lists components whose
+  configuration would not do what the question says they are for, a kind or
+  mode field left unset included. An answer with no artifact at all is sent
+  back to write one. Anything found is corrected in one **edit of the draft**:
+  the rewrite is given the draft and the list, and keeps every other line.
+  The edit is rechecked for undeclared references and missing required
+  arguments, and if it left any, one more edit corrects exactly those. A
+  rewrite that loses declarations is discarded. Nothing found costs only the
+  review call;
 * the first draft is never written at the low draft effort, and the acceptance
   gate's scores are reported but never trigger a rewrite of an artifact — its
   thresholds were calibrated on short answers, and the rewrites it asked for
@@ -1902,17 +1912,17 @@ assistant:
   workflow_options:
     agentic:
       compose_options:
-        planned_queries: 8          # queries beside the question itself
+        planned_queries: 24         # queries beside the question itself
         followup_queries: 4         # a grader's follow-ups searched per round
         per_query_results: 10
-        max_context_passages: 40
+        max_context_passages: 64
         passages_per_document: auto # proportional to each document's size (below)
         document_fraction: 0.25
         document_floor: 2
         document_window_share: 0.75
         scale_document_chars: true  # read further into a document cited many times
         chars_per_passage: 4000
-        context_budget_chars: 240000
+        context_budget_chars: 400000
         max_output_tokens: 24000
 ```
 
@@ -1921,10 +1931,21 @@ integer (a fixed cap), `auto`, or unset (no cap). `auto` scales with the
 document: `document_fraction` of its chunks, never below `document_floor` and
 never more than `document_window_share` of the window. With the values above, a
 one-page note contributes at most 2 passages, a 40-chunk guide 10, and a
-120-chunk PDF 30 of the 40. A fixed cap of two would read two passages of a
+120-chunk PDF 30 of the 64. A fixed cap of two would read two passages of a
 long PDF whose overview is spread across thirty; no cap lets one long file push
 every other component out of a composed artifact. Sizes are the index's own
 chunk counts, read once per answer.
+
+**A component's own page first.** Each query names one component, and its
+best hits are often an overview that every query also finds. So before the
+window is cut, each component the question or its queries name by identifier
+(`azurerm_key_vault`, `Microsoft.ApiManagement/service/backends`) has its own
+page's best passage moved to the front, by the rule the review checks keys
+against: a file whose stem is the name or its trailing segment, or whose
+whole name is a word of the query. Everything else keeps its rank order
+behind them. To name pages that way the planner is shown the documents in
+scope by name, when the scope holds 300 or fewer, under the same scope and
+ACL rule as the evidence.
 
 **Reading what the window kept.** A cap alone does not read more of a large
 file: hydration gives each prose document `passage_chars`, and excerpts a

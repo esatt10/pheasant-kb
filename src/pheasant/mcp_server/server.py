@@ -9,6 +9,7 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
 from pheasant.mcp_server.archive_tools import register_archive_tools
 from pheasant.mcp_server.assistant_tools import register_assistant_tools
+from pheasant.mcp_server.compose_tools import register_compose_tools
 from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.inventory_tools import register_inventory_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
@@ -49,7 +50,10 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         "pheasant",
         instructions=(
             "Use pheasant to sync configured knowledge sources, search indexed context, "
-            "inspect graph relationships, and record or recall agent memory."
+            "inspect graph relationships, and record or recall agent memory. To offload "
+            "building a new artifact (a configuration, script or set of files) assembled "
+            "from many documented parts, call compose_artifact and follow its job with "
+            "get_job: the region plans, retrieves, writes and checks it against the sources."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`
         # (1.x reported the SDK's own version, which was never pheasant's).
@@ -642,6 +646,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     # the registration is identical to the ones above it.
     register_readiness_tools(mcp, tools, anticipated)
     register_assistant_tools(mcp, tools, anticipated, anticipated_resource)
+    register_compose_tools(mcp, tools, anticipated)
 
     @mcp.tool()
     @anticipated

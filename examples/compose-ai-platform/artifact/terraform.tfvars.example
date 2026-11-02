@@ -1,0 +1,74 @@
+platform_subscription_id         = "<your-platform-subscription-id>"
+subscription_name                = "<your-subscription-name>"
+subscription_alias               = "<your-subscription-alias>"
+management_group_id              = "<your-management-group-resource-id>"
+location                         = "<your-azure-location>"
+resource_group_name              = "<your-platform-resource-group>"
+
+virtual_network_name             = "<your-virtual-network>"
+virtual_network_address_space    = ["<your-vnet-cidr>"]
+workload_subnet_name             = "<your-workload-subnet>"
+workload_subnet_prefixes         = ["<your-workload-subnet-cidr>"]
+private_endpoint_subnet_name     = "<your-private-endpoint-subnet>"
+private_endpoint_subnet_prefixes = ["<your-private-endpoint-subnet-cidr>"]
+
+foundry_private_dns_zone_name    = "<your-foundry-private-dns-zone>"
+key_vault_private_dns_zone_name  = "<your-key-vault-private-dns-zone>"
+storage_private_dns_zone_name    = "<your-storage-private-dns-zone>"
+foundry_dns_link_name            = "<your-foundry-dns-link>"
+key_vault_dns_link_name          = "<your-key-vault-dns-link>"
+storage_dns_link_name            = "<your-storage-dns-link>"
+
+foundry_account_name             = "<your-foundry-account>"
+foundry_custom_subdomain_name    = "<your-foundry-subdomain>"
+foundry_project_name             = "<your-foundry-project>"
+foundry_project_display_name     = "<your-foundry-project-display-name>"
+identity_name                    = "<your-platform-identity>"
+tenant_id                        = "<your-tenant-id>"
+key_vault_name                   = "<your-key-vault>"
+storage_account_name             = "<your-storage-account>"
+
+foundry_private_endpoint_name    = "<your-foundry-private-endpoint>"
+key_vault_private_endpoint_name  = "<your-key-vault-private-endpoint>"
+storage_private_endpoint_name   = "<your-storage-private-endpoint>"
+foundry_private_connection_name  = "<your-foundry-private-connection>"
+key_vault_private_connection_name = "<your-key-vault-private-connection>"
+storage_private_connection_name  = "<your-storage-private-connection>"
+foundry_subresource_name         = "account"
+key_vault_subresource_name       = "<your-key-vault-subresource-name>"
+storage_subresource_name         = "<your-storage-subresource-name>"
+
+foundry_role_definition_name     = "<your-foundry-account-role>"
+key_vault_role_definition_name   = "<your-key-vault-role>"
+storage_role_definition_name     = "<your-storage-role>"
+
+gpt_deployment_name              = "gpt-6-luna"
+gpt_model_version                = "<your-gpt-model-version>"
+embedding_deployment_name        = "text-embedding-3-small"
+embedding_model_version          = "<your-embedding-model-version>"
+
+log_analytics_workspace_name     = "<your-log-analytics-workspace>"
+application_insights_name        = "<your-application-insights>"
+foundry_log_category             = "<your-foundry-log-category>"
+key_vault_log_category           = "<your-key-vault-log-category>"
+storage_log_category             = "<your-storage-log-category>"
+apim_log_category                = "<your-apim-log-category>"
+
+api_management_name              = "<your-api-management-instance>"
+publisher_name                   = "<your-publisher-name>"
+publisher_email                  = "<your-publisher-email>"
+api_name                         = "<your-api-name>"
+api_revision                     = "1"
+api_path                         = "<your-api-path>"
+openapi_definition               = "<paste-your-valid-openapi-document>"
+
+secondary_backend_url            = "<your-secondary-backend-url>"
+primary_backend_priority         = 1
+secondary_backend_priority       = 2
+primary_backend_weight           = 100
+secondary_backend_weight         = 100
+backend_pool_name                = "<your-backend-pool-name>"
+
+tokens_per_minute                = 500
+metric_namespace                 = "<your-llm-metric-namespace>"
+foundry_connection_name          = "<your-foundry-apim-connection>"

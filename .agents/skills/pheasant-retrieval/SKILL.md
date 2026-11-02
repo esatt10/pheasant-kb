@@ -5,6 +5,9 @@ description: Query a Pheasant knowledge base with raw hybrid search and walk its
 
 # Retrieve from Pheasant, judge it yourself
 
+(To have the region *build* something new from what its sources document, a
+configuration or a set of files, use the `pheasant-compose` skill instead.)
+
 Pheasant exposes two ways to get knowledge out of a region:
 
 - **`ask_knowledge_base`**: the region plans, retrieves, grades and writes a

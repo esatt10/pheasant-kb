@@ -66,6 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
+from pheasant.assistant.markup import outside_code
 from pheasant.assistant.providers import OPENAI_WIRE, ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import (
@@ -82,8 +83,12 @@ from pheasant.assistant.workflows.agentic_prompts import (
 from pheasant.assistant.workflows.compose import (
     COMPOSE_DEFAULTS,
     PLANNER_COMPOSE_RULE,
+    REVISE_RULE,
     document_sizes,
+    documents_in_scope,
+    own_pages_first,
     review_artifact,
+    revision_draft,
     synthesis_window,
 )
 
@@ -396,11 +401,13 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
     planned_queries = max(1, int(options.get("planned_queries") or 3))
     if llm is not None:
         planner_system = PLANNER_SYSTEM.replace("{planned_queries}", str(planned_queries))
+        corpus = capabilities.as_prompt_context()
         if intent == "compose":
             planner_system += PLANNER_COMPOSE_RULE
+            corpus += documents_in_scope(retriever)
         raw = llm.try_complete(
             planner_system,
-            f"{capabilities.as_prompt_context()}\n\n"
+            f"{corpus}\n\n"
             f"{conversation.history_block(history)}"
             f"First reading of the question: {intent}, {depth} answer\n"
             f"Question: {question}"
@@ -982,6 +989,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     intent = str(state.get("intent") or "knowledge")
     depth = str(state.get("depth") or "short")
     ranked = state.get("passages", [])
+    if intent == "compose":
+        ranked = own_pages_first(ranked, [state["question"], *state.get("searched_queries", [])])
     passages = synthesis_window(ranked, options, document_sizes(retriever, ranked, options))
     draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
     passages, llm = draft.passages, draft.llm
@@ -1046,9 +1055,12 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                 history_text=history_text,
                 figures=figures,
             )
+            # A revision edits the artifact it revises: the draft follows the
+            # passages, and the review below edits against this answer, not it.
+            earlier = revision_draft(options) if whole else ""
             answer = llm.complete(
-                system,
-                prompt,
+                system + (REVISE_RULE if earlier else ""),
+                prompt + (f"\n\nDRAFT TO CORRECT:\n{earlier}" if earlier else ""),
                 max_output_tokens=options.get("max_output_tokens"),
                 **({"on_delta": draft.on_delta} if draft.on_delta else {}),
             )
@@ -1121,8 +1133,11 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
         dangling.add(index)
         return ""
 
-    cleaned = re.sub(r"\[(\d{1,2})\]", replace, answer)
-    cleaned = re.sub(r" +([.,;:])", r"\1", cleaned)
+    # Prose only: inside code ``[0]`` is an index, not a marker.
+    cleaned = outside_code(
+        answer,
+        lambda prose: re.sub(r" +([.,;:])", r"\1", re.sub(r"\[(\d{1,2})\]", replace, prose)),
+    )
     mark_used_citations(cleaned, citations)
     return {
         "answer": cleaned,

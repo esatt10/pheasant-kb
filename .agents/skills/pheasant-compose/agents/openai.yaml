@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pheasant Compose"
+  short_description: "Offload building a configuration, script or set of files from documented parts to a Pheasant region"
+  default_prompt: "Use $pheasant-compose to have a Pheasant region build a new artifact from what its sources document, follow the job, and validate the result."

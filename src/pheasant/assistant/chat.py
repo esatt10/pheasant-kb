@@ -127,11 +127,16 @@ Placeholders live ONLY in those variable defaults and in example-value files; \
 every component refers to the variable, never to a literal placeholder.
 - Wire the parts to each other by reference, with one consistent naming \
 scheme, so the artifact is internally consistent: everything referenced is \
-declared, nothing is declared twice.
+declared, nothing is declared twice. Refer to another component's attributes \
+exactly as the passages' own examples refer to them, including any index \
+they use.
 - Prefer the argument names of the current documented form over a \
 deprecated one when the passages show both. When passages disagree about a \
 component, its OWN reference page wins over an example inside another \
 component's page, and every argument that page marks Required is set.
+- Where the passages document a field that selects what kind of thing a \
+component is (a type, kind or mode), set it explicitly to the value for the \
+kind the question asks for, rather than leaving it to a default.
 - Never copy an exact version pin out of an example — examples lag the \
 documentation they sit in. State the documented minimum as a lower bound \
 (e.g. ">= 5.0") so the current release, which the passages describe, satisfies it.
