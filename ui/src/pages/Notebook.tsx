@@ -144,9 +144,17 @@ export function Notebook() {
     [dispatch, nodeById],
   );
 
+  // Narrow windows fold every tile into the middle column (below); a phone
+  // shows one of them at a time, chosen by a tab strip. Stacked on a phone,
+  // two open tiles left the chat its header and nothing else.
+  const narrow = useMediaQuery("(max-width: 1180px)");
+  const compact = useMediaQuery("(max-width: 860px)");
+  const [mobileTab, setMobileTab] = useState<TileId>("chat");
+
   /** Put text in the composer (unfolding the chat if it was folded) and focus it. */
   const askInChat = useCallback(
     (text: string) => {
+      setMobileTab("chat");
       if (state.chatCollapsed) dispatch({ type: "toggle-chat-collapsed" });
       dispatch({ type: "set-draft", text: `${text} ` });
       window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 0);
@@ -156,6 +164,7 @@ export function Notebook() {
 
   const showInGraph = useCallback(
     (nodeId: string) => {
+      setMobileTab("graph");
       if (state.panelCollapsed) dispatch({ type: "toggle-panel" });
       dispatch({ type: "center-node", nodeId });
       dispatch({ type: "open-tab", tab: "graph" });
@@ -168,28 +177,36 @@ export function Notebook() {
 
   const hosts = useTileHosts();
   const [dragging, setDragging] = useState<TileId | null>(null);
-  // Narrow windows fold every tile into the middle column rather than hiding
-  // it wherever it was dragged, and drop the graph below 860px (the Graph page
-  // is one tap away in the menu). The sources rail heads the stack, folded
-  // until asked for: it used to be dropped outright below 1180px, so a phone
-  // or tablet could not scope a question to a source or add one from here.
-  const narrow = useMediaQuery("(max-width: 1180px)");
-  const compact = useMediaQuery("(max-width: 860px)");
-  // Its own fold state, so opening the rail on a phone does not change the
-  // desktop rail's remembered state, and a phone starts with it out of the way.
+  // A tablet stacks every tile in the middle column rather than hiding it
+  // wherever it was dragged, and keeps the graph on the right. The sources
+  // rail heads the stack, folded until asked for: it used to be dropped
+  // outright below 1180px, so nothing narrower could scope a question to a
+  // source or add one. Its fold state is its own, so opening it there does
+  // not change the desktop rail's remembered state.
   const [narrowRailOpen, setNarrowRailOpen] = useState(false);
   const layout = useMemo<TileLayout>(() => {
+    if (compact) return { left: [], inner: [], center: [mobileTab], right: [] };
     if (!narrow) return state.tiles;
     const left = state.tiles.left.filter((tile) => tile !== "sources");
-    const right = compact ? state.tiles.right.filter((tile) => tile !== "graph") : [];
     return {
       left: [],
       inner: [],
-      center: ["sources", ...left, ...state.tiles.inner, ...state.tiles.center, ...right],
-      right: compact ? [] : state.tiles.right,
+      center: ["sources", ...left, ...state.tiles.inner, ...state.tiles.center],
+      right: state.tiles.right,
     };
-  }, [state.tiles, narrow, compact]);
-  const railCollapsed = narrow ? !narrowRailOpen : state.railCollapsed;
+  }, [state.tiles, narrow, compact, mobileTab]);
+  // On a phone the one tile shown is never folded: its tab is the fold.
+  const railCollapsed = compact ? false : narrow ? !narrowRailOpen : state.railCollapsed;
+
+  // Opening the taxonomy view anywhere (a citation, "browse" on a source, the
+  // chat's Taxonomy button) shows it on a phone; closing it goes back to chat.
+  const browserKey = `${browserOpen}|${state.browser.source}|${state.browser.path}|${state.browser.file?.path ?? ""}`;
+  const lastBrowserKey = useRef(browserKey);
+  useEffect(() => {
+    if (lastBrowserKey.current === browserKey) return;
+    lastBrowserKey.current = browserKey;
+    setMobileTab((tab) => (browserOpen ? "taxonomy" : tab === "taxonomy" ? "chat" : tab));
+  }, [browserKey, browserOpen]);
 
   if (overview.isSuccess && !hasContent) {
     return (
@@ -217,7 +234,7 @@ export function Notebook() {
       id: "taxonomy",
       title: "Taxonomy",
       visible: browserOpen,
-      collapsed: state.browserCollapsed,
+      collapsed: compact ? false : state.browserCollapsed,
       onToggle: () => dispatch({ type: "toggle-browser-collapsed" }),
       host: hosts.taxonomy,
       subtitle: browserLocation(state.browser),
@@ -237,7 +254,7 @@ export function Notebook() {
       id: "chat",
       title: "Chat",
       visible: true,
-      collapsed: state.chatCollapsed,
+      collapsed: compact ? false : state.chatCollapsed,
       onToggle: () => dispatch({ type: "toggle-chat-collapsed" }),
       host: hosts.chat,
     },
@@ -245,7 +262,7 @@ export function Notebook() {
       id: "graph",
       title: "Graph",
       visible: true,
-      collapsed: state.panelCollapsed,
+      collapsed: compact ? false : state.panelCollapsed,
       onToggle: () => dispatch({ type: "toggle-panel" }),
       host: hosts.graph,
       subtitle: "Graph · Facts · Node",
@@ -302,7 +319,7 @@ export function Notebook() {
       }}
     >
     <div
-      className={`notebook${dragging ? " notebook--dragging" : ""}`}
+      className={`notebook${dragging ? " notebook--dragging" : ""}${compact ? " notebook--tabs" : ""}`}
       ref={layoutRef}
       style={
         {
@@ -318,6 +335,38 @@ export function Notebook() {
         } as CSSProperties
       }
     >
+      {compact ? (
+        <nav className="nb-tabs" role="tablist" aria-label="Notebook sections">
+          {(
+            [
+              ["chat", "Chat"],
+              ["sources", "Sources"],
+              ["taxonomy", "Taxonomy"],
+              ["graph", "Graph"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={mobileTab === id}
+              className={`nb-tabs__tab${mobileTab === id ? " nb-tabs__tab--active" : ""}`}
+              onClick={() => {
+                // The taxonomy tab is the view itself; opening it is the tap.
+                if (id === "taxonomy" && !browserOpen) {
+                  dispatch({ type: "open-browser", source: state.sourceFilter ?? null, path: "" });
+                }
+                setMobileTab(id);
+              }}
+            >
+              {label}
+              {id === "sources" && (state.sourceFilter || state.alsoSources.length) ? (
+                <span className="nb-tabs__dot" aria-label="(filtered)" />
+              ) : null}
+            </button>
+          ))}
+        </nav>
+      ) : null}
       {columnView("left")}
       {sideOpen("left") ? (
         <PaneResizer
@@ -378,7 +427,8 @@ export function Notebook() {
                     // Stacked above the chat, an open rail is what the chat
                     // gave its height to: picking a source hands it back (the
                     // folded header still names the selection).
-                    if (narrow) setNarrowRailOpen(false);
+                    if (compact) setMobileTab("chat");
+                    else if (narrow) setNarrowRailOpen(false);
                   }}
                   alsoSelected={state.alsoSources}
                   onToggle={(source) => dispatch({ type: "toggle-source", source })}
@@ -392,7 +442,7 @@ export function Notebook() {
           )
         : null}
 
-      {browserOpen && !state.browserCollapsed && placed.has("taxonomy")
+      {browserOpen && !specs.taxonomy.collapsed && placed.has("taxonomy")
         ? createPortal(
             <TileScope spec={specs.taxonomy}>
               <Suspense
@@ -416,7 +466,8 @@ export function Notebook() {
               <TileGrip />
               <span className="pane__title">Chat</span>
               <div className="pane__actions">
-                {browserOpen ? null : (
+                {/* On a phone the Taxonomy tab is this button. */}
+                {browserOpen || compact ? null : (
                   <button
                     className="btn btn--small"
                     onClick={() => dispatch({ type: "open-browser", source: state.sourceFilter, path: "" })}
@@ -431,7 +482,7 @@ export function Notebook() {
                     onClick={() => dispatch({ type: "new-conversation" })}
                     title="Clear this thread and start fresh"
                   >
-                    New conversation
+                    {compact ? "New chat" : "New conversation"}
                   </button>
                 ) : null}
                 <button
@@ -446,7 +497,8 @@ export function Notebook() {
                   onClick={() => setShowModelDialog(true)}
                   title="Connect an LLM to synthesize answers"
                 >
-                  {status.data?.ready ? "Model connected" : "Connect model"}
+                  {/* Short on a phone, where three of these share 375px. */}
+                  {status.data?.ready ? (compact ? "Model ✓" : "Model connected") : compact ? "Model" : "Connect model"}
                 </button>
                 <TileFold />
               </div>
@@ -465,7 +517,7 @@ export function Notebook() {
         hosts.chat,
       )}
 
-      {!state.panelCollapsed && placed.has("graph")
+      {!specs.graph.collapsed && placed.has("graph")
         ? createPortal(
             <TileScope spec={specs.graph}>
       <aside className="pane pane--panel">

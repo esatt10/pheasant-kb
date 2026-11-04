@@ -114,6 +114,20 @@ for (const route of ['/', '/graph', '/memory', '/evaluation', '/tuning', '/sourc
 await phone.getByRole('button', { name: 'Open menu' }).click();
 const menuLinks = await phone.locator('.topbar__menu--open .navlink').count();
 
+// The Notebook shows one tile at a time on a phone. Each tab has to render
+// its tile into a host that is in the page -- the graph's Cytoscape, given a
+// detached one, is what blanked this page before -- and still fit the width.
+await phone.goto(`${base}/`, { waitUntil: 'networkidle' });
+const tabs = ['Chat', 'Sources', 'Taxonomy', 'Graph'];
+const tabFailures = [];
+for (const name of tabs) {
+  await phone.getByRole('tab', { name: new RegExp(`^${name}`) }).click();
+  await phone.waitForTimeout(1200);
+  const shown = await phone.locator('.tile-col--center .tile__host').count();
+  const width = await phone.evaluate(() => document.documentElement.scrollWidth);
+  if (shown !== 1 || width > 390) tabFailures.push(`${name}: ${shown} tiles shown, ${width}px wide`);
+}
+
 await browser.close();
 server.kill();
 
@@ -123,6 +137,10 @@ if (phoneErrors.length || composer === 0) {
 }
 if (tooWide.length) {
   console.error('pages wider than a 390px phone (the browser zooms them out):', tooWide);
+  process.exit(1);
+}
+if (tabFailures.length) {
+  console.error('the Notebook tabs at phone width:', tabFailures, phoneErrors);
   process.exit(1);
 }
 if (menuLinks === 0) {

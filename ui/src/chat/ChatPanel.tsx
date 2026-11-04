@@ -444,8 +444,12 @@ export function ChatPanel({
           </label>
           {extractive ? (
             <>
-              <span>No model connected — answers are extracted passages, not synthesis.</span>
-              <button className="btn btn--small" onClick={onConnectModel}>
+              <span className="composer__note">No model connected — answers are extracted passages, not synthesis.</span>
+              <button
+                className="btn btn--small"
+                onClick={onConnectModel}
+                title="No model connected — answers are extracted passages, not synthesis."
+              >
                 Connect a model
               </button>
             </>

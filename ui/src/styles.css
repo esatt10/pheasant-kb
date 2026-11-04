@@ -5507,3 +5507,283 @@ select.text-input {
   color: var(--text-soft);
   text-decoration: line-through;
 }
+
+/* ---------------------------------------------------- the Notebook on a phone
+
+   One tile at a time, picked from a tab strip (`pages/Notebook.tsx`), each
+   edge to edge. Stacked, two open tiles left the chat its header and nothing
+   else, and a tile's border, radius and gutter cost ~40px of a 390px screen
+   for a frame around the one thing on it. Dragging and folding are desktop
+   affordances (there is nowhere to drag to, and the tab is the fold), so
+   their grips go too. Everything here is scoped to `.notebook--tabs`, which
+   only a phone-width window renders. */
+.nb-tabs {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .notebook--tabs {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "tabs" "center";
+    padding: 0;
+    gap: 0;
+  }
+
+  .notebook--tabs > .tile-col:not(.tile-col--center),
+  .notebook--tabs > .resizer,
+  .notebook--tabs > .drag-handle {
+    display: none;
+  }
+
+  .nb-tabs {
+    grid-area: tabs;
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nb-tabs__tab {
+    flex: 1 1 0;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 7px 4px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: none;
+    color: var(--text-soft);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .nb-tabs__tab--active {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+
+  .nb-tabs__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: none;
+  }
+
+  .notebook--tabs .tile-col {
+    gap: 0;
+    border-radius: 0;
+  }
+
+  .notebook--tabs .pane {
+    border: none;
+    border-radius: 0;
+  }
+
+  .notebook--tabs .tile-grip,
+  .notebook--tabs .tile-fold {
+    display: none;
+  }
+
+  /* The tab names the tile, so its header keeps only what it can do. */
+  .notebook--tabs .tile__host > .pane > .pane__header {
+    padding: 7px 12px;
+    gap: 6px;
+    min-height: 44px;
+  }
+
+  .notebook--tabs .tile__host > .pane > .pane__header > .pane__title {
+    display: none;
+  }
+
+  .notebook--tabs .pane__header .btn--small {
+    padding: 4px 10px;
+    font-size: 12.5px;
+  }
+
+  /* Chat: the thread gets the height; the composer is two short rows. */
+  .notebook--tabs .chat__scroll {
+    padding: 14px 14px 8px;
+    gap: 16px;
+  }
+
+  .notebook--tabs .chat__composer {
+    padding: 8px 10px 10px;
+  }
+
+  .notebook--tabs .composer {
+    padding: 4px 4px 4px 12px;
+  }
+
+  .notebook--tabs .composer textarea {
+    padding: 6px 0;
+  }
+
+  /* A placeholder longer than the box wrapped under the one row the box has. */
+  .notebook--tabs .composer textarea:placeholder-shown {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .notebook--tabs .composer__send {
+    width: 32px;
+    height: 32px;
+  }
+
+  .notebook--tabs .composer__hint {
+    gap: 6px 8px;
+    margin-top: 6px;
+  }
+
+  .notebook--tabs .composer__depth {
+    padding: 2px 4px;
+    line-height: 1.2;
+  }
+
+  /* The chat header already says "Connect model"; on a phone the composer's
+     copy of it (and its sentence) is a second row for the same thing. */
+  .notebook--tabs .composer__note,
+  .notebook--tabs .composer__note + .btn {
+    display: none;
+  }
+
+  /* 16px so iOS does not zoom on it, shaped like the pills beside it so the
+     larger text does not read as a different kind of control. */
+  .notebook--tabs .composer__depth {
+    height: 28px;
+    padding: 0 8px;
+    border-color: var(--border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--bg);
+  }
+
+  /* Sources: one tight card per source. The filesystem path is the server's
+     and says nothing on a phone that the name does not. */
+  .notebook--tabs .source-list {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+
+  .notebook--tabs .source-item {
+    padding: 9px 11px;
+    gap: 3px;
+  }
+
+  .notebook--tabs .source-item__path {
+    display: none;
+  }
+
+  /* Name and status on the left, its three actions on the right: one row
+     per source, where it was three. */
+  .notebook--tabs .source-item:has(> .source-item__actions) {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .notebook--tabs .source-item__select {
+    flex: 1 1 auto;
+    gap: 2px;
+  }
+
+  .notebook--tabs .source-item__meta .pill {
+    display: none;
+  }
+
+  .notebook--tabs .source-item__actions {
+    flex: none;
+    margin-top: 0;
+    gap: 0;
+  }
+
+  .notebook--tabs .source-item__actions .btn--small {
+    padding: 6px 7px;
+    font-size: 12px;
+  }
+
+  /* Taxonomy: the folder list, or the open file -- never a sliver of each.
+     The file's own close button goes back to the list. */
+  .notebook--tabs .browser__body {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .notebook--tabs .browser__body:not(.browser__body--file) > .browser__viewer,
+  .notebook--tabs .browser__body--file > .browser__list {
+    display: none;
+  }
+
+  .notebook--tabs .browser__list {
+    border-bottom: none;
+  }
+
+  .notebook--tabs .browser__rows {
+    padding: 4px 6px;
+  }
+
+  .notebook--tabs .viewer__header {
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  /* Name and close on the first row; the scope toggles under it. */
+  .notebook--tabs .viewer__title-row {
+    gap: 6px;
+  }
+
+  .notebook--tabs .viewer__title {
+    flex: 1 1 calc(100% - 80px);
+  }
+
+  .notebook--tabs .viewer__title-row > .btn--icon {
+    order: 1;
+  }
+
+  .notebook--tabs .viewer__title-row > .scope-toggle {
+    order: 2;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11.5px;
+  }
+
+  /* The kind of file is the icon; its language pill and size stay. */
+  .notebook--tabs .viewer__meta > .pill:first-child {
+    display: none;
+  }
+
+  .notebook--tabs .viewer__meta {
+    font-size: 11px;
+    gap: 4px 6px;
+  }
+
+  .notebook--tabs .viewer__toolbar {
+    gap: 4px;
+  }
+
+  .notebook--tabs .viewer__toolbar .btn--small {
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+
+  .notebook--tabs .viewer__find {
+    flex: 1 1 80px;
+    min-width: 0;
+  }
+
+  .notebook--tabs .viewer__find .text-input {
+    width: 100%;
+    min-width: 0;
+    padding: 3px 8px;
+  }
+
+  .notebook--tabs .viewer__spacer {
+    display: none;
+  }
+}
