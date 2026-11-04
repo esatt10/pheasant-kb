@@ -64,6 +64,10 @@ on:
       - "ui/src/tuning/**"
       - "ui/src/api/types.ts"
       - "ui/src/api/client.ts"
+      # ci-render.mjs also renders the Notebook at phone width.
+      - "ui/src/pages/Notebook.tsx"
+      - "ui/src/components/Tiles.tsx"
+      - "ui/ci-render.mjs"
       - ".github/workflows/tuning.yml"
   push:
     branches:
