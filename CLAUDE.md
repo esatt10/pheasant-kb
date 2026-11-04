@@ -1173,13 +1173,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   runs no scripts — which is also what the extractor saw. A page indexed
   before this has none until it changes or a `full` sync re-reads it;
   `tests/test_web_page_snapshot.py`. The web
-  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) has its own column
-  between the sources and the chat by default (above the chat in a narrow
-  window). Every Notebook section is a tile
-  (`ui/src/components/Tiles.tsx`): dragged by its grip (or arrow keys) to any
-  column, folded to its header anywhere, and portalled so a move never
-  remounts it (a streaming answer keeps streaming); placement is deliberately
-  not persisted, so a reload restores the default. A cited passage opened in
+  UI's taxonomy view (`ui/src/browser/`, lazy-loaded) is a tab of the
+  right-hand panel by default, beside Graph, Facts and Node. Every Notebook
+  section is a tile (`ui/src/components/Tiles.tsx`): dragged by its grip (or
+  arrow keys) to any column, folded to its header anywhere, and portalled so
+  a move never remounts it (a streaming answer keeps streaming). The panel
+  is a tile holding a tab group: a tab dragged off its bar (or popped out
+  with ⧉) becomes a tile of its own, and a tile dropped on the bar (or ⇲)
+  docks again -- `state/session.tsx` keeps a tab in `docked` or in a column,
+  never both. The taxonomy view sizes itself by container query (under
+  640px: the list or the open file). Below 860px the Notebook is one tile at
+  a time behind a tab strip (Chat, Sources, Taxonomy, Graph). Placement is
+  deliberately not persisted, so a reload restores the default. A cited passage opened in
   the viewer is highlighted in every rendering with text, not only the source
   view (`browser/passage.ts`: letters-and-digits matching with anchor voting,
   drawn with the CSS Custom Highlight API so no view's DOM is rewritten) — a

@@ -156,19 +156,29 @@ export function GraphCanvas({
   // size without a window resize, and Cytoscape only measures on the latter:
   // until told, it keeps drawing into the old box and clicks land beside the
   // nodes they aim at. A canvas that first rendered at zero size (a hidden
-  // tab, a collapsed pane) is also fitted once it has a real size.
+  // tab, a collapsed pane) is also fitted once it has a real size. Otherwise
+  // the view keeps its centre: Cytoscape anchors the top-left corner, so a
+  // tile that grew (a tile beside it moved away) drew the graph in its old,
+  // smaller box. The zoom the reader chose is left alone.
   const shellRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const shell = shellRef.current;
     if (!shell || typeof ResizeObserver === "undefined") return;
-    let hadSize = shell.clientWidth > 0 && shell.clientHeight > 0;
+    let width = shell.clientWidth;
+    let height = shell.clientHeight;
     const observer = new ResizeObserver(() => {
       const cy = cyRef.current;
       if (!cy) return;
       cy.resize();
-      const hasSize = shell.clientWidth > 0 && shell.clientHeight > 0;
-      if (hasSize && !hadSize) cy.fit(undefined, 30);
-      hadSize = hasSize;
+      const nextWidth = shell.clientWidth;
+      const nextHeight = shell.clientHeight;
+      const hadSize = width > 0 && height > 0;
+      if (nextWidth > 0 && nextHeight > 0) {
+        if (!hadSize) cy.fit(undefined, 30);
+        else cy.panBy({ x: (nextWidth - width) / 2, y: (nextHeight - height) / 2 });
+      }
+      width = nextWidth;
+      height = nextHeight;
     });
     observer.observe(shell);
     return () => observer.disconnect();

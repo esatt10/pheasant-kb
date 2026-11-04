@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, getApiToken, onApiAuthChanged, onApiAuthRequired } from "../api/client";
 import { ApiTokenDialog } from "./ApiTokenDialog";
@@ -14,6 +14,32 @@ export function TopBar() {
   const [showApiAuth, setShowApiAuth] = useState(false);
   const [apiToken, setApiTokenState] = useState(getApiToken);
   const queryClient = useQueryClient();
+  // Below 860px the nav and the actions do not fit beside the brand -- seven
+  // links and three buttons laid the page out 1,075px wide on a 390px phone,
+  // and the browser zoomed the whole app out to fit. They fold into a menu
+  // there (CSS decides when; on a wide window the wrapper is `display:
+  // contents` and this state does nothing).
+  const [menuOpen, setMenuOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const location = useLocation();
+
+  useEffect(() => setMenuOpen(false), [location.pathname]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!headerRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     const removeRequiredListener = onApiAuthRequired(() => setShowApiAuth(true));
@@ -44,7 +70,7 @@ export function TopBar() {
   // and the file currently being read, so the badge was a strictly worse
   // duplicate of it.
   return (
-    <header className="topbar">
+    <header className="topbar" ref={headerRef}>
       <div className="topbar__brand">
         <span className="topbar__logo" aria-hidden>
           <PheasantMark />
@@ -53,6 +79,18 @@ export function TopBar() {
         {overview.data ? <span className="topbar__kb">{overview.data.name}</span> : null}
       </div>
 
+      <button
+        type="button"
+        className="btn btn--icon topbar__menu-btn"
+        aria-label={menuOpen ? "Close menu" : "Open menu"}
+        aria-expanded={menuOpen}
+        aria-controls="topbar-menu"
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        {menuOpen ? "✕" : "☰"}
+      </button>
+
+      <div id="topbar-menu" className={`topbar__menu${menuOpen ? " topbar__menu--open" : ""}`}>
       <nav className="topbar__nav">
         <NavLink to="/" end className={({ isActive }) => (isActive ? "navlink active" : "navlink")}>
           Notebook
@@ -94,10 +132,10 @@ export function TopBar() {
 
       <div className="topbar__right">
         <HealthBadge />
-        <button className="btn btn--small" onClick={() => setShowApiAuth(true)}>
+        <button className="btn btn--small" onClick={() => { setMenuOpen(false); setShowApiAuth(true); }}>
           {apiToken ? "API connected" : "Connect API"}
         </button>
-        <button className="btn btn--small" onClick={() => setShowMcp(true)}>
+        <button className="btn btn--small" onClick={() => { setMenuOpen(false); setShowMcp(true); }}>
           Connect agent
         </button>
         <button
@@ -108,6 +146,7 @@ export function TopBar() {
         >
           {theme === "dark" ? "☀" : "☾"}
         </button>
+      </div>
       </div>
 
       {showMcp ? <McpDialog onClose={() => setShowMcp(false)} /> : null}

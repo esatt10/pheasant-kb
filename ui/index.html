@@ -3,6 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // iOS Safari zooms in on any text field under 16px when it takes focus
+      // and stays zoomed. maximum-scale=1 stops that, and iOS still lets the
+      // reader pinch-zoom, so the fields can be as small as the text around
+      // them. iOS only: elsewhere maximum-scale would also block pinch-zoom.
+      (function () {
+        var ua = navigator.userAgent;
+        var ios = /iPad|iPhone|iPod/.test(ua) || (ua.indexOf("Macintosh") > -1 && navigator.maxTouchPoints > 1);
+        if (!ios) return;
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (meta) meta.setAttribute("content", meta.getAttribute("content") + ", maximum-scale=1");
+      })();
+    </script>
     <link rel="icon" type="image/png" href="/pheasant.png" />
     <meta name="color-scheme" content="light dark" />
     <title>pheasant</title>
