@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
@@ -101,9 +101,26 @@ export function SourcesPage() {
     mutationFn: (name: string) => api.disableSource(name),
     onSuccess: invalidate,
   });
+  // A role-split api replica queues the removal for the indexer, and a
+  // failure used to vanish; both are said here, where the button was.
   const remove = useMutation({
     mutationFn: (name: string) => api.removeSource(name),
-    onSuccess: invalidate,
+    onSuccess: (data, name) => {
+      const tasks = (data as { queued_tasks?: string[] }).queued_tasks ?? [];
+      setNotice(
+        data.status === "removal_queued"
+          ? {
+              kind: "info",
+              text: `${name}: removal queued for the indexer. The source is disabled now and leaves the list once the indexer has removed it.`,
+              awaiting: tasks,
+            }
+          : null,
+      );
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["index-queue"] });
+    },
+    onError: (error, name) =>
+      setNotice({ kind: "error", text: `${name}: ${(error as Error).message}` }),
   });
   const promote = useMutation({
     mutationFn: (name: string) => api.promoteSource(name, false),
@@ -146,8 +163,10 @@ export function SourcesPage() {
         <div className="banner banner--error">{(sources.error as Error).message}</div>
       )}
 
-      <div className="table-scroll">
-        <table className="data-table">
+      {/* Below 860px the rows become cards (`data-table--cards`): a phone
+          cannot reach an actions column 1,000px to the right. */}
+      <div className="table-scroll table-scroll--cards">
+        <table className="data-table data-table--cards">
         <thead>
           <tr>
             <th>Name</th>
@@ -161,19 +180,19 @@ export function SourcesPage() {
           {sources.data?.map((source: SourceRecord) => (
             <Fragment key={source.id}>
             <tr className={source.enabled ? "" : "row--disabled"}>
-              <td>
+              <td className="source-name-cell">
                 {source.name}
                 {source.uploaded_archives?.length ? (
                   <div className="muted small">ZIP: {source.uploaded_archives.join(", ")}</div>
                 ) : null}
               </td>
-              <td>
+              <td data-label="Type">
                 <span className="pill">{source.type}</span>
               </td>
-              <td className="path-cell" title={source.path}>
+              <td className="path-cell" data-label="Path" title={source.path}>
                 {source.path}
               </td>
-              <td className="muted small">
+              <td className="muted small" data-label="Status">
                 {source.syncing ? (
                   <span
                     className={`thinking${source.progress?.stalled ? " thinking--stalled" : ""}`}
@@ -243,12 +262,11 @@ export function SourcesPage() {
                 <button className="btn btn--small" onClick={() => disable.mutate(source.name)}>
                   disable
                 </button>
-                <button
-                  className="btn btn--small btn--danger"
-                  onClick={() => remove.mutate(source.name)}
-                >
-                  remove
-                </button>
+                <RemoveSourceButton
+                  name={source.name}
+                  pending={remove.isPending && remove.variables === source.name}
+                  onRemove={() => remove.mutate(source.name)}
+                />
               </td>
             </tr>
             {/* The whole point of Phase 35.1: a first index of a large source
@@ -377,6 +395,47 @@ function SyncControl({
         {disabled ? "syncing…" : "sync"}
       </button>
     </span>
+  );
+}
+
+/**
+ * Removing a source deletes its index, so it takes two taps: the first arms
+ * the button, the second removes, and an armed button disarms itself after
+ * four seconds (the document Remove button's rule, `browser/RemoveButton.tsx`).
+ * On a phone a stray tap is the likely way to press it.
+ */
+function RemoveSourceButton({
+  name,
+  pending,
+  onRemove,
+}: {
+  name: string;
+  pending: boolean;
+  onRemove: () => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const timer = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [armed]);
+  return (
+    <button
+      className={`btn btn--small btn--danger${armed ? " btn--armed" : ""}`}
+      disabled={pending}
+      onClick={() => {
+        if (!armed) return setArmed(true);
+        setArmed(false);
+        onRemove();
+      }}
+      title={
+        armed
+          ? `Tap again to remove ${name} and everything indexed from it`
+          : `Remove ${name}: its documents, vectors and graph leave the index`
+      }
+    >
+      {pending ? "removing…" : armed ? "confirm remove" : "remove"}
+    </button>
   );
 }
 
