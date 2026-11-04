@@ -20,10 +20,14 @@ import { colorForNode } from "../graph/graphStyles";
 import { useSessionId } from "../hooks/useSessionId";
 import {
   TileColumnView,
+  TileDock,
   TileDragProvider,
   TileFold,
   TileGrip,
   TileScope,
+  TileSlot,
+  isTileDrag,
+  tileDragProps,
   useMediaQuery,
   useTileHosts,
 } from "../components/Tiles";
@@ -34,9 +38,16 @@ import {
   DEFAULT_INNER_WIDTH,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_RAIL_WIDTH,
+  PANEL_TAB_LABELS,
+  isPanelTab,
   useSession,
 } from "../state/session";
-import type { BrowserState, TileColumn, TileId, TileLayout } from "../state/session";
+import type { BrowserState, PanelTab, TileColumn, TileId, TileLayout } from "../state/session";
+
+/** A phone's Notebook sections; "panel" is the tab group, shown as Graph. */
+type MobileTab = "chat" | "sources" | "taxonomy" | "panel";
+/** The panel's tabs on a phone, where the taxonomy view has a section of its own. */
+const PHONE_PANEL_TABS: PanelTab[] = ["graph", "facts", "node"];
 
 /** Height of the first of two unfolded tiles stacked in a side column, before it is dragged. */
 const DEFAULT_SIDE_STACK = 360;
@@ -149,7 +160,7 @@ export function Notebook() {
   // two open tiles left the chat its header and nothing else.
   const narrow = useMediaQuery("(max-width: 1180px)");
   const compact = useMediaQuery("(max-width: 860px)");
-  const [mobileTab, setMobileTab] = useState<TileId>("chat");
+  const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
 
   /** Put text in the composer (unfolding the chat if it was folded) and focus it. */
   const askInChat = useCallback(
@@ -164,12 +175,12 @@ export function Notebook() {
 
   const showInGraph = useCallback(
     (nodeId: string) => {
-      setMobileTab("graph");
-      if (state.panelCollapsed) dispatch({ type: "toggle-panel" });
+      setMobileTab("panel");
       dispatch({ type: "center-node", nodeId });
+      // Unfolds the graph wherever it is: in the panel, or a tile of its own.
       dispatch({ type: "open-tab", tab: "graph" });
     },
-    [dispatch, state.panelCollapsed],
+    [dispatch],
   );
 
   const hasContent = overview.data?.has_content ?? false;
@@ -177,6 +188,8 @@ export function Notebook() {
 
   const hosts = useTileHosts();
   const [dragging, setDragging] = useState<TileId | null>(null);
+  // A panel tab dragged over the panel's tab bar, and the tab it would land before.
+  const [dockDrop, setDockDrop] = useState<{ before: PanelTab | null } | null>(null);
   // A tablet stacks every tile in the middle column rather than hiding it
   // wherever it was dragged, and keeps the graph on the right. The sources
   // rail heads the stack, folded until asked for: it used to be dropped
@@ -219,6 +232,27 @@ export function Notebook() {
     );
   }
 
+  // The panel is a tab group. On a desktop it holds whichever tabs are
+  // docked; a phone gives the taxonomy view a section of its own and keeps
+  // the rest together, wherever they were on a wider window.
+  const groupTabs: PanelTab[] = compact ? PHONE_PANEL_TABS : state.docked;
+  const isDocked = (tab: PanelTab) => groupTabs.includes(tab);
+  const activeTab: PanelTab | undefined =
+    groupTabs.includes(state.panelTab) && (state.panelTab !== "taxonomy" || browserOpen)
+      ? state.panelTab
+      : (groupTabs.find((tab) => tab !== "taxonomy" || browserOpen) ?? groupTabs[0]);
+  const dock = (tab: PanelTab) => (compact || isDocked(tab) ? undefined : () => dispatch({ type: "dock-tab", tab }));
+  /** A panel tab as a tile of its own: graph, facts or node. */
+  const tabSpec = (tab: "graph" | "facts" | "node"): TileSpec => ({
+    id: tab,
+    title: tab === "facts" && state.answer?.facts.length ? `Facts (${state.answer.facts.length})` : PANEL_TAB_LABELS[tab],
+    visible: true,
+    collapsed: compact ? false : Boolean(state.tabCollapsed[tab]),
+    onToggle: () => dispatch({ type: "toggle-tab-collapsed", tab }),
+    host: hosts[tab],
+    onDock: dock(tab),
+  });
+
   const specs: Record<TileId, TileSpec> = {
     sources: {
       id: "sources",
@@ -237,6 +271,7 @@ export function Notebook() {
       collapsed: compact ? false : state.browserCollapsed,
       onToggle: () => dispatch({ type: "toggle-browser-collapsed" }),
       host: hosts.taxonomy,
+      onDock: dock("taxonomy"),
       subtitle: browserLocation(state.browser),
       stripActions: (
         <button
@@ -258,15 +293,18 @@ export function Notebook() {
       onToggle: () => dispatch({ type: "toggle-chat-collapsed" }),
       host: hosts.chat,
     },
-    graph: {
-      id: "graph",
-      title: "Graph",
-      visible: true,
+    panel: {
+      id: "panel",
+      title: groupTabs.map((tab) => PANEL_TAB_LABELS[tab]).join(" · "),
+      // With every tab pulled out there is nothing left to hold.
+      visible: groupTabs.length > 0,
       collapsed: compact ? false : state.panelCollapsed,
       onToggle: () => dispatch({ type: "toggle-panel" }),
-      host: hosts.graph,
-      subtitle: "Graph · Facts · Node",
+      host: hosts.panel,
     },
+    graph: tabSpec("graph"),
+    facts: tabSpec("facts"),
+    node: tabSpec("node"),
   };
   const visibleIds = (column: TileColumn) => layout[column].filter((id) => specs[id].visible);
   const columns = {
@@ -276,11 +314,121 @@ export function Notebook() {
     right: visibleIds("right"),
   };
   const sideOpen = (column: TileColumn) => columns[column].some((id) => !specs[id].collapsed);
-  // A tile the narrow layout leaves out of every column (the graph below
-  // 860px) has no slot to hold its host, so
-  // its content must not be rendered: portalled into a detached host, the
-  // graph's Cytoscape measured NaN, threw, and blanked the whole page.
+  // A tile no column holds (a phone shows one at a time) has no slot to hold
+  // its host, so its content must not be rendered: portalled into a detached
+  // host, the graph's Cytoscape measured NaN, threw, and blanked the whole page.
   const placed = new Set<TileId>([...layout.left, ...layout.inner, ...layout.center, ...layout.right]);
+  /** Whether a panel tab's content is on screen: the panel's open tab, or an unfolded tile. */
+  const tabShown = (tab: PanelTab) =>
+    isDocked(tab)
+      ? placed.has("panel") && !specs.panel.collapsed && activeTab === tab
+      : placed.has(tab) && !specs[tab].collapsed && specs[tab].visible;
+  const selectTab = (tab: PanelTab) =>
+    tab === "taxonomy" && !browserOpen
+      ? dispatch({ type: "open-browser", source: state.sourceFilter ?? null, path: "" })
+      : dispatch({ type: "open-tab", tab });
+  const dragValue = {
+    dragging,
+    setDragging,
+    move: (tile: TileId, column: TileColumn, before: TileId | null) =>
+      dispatch({ type: "move-tile", tile, column, before }),
+    reset: () => dispatch({ type: "reset-tiles" }),
+    columns,
+  };
+
+  /** What the graph, facts and node tabs show, in the panel or as tiles. */
+  const tabBody = (tab: "graph" | "facts" | "node") => {
+    if (tab === "graph")
+      return (
+        <>
+            <div className="graph-pane__body">
+              <div className="graph-overlay">
+                <HorizonControls
+                  mode={mode}
+                  depth={state.depth}
+                  centerLabel={centerLabel}
+                  surfacedCount={state.surfacedIds.length}
+                  nodeCount={graph.nodes.length}
+                  truncated={Boolean(graph.truncated)}
+                  busy={isFetching}
+                  dirty={
+                    state.selectedId !== null ||
+                    state.centerId !== null ||
+                    state.surfacedIds.length > 0 ||
+                    state.showAll ||
+                    state.depth !== DEFAULT_DEPTH
+                  }
+                  layout={state.layout}
+                  onLayout={(layout) => dispatch({ type: "set-layout", layout })}
+                  onDepth={(depth) => dispatch({ type: "set-depth", depth })}
+                  onShowAll={(value) => dispatch({ type: "show-all", value })}
+                  onClearAnswerFilter={() => dispatch({ type: "clear-answer-filter" })}
+                  onClear={() => dispatch({ type: "clear-view" })}
+                />
+              </div>
+              {isLoading ? (
+                <div className="centered muted">
+                  <span className="spinner" />
+                </div>
+              ) : graph.nodes.length === 0 ? (
+                <div className="centered muted small">
+                  Nothing within {state.depth} layers of here. Widen the depth, or show all.
+                </div>
+              ) : (
+                <GraphCanvas
+                  nodes={graph.nodes}
+                  links={graph.links}
+                  depths={graph.depths}
+                  selectedId={state.selectedId}
+                  focusIds={state.focusIds}
+                  citedIds={citedIds}
+                  layoutName={state.layout}
+                  spacing={1}
+                  shapeAlgorithm="node_type"
+                  onSelect={(id) => {
+                    dispatch({ type: "select-node", nodeId: id });
+                    // Only jump to the Node tab when there is a node to show;
+                    // a background tap is a deselect and should leave the
+                    // graph exactly as it is.
+                    if (id) dispatch({ type: "open-tab", tab: "node" });
+                  }}
+                  onRecenter={(id) => dispatch({ type: "center-node", nodeId: id })}
+                />
+              )}
+            </div>
+            <GraphLegend
+              counts={overview.data?.node_counts ?? {}}
+              hidden={state.hiddenTypes}
+              onToggle={(nodeType) => dispatch({ type: "toggle-type", nodeType })}
+            />
+        </>
+      );
+    if (tab === "facts")
+      return (
+          <div className="pane__body pane__body--pad">
+            <FactList facts={state.answer?.facts ?? []} onSelect={focusNode} />
+          </div>
+      );
+    return (
+          <div className="pane__body">
+            <NodeInspector
+              selectedId={state.selectedId}
+              nodes={graph.nodes}
+              links={graph.links}
+              onExpand={(nodeId) => dispatch({ type: "center-node", nodeId })}
+              onShowChunks={(nodeId) => {
+                if (state.hiddenTypes.includes("chunk")) {
+                  dispatch({ type: "toggle-type", nodeType: "chunk" });
+                }
+                dispatch({ type: "center-node", nodeId });
+                dispatch({ type: "open-tab", tab: "graph" });
+              }}
+              onPivot={focusNode}
+              onOpenFile={(source, path) => dispatch({ type: "open-file", file: { source, path } })}
+            />
+          </div>
+    );
+  };
   /** A side column's track: its width, a spine, a drop strip while dragging, or nothing. */
   const sideTrack = (column: TileColumn, width: string) =>
     columns[column].length === 0
@@ -309,15 +457,7 @@ export function Notebook() {
   );
 
   return (
-    <TileDragProvider
-      value={{
-        dragging,
-        setDragging,
-        move: (tile, column, before) => dispatch({ type: "move-tile", tile, column, before }),
-        reset: () => dispatch({ type: "reset-tiles" }),
-        columns,
-      }}
-    >
+    <TileDragProvider value={dragValue}>
     <div
       className={`notebook${dragging ? " notebook--dragging" : ""}${compact ? " notebook--tabs" : ""}`}
       ref={layoutRef}
@@ -342,7 +482,7 @@ export function Notebook() {
               ["chat", "Chat"],
               ["sources", "Sources"],
               ["taxonomy", "Taxonomy"],
-              ["graph", "Graph"],
+              ["panel", "Graph"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -442,7 +582,7 @@ export function Notebook() {
           )
         : null}
 
-      {browserOpen && !specs.taxonomy.collapsed && placed.has("taxonomy")
+      {browserOpen && (compact ? placed.has("taxonomy") && !specs.taxonomy.collapsed : tabShown("taxonomy"))
         ? createPortal(
             <TileScope spec={specs.taxonomy}>
               <Suspense
@@ -517,129 +657,110 @@ export function Notebook() {
         hosts.chat,
       )}
 
-      {!specs.graph.collapsed && placed.has("graph")
+      {/* The panel: a tab group. Each docked tab's content is portalled into
+          its own host (below), and the panel shows the open tab's host in its
+          body -- so a tab pulled out into a tile of its own is the same
+          content moved, not a second copy. Dragging a tab off the bar makes
+          it a tile where it lands; dragging a tile onto the bar docks it. */}
+      {placed.has("panel") && !specs.panel.collapsed && activeTab
         ? createPortal(
-            <TileScope spec={specs.graph}>
-      <aside className="pane pane--panel">
-        <header className="pane__header">
-          <TileGrip />
-          <div className="tabs" style={{ flex: 1 }}>
-            <button
-              className={state.panelTab === "graph" ? "tab active" : "tab"}
-              onClick={() => dispatch({ type: "open-tab", tab: "graph" })}
-            >
-              Graph
-            </button>
-            <button
-              className={state.panelTab === "facts" ? "tab active" : "tab"}
-              onClick={() => dispatch({ type: "open-tab", tab: "facts" })}
-            >
-              Facts{state.answer?.facts.length ? ` (${state.answer.facts.length})` : ""}
-            </button>
-            <button
-              className={state.panelTab === "node" ? "tab active" : "tab"}
-              onClick={() => dispatch({ type: "open-tab", tab: "node" })}
-            >
-              Node
-            </button>
-          </div>
-          <TileFold />
-        </header>
-        {state.panelTab === "graph" ? (
-          <>
-            <div className="graph-pane__body">
-              <div className="graph-overlay">
-                <HorizonControls
-                  mode={mode}
-                  depth={state.depth}
-                  centerLabel={centerLabel}
-                  surfacedCount={state.surfacedIds.length}
-                  nodeCount={graph.nodes.length}
-                  truncated={Boolean(graph.truncated)}
-                  busy={isFetching}
-                  dirty={
-                    state.selectedId !== null ||
-                    state.centerId !== null ||
-                    state.surfacedIds.length > 0 ||
-                    state.showAll ||
-                    state.depth !== DEFAULT_DEPTH
-                  }
-                  layout={state.layout}
-                  onLayout={(layout) => dispatch({ type: "set-layout", layout })}
-                  onDepth={(depth) => dispatch({ type: "set-depth", depth })}
-                  onShowAll={(value) => dispatch({ type: "show-all", value })}
-                  onClearAnswerFilter={() => dispatch({ type: "clear-answer-filter" })}
-                  onClear={() => dispatch({ type: "clear-view" })}
-                />
-              </div>
-              {isLoading ? (
-                <div className="centered muted">
-                  <span className="spinner" />
-                </div>
-              ) : graph.nodes.length === 0 ? (
-                <div className="centered muted small">
-                  Nothing within {state.depth} layers of here. Widen the depth, or show all.
-                </div>
-              ) : (
-                <GraphCanvas
-                  nodes={graph.nodes}
-                  links={graph.links}
-                  depths={graph.depths}
-                  selectedId={state.selectedId}
-                  focusIds={state.focusIds}
-                  citedIds={citedIds}
-                  layoutName={state.layout}
-                  spacing={1}
-                  shapeAlgorithm="node_type"
-                  onSelect={(id) => {
-                    dispatch({ type: "select-node", nodeId: id });
-                    // Only jump to the Node tab when there is a node to show;
-                    // a background tap is a deselect and should leave the
-                    // graph exactly as it is.
-                    if (id) dispatch({ type: "open-tab", tab: "node" });
+            <TileScope spec={specs.panel}>
+              <aside className="pane pane--panel">
+                <header
+                  className={`pane__header panel__bar${dockDrop ? " panel__bar--drop" : ""}`}
+                  data-dock-target=""
+                  onDragOver={(event) => {
+                    if (compact || !isTileDrag(event) || !isPanelTab(dragging)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    const over = (event.target as HTMLElement).closest<HTMLElement>("[data-panel-tab]");
+                    const before = (over?.dataset.panelTab as PanelTab | undefined) ?? null;
+                    setDockDrop((current) => (current && current.before === before ? current : { before }));
                   }}
-                  onRecenter={(id) => dispatch({ type: "center-node", nodeId: id })}
-                />
-              )}
-            </div>
-            <GraphLegend
-              counts={overview.data?.node_counts ?? {}}
-              hidden={state.hiddenTypes}
-              onToggle={(nodeType) => dispatch({ type: "toggle-type", nodeType })}
-            />
-          </>
-        ) : null}
-
-        {state.panelTab === "facts" ? (
-          <div className="pane__body pane__body--pad">
-            <FactList facts={state.answer?.facts ?? []} onSelect={focusNode} />
-          </div>
-        ) : null}
-
-        {state.panelTab === "node" ? (
-          <div className="pane__body">
-            <NodeInspector
-              selectedId={state.selectedId}
-              nodes={graph.nodes}
-              links={graph.links}
-              onExpand={(nodeId) => dispatch({ type: "center-node", nodeId })}
-              onShowChunks={(nodeId) => {
-                if (state.hiddenTypes.includes("chunk")) {
-                  dispatch({ type: "toggle-type", nodeType: "chunk" });
-                }
-                dispatch({ type: "center-node", nodeId });
-                dispatch({ type: "open-tab", tab: "graph" });
-              }}
-              onPivot={focusNode}
-              onOpenFile={(source, path) => dispatch({ type: "open-file", file: { source, path } })}
-            />
-          </div>
-        ) : null}
-      </aside>
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDockDrop(null);
+                  }}
+                  onDrop={(event) => {
+                    setDockDrop(null);
+                    if (!isPanelTab(dragging)) return;
+                    event.preventDefault();
+                    const before = dockDrop?.before;
+                    dispatch({ type: "dock-tab", tab: dragging, before: before === dragging ? null : before });
+                    setDragging(null);
+                  }}
+                >
+                  <TileGrip />
+                  <div className="tabs panel__tabs" role="tablist" aria-label="Panel">
+                    {groupTabs.map((tab) => (
+                      <div
+                        key={tab}
+                        role="tab"
+                        tabIndex={0}
+                        aria-selected={activeTab === tab}
+                        data-panel-tab={tab}
+                        className={`tab${activeTab === tab ? " active" : ""}${
+                          dockDrop?.before === tab && dragging !== tab ? " tab--drop-before" : ""
+                        }`}
+                        title={compact ? undefined : `${PANEL_TAB_LABELS[tab]} · drag to any column to open it as its own tile`}
+                        {...(compact ? {} : tileDragProps(tab, dragValue))}
+                        onClick={() => selectTab(tab)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            selectTab(tab);
+                          }
+                        }}
+                      >
+                        {PANEL_TAB_LABELS[tab]}
+                        {tab === "facts" && state.answer?.facts.length ? ` (${state.answer.facts.length})` : ""}
+                      </div>
+                    ))}
+                  </div>
+                  {compact ? null : (
+                    <button
+                      type="button"
+                      className="btn btn--small btn--icon btn--ghost panel__popout"
+                      onClick={() => dispatch({ type: "undock-tab", tab: activeTab })}
+                      aria-label={`Open ${PANEL_TAB_LABELS[activeTab]} as its own tile`}
+                      title={`Open ${PANEL_TAB_LABELS[activeTab]} as its own tile (or drag its tab to any column)`}
+                    >
+                      ⧉
+                    </button>
+                  )}
+                  <TileFold />
+                </header>
+                <TileSlot host={hosts[activeTab]} className="panel__slot" />
+              </aside>
             </TileScope>,
-            hosts.graph,
+            hosts.panel,
           )
         : null}
+
+      {(["graph", "facts", "node"] as const).map((tab) =>
+        tabShown(tab)
+          ? createPortal(
+              <TileScope key={tab} spec={specs[tab]}>
+                {isDocked(tab) ? (
+                  <div className="panel-tab">{tabBody(tab)}</div>
+                ) : (
+                  <section className="pane pane--panel">
+                    <header className="pane__header">
+                      <TileGrip />
+                      <span className="pane__title">{specs[tab].title}</span>
+                      <div className="pane__actions">
+                        <TileDock />
+                        <TileFold />
+                      </div>
+                    </header>
+                    {tabBody(tab)}
+                  </section>
+                )}
+              </TileScope>,
+              hosts[tab],
+              tab,
+            )
+          : null,
+      )}
 
       {showWorkflowDialog ? (
         <div className="modal-scrim" onClick={() => setShowWorkflowDialog(false)}>

@@ -5795,3 +5795,87 @@ select.text-input {
     display: none;
   }
 }
+
+/* ------------------------------------------------- the panel: a tab group
+
+   Graph, Facts, Node and Taxonomy are tabs of one panel by default, and each
+   can be dragged off the tab bar into a column of its own (`pages/Notebook.tsx`,
+   `state/session.tsx`). The bar is also where a tab is dropped to dock it. */
+.panel__tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel__tabs .tab {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.panel__bar--drop .panel__tabs {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Where a docking tab will land. */
+.tab--drop-before::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.panel__slot,
+.panel-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The taxonomy view docked in the panel: the panel frames it, and the
+   panel's own grip, title and fold stand for the view's. */
+.panel__slot > .tile__host > .pane {
+  border: none;
+  border-radius: 0;
+}
+
+.panel__slot .browser > .pane__header > .tile-grip,
+.panel__slot .browser > .pane__header > .pane__title,
+.panel__slot .browser .tile-fold {
+  display: none;
+}
+
+/* The taxonomy view sizes itself to wherever it is -- the panel, a narrow
+   column, a wide one. Under 640px a folder list beside a file viewer left
+   the viewer a sliver, so it shows the list, or the open file (whose close
+   button goes back to the list). */
+.browser {
+  container-type: inline-size;
+}
+
+@container (max-width: 640px) {
+  .browser__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .browser__body > .drag-handle,
+  .browser__body:not(.browser__body--file) > .browser__viewer,
+  .browser__body--file > .browser__list {
+    display: none;
+  }
+
+  .browser__list {
+    border-right: none;
+  }
+}

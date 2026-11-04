@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 import { DragHandle } from "../browser/DragHandle";
 import type { TileColumn, TileId } from "../state/session";
 import { TILE_COLUMNS } from "../state/session";
@@ -31,6 +31,8 @@ export interface TileSpec {
   subtitle?: string;
   /** Actions on the folded strip (the taxonomy view's close). */
   stripActions?: ReactNode;
+  /** Put a panel tab that is a tile of its own back in the panel. */
+  onDock?: () => void;
 }
 
 interface TileContextValue {
@@ -38,6 +40,7 @@ interface TileContextValue {
   title: string;
   collapsed: boolean;
   onToggle: () => void;
+  onDock?: () => void;
 }
 
 const TileContext = createContext<TileContextValue | null>(null);
@@ -57,11 +60,40 @@ export function TileDragProvider({ value, children }: { value: TileDragValue; ch
   return <TileDragContext.Provider value={value}>{children}</TileDragContext.Provider>;
 }
 
+/** The drag in progress, for a drop target outside a column (the panel's tab bar). */
+export function useTileDrag(): TileDragValue | null {
+  return useContext(TileDragContext);
+}
+
+/**
+ * Props that make an element drag `id` the way a tile grip does -- so a
+ * panel tab dropped on a column becomes a tile there.
+ */
+export function tileDragProps(id: TileId, drag: TileDragValue | null, dragImage?: () => HTMLElement | null) {
+  return {
+    draggable: true,
+    onDragStart: (event: ReactDragEvent<HTMLElement>) => {
+      event.dataTransfer.setData(DRAG_TYPE, id);
+      event.dataTransfer.effectAllowed = "move";
+      const image = dragImage?.();
+      if (image) event.dataTransfer.setDragImage(image, 16, 16);
+      // Deferred: changing layout during dragstart cancels the drag in Chrome.
+      window.setTimeout(() => drag?.setDragging(id), 0);
+    },
+    onDragEnd: () => drag?.setDragging(null),
+  };
+}
+
+/** Whether a drag over an element is carrying a tile. */
+export function isTileDrag(event: ReactDragEvent<HTMLElement>): boolean {
+  return event.dataTransfer.types.includes(DRAG_TYPE);
+}
+
 /** Wraps a tile's content so its header controls know which tile they belong to. */
 export function TileScope({ spec, children }: { spec: TileSpec; children: ReactNode }) {
   return (
     <TileContext.Provider
-      value={{ id: spec.id, title: spec.title, collapsed: spec.collapsed, onToggle: spec.onToggle }}
+      value={{ id: spec.id, title: spec.title, collapsed: spec.collapsed, onToggle: spec.onToggle, onDock: spec.onDock }}
     >
       {children}
     </TileContext.Provider>
@@ -77,7 +109,15 @@ export function useTileHosts(): Record<TileId, HTMLElement> {
       host.dataset.tileHost = id;
       return host;
     };
-    return { sources: make("sources"), taxonomy: make("taxonomy"), chat: make("chat"), graph: make("graph") };
+    return {
+      sources: make("sources"),
+      chat: make("chat"),
+      panel: make("panel"),
+      graph: make("graph"),
+      facts: make("facts"),
+      node: make("node"),
+      taxonomy: make("taxonomy"),
+    };
   });
   return hosts;
 }
@@ -153,8 +193,25 @@ export function TileFold() {
   );
 }
 
+/** The button that puts a panel tab, while it is a tile, back in the panel. */
+export function TileDock() {
+  const tile = useContext(TileContext);
+  if (!tile?.onDock) return null;
+  return (
+    <button
+      type="button"
+      className="btn btn--small btn--icon btn--ghost tile-dock"
+      onClick={tile.onDock}
+      aria-label={`Put ${tile.title} back in the panel`}
+      title={`Put ${tile.title} back in the panel (or drag it onto the panel's tabs)`}
+    >
+      ⇲
+    </button>
+  );
+}
+
 /** Moves a tile's host element into the slot it is shown in. */
-function TileSlot({ host }: { host: HTMLElement }) {
+export function TileSlot({ host, className = "tile__slot" }: { host: HTMLElement; className?: string }) {
   const slotRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const slot = slotRef.current;
@@ -166,7 +223,7 @@ function TileSlot({ host }: { host: HTMLElement }) {
       if (host.parentNode === slot) slot.removeChild(host);
     };
   }, [host]);
-  return <div className="tile__slot" ref={slotRef} />;
+  return <div className={className} ref={slotRef} />;
 }
 
 /**
@@ -215,8 +272,16 @@ export function TileColumnView({
       }
       return null;
     };
+    // The panel's tab bar is a drop target of its own (docking a tab), inside
+    // a column; a drop there belongs to it, not to the column around it.
+    const onDockTarget = (event: DragEvent) =>
+      event.target instanceof Element && event.target.closest("[data-dock-target]") !== null;
     const over = (event: DragEvent) => {
       if (!event.dataTransfer?.types.includes(DRAG_TYPE)) return;
+      if (onDockTarget(event)) {
+        setDrop(null);
+        return;
+      }
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
       const target = before(event);
@@ -226,6 +291,7 @@ export function TileColumnView({
       if (!element.contains(event.relatedTarget as Node | null)) setDrop(null);
     };
     const dropped = (event: DragEvent) => {
+      if (onDockTarget(event)) return;
       const tile = event.dataTransfer?.getData(DRAG_TYPE) as TileId | undefined;
       setDrop(null);
       if (!tile) return;
@@ -332,7 +398,12 @@ function TileStrip({ tile }: { tile: TileSpec }) {
         <TileFold />
         <span className="pane__title">{tile.title}</span>
         {tile.subtitle ? <span className="tile-strip__subtitle muted small">{tile.subtitle}</span> : null}
-        {tile.stripActions ? <div className="pane__actions">{tile.stripActions}</div> : null}
+        {tile.stripActions || tile.onDock ? (
+          <div className="pane__actions">
+            {tile.stripActions}
+            <TileDock />
+          </div>
+        ) : null}
       </header>
     </section>
   );

@@ -123,9 +123,12 @@ const tabFailures = [];
 for (const name of tabs) {
   await phone.getByRole('tab', { name: new RegExp(`^${name}`) }).click();
   await phone.waitForTimeout(1200);
-  const shown = await phone.locator('.tile-col--center .tile__host').count();
+  // One open tile, with something in it (the panel nests its open tab's host
+  // inside its own, so hosts are not the thing to count).
+  const shown = await phone.locator('.tile-col--center > .tile--open').count();
+  const filled = await phone.locator('.tile-col--center > .tile--open .pane').count();
   const width = await phone.evaluate(() => document.documentElement.scrollWidth);
-  if (shown !== 1 || width > 390) tabFailures.push(`${name}: ${shown} tiles shown, ${width}px wide`);
+  if (shown !== 1 || filled === 0 || width > 390) tabFailures.push(`${name}: ${shown} tiles shown, ${filled} panes, ${width}px wide`);
 }
 
 await browser.close();

@@ -21,7 +21,22 @@ import { NOISY_NODE_TYPES } from "../graph/graphStyles";
  * deliberate user action does.
  */
 
-export type PanelTab = "graph" | "facts" | "node";
+/**
+ * The tabs of the Notebook's right-hand panel. Each is docked in the panel by
+ * default and can be pulled out into a tile of its own (`docked` below).
+ */
+export type PanelTab = "graph" | "facts" | "node" | "taxonomy";
+export const PANEL_TABS: PanelTab[] = ["graph", "facts", "node", "taxonomy"];
+export const PANEL_TAB_LABELS: Record<PanelTab, string> = {
+  graph: "Graph",
+  facts: "Facts",
+  node: "Node",
+  taxonomy: "Taxonomy",
+};
+
+export function isPanelTab(id: string | null | undefined): id is PanelTab {
+  return (PANEL_TABS as string[]).includes(id ?? "");
+}
 
 /** A document open in the source browser's viewer. */
 export interface OpenFile {
@@ -57,11 +72,17 @@ export interface BrowserState {
 
 /**
  * The Notebook's sections, arranged as tiles in four columns: sources, the
- * taxonomy view, the chat and the graph, left to right. A tile can be
- * dragged to another column or to another place in its own, and every tile
- * folds to its header. A column with nothing in it takes no width.
+ * chat and the panel (a tab group: graph, facts, node, taxonomy), left to
+ * right. A tile can be dragged to another column or to another place in its
+ * own, and every tile folds to its header. A column with nothing in it takes
+ * no width.
+ *
+ * A panel tab is a tile too, once it is pulled out of the panel: dragged off
+ * the tab bar or popped out, it sits in a column like any other tile, and
+ * dragged onto the tab bar (or docked) it goes back. A tab is in exactly one
+ * place -- `docked`, or a column of `tiles` -- never both.
  */
-export type TileId = "sources" | "taxonomy" | "chat" | "graph";
+export type TileId = "sources" | "chat" | "panel" | PanelTab;
 export type TileColumn = "left" | "inner" | "center" | "right";
 export type TileLayout = Record<TileColumn, TileId[]>;
 
@@ -69,16 +90,12 @@ export const TILE_COLUMNS: TileColumn[] = ["left", "inner", "center", "right"];
 
 export const DEFAULT_TILE_LAYOUT: TileLayout = {
   left: ["sources"],
-  inner: ["taxonomy"],
+  inner: [],
   center: ["chat"],
-  right: ["graph"],
+  right: ["panel"],
 };
 
-export function isDefaultTileLayout(layout: TileLayout): boolean {
-  return TILE_COLUMNS.every(
-    (column) => layout[column].join(",") === DEFAULT_TILE_LAYOUT[column].join(","),
-  );
-}
+export const DEFAULT_DOCKED: PanelTab[] = ["graph", "facts", "node", "taxonomy"];
 
 export interface ChatTurn {
   id: string;
@@ -164,6 +181,10 @@ export interface SessionState {
    * from fixed.
    */
   tiles: TileLayout;
+  /** The panel tabs docked in the panel, in tab order; the rest are tiles. Not persisted. */
+  docked: PanelTab[];
+  /** Fold state of the graph, facts and node tabs while they are tiles of their own. */
+  tabCollapsed: Partial<Record<PanelTab, boolean>>;
   /** Height of the first unfolded tile of a side column holding two, in px; not persisted. */
   stackHeights: Partial<Record<TileColumn, number>>;
   /**
@@ -219,6 +240,8 @@ const INITIAL: SessionState = {
   browserHeight: DEFAULT_BROWSER_HEIGHT,
   browserTreeWidth: DEFAULT_TREE_WIDTH,
   tiles: DEFAULT_TILE_LAYOUT,
+  docked: DEFAULT_DOCKED,
+  tabCollapsed: {},
   stackHeights: {},
   excluded: [],
 };
@@ -258,6 +281,9 @@ export type SessionAction =
   | { type: "toggle-browser-collapsed" }
   | { type: "toggle-chat-collapsed" }
   | { type: "move-tile"; tile: TileId; column: TileColumn; before: TileId | null }
+  | { type: "dock-tab"; tab: PanelTab; before?: PanelTab | null }
+  | { type: "undock-tab"; tab: PanelTab }
+  | { type: "toggle-tab-collapsed"; tab: PanelTab }
   | { type: "reset-tiles" }
   | { type: "set-stack-height"; column: TileColumn; height: number };
 
@@ -364,7 +390,8 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           : [...state.hiddenTypes, action.nodeType],
       };
     case "open-tab":
-      return { ...state, panelTab: action.tab };
+      // Showing a tab unfolds wherever it is: the panel, or its own tile.
+      return { ...state, panelTab: action.tab, ...unfoldTab(state, action.tab) };
     case "select-node":
       return {
         ...state,
@@ -466,12 +493,13 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return { ...state, panelWidth: width };
     }
     case "open-browser":
-      return { ...state, ...openBrowser(state, action.source, action.path ?? "") };
+      return { ...state, ...openBrowser(state, action.source, action.path ?? ""), ...showTaxonomy(state) };
     case "open-file": {
       const slash = action.file.path.lastIndexOf("/");
       return {
         ...state,
         ...openBrowser(state, action.file.source, slash > 0 ? action.file.path.slice(0, slash) : ""),
+        ...showTaxonomy(state),
         browser: {
           open: true,
           source: action.file.source,
@@ -483,7 +511,12 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "close-file":
       return { ...state, browser: { ...state.browser, file: null } };
     case "close-browser":
-      return { ...state, browser: { ...state.browser, open: false } };
+      return {
+        ...state,
+        browser: { ...state.browser, open: false },
+        // A closed taxonomy view has nothing to show in its tab.
+        panelTab: state.panelTab === "taxonomy" ? firstOpenTab(state.docked, false) : state.panelTab,
+      };
     // Every tile folds on its own. The browser and the chat used to unfold
     // each other, which made sense while they were always stacked together;
     // as tiles they may sit in different columns, and a fold the reader
@@ -492,10 +525,47 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return { ...state, browserCollapsed: !state.browserCollapsed };
     case "toggle-chat-collapsed":
       return { ...state, chatCollapsed: !state.chatCollapsed };
-    case "move-tile":
-      return { ...state, tiles: moveTile(state.tiles, action.tile, action.column, action.before) };
+    case "move-tile": {
+      // Dragging a docked tab off the tab bar makes it a tile where it lands.
+      const docked = isPanelTab(action.tile) ? state.docked.filter((tab) => tab !== action.tile) : state.docked;
+      return {
+        ...state,
+        tiles: moveTile(state.tiles, action.tile, action.column, action.before),
+        docked,
+        panelTab: docked.includes(state.panelTab) ? state.panelTab : firstOpenTab(docked, state.browser.open),
+      };
+    }
+    case "undock-tab": {
+      // Popped out with a button rather than dragged: it goes just below the
+      // panel, in the panel's column.
+      if (!state.docked.includes(action.tab)) return state;
+      const column = TILE_COLUMNS.find((key) => state.tiles[key].includes("panel")) ?? "right";
+      const after = state.tiles[column].indexOf("panel");
+      const tiles = moveTile(state.tiles, action.tab, column, state.tiles[column][after + 1] ?? null);
+      const docked = state.docked.filter((tab) => tab !== action.tab);
+      return {
+        ...state,
+        tiles,
+        docked,
+        panelTab: docked.includes(state.panelTab) ? state.panelTab : firstOpenTab(docked, state.browser.open),
+        ...unfoldTab({ ...state, docked }, action.tab),
+      };
+    }
+    case "dock-tab": {
+      const tiles = {} as TileLayout;
+      for (const key of TILE_COLUMNS) tiles[key] = state.tiles[key].filter((id) => id !== action.tab);
+      const rest = state.docked.filter((tab) => tab !== action.tab);
+      const at = action.before ? rest.indexOf(action.before) : -1;
+      const docked = at >= 0 ? [...rest.slice(0, at), action.tab, ...rest.slice(at)] : [...rest, action.tab];
+      // Docking the taxonomy view shows it; it opens if it was closed.
+      const browser = action.tab === "taxonomy" && !state.browser.open ? { ...state.browser, open: true } : state.browser;
+      return { ...state, tiles, docked, browser, panelTab: action.tab, panelCollapsed: false };
+    }
+    case "toggle-tab-collapsed":
+      if (action.tab === "taxonomy") return { ...state, browserCollapsed: !state.browserCollapsed };
+      return { ...state, tabCollapsed: { ...state.tabCollapsed, [action.tab]: !state.tabCollapsed[action.tab] } };
     case "reset-tiles":
-      return { ...state, tiles: DEFAULT_TILE_LAYOUT, stackHeights: {} };
+      return { ...state, tiles: DEFAULT_TILE_LAYOUT, docked: DEFAULT_DOCKED, stackHeights: {} };
     case "set-stack-height":
       return {
         ...state,
@@ -539,6 +609,23 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     default:
       return state;
   }
+}
+
+/** The tab a panel shows when its own choice is gone: the first that has something to show. */
+export function firstOpenTab(docked: PanelTab[], browserOpen: boolean): PanelTab {
+  return docked.find((tab) => tab !== "taxonomy" || browserOpen) ?? "graph";
+}
+
+/** The fold flag that hides `tab` wherever it is now, cleared. */
+function unfoldTab(state: SessionState, tab: PanelTab): Partial<SessionState> {
+  if (state.docked.includes(tab)) return { panelCollapsed: false };
+  if (tab === "taxonomy") return { browserCollapsed: false };
+  return { tabCollapsed: { ...state.tabCollapsed, [tab]: false } };
+}
+
+/** Opening the taxonomy view brings its tab forward when it is docked. */
+function showTaxonomy(state: SessionState): Partial<SessionState> {
+  return state.docked.includes("taxonomy") ? { panelTab: "taxonomy", panelCollapsed: false } : {};
 }
 
 /** `tile` taken out of wherever it is and put in `column`, before `before` (or last). */
@@ -666,7 +753,7 @@ function hydrate(): SessionState {
       sourceTypeFilter: saved.sourceTypeFilter ?? INITIAL.sourceTypeFilter,
       hiddenTypes: Array.isArray(saved.hiddenTypes) ? saved.hiddenTypes : INITIAL.hiddenTypes,
       depth: clampDepth(saved.depth ?? DEFAULT_DEPTH),
-      panelTab: saved.panelTab ?? INITIAL.panelTab,
+      panelTab: isPanelTab(saved.panelTab) ? saved.panelTab : INITIAL.panelTab,
       railCollapsed: saved.railCollapsed === true,
       panelCollapsed: saved.panelCollapsed === true,
       workflow: saved.workflow ?? INITIAL.workflow,

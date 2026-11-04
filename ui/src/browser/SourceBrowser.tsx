@@ -4,7 +4,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { BrowseFile, BrowseFolder, BrowseResponse } from "../api/types";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
-import { TileFold, TileGrip } from "../components/Tiles";
+import { TileDock, TileFold, TileGrip } from "../components/Tiles";
 import { ArchivedList } from "./ArchivedList";
 import { DragHandle } from "./DragHandle";
 import { ScopeToggle } from "./ScopeToggle";
@@ -126,6 +126,7 @@ export function SourceBrowser({
           >
             ✕
           </button>
+          <TileDock />
           <TileFold />
         </div>
       </header>
