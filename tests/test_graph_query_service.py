@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import socket
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
 from pheasant.config.schema import PheasantConfig
-from pheasant.graph.query_service import GraphQueryClient, RemoteGraph
+from pheasant.graph.query_service import GraphQueryClient, GraphQueryError, RemoteGraph
 from pheasant.sync.engine import SyncEngine
 
 
@@ -272,3 +277,142 @@ def test_graph_client_round_robins_cached_service_replicas(monkeypatch: Any) -> 
     assert third.startswith("http://10.0.0.11:8765/")
     assert host1 == host2 == "graph:8765"
     assert calls == 1
+
+
+# --- the client's transport, against a real socket --------------------------
+#
+# Each case below scripts what the server does with one request: answer and
+# keep the connection, answer and close it, or answer short. The handler gets
+# the request's ordinal and its headers and returns the raw response bytes and
+# whether to close afterwards.
+
+Reply = tuple[bytes, bool]
+
+
+def _response(status: str, payload: dict[str, Any]) -> bytes:
+    body = json.dumps(payload).encode()
+    head = f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n"
+    return f"{head}Content-Length: {len(body)}\r\n\r\n".encode() + body
+
+
+def _answer(result: Any) -> bytes:
+    return _response("200 OK", {"result": result})
+
+
+@contextmanager
+def _scripted_server(
+    handler: Callable[[int, dict[str, str]], Reply],
+) -> Iterator[dict[str, Any]]:
+    listener = socket.create_server(("127.0.0.1", 0))
+    seen: dict[str, Any] = {"port": listener.getsockname()[1], "connections": 0, "requests": []}
+
+    def serve(conn: socket.socket) -> None:
+        with conn:
+            buffer = b""
+            while True:
+                while b"\r\n\r\n" not in buffer:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        return
+                    buffer += chunk
+                head, _, buffer = buffer.partition(b"\r\n\r\n")
+                lines = head.decode("latin-1").split("\r\n")
+                headers = {
+                    k.strip().lower(): v.strip()
+                    for k, _, v in (line.partition(":") for line in lines[1:])
+                }
+                length = int(headers.get("content-length", "0"))
+                while len(buffer) < length:
+                    buffer += conn.recv(65536)
+                buffer = buffer[length:]
+                seen["requests"].append(headers)
+                reply, close = handler(len(seen["requests"]), headers)
+                conn.sendall(reply)
+                if close:
+                    return
+
+    def accept() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return
+            seen["connections"] += 1
+            threading.Thread(target=serve, args=(conn,), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    try:
+        yield seen
+    finally:
+        listener.close()
+
+
+def _client(port: int, monkeypatch: Any, retries: int = 1) -> GraphQueryClient:
+    monkeypatch.setenv("TEST_GRAPH_TOKEN", "graph-token")
+    return GraphQueryClient(
+        f"http://127.0.0.1:{port}", "TEST_GRAPH_TOKEN", timeout_seconds=5, retries=retries
+    )
+
+
+def test_graph_client_keeps_one_connection_open_across_queries(monkeypatch: Any) -> None:
+    # urllib sent `Connection: close` on every call, and over a real network
+    # hop the server's close then cut answers larger than its send buffer
+    # short (65 KB of a 363 KB node_link on Azure Container Apps).
+    with _scripted_server(lambda n, _h: (_answer({"call": n}), False)) as server:
+        client = _client(server["port"], monkeypatch)
+        assert client.query("stats") == {"call": 1}
+        assert client.query("stats") == {"call": 2}
+
+    assert server["connections"] == 1
+    assert all(h.get("connection", "").lower() != "close" for h in server["requests"])
+    assert all(h["authorization"] == "Bearer graph-token" for h in server["requests"])
+
+
+def test_graph_client_reopens_a_connection_the_server_dropped_while_idle(
+    monkeypatch: Any,
+) -> None:
+    # uvicorn closes an idle kept-alive connection after a few seconds. The
+    # next call finds a dead socket before any answer exists; that is a
+    # reconnect, not a failure, so it holds even with no retries to spend.
+    with _scripted_server(lambda n, _h: (_answer({"call": n}), True)) as server:
+        client = _client(server["port"], monkeypatch, retries=0)
+        assert client.query("stats") == {"call": 1}
+        assert client.query("stats") == {"call": 2}
+
+    assert server["connections"] == 2
+
+
+def test_graph_client_retries_a_truncated_answer(monkeypatch: Any) -> None:
+    whole = _answer({"nodes": ["a" * 40]})
+    short = whole[: len(whole) - 20]
+
+    with _scripted_server(lambda n, _h: (short, True) if n == 1 else (whole, False)) as server:
+        client = _client(server["port"], monkeypatch, retries=1)
+        assert client.query("node_link") == {"nodes": ["a" * 40]}
+    assert len(server["requests"]) == 2
+
+    # With nothing left to retry it is the client's own error, not a raw
+    # http.client.IncompleteRead escaping as a 500.
+    with _scripted_server(lambda _n, _h: (short, True)) as server:
+        client = _client(server["port"], monkeypatch, retries=0)
+        with pytest.raises(GraphQueryError, match="could not answer 'node_link'"):
+            client.query("node_link")
+
+
+def test_graph_client_refuses_at_once_on_4xx_and_retries_5xx(monkeypatch: Any) -> None:
+    forbidden = _response("403 Forbidden", {"detail": "bad token"})
+    with _scripted_server(lambda _n, _h: (forbidden, False)) as server:
+        client = _client(server["port"], monkeypatch, retries=3)
+        with pytest.raises(GraphQueryError, match="rejected 'stats': bad token"):
+            client.query("stats")
+    assert len(server["requests"]) == 1
+
+    def flaky(n: int, _h: dict[str, str]) -> Reply:
+        if n == 1:
+            return _response("503 Service Unavailable", {"detail": "draining"}), False
+        return _answer({"call": n}), False
+
+    with _scripted_server(flaky) as server:
+        client = _client(server["port"], monkeypatch, retries=1)
+        assert client.query("stats") == {"call": 2}
+    assert len(server["requests"]) == 2

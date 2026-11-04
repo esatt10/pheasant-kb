@@ -8,6 +8,7 @@ it, while API/MCP replicas hold only this small proxy.  The default URL is
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -17,9 +18,7 @@ from contextlib import nullcontext
 from functools import wraps
 from ipaddress import ip_address
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import ProxyHandler, Request, build_opener
 
 from pheasant.telemetry.interactions import inject_traceparent
 
@@ -64,10 +63,66 @@ class GraphQueryClient:
         self._replica_ordinal = 0
         self._replica_addresses: list[str] = []
         self._replica_resolved_at = 0.0
-        # This endpoint is explicitly internal. Bypassing ambient HTTP_PROXY
-        # also lets us address a resolved replica IP while retaining the
-        # service name in Host without sending cluster traffic outside.
-        self._opener = build_opener(ProxyHandler({}))
+        # Kept-alive connections, one set per thread (http.client connections
+        # are not thread-safe), keyed by the resolved replica. Not urllib:
+        # it sends `Connection: close` on every request and cannot be told
+        # otherwise, and the server then closes the socket straight after its
+        # answer. Over a real network hop (Azure Container Apps) that close
+        # cut every answer larger than the send buffer short, 65 KB of a
+        # 363 KB node_link, while a kept-alive connection read all of it.
+        # http.client also ignores ambient HTTP_PROXY, as this internal hop
+        # must, and lets us address a resolved replica IP with the service
+        # name in Host.
+        self._local = threading.local()
+
+    def _post(
+        self, target: str, body: bytes, headers: dict[str, str], timeout: float
+    ) -> tuple[int, str, bytes]:
+        """POST over a kept-alive connection to ``target``'s replica.
+
+        A pooled connection the server has since closed (uvicorn drops an
+        idle one after a few seconds) fails before any answer arrives; that
+        is reopened once here rather than spent as one of the caller's
+        retries, because nothing was lost but a stale socket.
+        """
+
+        parsed = urlsplit(target)
+        key = (parsed.scheme, parsed.hostname, parsed.port)
+        connections: dict[tuple[Any, ...], http.client.HTTPConnection]
+        connections = self._local.__dict__.setdefault("connections", {})
+        secure = parsed.scheme == "https"
+        factory = http.client.HTTPSConnection if secure else http.client.HTTPConnection
+        path = parsed.path or "/"
+        for attempt in range(2):
+            connection = connections.get(key)
+            reused = connection is not None
+            if connection is None:
+                connection = factory(parsed.hostname or "", parsed.port, timeout=timeout)
+                connections[key] = connection
+            connection.timeout = timeout
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout)
+            try:
+                connection.request("POST", path, body=body, headers=headers)
+                response = connection.getresponse()
+                data = response.read()
+            # RemoteDisconnected, a broken pipe or a reset: how a dead socket
+            # shows depends on the platform, and all are ConnectionErrors.
+            except ConnectionError:
+                connection.close()
+                connections.pop(key, None)
+                if reused and attempt == 0:
+                    continue
+                raise
+            except BaseException:
+                connection.close()
+                connections.pop(key, None)
+                raise
+            if response.will_close:
+                connection.close()
+                connections.pop(key, None)
+            return response.status, response.reason, data
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _target(self) -> tuple[str, str | None]:
         """Resolve every current HTTP service replica and choose round-robin."""
@@ -154,26 +209,29 @@ class GraphQueryClient:
             # seconds" and cannot see that most of it was this one call. A
             # no-op outside a traced request, which is every sync.
             inject_traceparent(headers)
-            request = Request(target, data=body, method="POST", headers=headers)
             try:
-                with self._opener.open(request, timeout=timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                if not isinstance(payload, dict) or "result" not in payload:
-                    raise GraphQueryError("graph service returned an invalid response")
-                return payload["result"]
-            except HTTPError as exc:
-                try:
-                    detail = json.loads(exc.read().decode("utf-8")).get("detail")
-                except Exception:  # pragma: no cover - malformed upstream response
-                    detail = None
-                # Authentication and caller errors are deterministic; retrying
-                # would only delay the useful error.
-                if 400 <= exc.code < 500:
-                    raise GraphQueryError(
-                        f"graph service rejected {operation!r}: {detail or exc.reason}"
-                    ) from exc
-                last = exc
-            except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+                status, reason, data = self._post(target, body, headers, timeout)
+                if status >= 400:
+                    try:
+                        detail = json.loads(data.decode("utf-8")).get("detail")
+                    except Exception:  # pragma: no cover - malformed upstream response
+                        detail = None
+                    # Authentication and caller errors are deterministic;
+                    # retrying would only delay the useful error.
+                    if 400 <= status < 500:
+                        raise GraphQueryError(
+                            f"graph service rejected {operation!r}: {detail or reason}"
+                        )
+                    last = GraphQueryError(f"HTTP {status} {detail or reason}")
+                else:
+                    payload = json.loads(data.decode("utf-8"))
+                    if not isinstance(payload, dict) or "result" not in payload:
+                        raise GraphQueryError("graph service returned an invalid response")
+                    return payload["result"]
+            # `http.client.HTTPException` is not an OSError: a truncated body
+            # (IncompleteRead) used to escape this loop unretried, as a raw
+            # exception and a 500 from whichever surface had asked.
+            except (OSError, TimeoutError, http.client.HTTPException, json.JSONDecodeError) as exc:
                 remaining = remaining_seconds()
                 if remaining is not None and remaining <= 0:
                     raise DeadlineExceeded("assistant request deadline exceeded") from exc
