@@ -314,6 +314,13 @@ a {
   background: var(--danger-soft);
 }
 
+/* Armed: the next press removes (two-press destructive buttons). */
+.btn--danger.btn--armed {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  font-weight: 600;
+}
+
 .btn--icon {
   width: 34px;
   height: 34px;
@@ -1962,6 +1969,98 @@ select.text-input {
   display: inline-flex;
   gap: calc(4px * var(--sp));
   align-items: center;
+}
+
+/* A table whose rows become cards on a phone (the Sources table). Its
+   actions column sat about 1,000px to the right behind two horizontal
+   scrollers, so a phone could not reach "remove" at all; as a card every
+   field is a line and the actions wrap underneath at a touch size. */
+@media (max-width: 860px) {
+  .table-scroll.table-scroll--cards {
+    overflow-x: visible;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .data-table.data-table--cards {
+    display: block;
+    min-width: 0;
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .data-table--cards thead {
+    display: none;
+  }
+
+  .data-table--cards tbody {
+    display: flex;
+    flex-direction: column;
+    gap: calc(10px * var(--sp));
+  }
+
+  .data-table--cards tr {
+    display: block;
+    padding: calc(12px * var(--sp)) calc(14px * var(--sp));
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .data-table--cards td {
+    display: block;
+    padding: calc(3px * var(--sp)) 0;
+    border: none;
+  }
+
+  .data-table--cards td[data-label]::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 4.5em;
+    margin-right: calc(8px * var(--sp));
+    font-family: var(--font);
+    font-size: calc(11px * var(--fs));
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+
+  .data-table--cards .source-name-cell {
+    font-size: calc(15px * var(--fs));
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .data-table--cards .path-cell {
+    max-width: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .data-table--cards .actions-cell {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: calc(6px * var(--sp));
+    margin-top: calc(8px * var(--sp));
+    padding-top: calc(10px * var(--sp));
+    border-top: 1px solid var(--border);
+  }
+
+  .data-table--cards .actions-cell .btn,
+  .data-table--cards .actions-cell select {
+    min-height: 36px;
+  }
+
+  /* Apart from the others, so it is not the button a thumb lands on by
+     reaching for "disable". */
+  .data-table--cards .actions-cell .btn--danger {
+    margin-left: auto;
+  }
 }
 
 .quick-add {
