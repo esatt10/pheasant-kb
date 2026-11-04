@@ -1,0 +1,12 @@
+# Secrets and the deployment's live state. Terraform state holds every
+# secret in plain text, so it never belongs in git.
+.env
+deploy/.terraform/
+deploy/*.tfstate
+deploy/*.tfstate.*
+deploy/*.tfplan
+# The deployment's own values: personal email, home IP, subscription,
+# tenant and object IDs. Not secrets, but not for a public repository.
+deploy/*.tfvars
+deploy/.terraform.tfstate.lock.info
+deploy/crash.log
