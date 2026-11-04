@@ -253,6 +253,11 @@ export function Notebook() {
     right: visibleIds("right"),
   };
   const sideOpen = (column: TileColumn) => columns[column].some((id) => !specs[id].collapsed);
+  // A tile the narrow layout leaves out of every column (the graph below
+  // 860px, the sources rail below 1180px) has no slot to hold its host, so
+  // its content must not be rendered: portalled into a detached host, the
+  // graph's Cytoscape measured NaN, threw, and blanked the whole page.
+  const placed = new Set<TileId>([...layout.left, ...layout.inner, ...layout.center, ...layout.right]);
   /** A side column's track: its width, a spine, a drop strip while dragging, or nothing. */
   const sideTrack = (column: TileColumn, width: string) =>
     columns[column].length === 0
@@ -352,8 +357,9 @@ export function Notebook() {
       {/* Each tile's content, rendered once and portalled into the host its
           tile shows (`components/Tiles.tsx`), so moving a tile never remounts
           it. A folded tile's content is dropped, except the chat's: an answer
-          being written must still land in the thread when it is unfolded. */}
-      {!state.railCollapsed
+          being written must still land in the thread when it is unfolded. So
+          is the content of a tile the layout does not place. */}
+      {!state.railCollapsed && placed.has("sources")
         ? createPortal(
             <TileScope spec={specs.sources}>
               <aside className="pane pane--rail">
@@ -374,7 +380,7 @@ export function Notebook() {
           )
         : null}
 
-      {browserOpen && !state.browserCollapsed
+      {browserOpen && !state.browserCollapsed && placed.has("taxonomy")
         ? createPortal(
             <TileScope spec={specs.taxonomy}>
               <Suspense
@@ -447,7 +453,7 @@ export function Notebook() {
         hosts.chat,
       )}
 
-      {!state.panelCollapsed
+      {!state.panelCollapsed && placed.has("graph")
         ? createPortal(
             <TileScope spec={specs.graph}>
       <aside className="pane pane--panel">

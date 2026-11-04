@@ -10,6 +10,9 @@
  * So this boots the real server over a real region, opens the page, and treats
  * a console error as a failure. It also asserts the sections that must exist
  * are present — a page that renders nothing renders without errors too.
+ *
+ * The same region then serves the Notebook at phone width, which a desktop
+ * viewport never exercises (see below).
  */
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
@@ -84,8 +87,25 @@ const missing = required.filter((text) => !body.includes(text));
 // text assertion and tells a reader nothing.
 const marks = await page.locator('.sweep svg circle').count();
 
+// The Notebook at phone width. Below 860px its layout leaves the graph tile
+// out of every column, and the graph used to render anyway, into a detached
+// host: Cytoscape measured NaN, threw, and React unmounted the whole app, so
+// a phone saw an empty page. A blank page logs the error once and then has
+// nothing to assert on, so this checks for the composer as well.
+const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+const phoneErrors = [];
+phone.on('pageerror', (e) => phoneErrors.push(String(e)));
+await phone.goto(`${base}/`, { waitUntil: 'networkidle' });
+await phone.waitForTimeout(3000);
+const composer = await phone.locator('textarea').count();
+
 await browser.close();
 server.kill();
+
+if (phoneErrors.length || composer === 0) {
+  console.error('the Notebook did not render at phone width:', phoneErrors);
+  process.exit(1);
+}
 
 if (errors.length) {
   console.error('console errors:', errors);
@@ -99,4 +119,4 @@ if (marks === 0) {
   console.error('no sweep marks were drawn; the charts rendered empty');
   process.exit(1);
 }
-console.log(`tuning page rendered clean: ${marks} sweep marks, no console errors`);
+console.log(`tuning page rendered clean: ${marks} sweep marks, no console errors; Notebook renders at phone width`);
