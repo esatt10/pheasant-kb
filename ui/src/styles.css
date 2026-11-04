@@ -130,6 +130,10 @@ a {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* A phone's 100vh is the viewport with the browser's address bar *hidden*,
+     so with it showing, the bottom of the app -- the chat composer -- sat
+     under the browser chrome. `dvh` is the viewport as it is now. */
+  height: 100dvh;
   background: var(--bg-sunken);
 }
 
@@ -2001,6 +2005,7 @@ select.text-input {
 .modal {
   width: min(640px, 100%);
   max-height: 86vh;
+  max-height: 86dvh;
   overflow-y: auto;
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -2141,10 +2146,130 @@ select.text-input {
 /* ------------------------------------------------------------ responsive */
 
 /* Narrow windows: the Notebook moves tiles into its middle column itself
-   (`pages/Notebook.tsx`), so its side tracks are already empty here. */
+   (`pages/Notebook.tsx`), so its side tracks are already empty here.
+
+   The topbar's nav and actions fold behind a menu button. Left inline they
+   laid every page out ~1,075px wide on a 390px phone, and a mobile browser
+   answers that by zooming the whole app out until it fits -- which is what
+   made it unusable rather than merely cramped. */
+.topbar {
+  position: relative;
+}
+
+.topbar__menu {
+  display: contents;
+}
+
+.topbar__menu-btn {
+  display: none;
+}
+
 @media (max-width: 860px) {
+  /* A table wider than a phone scrolls inside itself instead of widening the
+     page (`.table-scroll` already does this for the tables that opt in). */
+  .data-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-scrim {
+    padding: 10px;
+  }
+
+  .page {
+    padding: 16px 16px 40px;
+  }
+
+  /* Title and lede take the row; the actions wrap underneath rather than
+     squeezing the lede into a column a few words wide. */
+  .page__header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .page__header > :first-child {
+    flex: 1 1 100%;
+  }
+
+  .page__header .btn {
+    margin-left: 0;
+  }
+
+  .page__header .muted {
+    overflow-wrap: anywhere;
+  }
+
+  .modal {
+    padding: 16px;
+  }
+
+  .topbar {
+    gap: 12px;
+    padding: 0 12px;
+  }
+
   .topbar__kb {
     display: none;
+  }
+
+  .topbar__menu-btn {
+    display: inline-flex;
+    margin-left: auto;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .topbar__menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px 12px 14px;
+    max-height: calc(100dvh - 56px);
+    overflow-y: auto;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .topbar__menu--open {
+    display: flex;
+  }
+
+  .topbar__nav {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .topbar__nav .navlink {
+    padding: 11px 14px;
+    border-radius: var(--radius);
+    font-size: 15px;
+  }
+
+  .topbar__right {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* iOS Safari zooms the page in when a field under 16px takes focus, and
+   leaves it zoomed after the keyboard closes. Touch screens get 16px fields;
+   a mouse keeps the denser desktop sizes. */
+@media (max-width: 860px) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }
 
@@ -4093,7 +4218,7 @@ select.text-input {
 .mcp-app-slot { position: relative; }
 /* Fullscreen is the same frame restyled, not moved: a moved iframe reloads. */
 .mcp-app-frame--fullscreen { position: fixed; inset: 12px; z-index: 1000;
-  width: calc(100vw - 24px); height: calc(100vh - 24px); border-radius: 12px;
+  width: calc(100vw - 24px); height: calc(100vh - 24px); height: calc(100dvh - 24px); border-radius: 12px;
   box-shadow: 0 0 0 100vmax rgba(8, 10, 14, 0.6); }
 .source-chip-wrap { display: inline-flex; align-items: stretch; gap: 2px; }
 .source-chip__visualize { border: 1px solid var(--border); background: var(--bg-raised);

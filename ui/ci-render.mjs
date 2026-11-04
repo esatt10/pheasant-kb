@@ -99,11 +99,34 @@ await phone.goto(`${base}/`, { waitUntil: 'networkidle' });
 await phone.waitForTimeout(3000);
 const composer = await phone.locator('textarea').count();
 
+// Every page must lay out at the phone's own width. One element wider than
+// the screen (the topbar's nav and buttons, once) makes a mobile browser
+// lay the whole app out at that width and zoom out to fit it, so everything
+// is unreadably small and nothing fails or logs. The nav lives behind a menu
+// at this width, so that has to open too.
+const tooWide = [];
+for (const route of ['/', '/graph', '/memory', '/evaluation', '/tuning', '/sources', '/config']) {
+  await phone.goto(`${base}${route}`, { waitUntil: 'networkidle' });
+  await phone.waitForTimeout(800);
+  const width = await phone.evaluate(() => document.documentElement.scrollWidth);
+  if (width > 390) tooWide.push(`${route} laid out ${width}px wide`);
+}
+await phone.getByRole('button', { name: 'Open menu' }).click();
+const menuLinks = await phone.locator('.topbar__menu--open .navlink').count();
+
 await browser.close();
 server.kill();
 
 if (phoneErrors.length || composer === 0) {
   console.error('the Notebook did not render at phone width:', phoneErrors);
+  process.exit(1);
+}
+if (tooWide.length) {
+  console.error('pages wider than a 390px phone (the browser zooms them out):', tooWide);
+  process.exit(1);
+}
+if (menuLinks === 0) {
+  console.error('the topbar menu did not open at phone width');
   process.exit(1);
 }
 
@@ -119,4 +142,4 @@ if (marks === 0) {
   console.error('no sweep marks were drawn; the charts rendered empty');
   process.exit(1);
 }
-console.log(`tuning page rendered clean: ${marks} sweep marks, no console errors; Notebook renders at phone width`);
+console.log(`tuning page rendered clean: ${marks} sweep marks, no console errors; every page fits a phone`);

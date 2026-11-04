@@ -168,23 +168,28 @@ export function Notebook() {
 
   const hosts = useTileHosts();
   const [dragging, setDragging] = useState<TileId | null>(null);
-  // Narrow windows keep the old behaviour for the tiles that had it — no
-  // sources rail below 1180px, no graph below 860px — and fold every other
-  // tile into the middle column rather than hiding wherever it was dragged.
+  // Narrow windows fold every tile into the middle column rather than hiding
+  // it wherever it was dragged, and drop the graph below 860px (the Graph page
+  // is one tap away in the menu). The sources rail heads the stack, folded
+  // until asked for: it used to be dropped outright below 1180px, so a phone
+  // or tablet could not scope a question to a source or add one from here.
   const narrow = useMediaQuery("(max-width: 1180px)");
   const compact = useMediaQuery("(max-width: 860px)");
+  // Its own fold state, so opening the rail on a phone does not change the
+  // desktop rail's remembered state, and a phone starts with it out of the way.
+  const [narrowRailOpen, setNarrowRailOpen] = useState(false);
   const layout = useMemo<TileLayout>(() => {
     if (!narrow) return state.tiles;
-    // The taxonomy view goes back above the chat, where it fits a narrow window.
     const left = state.tiles.left.filter((tile) => tile !== "sources");
     const right = compact ? state.tiles.right.filter((tile) => tile !== "graph") : [];
     return {
       left: [],
       inner: [],
-      center: [...left, ...state.tiles.inner, ...state.tiles.center, ...right],
+      center: ["sources", ...left, ...state.tiles.inner, ...state.tiles.center, ...right],
       right: compact ? [] : state.tiles.right,
     };
   }, [state.tiles, narrow, compact]);
+  const railCollapsed = narrow ? !narrowRailOpen : state.railCollapsed;
 
   if (overview.isSuccess && !hasContent) {
     return (
@@ -202,8 +207,9 @@ export function Notebook() {
       id: "sources",
       title: "Sources",
       visible: true,
-      collapsed: state.railCollapsed,
-      onToggle: () => dispatch({ type: "toggle-rail" }),
+      collapsed: railCollapsed,
+      onToggle: () =>
+        narrow ? setNarrowRailOpen((open) => !open) : dispatch({ type: "toggle-rail" }),
       host: hosts.sources,
       subtitle: state.sourceFilter ?? undefined,
     },
@@ -254,7 +260,7 @@ export function Notebook() {
   };
   const sideOpen = (column: TileColumn) => columns[column].some((id) => !specs[id].collapsed);
   // A tile the narrow layout leaves out of every column (the graph below
-  // 860px, the sources rail below 1180px) has no slot to hold its host, so
+  // 860px) has no slot to hold its host, so
   // its content must not be rendered: portalled into a detached host, the
   // graph's Cytoscape measured NaN, threw, and blanked the whole page.
   const placed = new Set<TileId>([...layout.left, ...layout.inner, ...layout.center, ...layout.right]);
@@ -359,7 +365,7 @@ export function Notebook() {
           it. A folded tile's content is dropped, except the chat's: an answer
           being written must still land in the thread when it is unfolded. So
           is the content of a tile the layout does not place. */}
-      {!state.railCollapsed && placed.has("sources")
+      {!railCollapsed && placed.has("sources")
         ? createPortal(
             <TileScope spec={specs.sources}>
               <aside className="pane pane--rail">
@@ -367,7 +373,13 @@ export function Notebook() {
                   sources={overview.data?.sources ?? []}
                   selected={state.sourceFilter}
                   selectedType={state.sourceTypeFilter}
-                  onSelect={(source) => dispatch({ type: "filter-source", source })}
+                  onSelect={(source) => {
+                    dispatch({ type: "filter-source", source });
+                    // Stacked above the chat, an open rail is what the chat
+                    // gave its height to: picking a source hands it back (the
+                    // folded header still names the selection).
+                    if (narrow) setNarrowRailOpen(false);
+                  }}
                   alsoSelected={state.alsoSources}
                   onToggle={(source) => dispatch({ type: "toggle-source", source })}
                   onSelectType={(sourceType) => dispatch({ type: "filter-source-type", sourceType })}
