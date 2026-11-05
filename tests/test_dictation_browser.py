@@ -302,3 +302,22 @@ def test_a_refused_session_turns_off_says_why_and_frees_the_microphone(browser, 
     page.wait_for_function("() => window.__streams.length > 0")
     assert _live_tracks(page) == 0
     assert _value(page) == ""
+
+
+def test_a_phone_still_says_why_dictation_stopped(browser, region) -> None:
+    """The phone layout hides the composer's notes to save a row; dictation's
+    is the one place a blocked microphone or a refusal is said, so it stays."""
+
+    region["provider"].refuse = (401, "Incorrect API key provided")
+    context = browser.new_context(
+        permissions=["microphone"], viewport={"width": 390, "height": 760}, is_mobile=True
+    )
+    context.add_init_script(TRACK_STREAMS)
+    page = context.new_page()
+    page.goto(region["url"])
+    page.wait_for_selector(BOX)
+    _mic(page).click()
+    _wait_state(page, "off")
+    note = page.locator(".composer__mic-note")
+    note.wait_for(state="visible")
+    assert "Incorrect API key" in note.inner_text()

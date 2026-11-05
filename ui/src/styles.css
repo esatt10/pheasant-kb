@@ -5822,7 +5822,8 @@ select.text-input {
     text-overflow: ellipsis;
   }
 
-  .notebook--tabs .composer__send {
+  .notebook--tabs .composer__send,
+  .notebook--tabs .composer__mic-btn {
     width: 32px;
     height: 32px;
   }
@@ -5838,9 +5839,11 @@ select.text-input {
   }
 
   /* The chat header already says "Connect model"; on a phone the composer's
-     copy of it (and its sentence) is a second row for the same thing. */
-  .notebook--tabs .composer__note,
-  .notebook--tabs .composer__note + .btn {
+     copy of it (and its sentence) is a second row for the same thing.
+     Dictation's note stays: "stopped at the limit" or "microphone blocked"
+     is said nowhere else. */
+  .notebook--tabs .composer__note:not(.composer__mic-note),
+  .notebook--tabs .composer__note:not(.composer__mic-note) + .btn {
     display: none;
   }
 
