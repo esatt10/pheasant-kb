@@ -95,14 +95,3 @@ was complete in every run where a one-paragraph request left components out:
   "compose"` (and a stream at `/assistant/chat/stream`); `ask_knowledge_base`
   with `intent="compose"` is the same composition with the full payload,
   which can exceed an MCP client's result limit.
-
-## A worked example
-
-`examples/compose-ai-platform/` is one real session of this workflow: an
-agent hands a 40-resource Azure AI platform behind an AI gateway to
-`compose_artifact`, validates and reviews each round, and revises twice with
-`previous_job`. It holds the three requests, the three `get_job` results, the
-final Terraform files and the validation transcript. The round-1 request is a
-model of steps 2–3; the round-2 request shows how a request that leans on a
-convention ("in the form the documentation's examples use") can carry it to a
-case it does not fit.

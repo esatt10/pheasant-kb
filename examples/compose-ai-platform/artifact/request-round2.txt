@@ -1,7 +1,0 @@
-Revise the configuration from the previous job. terraform validate passes; make exactly these review corrections and keep everything else:
-1. The load-balanced backend pool must declare that it is a pool: set its backend type to the value the backends specification documents for a pool. Its members' priority and weight must be valid values from that specification (the primary preferred, the secondary as failover), not -1 placeholders.
-2. The gateway must call the Foundry account without keys: give the API Management instance a managed identity, assign that identity a role on the Foundry account, and add the managed-identity authentication policy to the API policy for the Foundry resource, as its policy reference documents. Reference the identity's principal ID in the form the provider documentation's examples use.
-3. The Foundry connection of category ApiManagement must target the API Management gateway by reference (the API Management instance's gateway URL attribute and the API's path) and use the authType the connections specification documents for managed identity; remove the variables it no longer needs.
-4. The primary backend's URL must refer to the Foundry account's endpoint attribute. The secondary (failover) backend keeps its URL variable.
-5. Remove log_analytics_destination_type from diagnostic settings whose target the documentation says it is not configurable for.
-Return the complete configuration as providers.tf, variables.tf, main.tf, outputs.tf and terraform.tfvars.example.
