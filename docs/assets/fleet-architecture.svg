@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1524" width="1800" height="1524" class="fleet" role="img" aria-label="pheasant role-split fleet at maximum configuration: sources and SDK connectors feed one indexer that is the sole commit authority, which hands bytes to N gRPC preparation workers and drains a NATS JetStream index queue; it is the only writer of PostgreSQL and the state volume, which N graph-free API replicas and one graph service read; agents, operators and a Synapse router consume the API; model endpoints, the observation, evaluation, tuning and readiness planes, and three separate service tokens sit alongside.">
+<style>
+:root {
+  --ground: #f4f6f8; --surface: #ffffff; --surface-2: #e9edf2; --plane-wash: #eff1f6;
+  --line: #c0c7d2; --line-strong: #69727f; --ink: #171a20; --body: #3d4552; --muted: #626c7c;
+  --accent: #b45309; --accent-ink: #92400e; --accent-wash: #fdf4e7;
+  --token: #6d28d9; --token-wash: #f3eefc; --badge: #dfe4ea; --badge-ink: #3d4552;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --ground: #11141a; --surface: #1a1e26; --surface-2: #212733; --plane-wash: #171b22;
+  --line: #39414f; --line-strong: #8a93a4; --ink: #e7e9ee; --body: #b5bcc9; --muted: #98a1b2;
+  --accent: #eab135; --accent-ink: #eab135; --accent-wash: #2b2412;
+  --token: #a78bfa; --token-wash: #221c33; --badge: #2c3341; --badge-ink: #b5bcc9;
+} }
+
+.fleet { font-family: 'IBM Plex Sans', 'Segoe UI', Helvetica, Arial, sans-serif; }
+.fleet text { fill: var(--ink); }
+.fleet .h1 { font-size: 23px; font-weight: 600; letter-spacing: -0.2px; }
+.fleet .h2 { font-size: 12.5px; fill: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .band { font-size: 11px; font-weight: 600; letter-spacing: 1.4px; fill: var(--muted); }
+.fleet .t  { font-size: 15.5px; font-weight: 600; }
+.fleet .t2 { font-size: 13px; font-weight: 600; }
+.fleet .s  { font-size: 11px; fill: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .s2 { font-size: 10px; fill: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .l  { font-size: 11.5px; fill: var(--body); }
+.fleet .al { font-size: 10.5px; fill: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .al-a { font-size: 10.5px; fill: var(--accent-ink); font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .bt { font-size: 10.5px; font-weight: 600; fill: var(--badge-ink); text-anchor: middle; font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+.fleet .bx       { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.fleet .bx-core  { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 2; }
+.fleet .bx-infra { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+.fleet .bx-plane { fill: var(--plane-wash); stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.fleet .bx-sub   { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.fleet .bx-dash  { fill: var(--surface); stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.fleet .bx-token { fill: var(--token-wash); stroke: var(--token); stroke-width: 1.5; }
+.fleet .badge    { fill: var(--badge); }
+.fleet .ar   { fill: none; stroke: var(--line-strong); stroke-width: 1.4; }
+.fleet .ar-a { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+.fleet .ar-d { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-dasharray: 5 4; }
+.fleet .head  { fill: var(--line-strong); }
+.fleet .headA { fill: var(--accent); }
+
+</style>
+<rect x="0" y="0" width="1800" height="1524" fill="var(--ground)"/>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+<marker id="arrow-r" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M10,0 L0,5 L10,10 z"/></marker>
+<marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="headA" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<text class="h1" x="48" y="40">pheasant — the role-split fleet at maximum configuration</text><text class="h2" x="48" y="62">deploy/compose/docker-compose.scale.yml + fleet.yaml · postgres · NATS JetStream · gRPC workers · LanceDB · every plane enabled</text>
+<g transform="translate(0,64)">
+<text class="band" x="48" y="92">SOURCES  ·  incremental by default</text>
+<rect class="bx" x="48" y="104" width="548" height="144" rx="7"/>
+<text class="t" x="66" y="131">Mounted sources</text>
+<text class="s" x="66" y="149">read_only_sources: true · deny_path_traversal · allow_workspace_roots</text>
+<text class="l" x="66" y="174">repository · folder · file · obsidian_vault · web_collection</text>
+<text class="l" x="66" y="191">api · s3 · memory (frontmatter Markdown, one file per record)</text>
+<text class="l" x="66" y="208">git: detect_commit_changes + branch switch → reindex</text>
+<text class="l" x="66" y="225">artifact id  file:{source}:{relpath}:branch={b}  is a contract</text>
+<rect class="bx" x="632" y="104" width="548" height="144" rx="7"/>
+<text class="t" x="650" y="131">SDK connectors</text>
+<text class="s" x="650" y="149">sources[].type resolves through entry points — no dispatch code</text>
+<text class="l" x="650" y="174">notion · gdrive · slack · confluence · imap  (first-party)</text>
+<text class="l" x="650" y="191">third-party plugins run at connector.runtime: sandboxed</text>
+<text class="l" x="650" y="208">wasmtime guest · fuel metering · linear-memory cap</text>
+<text class="l" x="650" y="225">a guest declaring an unwired import fails to load at all</text>
+<text class="band" x="48" y="288">INGEST  ·  scale workers, not indexers</text>
+<rect class="bx-core" x="48" y="300" width="572" height="312" rx="7"/>
+<text class="t" x="66" y="327">Indexer</text>
+<text class="s" x="66" y="345">serve --role indexer</text>
+<text class="l" x="66" y="370">watcher: 20 000 paths · 250 ms debounce · 1 s batch window</text>
+<text class="l" x="66" y="387">scheduler beat 900 s · memory, IdP and reclamation upkeep</text>
+<text class="l" x="66" y="404">drains PHEASANT_INDEX · holds sync_lock and source_leases</text>
+<text class="l" x="66" y="421">sha256 unchanged → skipped before the bytes are ever read</text>
+<text class="l" x="66" y="438">4 sources · 16 files · 8 embeddings in parallel</text>
+<text class="l" x="66" y="455">SOLE COMMIT AUTHORITY — graph, vectors and FTS are one stream</text>
+<text class="l" x="66" y="472">a second indexer is elected hot standby, never throughput</text>
+<text class="l" x="66" y="489">pheasant_commit_authority_saturation &gt; 0.8 → shard the region</text>
+<text class="l" x="66" y="506"></text>
+<text class="l" x="66" y="523">remote preparation is an optimization: no arrangement of</text>
+<text class="l" x="66" y="540">worker failures may change what a sync produces</text>
+<rect class="badge" x="580" y="313" width="26" height="20" rx="10"/><text class="bt" x="593" y="327">×1</text>
+<rect class="bx" x="712" y="300" width="468" height="200" rx="7"/>
+<text class="t" x="730" y="327">Preparation workers</text>
+<text class="s" x="730" y="345">worker --transport grpc :8766</text>
+<text class="l" x="730" y="370">extract 7 doc formats · chunk · taxonomy · caption</text>
+<text class="l" x="730" y="387">gRPC round-robin · circuit breaker · deadline propagation</text>
+<text class="l" x="730" y="404">failover to another worker, then to local preparation</text>
+<text class="l" x="730" y="421">holds exactly one secret: the index-worker token</text>
+<text class="l" x="730" y="438">refuses a DSN, model key, graph token or source list</text>
+<text class="l" x="730" y="455">api.enabled: false is enforced — 404 outside the probes</text>
+<rect class="badge" x="1140" y="313" width="26" height="20" rx="10"/><text class="bt" x="1153" y="327">×N</text>
+<rect class="bx-infra" x="712" y="520" width="468" height="92" rx="7"/>
+<text class="t" x="730" y="547">NATS JetStream</text>
+<text class="s" x="730" y="565">sync.queue.backend: nats</text>
+<text class="l" x="730" y="590">PHEASANT_INDEX / pheasant.index.tasks · pheasant-indexers</text>
+<text class="l" x="730" y="607">visibility 300 s · max_attempts 5 · content-addressed ids</text>
+<polyline class="ar" points="300,248 300,300" marker-end="url(#arrow)"/>
+<text class="al" x="310" y="276" text-anchor="start">items + bytes</text>
+<polyline class="ar" points="906,248 906,276 500,276 500,300" marker-end="url(#arrow)"/>
+<text class="al" x="898" y="262" text-anchor="end">connector checkpoints</text>
+<polyline class="ar" points="620,356 712,356" marker-end="url(#arrow)"/>
+<text class="al" x="666" y="348" text-anchor="middle">bytes</text>
+<polyline class="ar" points="712,400 620,400" marker-end="url(#arrow)"/>
+<text class="al" x="666" y="392" text-anchor="middle">chunks</text>
+<polyline class="ar" points="620,566 712,566" marker-end="url(#arrow)" marker-start="url(#arrow-r)"/>
+<text class="al" x="666" y="556" text-anchor="middle">publish/claim</text>
+<text class="band" x="48" y="652">PERSISTENCE</text>
+<rect class="bx-infra" x="48" y="664" width="544" height="236" rx="7"/>
+<text class="t" x="66" y="691">PostgreSQL</text>
+<text class="s" x="66" y="709">storage.backend: postgres · pool_size 16</text>
+<text class="l" x="66" y="734">artifacts · chunks · chunks_fts (tsvector + BM25 8/3/2/1)</text>
+<text class="l" x="66" y="751">graph_nodes / graph_edges — storage.graph_format: rows</text>
+<text class="l" x="66" y="768">generation id = XOR fold of row digests, O(changed) commit</text>
+<text class="l" x="66" y="785">source_leases · index_tasks · log_tasks · ingest receipts</text>
+<text class="l" x="66" y="802">memory_records · interactions · evaluation_* · tuning_*</text>
+<text class="l" x="66" y="819">a commit costs what the change costs, not what the graph is</text>
+<rect class="bx-infra" x="624" y="664" width="272" height="236" rx="7"/>
+<text class="t" x="642" y="691">/state</text>
+<text class="s" x="642" y="709">rw: indexer only</text>
+<text class="l" x="642" y="734">LanceDB vectors —</text>
+<text class="l" x="642" y="751">outside the graph</text>
+<text class="l" x="642" y="768">transaction; repair</text>
+<text class="l" x="642" y="785">reconciles them</text>
+<text class="l" x="642" y="802">manifests · graph</text>
+<text class="l" x="642" y="819">snapshots  900 s</text>
+<text class="l" x="642" y="836">tuning bundle row,</text>
+<text class="l" x="642" y="853">30 s TTL per replica</text>
+<rect class="bx-infra" x="928" y="664" width="252" height="236" rx="7"/>
+<text class="t" x="946" y="691">/exports</text>
+<text class="s" x="946" y="709">read by outsiders</text>
+<text class="l" x="946" y="734">Parquet tables, written</text>
+<text class="l" x="946" y="751">by DuckDB — read-side</text>
+<text class="l" x="946" y="768">only, never a backend</text>
+<text class="l" x="946" y="785">interactions cold</text>
+<text class="l" x="946" y="802">partitions  dt=…</text>
+<text class="l" x="946" y="819">tuning per-trial</text>
+<text class="l" x="946" y="836">rankings, zstd JSONL</text>
+<text class="l" x="946" y="853">mounted, never served</text>
+<polyline class="ar-a" points="300,612 300,664" marker-end="url(#arrowA)"/>
+<text class="al-a" x="310" y="632" text-anchor="start">the one writer</text>
+<polyline class="ar" points="520,612 520,636 756,636 756,664" marker-end="url(#arrow)"/>
+<text class="al" x="640" y="630" text-anchor="middle">vectors · snapshots</text>
+<text class="band" x="48" y="952">SERVING</text>
+<rect class="bx" x="48" y="964" width="400" height="246" rx="7"/>
+<text class="t" x="66" y="991">Graph service</text>
+<text class="s" x="66" y="1009">serve --role graph</text>
+<text class="l" x="66" y="1034">the indexer's resident working set,</text>
+<text class="l" x="66" y="1051">for the whole-graph enrichment passes</text>
+<text class="l" x="66" y="1068">internal graph API, behind its own token</text>
+<text class="l" x="66" y="1085">reload announced on core NATS, per kb</text>
+<text class="l" x="66" y="1102">30 s poll is the backstop, not the path</text>
+<text class="l" x="66" y="1119">SqlGraph is the serving read surface:</text>
+<text class="l" x="66" y="1136">it holds nothing, so it cannot go stale</text>
+<rect class="badge" x="408" y="977" width="26" height="20" rx="10"/><text class="bt" x="421" y="991">×N</text>
+<rect class="bx" x="540" y="964" width="640" height="246" rx="7"/>
+<text class="t" x="558" y="991">API / MCP replicas</text>
+<text class="s" x="558" y="1009">serve --role api · 0.0.0.0:8765</text>
+<text class="l" x="558" y="1034">hybrid retrieval, fused by RRF: text BM25 + vector (LanceDB) + graph arm</text>
+<text class="l" x="558" y="1051">one over-fetch — ranking.filter_overfetch governs ACL, section, memory, criteria</text>
+<text class="l" x="558" y="1068">services/ layer: one implementation, two transports, identical refusal text</text>
+<text class="l" x="558" y="1085">memory policy · steering · validity at query time · acl_enforced: true</text>
+<text class="l" x="558" y="1102">assistant: agentic workflow, 2 rounds, graph expand depth 2, citations verified</text>
+<text class="l" x="558" y="1119">MCP streamable HTTP · bundled React UI · OpenAPI · Prometheus /metrics</text>
+<text class="l" x="558" y="1136">32 concurrent → 429 + Retry-After · 20 s SIGTERM drain off the event loop</text>
+<text class="l" x="558" y="1153">/ready publishes loaded beside published generation — staleness is detectable</text>
+<rect class="badge" x="1140" y="977" width="26" height="20" rx="10"/><text class="bt" x="1153" y="991">×N</text>
+<polyline class="ar" points="250,900 250,964" marker-end="url(#arrow)"/>
+<text class="al" x="260" y="930" text-anchor="start">graph rows</text>
+<polyline class="ar" points="520,900 520,928 740,928 740,964" marker-end="url(#arrow)"/>
+<text class="al" x="630" y="922" text-anchor="middle">chunks_fts · BM25</text>
+<polyline class="ar" points="756,900 756,940 940,940 940,964" marker-end="url(#arrow)"/>
+<text class="al" x="852" y="934" text-anchor="middle">vectors (ro)</text>
+<polyline class="ar" points="540,1090 448,1090" marker-end="url(#arrow)"/>
+<text class="al" x="494" y="1082" text-anchor="middle">graph query</text>
+<text class="band" x="48" y="1262">CONSUMERS</text>
+<rect class="bx" x="48" y="1274" width="352" height="118" rx="7"/>
+<text class="t" x="66" y="1301">Agents</text>
+<text class="s" x="66" y="1319">MCP streamable HTTP</text>
+<text class="l" x="66" y="1344">27 tools · 11 resources</text>
+<text class="l" x="66" y="1361">the tool surface is public API:</text>
+<text class="l" x="66" y="1378">additive evolution only</text>
+<rect class="bx" x="432" y="1274" width="352" height="118" rx="7"/>
+<text class="t" x="450" y="1301">Operators</text>
+<text class="s" x="450" y="1319">bundled UI, baked into the image</text>
+<text class="l" x="450" y="1344">React + Vite · graph visualisation</text>
+<text class="l" x="450" y="1361">SPA fallback lives at the 404</text>
+<text class="l" x="450" y="1378">handler, after routing failed</text>
+<rect class="bx-dash" x="816" y="1274" width="364" height="118" rx="7"/>
+<text class="t" x="834" y="1301">Synapse router</text>
+<text class="s" x="834" y="1319">pheasant-flock · contract JSON over HTTP</text>
+<text class="l" x="834" y="1344">the router scores this region's</text>
+<text class="l" x="834" y="1361">semantic contract, then fans out</text>
+<text class="l" x="834" y="1378">no Python dependency either way</text>
+<polyline class="ar" points="700,1210 700,1242"/>
+<polyline class="ar" points="224,1242 1000,1242" />
+<polyline class="ar" points="224,1242 224,1274" marker-end="url(#arrow)"/>
+<polyline class="ar" points="608,1242 608,1274" marker-end="url(#arrow)"/>
+<polyline class="ar" points="998,1242 998,1274" marker-end="url(#arrow)"/>
+<text class="al" x="712" y="1236" text-anchor="start">bearer token at the front door · /internal/* is exempt structurally</text>
+<text class="band" x="1236" y="288">MODEL ENDPOINTS</text>
+<rect class="bx-dash" x="1236" y="300" width="516" height="312" rx="7"/>
+<text class="t" x="1254" y="327">openai-spec provider</text>
+<text class="s" x="1254" y="345">the only sanctioned network calls at sync time</text>
+<text class="l" x="1254" y="370">embeddings  text-embedding-3-small · 1536-d · batch 128</text>
+<text class="l" x="1254" y="387">captioner + transcriber — an authored .caption.txt or</text>
+<text class="l" x="1254" y="404">.transcript.txt sidecar always wins over the model</text>
+<text class="l" x="1254" y="421">assistant  gpt · 24 context chunks · evidence graded</text>
+<text class="l" x="1254" y="438"></text>
+<text class="l" x="1254" y="455">Each keeps a deterministic offline stub, so the suite</text>
+<text class="l" x="1254" y="472">stays network-free — and no LLM call ever enters the</text>
+<text class="l" x="1254" y="489">indexing decision path. Determinism is a product</text>
+<text class="l" x="1254" y="506">guarantee, not a preference.</text>
+<text class="band" x="1236" y="652">PLANES  ·  each off by default, all on here</text>
+<rect class="bx-plane" x="1236" y="664" width="516" height="552" rx="7"/>
+<rect class="bx-sub" x="1252" y="680" width="484" height="126" rx="6"/>
+<text class="t2" x="1266" y="703">Observation &amp; formation</text>
+<text class="s2" x="1722" y="703" text-anchor="end">observability.interactions</text>
+<text class="l" x="1266" y="723">request path appends to a bounded ring only</text>
+<text class="l" x="1266" y="739">serve --role logger drains PHEASANT_LOGS → rows → Parquet</text>
+<text class="l" x="1266" y="755">rows, never files: never chunked, never searchable</text>
+<text class="l" x="1266" y="771">session-digest-v1 writes; three further rules propose</text>
+<rect class="bx-sub" x="1252" y="818" width="484" height="126" rx="6"/>
+<text class="t2" x="1266" y="841">Evaluation</text>
+<text class="s2" x="1722" y="841" text-anchor="end">evaluation.*  ·  read-only</text>
+<text class="l" x="1266" y="861">six cohorts · paired ablations B0–B6 · typed proof</text>
+<text class="l" x="1266" y="877">unknown is weight zero; silence is never a negative</text>
+<text class="l" x="1266" y="893">gates evaluated before aggregation, never averaged away</text>
+<text class="l" x="1266" y="909">__evaluation__ lease, never sync_lock · progress is a row</text>
+<rect class="bx-sub" x="1252" y="956" width="484" height="126" rx="6"/>
+<text class="t2" x="1266" y="979">Tuning</text>
+<text class="s2" x="1722" y="979" text-anchor="end">tuning.*</text>
+<text class="l" x="1266" y="999">stage attribution: which step lost the document</text>
+<text class="l" x="1266" y="1015">400 re-fusion trials cost no retrieval · 24 re-query</text>
+<text class="l" x="1266" y="1031">a winner must confirm on a holdout it never saw</text>
+<text class="l" x="1266" y="1047">one fleet-scoped bundle; tune apply is a separate act</text>
+<rect class="bx-sub" x="1252" y="1094" width="484" height="106" rx="6"/>
+<text class="t2" x="1266" y="1117">Readiness</text>
+<text class="s2" x="1722" y="1117" text-anchor="end">readiness.*</text>
+<text class="l" x="1266" y="1137">capability contract derived from live symbols, not written</text>
+<text class="l" x="1266" y="1153">corpus_denylist enforced at every door, in security/</text>
+<text class="l" x="1266" y="1169">verdict is tri-state — INCOMPLETE is not PASS</text>
+<text class="band" x="1236" y="1262">TRUST BOUNDARIES  ·  refusals, not conventions</text>
+<rect class="bx-token" x="1236" y="1274" width="516" height="160" rx="7"/>
+<text class="t" x="1254" y="1301">Three secrets, three boundaries</text>
+<text class="l" x="1254" y="1326">PHEASANT_API_TOKEN — callers → the region's API</text>
+<text class="l" x="1254" y="1343">PHEASANT_GRAPH_SERVICE_TOKEN — api/mcp → internal graph API</text>
+<text class="l" x="1254" y="1360">PHEASANT_INDEX_WORKER_TOKEN — indexer → preparation workers</text>
+<text class="l" x="1254" y="1377"></text>
+<text class="l" x="1254" y="1394">serve refuses to start when the graph and worker tokens name</text>
+<text class="l" x="1254" y="1411">one variable or resolve to one value. A worker is the least</text>
+<text class="l" x="1254" y="1428">trusted tier and holds the third by necessity.</text>
+<polyline class="ar-d" points="1236,400 1180,400" marker-end="url(#arrow)"/>
+<polyline class="ar-d" points="1236,560 1208,560 1208,1028 1180,1028" marker-end="url(#arrow)"/>
+<polyline class="ar-d" points="1252,760 1180,760" marker-end="url(#arrow)"/>
+</g>
+</svg>
