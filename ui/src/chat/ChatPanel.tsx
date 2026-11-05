@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type {
   AnswerDepth,
@@ -22,6 +22,8 @@ import {
   useKeywordReference,
 } from "./KeywordReference";
 import { McpAppFrame } from "./McpAppFrame";
+import { MicButton, useDictation } from "./MicButton";
+import { dictationUnsupported, spliceAtCaret } from "./dictation";
 import { SourceStrip, openable } from "./SourceStrip";
 
 export type { ChatTurn } from "../state/session";
@@ -113,6 +115,49 @@ export function ChatPanel({
   // `@remove` changed the index: the taxonomy view's listings are stale.
   const refreshArchive = useArchiveRefresh();
 
+  // Dictation: transcript text is written wherever the caret is, as it
+  // arrives. `draftRef` is the text as of the last write (several deltas can
+  // land before React renders), and `caretRef` the caret that write left,
+  // restored after the render that moves a controlled textarea's caret to
+  // its end.
+  const voice = useQuery({
+    queryKey: ["assistant-voice", sessionId],
+    queryFn: () => api.voiceStatus(sessionId),
+    staleTime: 60_000,
+  });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const caretRef = useRef<number | null>(null);
+  const writeDictated = (text: string, separate: boolean) => {
+    const el = textareaRef.current;
+    const value = draftRef.current;
+    const start = caretRef.current ?? el?.selectionStart ?? value.length;
+    const end = caretRef.current ?? el?.selectionEnd ?? value.length;
+    const next = spliceAtCaret(value, start, end, text, separate);
+    draftRef.current = next.value;
+    caretRef.current = next.caret;
+    dispatch({ type: "set-draft", text: next.value });
+  };
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || caretRef.current === null) return;
+    el.setSelectionRange(caretRef.current, caretRef.current);
+    caretRef.current = null;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [draft]);
+  const dictation = useDictation({
+    sessionId,
+    maxSeconds: voice.data?.max_seconds ?? 60,
+    onText: writeDictated,
+    onLive: () => textareaRef.current?.focus(),
+  });
+  const micUnavailable = voice.data
+    ? voice.data.available
+      ? dictationUnsupported()
+      : voice.data.reason || "not configured on the server"
+    : "checking…";
+
   const ask = useMutation({
     mutationFn: ({ id, question }: { id: string; question: string }) => {
       setProgress([]);
@@ -182,6 +227,8 @@ export function ChatPanel({
     if (/^@(taxonomy|browse|folders)$/i.test(question)) {
       dispatch({ type: "open-browser", source: sourceFilter, path: "" });
     }
+    // A sent question ends a dictation; its last words must not start the next one.
+    dictation.cancel();
     const id = `${Date.now()}-${turns.length}`;
     dispatch({ type: "ask", id, question });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -341,6 +388,9 @@ export function ChatPanel({
             onKeyDown={onKeyDown}
             aria-label="Ask a question"
           />
+          {voice.data?.available || dictation.state !== "off" ? (
+            <MicButton control={dictation} unavailable={dictation.state === "off" ? micUnavailable : null} />
+          ) : null}
           <button
             className="composer__send"
             onClick={() => submit(draft)}
@@ -352,6 +402,15 @@ export function ChatPanel({
           </button>
         </div>
         <div className="composer__hint">
+          {dictation.state === "live" ? (
+            <span className="composer__note composer__mic-note" role="status">
+              Listening — words go where the cursor is
+            </span>
+          ) : dictation.notice ? (
+            <span className="composer__note composer__mic-note" role="status">
+              {dictation.notice}
+            </span>
+          ) : null}
           {keywords.length > 0 ? (
             <button
               type="button"

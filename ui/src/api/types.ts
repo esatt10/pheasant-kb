@@ -260,6 +260,27 @@ export interface AssistantStatus {
   keywords?: AnswerKeyword[];
 }
 
+/** `GET /assistant/voice`: whether the composer may offer dictation. */
+export interface VoiceStatus {
+  available: boolean;
+  /** Why not, when `available` is false. */
+  reason: string | null;
+  model: string | null;
+  /** The cap on one dictation; the composer stops itself there. */
+  max_seconds: number;
+  sample_rate: number;
+}
+
+/** `POST /assistant/voice/session`: one live transcription session to open. */
+export interface VoiceSession {
+  client_secret: string;
+  expires_at: number | null;
+  model: string;
+  websocket_url: string;
+  sample_rate: number;
+  max_seconds: number;
+}
+
 /** One first-word keyword (`@table`, `@doc` …) and what it answers with. */
 export interface AnswerKeyword {
   keyword: string;

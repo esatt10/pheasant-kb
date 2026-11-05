@@ -180,7 +180,8 @@ pheasant-kb/
 │   │                            reinstate it; + @remove), source_urls
 │   │                            (a web collection's pages: add, remove),
 │   │                            sync_control (cancel a source's running
-│   │                            sync)
+│   │                            sync), voice (the composer's dictation:
+│   │                            a live transcription session, HTTP only)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            compose_tools (compose_artifact as a job),
@@ -216,7 +217,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 185 pytest modules, offline by design
+└── tests/                     ← 187 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1322,6 +1323,20 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   modes when hybrid is present, since hybrid already contains them. The stream
   carries provisional `draft` events that the verified `answer` replaces.
   `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
+- **Dictation is the browser's, the credential is the region's**
+  (`services/voice.py`, `assistant.voice`, `ui/src/chat/dictation.ts`). The
+  composer's microphone streams 24 kHz PCM16 straight to an OpenAI Realtime
+  transcription session (`gpt-live-transcribe`); the region only mints its
+  short-lived client secret (`POST /assistant/voice/session`, `no-store`), so
+  its key never reaches a browser and no audio crosses it. Deltas are spliced
+  in at the caret as they arrive; one dictation is capped at `max_seconds`
+  (60) and turns itself off there, a stop releases the microphone at once
+  while the session drains its last words, and a sent question cancels
+  rather than drains. HTTP only, like `raw_document`: an agent has no
+  microphone. No key, no microphone — the standalone default.
+  `tests/test_voice_dictation.py` over a real socket,
+  `tests/test_dictation_browser.py` in Chromium with a fake microphone
+  against the built UI (CI's browser job builds it).
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a

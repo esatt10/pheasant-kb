@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
 from pheasant.config.assistant_decisions import AssistantDecisionsSettings
+from pheasant.config.assistant_voice import AssistantVoiceSettings
 from pheasant.config.exclusions import (
     DEFAULT_EXCLUDES as DEFAULT_EXCLUDES,
 )
@@ -1047,6 +1048,8 @@ class AssistantSettings(ModelMixin):
     # The agent loop's judgements through the Decisions API (beta by default;
     # `mode: off` keeps the loop exactly as it was).
     decisions: AssistantDecisionsSettings = field(default_factory=AssistantDecisionsSettings)
+    # Dictation in the composer through a live transcription model.
+    voice: AssistantVoiceSettings = field(default_factory=lambda: AssistantVoiceSettings())
 
     def __post_init__(self) -> None:
         if self.reasoning_effort is not None and self.reasoning_effort not in {"none", "low"}:

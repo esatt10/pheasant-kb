@@ -425,3 +425,33 @@ class SyncNotRunning(ServiceError):
             "still waiting in the index queue can be cancelled once an indexer starts it."
         )
         self.source = source
+
+
+class VoiceNotConfigured(ServiceError):
+    """Dictation was asked for and nothing here can mint a transcription session.
+
+    Not retryable: no OpenAI key reaches ``assistant.voice``, or it (or the
+    assistant) is off, and asking again changes none of that. Split from
+    `VoiceUnavailable` the way `DecisionsNotConfigured` is split from
+    `DecisionsUnavailable`: one is a setting to change, the other a provider
+    that did not answer.
+    """
+
+    status = 503
+    code = "VOICE_NOT_CONFIGURED"
+
+    def __init__(self, reason: object) -> None:
+        super().__init__(f"Dictation is not available in this region: {reason}")
+        self.reason = str(reason)
+
+
+class VoiceUnavailable(ServiceError):
+    """The transcription provider was asked for a session and did not mint one."""
+
+    status = 502
+    code = "VOICE_UNAVAILABLE"
+    retryable = True
+
+    def __init__(self, reason: object) -> None:
+        super().__init__(f"The transcription service did not start a session: {reason}")
+        self.reason = str(reason)

@@ -117,6 +117,12 @@ class AssessRequest(BaseModel):
     relevance: bool = True
 
 
+class VoiceSessionRequest(BaseModel):
+    """Start one dictation. ``session_id`` is a pasted key's opaque handle."""
+
+    session_id: str | None = None
+
+
 def register_assistant_routes(
     app: FastAPI,
     *,
@@ -364,6 +370,45 @@ def register_assistant_routes(
                 relevance=req.relevance,
             ),
             env=dict(os.environ),
+        )
+
+    @app.get("/assistant/voice")
+    def assistant_voice(session_id: str | None = None) -> dict:
+        """Whether the composer may offer dictation. The operation is
+        `services.voice.voice_status`.
+
+        HTTP only, on purpose: dictation is for a person's microphone, and an
+        agent sends its question as text through ``ask_knowledge_base``.
+        """
+
+        from pheasant.services import voice as voice_service
+
+        return voice_service.voice_status(
+            services, credential=session_keys().get(session_id), env=dict(os.environ)
+        )
+
+    @app.post("/assistant/voice/session")
+    def assistant_voice_session(req: VoiceSessionRequest) -> Response:
+        """A short-lived secret for one live transcription session.
+
+        The operation is `services.voice.start_voice_session`; HTTP only, like
+        ``GET /assistant/voice``. The browser streams its microphone straight
+        to the transcriber with this secret — the region's key never leaves
+        the process and no audio passes through it. ``no-store``: a secret
+        that a cache kept would outlive the dictation it was minted for.
+        """
+
+        import json as json_module
+
+        from pheasant.services import voice as voice_service
+
+        minted = voice_service.start_voice_session(
+            services, credential=session_keys().get(req.session_id), env=dict(os.environ)
+        )
+        return Response(
+            content=json_module.dumps(minted),
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.get("/assistant/apps/knowledge-view")

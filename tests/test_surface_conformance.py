@@ -772,6 +772,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import retrieval as retrieval_service
     from pheasant.services import source_browser as source_browser_service
     from pheasant.services import sync_control as sync_control_service
+    from pheasant.services import voice as voice_service
     from pheasant.services import web_pages as web_pages_service
 
     public: set[str] = set()
@@ -787,6 +788,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         web_pages_service,
         archive_service,
         sync_control_service,
+        voice_service,
     ):
         for name, value in vars(module).items():
             if name.startswith("_") or not inspect.isfunction(value):
@@ -844,6 +846,16 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     public.discard("snapshot_path")
     public.discard("classify")
     public.discard("clean_directory")
+    # Dictation exists on one transport on purpose: it mints a live
+    # transcription session for a person's microphone, and an agent has no
+    # microphone — it sends text through `ask_knowledge_base`. Driven over HTTP
+    # in tests/test_voice_dictation.py and in a real browser in
+    # tests/test_dictation_browser.py. `websocket_url` and
+    # `session_request_body` are its helpers, called inside both operations.
+    public.discard("voice_status")
+    public.discard("start_voice_session")
+    public.discard("websocket_url")
+    public.discard("session_request_body")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

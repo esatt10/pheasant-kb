@@ -792,6 +792,87 @@ select.text-input {
   cursor: not-allowed;
 }
 
+/* Dictation: off is an outline mic, on is a filled one on the danger colour,
+   pulsing while it listens, with the time left beside it. */
+.composer__mic {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6px * var(--sp));
+  flex: none;
+}
+
+.composer__mic-btn {
+  width: calc(34px * var(--sp));
+  height: calc(34px * var(--sp));
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.composer__mic-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.composer__mic-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.composer__mic-btn--on,
+.composer__mic-btn--on:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  animation: mic-pulse 1.6s ease-out infinite;
+}
+
+.composer__mic-btn--starting {
+  animation: none;
+  opacity: 0.75;
+}
+
+.composer__mic-btn:disabled {
+  color: var(--border-strong);
+  cursor: not-allowed;
+}
+
+.composer__mic-time {
+  font-size: calc(11.5px * var(--fs));
+  font-variant-numeric: tabular-nums;
+  color: var(--danger);
+}
+
+.composer__mic-note {
+  color: var(--danger);
+}
+
+@keyframes mic-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--danger-soft);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer__mic-btn--on {
+    animation: none;
+  }
+}
+
 .composer__hint {
   display: flex;
   align-items: center;
@@ -5741,7 +5822,8 @@ select.text-input {
     text-overflow: ellipsis;
   }
 
-  .notebook--tabs .composer__send {
+  .notebook--tabs .composer__send,
+  .notebook--tabs .composer__mic-btn {
     width: 32px;
     height: 32px;
   }
@@ -5757,9 +5839,11 @@ select.text-input {
   }
 
   /* The chat header already says "Connect model"; on a phone the composer's
-     copy of it (and its sentence) is a second row for the same thing. */
-  .notebook--tabs .composer__note,
-  .notebook--tabs .composer__note + .btn {
+     copy of it (and its sentence) is a second row for the same thing.
+     Dictation's note stays: "stopped at the limit" or "microphone blocked"
+     is said nowhere else. */
+  .notebook--tabs .composer__note:not(.composer__mic-note),
+  .notebook--tabs .composer__note:not(.composer__mic-note) + .btn {
     display: none;
   }
 
