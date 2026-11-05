@@ -64,9 +64,7 @@ pheasant-kb/
 ├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
 │                                pheasant-kb/ is the primary guide, every
 │                                other shape is in other-deployments.md
-├── examples/                  ← demo-agent-framework, vscode MCP config,
-│                                compose-ai-platform (a compose_artifact
-│                                session: requests, jobs, Terraform)
+├── examples/                  ← demo-agent-framework, vscode MCP config
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← up/host/setup/mount/start/serve/worker/sync/
