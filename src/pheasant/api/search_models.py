@@ -38,6 +38,14 @@ class SearchCriteria(BaseModel):
     # Documents to leave out: names, paths or artifact ids, resolved within the
     # scope (`services.scope`). A name that resolves to nothing is refused.
     exclude_documents: list[str] | None = None
+    # Keep documents last updated in [updated_after, updated_before): a date
+    # (2025-03-01, 2025-03, 2025) or an ISO timestamp. `date_field` picks the
+    # clock: "source" (default; the source of truth's own date) or "ingested"
+    # (when pheasant took in the current content). Undated documents are
+    # outside every window. A bad bound is refused with INVALID_DATE_RANGE.
+    updated_after: str | None = None
+    updated_before: str | None = None
+    date_field: str | None = None
     # Step 33.6 — the same retrieval criteria the MCP tool has always had.
     # They lived only on the MCP surface, so the same region answered a query
     # differently depending on which protocol asked; the router, which reaches
@@ -87,6 +95,9 @@ class SearchCriteria(BaseModel):
             section=self.section,
             path_prefix=self.path_prefix,
             exclude_documents=self.exclude_documents,
+            updated_after=self.updated_after,
+            updated_before=self.updated_before,
+            date_field=self.date_field,
             principal=self.principal,
             principal_groups=self.principal_groups,
             memory=self.memory,

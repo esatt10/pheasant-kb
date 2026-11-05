@@ -89,6 +89,9 @@ class AssistantTools(ComposeTools):
         intent: str | None = None,
         source_names: list[str] | None = None,
         on_step: Any = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+        date_field: str | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -132,6 +135,9 @@ class AssistantTools(ComposeTools):
                 current_directory=current_directory,
                 intent=intent,
                 source_names=source_names,
+                updated_after=updated_after,
+                updated_before=updated_before,
+                date_field=date_field,
             ),
             # A progress sink, for a caller that follows the answer as a job
             # (compose_artifact); the MCP tool itself passes none.
@@ -279,6 +285,9 @@ def register_assistant_tools(
         current_directory: str | None = None,
         intent: str | None = None,
         source_names: list[str] | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+        date_field: str | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -336,6 +345,17 @@ def register_assistant_tools(
         (["tf-foundry-core", "tf-security-network"]); one name means what
         source_name means.
 
+        updated_after/updated_before answer only from documents last updated
+        in that range (on or after / strictly before; "2025-03-01", "2025-03",
+        "2025" or an ISO timestamp), by date_field: "source" (default; the
+        source of truth's own date) or "ingested" (when this region took the
+        content in). "@since 2025-01" and "@before 2025-07" anywhere in the
+        question say the same and win. Undated documents are left out, cited
+        passages carry their date, and the answer's "date_window" echoes what
+        was applied. The region holds the current version of each document,
+        so this selects documents by when they last changed; it cannot
+        recover what a document said before an edit.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -365,6 +385,9 @@ def register_assistant_tools(
             current_directory=current_directory,
             intent=intent,
             source_names=source_names,
+            updated_after=updated_after,
+            updated_before=updated_before,
+            date_field=date_field,
         )
 
     @mcp.tool(meta=app_meta())

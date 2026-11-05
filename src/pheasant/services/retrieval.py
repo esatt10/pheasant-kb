@@ -183,6 +183,13 @@ class SearchRequest:
     #: Documents to leave out — names, paths or artifact ids, resolved within
     #: the scope above (`services.scope`). An unresolvable name is refused.
     exclude_documents: list[str] | None = None
+    #: Keep documents last updated in ``[updated_after, updated_before)``,
+    #: measured by ``date_field``: ``source`` (the source of truth's own date)
+    #: or ``ingested`` (when pheasant took in the current content). Dates or
+    #: ISO timestamps; see `criteria.DateWindow`.
+    updated_after: str | None = None
+    updated_before: str | None = None
+    date_field: str | None = None
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
@@ -228,6 +235,13 @@ class SearchRequest:
             self.exclude_source_types,
             self.source_names,
         )
+
+    def date_window(self) -> Any:
+        """The window this request asks for, ``None`` for none; refuses a bad one."""
+
+        from pheasant.services.scope import date_window
+
+        return date_window(self.updated_after, self.updated_before, self.date_field)
 
     def criteria_block(self) -> dict[str, Any]:
         return criteria_dict(
@@ -280,6 +294,7 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     # attribute whatever comes back to the snapshot it named, so the only safe
     # order is to establish that the name is still true first.
     snapshot = _require_snapshot(context, request.snapshot_id)
+    request.date_window()  # refused before anything is retrieved
     return _search(context, request, kb_id, snapshot)
 
 
@@ -308,6 +323,7 @@ def _search(
             principal=request.principal,
             principal_groups=request.principal_groups,
         )
+    window = request.date_window()
     ranking = context.searcher.ranking_parameters()
     fetch = ranking.overfetch(request.max_results, filtering=request.filtering)
     started = time.perf_counter()
@@ -330,6 +346,7 @@ def _search(
                 if scope is not None
                 else {}
             ),
+            **({"window": window} if window else {}),
         )
     except Exception:
         metrics.REGISTRY.inc("pheasant_search_total", mode=request.mode, outcome="error")
@@ -663,6 +680,13 @@ def _query_id(kb_id: str, request: SearchRequest, snapshot_id: str | None) -> st
         request.as_of or "",
         request.principal or "",
         json.dumps(request.criteria_block(), sort_keys=True, default=str),
+        # Only when set, so every query id minted before date windows existed
+        # is unchanged.
+        *(
+            [json.dumps(window.as_dict(), sort_keys=True)]
+            if (window := request.date_window())
+            else []
+        ),
     ):
         digest.update(str(part).encode("utf-8"))
         digest.update(b"\x1f")

@@ -233,6 +233,9 @@ def answer_question(
     remove_documents: Any = None,
     source_names: list[str] | None = None,
     intent: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    date_field: str | None = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -303,6 +306,17 @@ def answer_question(
             principal_groups=principal_groups,
         )
         source_name, path_prefix = scope.source_name, scope.path_prefix
+    # When the documents were last updated (`search.criteria.DateWindow`):
+    # `@since` / `@before` in the message win, bound by bound, over the
+    # request's own. Read once and held by the retriever, so every search and
+    # every evidence read this answer makes stays inside it. A bound that
+    # cannot be read is refused rather than dropped, because a dropped bound
+    # answers a question about one year from the whole corpus.
+    from pheasant.services.scope import date_window
+
+    window = date_window(
+        directives.since or updated_after, directives.before or updated_before, date_field
+    )
     depth = directives.depth or depth
     visual = directives.visual or visual
     max_results = max_results or int(getattr(settings, "max_context_chunks", 8) or 8)
@@ -334,6 +348,7 @@ def answer_question(
         principal_groups=principal_groups,
         path_prefix=path_prefix,
         exclusion=scope.exclusion if scope is not None else None,
+        window=window,
     )
 
     name = resolve_workflow_name(
@@ -687,6 +702,8 @@ def answer_question(
         payload["search_question"] = search_question
     if directives.used or directives.unknown:
         payload["keywords"] = directives.as_dict()
+    if window:
+        payload["date_window"] = window.as_dict()
     if scope is not None and scope.active:
         payload["scope"] = scope.as_dict()
         if scope.notes and inventory_data is None:

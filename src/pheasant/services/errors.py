@@ -394,6 +394,17 @@ class AmbiguousDocument(InvalidRequest):
         self.candidates = candidates
 
 
+class InvalidDateRange(InvalidRequest):
+    """A date window that cannot be applied: an unreadable bound, an unknown
+    ``date_field``, or a start not earlier than its end.
+
+    Refused rather than ignored, because a dropped bound answers a question
+    about one month from the whole corpus, and nothing in the answer says so.
+    """
+
+    code = "INVALID_DATE_RANGE"
+
+
 class NotReinstatable(InvalidRequest):
     """An archived document that cannot come back: an upload, whose bytes were deleted."""
 

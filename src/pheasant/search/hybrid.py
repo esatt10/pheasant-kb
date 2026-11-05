@@ -19,11 +19,13 @@ from pheasant.memory.policy import (
 )
 from pheasant.search import fusion
 from pheasant.search.criteria import (
+    date_subject,
     path_scope,
     scope_hits,
     section_matches,
     section_needle,
     source_type_map,
+    stamp_dates,
     stamp_source_types,
 )
 from pheasant.search.fusion import Fused
@@ -160,6 +162,7 @@ class HybridSearch:
         explain: bool = False,
         path_prefix: str | None = None,
         exclude: Any = None,
+        window: Any = None,
     ) -> dict:
         """Run one query across the arms and fuse them.
 
@@ -194,6 +197,12 @@ class HybridSearch:
         ``path_prefix`` narrows to one file or folder like ``section`` does, and
         ``exclude`` (a ``criteria.Exclusion``) leaves named documents out (see
         ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
+
+        ``window`` (a ``criteria.DateWindow``) keeps documents last updated
+        inside a date range: in the text arm's SQL, and against one batched
+        artifact lookup for the other two. Hits then carry their document's
+        dates in ``provenance``, and the payload a ``date_window`` block; with
+        no window both are absent and the payload is unchanged.
         """
         mode = mode if mode in VALID_MODES else "hybrid"
         # Clamped, not just floored: `max_results` arrives straight off an
@@ -243,7 +252,8 @@ class HybridSearch:
         sectioned = bool(section_needle(section))
         scoped = bool(path_scope(path_prefix)) or bool(exclude)
         ranking = self.ranking_parameters()
-        narrowed = enforced or sectioned or scoped or memory_filtered
+        dated = bool(window)
+        narrowed = enforced or sectioned or scoped or memory_filtered or dated
         fetch_n = ranking.overfetch(max_results, filtering=narrowed)
         # Nothing is collected unless a caller asked or this search was
         # sampled, so the ordinary path allocates one `None` and does no extra
@@ -313,6 +323,7 @@ class HybridSearch:
                         memory_now=memory_now,
                         steering=steering,
                         **({"path_prefix": path_prefix, "exclude": exclude} if scoped else {}),
+                        **({"window": window} if dated else {}),
                     )
                 finally:
                     if admitted:
@@ -433,6 +444,40 @@ class HybridSearch:
             )
             _filter_stage("path")
 
+        undated_hits = 0
+        if dated:
+            # The text arm was narrowed in SQL. The other two are judged by the
+            # document each hit belongs to, in one lookup that also supplies
+            # the dates every surviving hit is stamped with. A hit resolving
+            # to no document (an entity, a shared stub) has no date, so it is
+            # outside the window -- the call `scope_hits` makes for a folder.
+            dates = self.store.state.artifact_timestamps(
+                sorted(
+                    {
+                        date_subject(item)
+                        for group in (text_results, vector_results, graph_results)
+                        for item in group
+                    }
+                    - {""}
+                )
+            )
+
+            def in_window(item: dict[str, Any]) -> bool:
+                nonlocal undated_hits
+                found = dates.get(date_subject(item)) or {}
+                value = found.get(window.column)
+                if not value:
+                    undated_hits += 1
+                    return False
+                return window.admits_date(value)
+
+            text_results = [r for r in text_results if in_window(r)]
+            vector_results = [r for r in vector_results if in_window(r)]
+            graph_results = [r for r in graph_results if in_window(r)]
+            for group in (text_results, vector_results, graph_results):
+                stamp_dates(group, dates)
+            _filter_stage("date")
+
         if memory_index:
             # The text arm was already narrowed in SQL. These two carry no
             # memory columns of their own, so they are filtered against the
@@ -549,6 +594,8 @@ class HybridSearch:
         }
         if failed_arms:
             payload["arm_failures"] = sorted(failed_arms)
+        if dated:
+            payload["date_window"] = {**window.as_dict(), "undated_hits": undated_hits}
         # Reported only when the region has memory, so a corpus without it
         # returns the exact payload it did before — the same "add the key only
         # when it says something" rule `heading_path` follows.

@@ -135,6 +135,8 @@ One row per indexed file. Primary key `id`.
 | `git_commit` | VARCHAR | Commit at index time. |
 | `last_indexed_at` | VARCHAR | ISO-8601 UTC. |
 | `status` | VARCHAR | Indexing outcome for this artifact. |
+| `source_modified_at` | VARCHAR | When the document's source of truth says it last changed — a file's mtime, a repository's last commit touching it, Drive's `modifiedTime`, a page's `Last-Modified` — as `YYYY-MM-DDTHH:MM:SSZ` UTC, so it sorts as time does. NULL when the source does not say. `mtime` keeps whatever the connector reported. See [search by date](../how-to/search-by-date.md). |
+| `ingested_at` | VARCHAR | When pheasant took in the content it holds now. Moves only when `sha256` does, a full sync included; `last_indexed_at` moves on every rewrite. |
 | `acl` | VARCHAR | Access-control expression, or NULL for "the source expressed no ACL". **Data, not enforcement** — see the warning above. Added by migration, so it is present in a live export and absent from the declared schema. |
 
 ### `chunks.parquet`

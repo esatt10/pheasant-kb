@@ -55,6 +55,7 @@ from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync import archived
+from pheasant.sync import timestamps as source_dates
 from pheasant.sync.cancellation import (
     SyncCancelled,
     SyncRun,
@@ -2068,6 +2069,12 @@ class SyncEngine:
             # 35.7: 500 → 8,000 files went 1.9s → 164.7s). Telling the writer
             # the rows cannot exist skips the question entirely.
             cleared = mode == "full"
+            # What each document's dates were before this pass, read before a
+            # full sync empties the source: re-indexing identical bytes must
+            # not move `ingested_at` ("when pheasant took in this content"),
+            # and a full sync is a re-index of identical bytes for almost
+            # every file it touches. One read per sync, O(source).
+            prior_dates = self.state.artifact_dates(source.name)
             if cleared:
                 with self._sync_mutex:
                     resume_scope = FULL_RESUME_SCOPE.format(name=source.name)
@@ -2186,6 +2193,7 @@ class SyncEngine:
                     "git_commit": parsed.git_commit,
                     "last_indexed_at": now,
                     "status": "indexed",
+                    **_artifact_dates(source, parsed, prior_dates.get(parsed.id), now),
                 }
                 chunk_rows = [
                     {
@@ -2315,6 +2323,12 @@ class SyncEngine:
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed
+            # After the pass and before anything records completeness: dates
+            # the listing (or git) reports for rows this pass did not rewrite.
+            if redated := source_dates.reconcile(
+                self, source, items, head_commit=git_metadata[1] if git_metadata else None
+            ):
+                details_extra["redated_artifacts"] = redated
             pruned_vectors = self._finalize_index_state(
                 source=source,
                 connector=connector,
@@ -2837,3 +2851,25 @@ class SyncEngine:
             or state.get("status") != "indexed"
             or int(state.get("chunk_count") or 0) < expected_chunks
         )
+
+
+def _artifact_dates(
+    source: Any, parsed: Any, prior: tuple[Any, Any, Any] | None, now: str
+) -> dict[str, Any]:
+    """``source_modified_at`` and ``ingested_at`` for the row about to be written.
+
+    ``prior`` is ``(sha256, ingested_at, source_modified_at)`` as stored
+    before this pass. ``ingested_at`` moves only when the bytes did. A
+    repository's file mtime is a checkout time, so its date is git's
+    (`sync.timestamps.reconcile`, after the pass); until then the row keeps
+    the date it had, which is still right when the bytes did not change and is
+    replaced when they did, because the commit that changed them is in the diff.
+    """
+
+    unchanged = prior is not None and prior[0] == parsed.sha256
+    ingested = (prior[1] if unchanged else None) or now
+    if str(getattr(source.type, "value", source.type)) == "repository":
+        modified = prior[2] if prior is not None else None
+    else:
+        modified = getattr(parsed, "source_modified_at", None)
+    return {"source_modified_at": modified, "ingested_at": ingested}

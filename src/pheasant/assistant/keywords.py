@@ -32,6 +32,9 @@ question so a rule notices. A keyword says it directly:
   asks for — an answer, ``@search``, ``@docs``, ``@doc``, ``@links``,
   ``@taxonomy`` — and are resolved by ``services.scope`` against the
   ``current_document`` / ``current_directory`` the caller sends.
+  ``@since <date>`` and ``@before <date>`` keep documents whose source last
+  changed in that range (``@since 2024 @before 2025`` is 2024), the same
+  window as ``updated_after`` / ``updated_before`` on the request.
 * **Changing the index**: ``@remove <names>`` removes documents from the index
   and holds them out of every later sync (``services.archive``), and
   ``@current @remove`` removes the open document. A name must name one
@@ -166,6 +169,26 @@ KEYWORDS: tuple[Keyword, ...] = (
         "Leave documents out, by name, path or id: `@exclude deploy.md,notes.md`. Repeatable.",
         "@dir @exclude README.md how is it deployed",
         ("omit", "without"),
+        group="Where to look",
+    ),
+    Keyword(
+        "since",
+        "scope",
+        "since",
+        "Only documents last updated on or after a date (the source's own date): "
+        "`@since 2025-01-01`, `@since 2025-03` or `@since 2024`. Anywhere in the message.",
+        "@since 2025-01 what changed in the rotation runbook",
+        ("after",),
+        group="Where to look",
+    ),
+    Keyword(
+        "before",
+        "scope",
+        "before",
+        "Only documents last updated before a date: `@before 2024-07-01`. With `@since`, "
+        "a range: `@since 2024 @before 2025` is 2024.",
+        "@since 2024 @before 2025 how was rotation done",
+        ("until",),
         group="Where to look",
     ),
     Keyword(
@@ -342,6 +365,16 @@ _SCOPE_EXCLUDE = re.compile(
 )
 
 
+#: ``@since`` / ``@before`` take one date: a year, a month, a day, or an ISO
+#: timestamp. Strict, so ``@before lunch`` is left in the question rather than
+#: read as a date nobody wrote.
+_DATE = r"\d{4}(?:-\d{2}(?:-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)?)?"
+_SCOPE_DATE = re.compile(
+    rf"(?<![\w@.])@(?P<name>since|after|before|until)\b[:,]?\s+(?P<date>{_DATE})(?![\w-])",
+    re.I,
+)
+
+
 @dataclass(frozen=True)
 class Directives:
     """What a message's leading keywords asked for, and the question without them."""
@@ -362,6 +395,10 @@ class Directives:
     scope: str | None = None
     #: Names ``@exclude`` gave, unresolved (``services.scope`` resolves them).
     exclude: tuple[str, ...] = ()
+    #: The date window ``@since`` / ``@before`` asked for, as typed (a later
+    #: ``services.retrieval.parse_date_window`` reads and checks them).
+    since: str | None = None
+    before: str | None = None
     #: Names ``@remove`` gave (empty for ``@current @remove``); ``None`` without it.
     remove: tuple[str, ...] | None = None
     #: An answer shape the message pins (``@compose``), the request's ``intent``.
@@ -382,6 +419,8 @@ class Directives:
             # Only when a scope keyword was read: the payload is unchanged otherwise.
             **({"scope": self.scope} if self.scope else {}),
             **({"exclude": list(self.exclude)} if self.exclude else {}),
+            **({"since": self.since} if self.since else {}),
+            **({"before": self.before} if self.before else {}),
             **({"remove": list(self.remove)} if self.remove is not None else {}),
             **({"intent": self.intent} if self.intent else {}),
         }
@@ -390,7 +429,7 @@ class Directives:
 def read(question: str) -> Directives:
     """The keywords leading ``question``. Pure; never raises."""
 
-    text, used, scope, exclude = _read_scope(question or "")
+    text, used, scope, exclude, dates = _read_scope(question or "")
     found: dict[str, object] = {}
     unknown = None
     while True:
@@ -438,6 +477,8 @@ def read(question: str) -> Directives:
         visual=found.get("visual"),  # type: ignore[arg-type]
         scope=scope,
         exclude=exclude,
+        since=dates.get("since"),
+        before=dates.get("before"),
         remove=found.get("remove"),  # type: ignore[arg-type]
         intent=found.get("intent"),  # type: ignore[arg-type]
     )
@@ -463,19 +504,24 @@ def removal_names(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def _read_scope(text: str) -> tuple[str, list[str], str | None, tuple[str, ...]]:
+def _read_scope(
+    text: str,
+) -> tuple[str, list[str], str | None, tuple[str, ...], dict[str, str]]:
     """Take the scope keywords out of ``text``, wherever they are."""
 
     used: list[str] = []
     scope: str | None = None
     exclude: list[str] = []
+    dates: dict[str, str] = {}
 
     def take(matched: re.Match[str]) -> str:
         nonlocal scope
         keyword = _BY_NAME[matched.group("name").lower()]
         if f"@{keyword.name}" not in used:
             used.append(f"@{keyword.name}")
-        if keyword.value == "exclude":
+        if keyword.value in {"since", "before"}:
+            dates[keyword.value] = matched.group("date")  # the last one wins
+        elif keyword.value == "exclude":
             raw = (matched.groupdict().get("arg") or "").strip()
             exclude.extend(
                 part.strip().strip("\"'“”").strip()
@@ -487,12 +533,12 @@ def _read_scope(text: str) -> tuple[str, list[str], str | None, tuple[str, ...]]
             scope = "document" if "document" in {scope, keyword.value} else keyword.value
         return " "
 
-    cleaned = _SCOPE_FLAG.sub(take, _SCOPE_EXCLUDE.sub(take, text))
+    cleaned = _SCOPE_FLAG.sub(take, _SCOPE_EXCLUDE.sub(take, _SCOPE_DATE.sub(take, text)))
     if not used:
-        return text, [], None, ()
+        return text, [], None, (), {}
     # `@exclude a.md, what changed` leaves the comma that separated them.
     text = " ".join(cleaned.split()).lstrip(",;: ")
-    return text, used, scope, tuple(dict.fromkeys(exclude))
+    return text, used, scope, tuple(dict.fromkeys(exclude)), dates
 
 
 def inventory_form(question: str) -> str:

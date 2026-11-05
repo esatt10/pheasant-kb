@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
   git_commit TEXT,
   last_indexed_at TEXT,
   status TEXT,
+  -- When the document's source of truth says it last changed (a file's
+  -- mtime, a repository's last commit touching it, Drive's modifiedTime, a
+  -- page's Last-Modified), in `ingestion.timestamps`' canonical UTC form so
+  -- a date range is a string comparison. NULL when the source does not say;
+  -- `mtime` keeps whatever the connector reported, as it always has.
+  source_modified_at TEXT,
+  -- When pheasant took in the content it holds now: moves when the sha256
+  -- does, and is carried across a re-index of identical bytes (a full sync
+  -- included), unlike `last_indexed_at`, which every rewrite resets.
+  ingested_at TEXT,
   FOREIGN KEY (source_id) REFERENCES sources(id)
 );
 CREATE TABLE IF NOT EXISTS chunks (

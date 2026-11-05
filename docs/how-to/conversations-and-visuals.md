@@ -183,7 +183,7 @@ caller may read. If the automatic reading is ever wrong for your corpus, set
 A keyword as the **first word** of a message says what kind of answer you
 want, so the question does not have to be phrased for a rule to notice.
 Several can lead one message (`@detailed @table …`). `@pheasant` and the
-three scope keywords (`@current`, `@dir`, `@exclude`) count anywhere. Other
+scope keywords (`@current`, `@dir`, `@exclude`, `@since`, `@before`) count anywhere. Other
 keywords later in a sentence and email addresses are just text.
 
 | Keyword | Answers with |
@@ -193,6 +193,7 @@ keywords later in a sentence and email addresses are just text.
 | `@current` (`@this`) | Only the open document: every search the answer runs, and any `@pheasant` lookup (`@current @doc` describes it, `@current @links` lists its links). |
 | `@dir` (`@directory`, `@cwd`) | Only the folder being browsed, or the open document's folder: answers, `@search`, and listings (`@dir @docs`, `@pheasant how many documents @dir`, `@dir @taxonomy`). |
 | `@exclude <name>[,<name>…]` (`@omit`, `@without`) | Leave documents out: a file name, a path, `source/path` or an artifact id; quote a name with spaces. Combines with everything above (`@dir @exclude deploy.md @docs`). A name that matches nothing is said in a note. |
+| `@since <date>` (`@after`), `@before <date>` (`@until`) | Answer only from documents whose source last changed on or after / before a date: `2025`, `2025-03`, `2025-03-01` or an ISO timestamp. `@since 2024 @before 2025` is 2024. Cited passages carry their date and the prompt names it; an unreadable date is refused (`INVALID_DATE_RANGE`). See [search and ask by date](search-by-date.md). |
 | `@remove <name>[,<name>…]` (`@archive`) | Remove documents from the index and keep them out of every later sync, by a name that matches one document (a file name, path, `source/path` or id; quote one with spaces). `@current @remove` removes the open document. A folder or connector document is archived and can be reinstated; an upload is deleted. No search, no model; the payload's `archive` is `POST /documents/archive`'s answer. A name matching several documents removes nothing and lists them. |
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |

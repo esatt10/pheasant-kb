@@ -825,6 +825,9 @@ class PheasantTools(
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
         source_names: list[str] | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+        date_field: str | None = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -898,6 +901,9 @@ class PheasantTools(
                 section=section,
                 path_prefix=path_prefix,
                 exclude_documents=exclude_documents,
+                updated_after=updated_after,
+                updated_before=updated_before,
+                date_field=date_field,
                 principal=principal,
                 principal_groups=principal_groups,
                 memory=memory,

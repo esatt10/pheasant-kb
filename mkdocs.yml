@@ -83,6 +83,7 @@ nav:
       - Chunk each file the way it is written: how-to/dynamic-chunking.md
       - Multi-modal ingest: how-to/multimodal-ingest.md
       - Vector self-search: how-to/vector-search.md
+      - Search and ask by date: how-to/search-by-date.md
       - Monitor indexing: how-to/monitor-indexing.md
       - Export a corpus as Parquet: how-to/parquet-exports.md
   - Other deployments:

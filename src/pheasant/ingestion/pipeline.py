@@ -34,6 +34,7 @@ from pheasant.ingestion.taxonomy import (
     headings_for_source,
     max_depth_for_source,
 )
+from pheasant.ingestion.timestamps import normalize_timestamp
 
 if TYPE_CHECKING:
     from pheasant.ingestion.captioner import Captioner
@@ -76,6 +77,11 @@ class ParsedArtifact:
     #: directory is a *bundle* is decided once the whole source is indexed
     #: (`graph/okf.py`), because no single file can say so.
     okf: dict[str, Any] | None = None
+    #: When the source of truth says this document last changed, canonical
+    #: (`ingestion.timestamps`), or ``None`` when it does not say. Unlike
+    #: ``mtime`` there is no fallback to "now": a fetch time is not a source
+    #: date, and a date filter would treat it as one.
+    source_modified_at: str | None = None
 
 
 def utc_now() -> str:
@@ -552,6 +558,7 @@ def parse_file(
         headings=headings,
         chunk_plan=chunk_plan,
         okf=okf,
+        source_modified_at=normalize_timestamp(stat.st_mtime),
     )
 
 
@@ -640,6 +647,7 @@ def parse_connector_payload(
         headings=headings,
         chunk_plan=chunk_plan,
         okf=okf,
+        source_modified_at=normalize_timestamp(payload.mtime or item.mtime),
     )
 
 

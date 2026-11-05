@@ -138,6 +138,10 @@ class Passage:
     # answering prompt and the citation both need to say so, and neither can
     # infer it from a path that merely happens to start with a scope directory.
     memory: dict | None = None
+    #: When the source says this document last changed, canonical. Set only
+    #: when the answer runs under a date window (the hits carry it then), so
+    #: an unwindowed prompt is byte-identical to before.
+    source_modified_at: str | None = None
     raw: dict = field(default_factory=dict, repr=False)
 
     def key(self) -> str:
@@ -318,6 +322,7 @@ class PheasantRetriever:
         path_prefix: str | None = None,
         exclusion: Any = None,
         source_names: list[str] | None = None,
+        window: Any = None,
     ) -> None:
         self.search_engine = search
         self.knowledge_base = knowledge_base
@@ -347,6 +352,12 @@ class PheasantRetriever:
         # document read in this answer must stay inside it.
         self.path_prefix = path_scope(path_prefix) or None
         self.exclusion = exclusion or None  # documents `@exclude` left out
+        # A date window (`criteria.DateWindow`), held like the scope above:
+        # every search and every graph or document read in this answer stays
+        # inside it, or a follow-up round could cite a document the user
+        # ruled out by date.
+        self.window = window or None
+        self._date_cache: dict[str, dict[str, Any]] = {}
         self.principal = principal
         self.principal_groups = list(principal_groups or ())
         # Per-request memo: an agent loop re-issues overlapping queries, and
@@ -361,6 +372,16 @@ class PheasantRetriever:
         self._acl_identity_cache: set[str] | None = None
         self._arm_failures: list[dict[str, str]] = []
         self._diagnostic_lock = threading.Lock()
+
+    def _in_window(self, artifact_id: str) -> bool:
+        """Is this document's date inside the answer's window? Undated is outside."""
+
+        if self.state is None or not artifact_id:
+            return False
+        if artifact_id not in self._date_cache:
+            found = self.state.artifact_timestamps([artifact_id])
+            self._date_cache[artifact_id] = found.get(artifact_id) or {}
+        return self.window.admits_date(self._date_cache[artifact_id].get(self.window.column))
 
     def _artifact_allowed(
         self,
@@ -386,6 +407,8 @@ class PheasantRetriever:
         if self.exclusion and not self.exclusion.admits(
             {"node_id": artifact_id, "source_id": raw_source, "relative_path": relative_path}
         ):
+            return False
+        if self.window and not self._in_window(artifact_id):
             return False
         source_type = (self._source_type_cache or {}).get(raw_source) or (
             self._source_type_cache or {}
@@ -510,6 +533,7 @@ class PheasantRetriever:
             tuple(sorted(self.source_names or ())),
             self.path_prefix,
             id(self.exclusion),
+            self.window,
         )
         if cache_key in self._cache:
             return [
@@ -524,7 +548,9 @@ class PheasantRetriever:
         # a grounded answer built on a type-filtered corpus silently had fewer
         # passages to work from than the caller asked for — the failure mode
         # is a thinner answer, which reads as the corpus being thin.
-        filtering = bool(self.source_types or self.exclude_source_types or self.source_names)
+        filtering = bool(
+            self.source_types or self.exclude_source_types or self.source_names or self.window
+        )
         resolve = getattr(self.search_engine, "ranking_parameters", None)
         fetch = resolve().overfetch(limit, filtering=filtering) if callable(resolve) else limit
         payload = self.search_engine.search_context(
@@ -543,6 +569,7 @@ class PheasantRetriever:
                 if self.path_prefix or self.exclusion
                 else {}
             ),
+            **({"window": self.window} if self.window else {}),
         )
         failed_arms = payload.get("arm_failures") or []
         if failed_arms:
@@ -779,6 +806,7 @@ class PheasantRetriever:
             heading_path=(item.get("heading_path") or provenance.get("heading_path")) or None,
             source_type=(item.get("source_type") or provenance.get("source_type")) or None,
             memory=item.get("memory") or None,
+            source_modified_at=provenance.get("source_modified_at") or None,
             raw=item,
         )
 

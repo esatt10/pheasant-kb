@@ -69,6 +69,12 @@ class ChatRequest(BaseModel):
     # Several sources at once — the sources rail's multi-select. One name
     # means what `source_name` means.
     source_names: list[str] | None = None
+    # Answer only from documents last updated in [updated_after,
+    # updated_before), by `date_field` ("source" or "ingested"). `@since` /
+    # `@before` in the question say the same and win.
+    updated_after: str | None = None
+    updated_before: str | None = None
+    date_field: str | None = None
 
     def service_request(self) -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
@@ -92,6 +98,9 @@ class ChatRequest(BaseModel):
             current_directory=self.current_directory,
             intent=self.intent,
             source_names=self.source_names,
+            updated_after=self.updated_after,
+            updated_before=self.updated_before,
+            date_field=self.date_field,
         )
 
 

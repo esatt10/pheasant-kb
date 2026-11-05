@@ -127,6 +127,13 @@ class AnswerRequest:
     #: Documents to leave out, by name, path or id (`services.scope`); in a
     #: question an unresolvable one is said in a note rather than refused.
     exclude_documents: list[str] | None = None
+    #: Answer only from documents last updated in ``[updated_after,
+    #: updated_before)`` by ``date_field`` (``source``, the default, or
+    #: ``ingested``) -- the window ``services.retrieval.SearchRequest`` takes.
+    #: ``@since`` / ``@before`` in the question say the same and win.
+    updated_after: str | None = None
+    updated_before: str | None = None
+    date_field: str | None = None
     #: What the caller has open, which ``@current`` and ``@dir`` are read
     #: against: a document as ``source/path`` or an artifact id, and a folder
     #: as ``source/path`` (``source`` alone for its root).
@@ -239,6 +246,9 @@ def answer(
                 remove_documents=_remover(context, request),
                 source_names=request.source_names,
                 intent=request.intent,
+                updated_after=request.updated_after,
+                updated_before=request.updated_before,
+                date_field=request.date_field,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["admission_ms"] = admission_ms

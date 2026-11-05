@@ -332,3 +332,20 @@ def _named(row: Any, wanted: str) -> bool:
 
 def _escape_like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def date_window(after: Any, before: Any, field: Any) -> Any:
+    """The date window a caller asked for (`search.criteria.DateWindow`), or ``None``.
+
+    Part of "what a search may see", like a folder or an exclusion, and shared
+    by retrieval and answering so both refuse a bad bound with one text:
+    ``INVALID_DATE_RANGE``, naming what to change.
+    """
+
+    from pheasant.search.criteria import DateWindow, InvalidDateWindow
+    from pheasant.services.errors import InvalidDateRange
+
+    try:
+        return DateWindow.parse(after, before, field)
+    except InvalidDateWindow as exc:
+        raise InvalidDateRange(str(exc)) from exc

@@ -516,6 +516,11 @@ def passages_to_citations(passages: list, limit: int) -> list[dict]:
                 **({"heading_path": passage.heading_path} if passage.heading_path else {}),
                 **({"source_type": passage.source_type} if passage.source_type else {}),
                 **({"memory": passage.memory} if passage.memory else {}),
+                **(
+                    {"source_modified_at": passage.source_modified_at}
+                    if getattr(passage, "source_modified_at", None)
+                    else {}
+                ),
                 "used": False,
             }
         )
@@ -812,6 +817,11 @@ def build_prompt(
             asserted = remembered.get("asserted_at") or "unknown time"
             scope = remembered.get("scope") or "unknown scope"
             header += f" — remembered ({scope}, asserted {asserted})"
+        # Under a date window the model is told each document's date, so an
+        # answer about a period can say which source is the more recent one.
+        # Absent otherwise, so every unwindowed prompt is unchanged.
+        if citation.get("source_modified_at"):
+            header += f" — last updated {str(citation['source_modified_at'])[:10]}"
         lines.append(header)
         document = documents.get(citation["index"])
         if document is not None:

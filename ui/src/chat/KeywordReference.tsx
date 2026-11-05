@@ -241,7 +241,8 @@ export function KeywordReference({
       <p className="keyref__rule">
         Start a message with a keyword; several can lead (<code>@detailed @table …</code>).
         <code>@pheasant</code> and the scope keywords (<code>@current</code>, <code>@dir</code>,{" "}
-        <code>@exclude name</code>) work anywhere; the scope ones read what the taxonomy view has open.
+        <code>@exclude name</code>, <code>@since 2025-01</code>, <code>@before 2025-07</code>) work
+        anywhere; <code>@current</code> and <code>@dir</code> read what the taxonomy view has open.
         {typing ? " Tab completes the first match." : ""}
       </p>
       {typing ? null : (

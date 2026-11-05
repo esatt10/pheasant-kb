@@ -113,6 +113,7 @@ def parsed_to_wire(parsed: ParsedArtifact | None) -> dict[str, Any] | None:
         "headings": [_heading_to_wire(heading) for heading in parsed.headings],
         "chunk_plan": parsed.chunk_plan,
         "okf": parsed.okf,
+        "source_modified_at": parsed.source_modified_at,
     }
 
 
@@ -147,6 +148,9 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
         headings=[_heading_from_wire(row) for row in payload.get("headings") or []],
         chunk_plan=plan,
         okf=payload.get("okf"),
+        # Absent from a worker that predates it: "unknown", which the
+        # indexer's listing reconciliation fills where the listing knows.
+        source_modified_at=payload.get("source_modified_at"),
     )
 
 

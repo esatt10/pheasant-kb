@@ -383,6 +383,7 @@ class SearchStore:
         steering: Any = None,
         path_prefix: str | None = None,
         exclude: Any = None,
+        window: Any = None,
     ) -> list[dict]:
         # Natural-language queries ("where does the X service run") must not
         # fall to FTS5's implicit-AND — a single unmatched stopword would
@@ -423,6 +424,14 @@ class SearchStore:
             filter_params.append(f"%{section_needle(section)}%")
         # One file or folder of a source: in SQL for the reason `section` is.
         scope_where, scope_params = path_scope_sql(path_prefix, exclude)
+        # A date window (`criteria.DateWindow`) is a column of `artifacts`,
+        # which every lexical shape already joins; in SQL for the reason
+        # `section` is, since a narrow window post-filtered off a global page
+        # returns nothing while its documents sit past the cut.
+        if window:
+            window_where, window_params = window.sql()
+            scope_where += window_where
+            scope_params = [*scope_params, *window_params]
         filter_where += scope_where
         filter_params.extend(scope_params)
         # Step 33.6 — agent-memory policy. Pushed into SQL for the same reason

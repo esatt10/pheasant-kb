@@ -103,6 +103,8 @@ pheasant-kb/
 │   │                            (stop a running sync from any process),
 │   │                            graph_history (the interval-gated
 │   │                            snapshot), watcher,
+│   │                            timestamps (source dates kept true
+│   │                            each sync: listing and git, no re-index),
 │   │                            scheduler, locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
@@ -114,6 +116,8 @@ pheasant-kb/
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
+│   │                            timestamps (every source's date spelling
+│   │                            to one sortable UTC form),
 │   │                            extractor (7 doc formats), notebook
 │   │                            (.ipynb as its cells), okf (OKF
 │   │                            frontmatter, per file), captioner,
@@ -786,6 +790,28 @@ the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
 spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
 does not; the answering retriever holds it for every search and evidence read.
+
+**A search or a question can be limited to a date range**
+(`docs/how-to/search-by-date.md`). `artifacts` carries `source_modified_at`
+(what the source of truth says: file mtime, a repository's last commit
+touching the path, Drive's `modifiedTime`, `Last-Modified`, an API's
+`updated_at`) and `ingested_at` (when this region took in the current bytes,
+carried across a full sync's clear when the sha256 is unchanged), both in one
+canonical UTC spelling (`ingestion/timestamps.py`), so a window is a string
+comparison on either backend. Unknown is NULL, never "now" (`mtime` keeps its
+old `utc_now()` fallback; the new column refuses to guess). `sync/timestamps.py`
+re-dates rows after every sync from the listing, or for a repository from
+`git diff <last walked HEAD> <HEAD>`, without re-indexing, and leaves a shallow
+clone's boundary undated. `criteria.DateWindow` (`updated_after` inclusive,
+`updated_before` exclusive, `date_field` `source|ingested`) is in the text arm's
+SQL beside `path_prefix` and post-filters vector/graph hits through one
+`artifact_timestamps` lookup keyed by `acl_subject`; undated is outside every
+window and counted as `date_window.undated_hits`. MCP `search_context` /
+`ask_knowledge_base`, `POST /search` / `/assistant/chat`, and `@since` /
+`@before` anywhere in a question; a bad bound is `INVALID_DATE_RANGE`. With no
+window, payloads and prompts are byte-identical. It filters by when the
+*current* version changed; corpus-level `as_of` is still `unsupported`.
+`tests/test_date_window_search.py`.
 
 **The vector arm has two opt-in speed paths**, both measured on the
 pheasant-kb stack (60k x 1536-d, the api tier's one core, where LanceDB's

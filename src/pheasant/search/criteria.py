@@ -332,3 +332,129 @@ def type_of(item: dict) -> str:
     if isinstance(provenance, dict) and provenance.get("source_type"):
         return str(provenance["source_type"])
     return str(item.get("source_type") or "")
+
+
+#: What a date window can be measured against, and the ``artifacts`` column
+#: that holds it. ``source`` is the source of truth's own "last changed";
+#: ``ingested`` is when pheasant took in the content it now holds.
+DATE_FIELDS: dict[str, str] = {
+    "source": "source_modified_at",
+    "ingested": "ingested_at",
+}
+
+
+class InvalidDateWindow(ValueError):
+    """A date window a caller asked for that cannot be applied."""
+
+
+@dataclass(frozen=True)
+class DateWindow:
+    """Documents last updated in ``[after, before)``, by one of :data:`DATE_FIELDS`.
+
+    Both bounds are canonical timestamps (`ingestion.timestamps`), so every
+    comparison -- in SQL on either backend, and in Python -- is a string
+    comparison with no dialect branch. ``after`` is inclusive and ``before``
+    exclusive, so two adjacent windows never count a document twice and
+    ``after=2025`` / ``before=2026`` is exactly 2025.
+
+    A document with no date on the chosen field is **outside** every window:
+    a filter is a claim about when something changed, and an undated document
+    cannot satisfy one. A response's ``date_window.undated_hits`` counts the
+    candidates left out that way, so "nothing matched" and "nothing was
+    dated" read differently.
+    """
+
+    after: str | None = None
+    before: str | None = None
+    field: str = "source"
+
+    def __bool__(self) -> bool:
+        return bool(self.after or self.before)
+
+    @property
+    def column(self) -> str:
+        return DATE_FIELDS[self.field]
+
+    @classmethod
+    def parse(cls, after: Any = None, before: Any = None, field: Any = None) -> DateWindow | None:
+        """A window from caller input, ``None`` when no bound was given.
+
+        Refuses an unknown field, an unreadable bound and an empty range, each
+        naming what to change: silently dropping any of them would return the
+        whole corpus to a caller who asked for a slice of it.
+        """
+
+        from pheasant.ingestion.timestamps import InvalidDateBound, parse_bound
+
+        chosen = str(field or "source").strip().lower()
+        if chosen not in DATE_FIELDS:
+            raise InvalidDateWindow(
+                f"date_field must be one of {sorted(DATE_FIELDS)}, not {field!r}"
+            )
+        try:
+            low = parse_bound(after, name="updated_after")
+            high = parse_bound(before, name="updated_before")
+        except InvalidDateBound as exc:
+            raise InvalidDateWindow(str(exc)) from exc
+        if not low and not high:
+            return None
+        if low and high and low >= high:
+            raise InvalidDateWindow(
+                f"updated_after ({low}) must be earlier than updated_before ({high}); "
+                "the window is inclusive of its start and exclusive of its end"
+            )
+        return cls(after=low, before=high, field=chosen)
+
+    def sql(self, table: str = "artifacts") -> tuple[str, list[Any]]:
+        """``(" AND …", params)`` keeping rows of ``table`` inside the window."""
+
+        if not self:
+            return "", []
+        column = f"{table}.{self.column}"
+        where, params = f" AND {column} IS NOT NULL", []
+        if self.after:
+            where += f" AND {column} >= ?"
+            params.append(self.after)
+        if self.before:
+            where += f" AND {column} < ?"
+            params.append(self.before)
+        return where, params
+
+    def admits_date(self, value: Any) -> bool:
+        if not value:
+            return False
+        text = str(value)
+        if self.after and text < self.after:
+            return False
+        return not (self.before and text >= self.before)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"field": self.field, "updated_after": self.after, "updated_before": self.before}
+
+
+def date_subject(hit: dict) -> str:
+    """The artifact a hit is dated by: the file that owns a chunk, heading or
+    symbol, the node itself otherwise -- the ACL pass's rule (`acl_subject`),
+    because "which document is this from" is the same question for both."""
+
+    from pheasant.security.acl import acl_subject
+
+    return acl_subject(str(hit.get("node_id") or ""), hit.get("type"), hit.get("artifact_id"))
+
+
+def stamp_dates(results: list[dict], dates: dict[str, dict[str, Any]]) -> None:
+    """Write each hit's document dates into its provenance, in place.
+
+    Only called when a window is active, so a search that asked for no dates
+    returns the payload it always did.
+    """
+
+    for item in results:
+        found = dates.get(date_subject(item))
+        if not found:
+            continue
+        provenance = item.get("provenance")
+        if not isinstance(provenance, dict):
+            provenance = item["provenance"] = {}
+        provenance["source_modified_at"] = found.get("source_modified_at")
+        provenance["ingested_at"] = found.get("ingested_at")

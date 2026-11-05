@@ -366,6 +366,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
         source_names: list[str] | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+        date_field: str | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -440,6 +443,20 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         as_of is the instant memory validity is evaluated at, accepted here as
         well as inside memory so it reaches the lineage block even where the
         region holds no memory at all.
+
+        updated_after/updated_before keep documents last updated in that
+        range: on or after updated_after, strictly before updated_before. Each
+        is a date ("2025-03-01", "2025-03", "2025") or an ISO 8601 timestamp.
+        date_field picks the clock: "source" (default) is when the document's
+        source of truth says it last changed (a file's mtime, a repository's
+        last commit touching it, Drive's modifiedTime, a page's
+        Last-Modified); "ingested" is when this region took in the content it
+        holds now. A document with no such date is outside every window, and
+        the response's date_window.undated_hits counts those left out. Hits
+        then carry provenance.source_modified_at and provenance.ingested_at.
+        This filters by when the current version changed; the region holds one
+        version of each document, so it cannot return what a document said
+        before it was edited.
         """
 
         return tools.search_context(
@@ -465,6 +482,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             path_prefix=path_prefix,
             exclude_documents=exclude_documents,
             source_names=source_names,
+            updated_after=updated_after,
+            updated_before=updated_before,
+            date_field=date_field,
         )
 
     @mcp.tool()
