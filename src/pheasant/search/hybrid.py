@@ -19,14 +19,13 @@ from pheasant.memory.policy import (
 )
 from pheasant.search import fusion
 from pheasant.search.criteria import (
-    date_subject,
     path_scope,
     scope_hits,
     section_matches,
     section_needle,
     source_type_map,
-    stamp_dates,
     stamp_source_types,
+    window_hits,
 )
 from pheasant.search.fusion import Fused
 from pheasant.search.graph_search import search_graph
@@ -198,11 +197,8 @@ class HybridSearch:
         ``exclude`` (a ``criteria.Exclusion``) leaves named documents out (see
         ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
 
-        ``window`` (a ``criteria.DateWindow``) keeps documents last updated
-        inside a date range: in the text arm's SQL, and against one batched
-        artifact lookup for the other two. Hits then carry their document's
-        dates in ``provenance``, and the payload a ``date_window`` block; with
-        no window both are absent and the payload is unchanged.
+        ``window`` (a ``criteria.DateWindow``) keeps documents last updated in
+        a date range (``criteria.window_hits``); with none the payload is unchanged.
         """
         mode = mode if mode in VALID_MODES else "hybrid"
         # Clamped, not just floored: `max_results` arrives straight off an
@@ -445,37 +441,10 @@ class HybridSearch:
             _filter_stage("path")
 
         undated_hits = 0
-        if dated:
-            # The text arm was narrowed in SQL. The other two are judged by the
-            # document each hit belongs to, in one lookup that also supplies
-            # the dates every surviving hit is stamped with. A hit resolving
-            # to no document (an entity, a shared stub) has no date, so it is
-            # outside the window -- the call `scope_hits` makes for a folder.
-            dates = self.store.state.artifact_timestamps(
-                sorted(
-                    {
-                        date_subject(item)
-                        for group in (text_results, vector_results, graph_results)
-                        for item in group
-                    }
-                    - {""}
-                )
+        if dated:  # the text arm was narrowed in SQL; the others by their documents' dates
+            (text_results, vector_results, graph_results), undated_hits = window_hits(
+                self.store.state, window, text_results, vector_results, graph_results
             )
-
-            def in_window(item: dict[str, Any]) -> bool:
-                nonlocal undated_hits
-                found = dates.get(date_subject(item)) or {}
-                value = found.get(window.column)
-                if not value:
-                    undated_hits += 1
-                    return False
-                return window.admits_date(value)
-
-            text_results = [r for r in text_results if in_window(r)]
-            vector_results = [r for r in vector_results if in_window(r)]
-            graph_results = [r for r in graph_results if in_window(r)]
-            for group in (text_results, vector_results, graph_results):
-                stamp_dates(group, dates)
             _filter_stage("date")
 
         if memory_index:

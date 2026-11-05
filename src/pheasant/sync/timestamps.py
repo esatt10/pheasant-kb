@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.ingestion.timestamps import normalize_timestamp
+from pheasant.persistence import artifact_dates
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +255,7 @@ def _reconcile(engine: Any, source: Any, items: list[Any], *, head_commit: str |
     if not updates:
         return 0
     with engine._sync_mutex:
-        state.set_source_dates(updates)
+        artifact_dates.set_source_dates(state, updates)
     return len(updates)
 
 

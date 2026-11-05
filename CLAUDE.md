@@ -153,7 +153,9 @@ pheasant-kb/
 │   ├── memory/                ← store, projection, policy, steering, salience,
 │   │                            bridge, maintenance, formation, benchmark
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
-│   │                            schema, lexical_index (the pg_textsearch
+│   │                            schema, artifact_dates (the two document
+│   │                            dates: reads, writes, migration),
+│   │                            lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
 │   │                            (file|rows), graph_rows
 │   │                            (the delta write), graph_codec (rows to
@@ -219,7 +221,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 187 pytest modules, offline by design
+└── tests/                     ← 188 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -804,8 +806,9 @@ re-dates rows after every sync from the listing, or for a repository from
 `git diff <last walked HEAD> <HEAD>`, without re-indexing, and leaves a shallow
 clone's boundary undated. `criteria.DateWindow` (`updated_after` inclusive,
 `updated_before` exclusive, `date_field` `source|ingested`) is in the text arm's
-SQL beside `path_prefix` and post-filters vector/graph hits through one
-`artifact_timestamps` lookup keyed by `acl_subject`; undated is outside every
+SQL through `path_scope_sql` and post-filters vector/graph hits through one
+lookup keyed by `acl_subject` (`criteria.window_hits`; reads, writes and the
+migration are `persistence/artifact_dates.py`); undated is outside every
 window and counted as `date_window.undated_hits`. MCP `search_context` /
 `ask_knowledge_base`, `POST /search` / `/assistant/chat`, and `@since` /
 `@before` anywhere in a question; a bad bound is `INVALID_DATE_RANGE`. With no

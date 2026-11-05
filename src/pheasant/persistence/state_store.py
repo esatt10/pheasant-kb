@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pheasant.persistence import artifact_dates
 from pheasant.persistence.backends import SqliteBackend, StateBackend, open_backend
 from pheasant.persistence.lexical_index import (
     bm25_repeat_counts,
@@ -197,7 +198,7 @@ class StateStore:
         # keep acl NULL = "source expressed no ACL", the pre-32 semantics).
         if "acl" not in self.backend.table_columns("artifacts"):
             self.conn.execute("ALTER TABLE artifacts ADD COLUMN acl TEXT")
-        self._migrate_artifact_timestamps()
+        artifact_dates.migrate(self)
         # Phase 1 (agent-speed memory compaction) — one-shot idempotent
         # column adds. Existing rows keep canon_key NULL (never reinforced
         # against, since nothing can match a NULL) and observations 0/
@@ -348,33 +349,6 @@ class StateStore:
         )
         self.conn.commit()
 
-    def _migrate_artifact_timestamps(self) -> None:
-        """Add the two document-date columns to an ``artifacts`` table that predates them.
-
-        Both paths call this, for the reason `_migrate_evaluation_progress`
-        gives: Postgres returns early from `migrate`. Existing rows keep NULL,
-        which reads as "date unknown" and is then true -- the first sync after
-        the upgrade fills ``source_modified_at`` from the listing without
-        re-indexing anything (`sync.timestamps.reconcile`), and
-        ``ingested_at`` is backfilled here from ``last_indexed_at``, the best
-        evidence a row already carries of when its content arrived.
-        """
-
-        columns = self.backend.table_columns("artifacts")
-        if not columns:
-            return
-        added = False
-        for column in ("source_modified_at", "ingested_at"):
-            if column not in columns:
-                self.conn.execute(f"ALTER TABLE artifacts ADD COLUMN {column} TEXT")
-                added = True
-        if added:
-            # Idempotent by its predicate: only rows still NULL are touched.
-            self.conn.execute(
-                "UPDATE artifacts SET ingested_at = last_indexed_at "
-                "WHERE ingested_at IS NULL AND last_indexed_at IS NOT NULL"
-            )
-
     def _migrate_postgres(self) -> None:
         """Run DDL once across a concurrently starting fleet.
 
@@ -425,7 +399,7 @@ class StateStore:
             self.backend.executescript(schema_for(self.backend.dialect))
             if "acl" not in self.backend.table_columns("artifacts"):
                 self.conn.execute("ALTER TABLE artifacts ADD COLUMN acl TEXT")
-            self._migrate_artifact_timestamps()
+            artifact_dates.migrate(self)
             # Postgres returns early from `migrate()`, so the guarded column
             # adds there never run here -- an additive column needs saying
             # twice or it exists on exactly one backend. `CREATE TABLE IF NOT
@@ -569,61 +543,6 @@ class StateStore:
     def idp_principal_count(self) -> int:
         rows = self.rows("SELECT COUNT(DISTINCT principal) AS c FROM idp_groups")
         return int(rows[0]["c"]) if rows else 0
-
-    def artifact_dates(self, source_id: str) -> dict[str, tuple[Any, Any, Any]]:
-        """``{artifact id: (sha256, ingested_at, source_modified_at)}`` for one source.
-
-        Read at the start of a sync so dates survive a re-index of identical
-        bytes, a full sync's clear included (`sync.engine._artifact_dates`).
-        """
-
-        rows = self.rows(
-            "SELECT id, sha256, ingested_at, source_modified_at FROM artifacts WHERE source_id=?",
-            (source_id,),
-        )
-        return {
-            str(row["id"]): (row["sha256"], row["ingested_at"], row["source_modified_at"])
-            for row in rows
-        }
-
-    def set_source_dates(self, updates: list[tuple[str, str]]) -> None:
-        """Write ``(source_modified_at, artifact id)`` pairs in batched transactions.
-
-        The first sync after an upgrade re-dates every document in a source,
-        and one statement and commit per row is a round trip each on Postgres.
-        Batched, it is the cost of the rows.
-        """
-
-        for start in range(0, len(updates), 1000):
-            with self.conn:
-                self.conn.executemany(
-                    "UPDATE artifacts SET source_modified_at=? WHERE id=?",
-                    updates[start : start + 1000],
-                )
-
-    def artifact_timestamps(self, artifact_ids: list[str]) -> dict[str, dict[str, Any]]:
-        """``{artifact id: {"source_modified_at", "ingested_at"}}`` for the ids that exist.
-
-        The date window's post-filter for the arms SQL cannot narrow, batched
-        the way `artifact_acls` is and through `rows` for the reason it gives.
-        """
-
-        if not artifact_ids:
-            return {}
-        out: dict[str, dict[str, Any]] = {}
-        for start in range(0, len(artifact_ids), 500):
-            # `in_clause`: one statement text for every batch size, so
-            # Postgres prepares it once (see `Dialect.in_clause`).
-            clause, params = self.dialect.in_clause("id", artifact_ids[start : start + 500])
-            for row in self.rows(
-                f"SELECT id, source_modified_at, ingested_at FROM artifacts WHERE {clause}",
-                tuple(params),
-            ):
-                out[str(row["id"])] = {
-                    "source_modified_at": row["source_modified_at"],
-                    "ingested_at": row["ingested_at"],
-                }
-        return out
 
     def artifact_acls(self, artifact_ids: list[str]) -> dict[str, str | None]:
         """The stored ACL JSON (or None) for each artifact id (Step 32.2).
@@ -793,12 +712,7 @@ class StateStore:
                     acl=excluded.acl,
                     source_modified_at=excluded.source_modified_at,
                     ingested_at=excluded.ingested_at""",
-                {
-                    "acl": None,
-                    "source_modified_at": None,
-                    "ingested_at": artifact.get("last_indexed_at"),
-                    **artifact,
-                },
+                {"acl": None, **artifact_dates.row_defaults(artifact), **artifact},
             )
             if not fresh:
                 self.conn.execute("DELETE FROM chunks WHERE artifact_id=?", (artifact["id"],))

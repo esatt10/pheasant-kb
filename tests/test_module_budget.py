@@ -81,7 +81,10 @@ CEILINGS: dict[str, int] = {
     # Lowered from 950 when the shared snapshot store moved to `job_snapshots.py`.
     "jobs.py": 800,
     "mcp_server/server.py": 1300,
-    "mcp_server/tools.py": 2050,
+    # Raised by 4 for `search_context`'s date window (`updated_after`,
+    # `updated_before`, `date_field`): three public parameters and their pass-
+    # through. The window itself is `search/criteria.py`'s `DateWindow`.
+    "mcp_server/tools.py": 2054,
     "memory/formation.py": 1150,
     "memory/store.py": 950,
     # Raised from 1050 for the readiness plane's two tables. Deliberate, and
@@ -96,7 +99,10 @@ CEILINGS: dict[str, int] = {
     # the same grounds: a table's DDL belongs in the file that declares tables.
     # Raised to 1124 for `sync_runs` (a running sync and its cancel request),
     # on those grounds again; its code lives in `sync/cancellation.py`.
-    "persistence/schema.py": 1124,
+    # Raised to 1134 for `artifacts.source_modified_at` / `ingested_at`: two
+    # columns and the comment saying what each clock means; their reads,
+    # writes and migration live in `persistence/artifact_dates.py`.
+    "persistence/schema.py": 1134,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only

@@ -40,6 +40,7 @@ from pheasant.ingestion.walk import (
     walk_source,
 )
 from pheasant.memory.source_removal import reconcile_after_source_removal, retire_source_memories
+from pheasant.persistence import artifact_dates
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
@@ -2074,7 +2075,7 @@ class SyncEngine:
             # not move `ingested_at` ("when pheasant took in this content"),
             # and a full sync is a re-index of identical bytes for almost
             # every file it touches. One read per sync, O(source).
-            prior_dates = self.state.artifact_dates(source.name)
+            prior_dates = artifact_dates.prior_dates(self.state, source.name)
             if cleared:
                 with self._sync_mutex:
                     resume_scope = FULL_RESUME_SCOPE.format(name=source.name)

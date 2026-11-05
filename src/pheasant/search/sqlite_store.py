@@ -415,23 +415,14 @@ class SearchStore:
         source_params: list[object] = [source_name] if source_name else []
         filter_where = source_where
         filter_params: list[object] = list(source_params)
-        # Restrict to one section of a document's taxonomy. Pushed into SQL
-        # rather than filtered afterwards: a section is a narrow slice, and
-        # post-filtering a globally-ranked page of hits can return nothing from
-        # the requested section while its chunks sit just past the cut.
+        # Restrict to one section of a document's taxonomy. In SQL, not after:
+        # a section is a narrow slice, and post-filtering a globally-ranked page
+        # can return nothing from it while its chunks sit just past the cut.
         if section_needle(section):
             filter_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
             filter_params.append(f"%{section_needle(section)}%")
-        # One file or folder of a source: in SQL for the reason `section` is.
-        scope_where, scope_params = path_scope_sql(path_prefix, exclude)
-        # A date window (`criteria.DateWindow`) is a column of `artifacts`,
-        # which every lexical shape already joins; in SQL for the reason
-        # `section` is, since a narrow window post-filtered off a global page
-        # returns nothing while its documents sit past the cut.
-        if window:
-            window_where, window_params = window.sql()
-            scope_where += window_where
-            scope_params = [*scope_params, *window_params]
+        # One file or folder of a source, or a date window: in SQL as `section` is.
+        scope_where, scope_params = path_scope_sql(path_prefix, exclude, window=window)
         filter_where += scope_where
         filter_params.extend(scope_params)
         # Step 33.6 — agent-memory policy. Pushed into SQL for the same reason

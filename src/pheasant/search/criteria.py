@@ -147,9 +147,13 @@ class Exclusion:
 
 
 def path_scope_sql(
-    scope: Any, exclude: Exclusion | None = None, column: str = "artifacts.relative_path"
+    scope: Any,
+    exclude: Exclusion | None = None,
+    column: str = "artifacts.relative_path",
+    window: Any = None,
 ) -> tuple[str, list[Any]]:
-    """``(" AND …", params)`` keeping rows within ``scope`` and not excluded.
+    """``(" AND …", params)`` keeping rows within ``scope``, not excluded, and
+    inside a date ``window`` (a `DateWindow`, on the same ``artifacts`` table).
 
     ``substr(...) = ?`` rather than ``LIKE 'x/%'``: SQLite's ``LIKE`` folds
     ASCII case and Postgres's does not, so the obvious spelling would scope
@@ -157,15 +161,19 @@ def path_scope_sql(
     """
 
     where, params = "", []
+    table = column.rsplit(".", 1)[0] if "." in column else "artifacts"
     wanted = path_scope(scope)
     if wanted:
         where = f" AND ({column} = ? OR substr({column}, 1, ?) = ?)"
         params = [wanted, len(wanted) + 1, f"{wanted}/"]
     if exclude and exclude.ids:
         ids = sorted(exclude.ids)
-        table = column.rsplit(".", 1)[0] if "." in column else "artifacts"
         where += f" AND {table}.id NOT IN ({', '.join('?' for _ in ids)})"
         params.extend(ids)
+    if window:
+        window_where, window_params = window.sql(table)
+        where += window_where
+        params.extend(window_params)
     return where, params
 
 
@@ -458,3 +466,33 @@ def stamp_dates(results: list[dict], dates: dict[str, dict[str, Any]]) -> None:
             provenance = item["provenance"] = {}
         provenance["source_modified_at"] = found.get("source_modified_at")
         provenance["ingested_at"] = found.get("ingested_at")
+
+
+def window_hits(
+    state: Any, window: DateWindow, *arms: list[dict]
+) -> tuple[tuple[list[dict], ...], int]:
+    """Each arm's hits inside ``window``, stamped with their dates, and how many
+    candidates were left out for having no date at all.
+
+    One lookup for every arm's documents, which also supplies the dates every
+    surviving hit is stamped with. A hit resolving to no document (an entity,
+    a shared stub) has no date, so it is outside the window -- the call
+    `scope_hits` makes for a folder.
+    """
+
+    from pheasant.persistence.artifact_dates import timestamps
+
+    subjects = sorted({date_subject(item) for arm in arms for item in arm} - {""})
+    dates = timestamps(state, subjects)
+    undated = 0
+
+    def inside(item: dict) -> bool:
+        nonlocal undated
+        value = (dates.get(date_subject(item)) or {}).get(window.column)
+        undated += not value
+        return window.admits_date(value)
+
+    kept = tuple([item for item in arm if inside(item)] for arm in arms)
+    for arm in kept:
+        stamp_dates(arm, dates)
+    return kept, undated

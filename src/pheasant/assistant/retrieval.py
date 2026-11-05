@@ -379,7 +379,9 @@ class PheasantRetriever:
         if self.state is None or not artifact_id:
             return False
         if artifact_id not in self._date_cache:
-            found = self.state.artifact_timestamps([artifact_id])
+            from pheasant.persistence.artifact_dates import timestamps
+
+            found = timestamps(self.state, [artifact_id])
             self._date_cache[artifact_id] = found.get(artifact_id) or {}
         return self.window.admits_date(self._date_cache[artifact_id].get(self.window.column))
 
