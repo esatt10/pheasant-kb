@@ -99,10 +99,25 @@ jobs:
           python -m pip install -e ".[dev,mcp]" playwright
           python -m playwright install --with-deps chromium
 
+      # Composer dictation is driven against the built web UI (a fake
+      # microphone, a stand-in transcription wire), so this job builds it.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build the web UI
+        working-directory: ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
       - name: Run the view's browser tests
         env:
           PHEASANT_REQUIRE_BROWSER: "1"
-        run: python -m pytest tests/test_mcp_app_expand.py -q
+        run: python -m pytest tests/test_mcp_app_expand.py tests/test_dictation_browser.py -q
 
   backend-parity:
     # The scale-out backend, on EVERY pull request.

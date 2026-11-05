@@ -70,7 +70,9 @@ CEILINGS: dict[str, int] = {
     # the rules themselves live in `ingestion/html_text.py`.
     # Raised by 7 for `pheasant.defaults` and the two lines that lay a config
     # over the table it names; the table itself is `config/flagship.py`.
-    "config/schema.py": 2291,
+    # Raised by 3 for `assistant.voice`: its import, the nested field and its
+    # comment line; the section itself is `config/assistant_voice.py`.
+    "config/schema.py": 2294,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

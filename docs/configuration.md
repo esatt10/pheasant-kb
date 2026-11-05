@@ -2087,6 +2087,38 @@ rewrite cost 27–29 s each time it fired, which cancelled the saving.
 
 ---
 
+### `assistant.voice` — dictation in the composer
+
+The web UI's composer has a microphone beside **Send**. Pressing it streams
+speech to an OpenAI Realtime **transcription** session and writes the
+transcript into the question box at the cursor as it arrives; pressing it again
+stops. The region's part is the credential: `POST /assistant/voice/session`
+mints a short-lived client secret for one session
+(`POST {base_url}/realtime/client_secrets`) and the browser streams 24 kHz PCM
+to the transcriber with it, so the region's API key never reaches a browser and
+no audio passes through the region. Query-time only — nothing here touches
+indexing.
+
+The key is `api_key_env` when one is named, otherwise a browser session's
+pasted OpenAI key, otherwise `OPENAI_API_KEY`. With none, the microphone is not
+shown (`GET /assistant/voice` says why), which is the standalone default.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `true` | Off hides the microphone and refuses `VOICE_NOT_CONFIGURED`. |
+| `model` | str | `gpt-live-transcribe` | Any Realtime transcription model. |
+| `max_seconds` | 1–600 | `60` | One dictation's cap. The composer turns itself off there; another can start at once. |
+| `base_url` | URL | OpenAI | An OpenAI-spec base; the WebSocket address is derived from it. |
+| `api_key_env` | str | unset | Read the key from this variable instead. |
+| `language` | ISO-639-1 | unset | A language hint for the transcriber. |
+| `transcription` | map | `{}` | Merged into the session's `transcription` object as it stands, for model options this schema does not name (`delay`, `keywords` …). |
+| `secret_ttl_seconds` | 10–7200 | `60` | How long a minted secret may wait to open its session. |
+| `request_timeout_seconds` | float | `10` | The mint request's timeout. |
+
+The page needs a secure context for the microphone: `https://` or
+`localhost`, which is how pheasant-kb's UI is reached by default. A mint the
+provider refused is `502 VOICE_UNAVAILABLE` (retryable).
+
 ## `sources` (per-source configuration)
 
 Each source item supports:

@@ -5,6 +5,8 @@ import type {
   MemoryListResponse,
   MemoryWriteResponse,
   AssistantStatus,
+  VoiceSession,
+  VoiceStatus,
   AnswerDepth,
   ChatAnswer,
   HistoryTurn,
@@ -407,6 +409,15 @@ export const api = {
   // Assistant (grounded chat)
   assistantStatus: (sessionId?: string | null) =>
     request<AssistantStatus>(`/assistant/status${qs({ session_id: sessionId ?? undefined })}`),
+  /** Whether the composer may offer dictation (live transcription). */
+  voiceStatus: (sessionId?: string | null) =>
+    request<VoiceStatus>(`/assistant/voice${qs({ session_id: sessionId ?? undefined })}`),
+  /** A short-lived secret for one dictation; the region's own key never leaves it. */
+  voiceSession: (sessionId?: string | null) =>
+    request<VoiceSession>("/assistant/voice/session", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId ?? null }),
+    }),
   /** Hand a key to the server for this session only — it is never persisted. */
   assistantKey: (body: {
     provider: string;
