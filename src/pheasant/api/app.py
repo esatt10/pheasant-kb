@@ -25,6 +25,7 @@ from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.api.sync_control_routes import register_sync_control_routes
+from pheasant.api.sync_wait_routes import register_sync_wait_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -1642,6 +1643,22 @@ def create_app(
             headers=headers,
         )
 
+    async def transient_error(request, exc: Exception):  # type: ignore[no-untyped-def]
+        """A database failure no operation translated: retryable, said the way
+        MCP says it. Anything else re-raises into the ordinary logged 500."""
+
+        from pheasant.services.errors import transient_refusal
+
+        if (refusal := transient_refusal(exc)) is None:
+            raise exc
+        logger.warning("%s %s: %s", request.method, request.url.path, refusal)
+        return await service_error(request, refusal)
+
+    from pheasant.services.errors import database_exception_types
+
+    for transient_type in database_exception_types():
+        app.add_exception_handler(transient_type, transient_error)
+
     @app.get("/health")
     async def health() -> dict:
         """Liveness: is this process running at all.
@@ -2008,6 +2025,7 @@ def create_app(
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
     register_source_url_routes(app, services=services)
+    register_sync_wait_routes(app, services=services)
     register_sync_control_routes(app, services=services)
 
     @app.get("/contract")
@@ -5136,28 +5154,16 @@ def create_app(
     # MCP connection details, so the UI can hand an agent a working config.
     # ------------------------------------------------------------------
     @app.get("/mcp/info")
-    def mcp_info() -> dict:
-        from pheasant.mcp_client.agents import agent_mcp_config, render_agent_mcp_json
+    def mcp_info(request: Request) -> dict:
+        from pheasant.api.mcp_connect import connection_info, request_origin
 
-        transports = dict(config.server.mcp.transports)
-        base = f"http://{config.server.host}:{config.server.port}"
-        clients = {}
-        for client_name in ("claude-code", "cursor"):
-            try:
-                clients[client_name] = render_agent_mcp_json(
-                    agent_mcp_config("local", config_path=str(app.state.config_path))
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.debug("could not render %s mcp config: %s", client_name, exc)
-        return {
-            "enabled": config.server.mcp.enabled,
-            "transports": transports,
-            "streamable_http_url": f"{base}/mcp" if transports.get("streamable_http") else None,
-            "stdio_command": ["pheasant", "mcp", "--transport", "stdio"],
-            "config_path": str(app.state.config_path),
-            "tools": _mcp_tool_summaries(),
-            "client_configs": clients,
-        }
+        return connection_info(
+            config,
+            identity_service,
+            origin=request_origin(request.headers, request.url.scheme, request.url.netloc),
+            config_path=str(app.state.config_path),
+            tools=_mcp_tool_summaries(),
+        )
 
     # ------------------------------------------------------------------
     # Quick add — the UI counterpart to `pheasant up <anything>`.

@@ -368,7 +368,7 @@ def finish_cancelled(
     }
     now = utc_now()
     engine.state.append_sync_event(
-        uuid.uuid4().hex,
+        engine.state.new_sync_event_id(),
         source.name,
         "sync.cancelled",
         "cancelled",

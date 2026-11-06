@@ -192,6 +192,8 @@ CREATE TABLE IF NOT EXISTS sync_events (
   details_json TEXT,
   error_json TEXT
 );
+-- A source's latest sync is read per source (`describe_source`, `wait_for_sync`).
+CREATE INDEX IF NOT EXISTS idx_sync_events_source ON sync_events(source_id, finished_at);
 CREATE TABLE IF NOT EXISTS source_checkpoints (
   source_id TEXT PRIMARY KEY,
   connector_type TEXT NOT NULL,

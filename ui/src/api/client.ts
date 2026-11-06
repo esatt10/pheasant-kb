@@ -700,6 +700,20 @@ export const api = {
     return URL.createObjectURL(new Blob([bytes], { type: options.mimeType }));
   },
   /**
+   * Where pdf.js reads a document's bytes itself: the URL and the headers
+   * that authenticate it. pdf.js then asks for the byte ranges it needs while
+   * the rest streams in, so a long PDF shows its first page (and the cited
+   * one) once those ranges arrive rather than only after the whole file --
+   * which on a phone was most of the wait.
+   */
+  documentRawSource: (options: { source?: string | null; path: string }) => ({
+    url: new URL(
+      `${API_BASE}/documents/raw${qs({ path: options.path, source_name: options.source ?? undefined })}`,
+      window.location.href,
+    ).href,
+    headers: Object.fromEntries(requestHeaders(undefined, false).entries()),
+  }),
+  /**
    * A fetched web page's HTML as it was indexed, as text for a sandboxed
    * frame's `srcDoc`. Decoded as UTF-8, which is how the extractor read it.
    */

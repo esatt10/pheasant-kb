@@ -217,7 +217,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 189 pytest modules, offline by design
+└── tests/                     ← 192 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -289,6 +289,10 @@ Agents *querying* a region (raw hybrid search + graph traversal, judged by
 their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`; agents
 *offloading a composition* (a new artifact built from documented parts, as a
 job: MCP `compose_artifact` + `get_job`) use `.agents/skills/pheasant-compose/SKILL.md`.
+Agents *adding* content (register a source, edit a web collection's pages,
+submit documents) and then relying on it use
+`.agents/skills/pheasant-ingest/SKILL.md`: on a fleet a write only publishes a
+sync, and its job reads `succeeded` before anything is indexed.
 
 ---
 
@@ -523,6 +527,20 @@ pruning, no `healthy` — so the next incremental finishes it and equals a full
 sync. A connector keeps its checkpoint only if it can build one true of a
 partial pass (`partial_checkpoint_from_items`; the web connector does, for the
 pages it finished and never for ones it merely read ahead).
+
+**A sync's end can be waited for, and a partial one says so**
+(`services/sync_wait.py`; MCP `wait_for_sync`, `GET /sources/{name}/wait`).
+On a fleet a write only publishes a sync and its job reads `succeeded` at
+once, so an agent composed over content not yet indexed. The wait is built
+from state alone -- the queue, the `sync_runs` heartbeat, the source row --
+bounded at 55 s a call, and answers `finished` / `running` / `queued` /
+`not_started` against a caller's `since`. A sync that read some items and not
+others records `degraded` (not a failed status: its job still succeeds and
+nothing retries it in a loop), and `describe_source` carries `last_sync`, the
+latest `sync_events` row with its unreadable items and their errors. The
+indexer repeats a successful sync child's stderr into its own log, which it
+used to read only on failure. The MCP server's `instructions` and
+`.agents/skills/pheasant-ingest/` tell every agent to wait.
 
 **A document can be removed on purpose and stay removed**
 (`services/archive.py`, `sync/archived.py`, table `archived_documents`). The
@@ -2743,6 +2761,35 @@ Each of these cost real time. They are listed because the shape recurs.
   scores are still reported for compose and never acted on. Where an answer
   shape has a checkable form, check the form
   (`compose_review`) rather than trusting a judgement nobody calibrated for it.
+- **An idle pooled connection can be dead, and nothing says so until it is
+  used.** On Azure Container Apps the network closed every Postgres
+  connection idle a few minutes, and the pool handed them out: five MCP
+  writes in a row failed, one per dead connection, as a bare "Error executing
+  tool" while Postgres logged nothing. `persistence/pg_liveness.py` pings a
+  connection idle 30 s or more on checkout, asks for TCP keepalives, and a
+  standalone read that still hits one is repeated once. A connection the
+  *server* ends (restart, failover) carries SQLSTATE `57P01`, so "no
+  SQLSTATE" alone was not the test for a dropped connection -- the first
+  retry test passed only because its pool of two handed over the live one.
+  Anything left reaches a caller as `STATE_STORE_UNAVAILABLE`, retryable,
+  through both transports.
+- **A record nothing reads is a record nobody knows is wrong.** Every sync
+  wrote a `sync_events` row with the items it could not read, and
+  `list_sync_events` had no caller outside the tests -- and ordered by
+  `rowid`, which Postgres does not have, so its first real caller would have
+  failed on the fleet. Ordering by `finished_at` instead exposed the next
+  thing: it has one-second resolution, and a random event id made "the
+  latest sync" a coin toss between two in one second, which the web
+  connector tests caught one full run in two. Event ids are time-ordered now
+  (`StateStore.new_sync_event_id`). A web
+  collection kept 1 of 80 pages and every surface said `healthy`: the
+  child's warnings went to a stderr read only on failure, and the reason sat
+  in that row.
+- **A job that finishes when the work is handed off says the wrong thing
+  about the work.** On a fleet `start_sync_source` marks its job
+  `succeeded` once the task is published, and an agent following the job did
+  exactly what it was told. `wait_for_sync` is the answer for callers; the
+  job's own meaning is unchanged, because it is public behaviour.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

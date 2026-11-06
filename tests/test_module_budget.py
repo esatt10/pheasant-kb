@@ -101,7 +101,9 @@ CEILINGS: dict[str, int] = {
     # Raised to 1151 for `auth_tokens` and `oauth_clients` (credentials the
     # region issued, MCP clients registered), the same grounds; their code
     # lives in `persistence/auth_tokens.py`.
-    "persistence/schema.py": 1151,
+    # Raised to 1153 for `idx_sync_events_source`, the per-source lookup
+    # `describe_source` and `wait_for_sync` make; DDL belongs here.
+    "persistence/schema.py": 1153,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only

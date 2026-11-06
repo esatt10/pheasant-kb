@@ -1596,18 +1596,29 @@ def test_an_unreadable_page_is_recorded_and_the_rest_of_the_sync_goes_on(
 ) -> None:
     """One page that cannot be fetched used to fail the whole pass, and a
     queued sync of a large collection was redelivered from its first page,
-    forever. It is that page's failure now, and the sync completes."""
+    forever. It is that page's failure now, and the sync completes -- as
+    ``degraded``, not ``healthy``, with the page and its error in the source's
+    ``last_sync``, which is where a reader looks."""
+
+    from pheasant.services import ServiceContext
+    from pheasant.services.inventory_detail import source as describe_source
 
     pages = ["one", "two", "three"]
     engine = _web_engine(tmp_path / "flaky", flaky_site.base, pages)
     try:
         flaky_site.broken = {"two"}
         result = engine.sync_source("site", "incremental")
-        assert result.status == "healthy"
+        assert result.status == "degraded"
         assert result.indexed_artifacts == 2
         assert result.details["unreadable_items"] == 1
         assert result.details["unreadable"][0]["path"].endswith("two.txt")
         assert "HTTPError" in result.details["unreadable"][0]["error"]
+        context = ServiceContext(config=engine.config, state=engine.state, searcher=None)
+        described = describe_source(context, "site")
+        assert described["source"]["status"] == "degraded"
+        assert described["last_sync"]["status"] == "degraded"
+        assert described["last_sync"]["unreadable_items"] == 1
+        assert described["last_sync"]["unreadable"][0]["path"].endswith("two.txt")
 
         # A page indexed before keeps its text while it cannot be fetched.
         flaky_site.broken = {"one"}
@@ -1618,7 +1629,8 @@ def test_an_unreadable_page_is_recorded_and_the_rest_of_the_sync_goes_on(
 
         # And once every page answers, incremental equals a clean full sync.
         flaky_site.broken = set()
-        engine.sync_source("site", "incremental")
+        assert engine.sync_source("site", "incremental").status == "healthy"
+        assert describe_source(context, "site")["last_sync"]["unreadable_items"] == 0
         recovered = _site_state(engine)
     finally:
         engine.close()

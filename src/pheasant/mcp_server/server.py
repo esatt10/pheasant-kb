@@ -53,7 +53,16 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "inspect graph relationships, and record or recall agent memory. To offload "
             "building a new artifact (a configuration, script or set of files) assembled "
             "from many documented parts, call compose_artifact and follow its job with "
-            "get_job: the region plans, retrieves, writes and checks it against the sources."
+            "get_job: the region plans, retrieves, writes and checks it against the sources. "
+            "Adding content is not instant: after register_source, edit_source_urls, "
+            "submit_documents or sync_source, a response or job result with status "
+            "'queued' means the sync was only published (a job can read 'succeeded' "
+            "then). Before relying on the content, call wait_for_sync with since set to "
+            "the source's last_indexed_at from describe_source before the write, and "
+            "call it again while timed_out is true. When it finishes, compare documents "
+            "with what you added: last_sync.status 'degraded' and last_sync.unreadable "
+            "name what could not be read, so tell the user what is missing. An error "
+            "saying to retry the call is temporary; retry it."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`
         # (1.x reported the SDK's own version, which was never pheasant's).
@@ -1044,6 +1053,12 @@ def _anticipated_failures(surface: str) -> Any:
                         else str(exc)
                     )
                     raise deliberate(message) from exc
+                except Exception as exc:
+                    from pheasant.services.errors import transient_refusal
+
+                    if (refusal := transient_refusal(exc)) is None:
+                        raise
+                    raise deliberate(str(refusal)) from exc
 
             buffer = _interaction_buffer()
             if buffer is None:
