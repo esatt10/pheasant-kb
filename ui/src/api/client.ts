@@ -701,9 +701,10 @@ export const api = {
   },
   /**
    * Where pdf.js reads a document's bytes itself: the URL and the headers
-   * that authenticate it. pdf.js then asks for byte ranges, so a long PDF
-   * shows its first page (and the cited one) after a few hundred kilobytes
-   * rather than after the whole file, which on a phone is most of the wait.
+   * that authenticate it. pdf.js then asks for the byte ranges it needs while
+   * the rest streams in, so a long PDF shows its first page (and the cited
+   * one) once those ranges arrive rather than only after the whole file --
+   * which on a phone was most of the wait.
    */
   documentRawSource: (options: { source?: string | null; path: string }) => ({
     url: new URL(

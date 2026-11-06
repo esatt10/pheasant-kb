@@ -22,10 +22,13 @@ export function loadPdf(
     worker = new PdfWorker();
     GlobalWorkerOptions.workerPort = worker;
   }
-  // From a URL, pdf.js reads only the ranges it needs (the cross-reference
-  // table, then each page as it is drawn or searched) when the server
-  // answers `Accept-Ranges: bytes`, and the whole file when it does not.
-  // `disableAutoFetch` stops it downloading the rest in the background.
+  // From a URL, pdf.js streams the file and, when the server answers
+  // `Accept-Ranges: bytes`, fetches the ranges it needs next (the
+  // cross-reference table, then each page drawn or searched) while the stream
+  // is still arriving -- so a page shows at whichever comes first. Ranges
+  // alone were slower on a fast link: a book that is not linearized took 17
+  // serial rounds before page 1 (7.2 s for 58 MB from Azure, against 2.0 s
+  // for both), while a slow link is where the stream alone was the wait.
   const params =
     source instanceof ArrayBuffer
       ? { data: source }
@@ -33,7 +36,6 @@ export function loadPdf(
           url: source.url,
           httpHeaders: source.headers,
           rangeChunkSize: RANGE_CHUNK,
-          disableStream: true,
           disableAutoFetch: true,
         };
   // No `eval`: a PDF's fonts are compiled without it, at some cost in speed.
