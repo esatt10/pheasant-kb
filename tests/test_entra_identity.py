@@ -250,6 +250,27 @@ def test_the_ledger_records_the_verified_principal_and_method(
     assert json.loads(row["attributes_json"])["auth_method"] == "entra_token"
 
 
+def test_the_shared_token_keeps_the_asserted_principal(client: TestClient) -> None:
+    """The shared token names a credential, not a person: overruling an
+    asserted name with it made every caller of a token-only region one
+    principal (the log-tier smoke test caught it)."""
+
+    shared = _bearer(SHARED)
+    client.get("/sources", headers={**shared, "X-Pheasant-Principal": "user:ci"})
+    client.get("/documents", headers=shared)
+    app = client.app
+    app.state.interaction_buffer.flush()
+    rows = {
+        row["operation"]: row
+        for row in app.state.state.rows(
+            "SELECT operation, principal, attributes_json FROM interaction_events", ()
+        )
+    }
+    assert rows["/sources"]["principal"] == "user:ci"
+    assert json.loads(rows["/sources"]["attributes_json"])["auth_method"] == "api_token"
+    assert rows["/documents"]["principal"] == "shared-token"
+
+
 # -- personal keys ------------------------------------------------------------
 
 

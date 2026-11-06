@@ -137,8 +137,12 @@ Every request then carries a verified principal and its auth method: one
 `pheasant.access` log line per request (`GET /sources 200 principal=… auth=…`,
 and `401 … auth=rejected` for a refused credential), and, with the
 observation plane on, the `principal` column and `attributes.auth_method` of
-its interaction row. A verified principal overrules an asserted
-`X-Pheasant-Principal` header or `principal` tool argument in that record.
+its interaction row. A verified *person* (`entra_token`, `entra_sso`,
+`personal_key`, `mcp_oauth`) overrules an asserted `X-Pheasant-Principal`
+header or `principal` tool argument in that record. A shared credential (the
+region's token, a service's) proves who holds a credential, not who is
+calling, so behind one the asserted name is kept, falling back to
+`shared-token`; `auth_method` still says it was only asserted.
 
 **Who may sign in** is decided in Entra: the app registration requires
 assignment, and a token or sign-in must also carry one of

@@ -76,9 +76,16 @@ def reset_identity(token: contextvars.Token) -> None:
 
 
 def effective_principal(asserted: str | None) -> str | None:
-    """The verified principal when there is one, else whatever was asserted."""
+    """The verified person when there is one, else whatever was asserted.
+
+    A shared credential (the region's token, a service's) proves who holds a
+    credential rather than who is calling, so it does not overrule an asserted
+    name: every caller behind the shared token would otherwise be one
+    principal, and the ledger would lose the only thing that told them apart.
+    The row's ``auth_method`` still says the name was asserted, not proven.
+    """
 
     identity = _CURRENT.get()
-    if identity is not None and identity.principal:
+    if identity is not None and identity.principal and identity.is_person:
         return identity.principal
-    return asserted or None
+    return asserted or (identity.principal if identity is not None else None) or None
