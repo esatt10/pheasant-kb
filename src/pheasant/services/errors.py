@@ -455,3 +455,101 @@ class VoiceUnavailable(ServiceError):
     def __init__(self, reason: object) -> None:
         super().__init__(f"The transcription service did not start a session: {reason}")
         self.reason = str(reason)
+
+
+class IdentityNotConfigured(ServiceError):
+    """Sign-in with Microsoft was asked for and this region has it off.
+
+    A 404 rather than a 503: the feature is not part of this region, the same
+    answer a build without it would give. ``security.entra`` turns it on.
+    """
+
+    status = 404
+    code = "IDENTITY_NOT_CONFIGURED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Sign-in with Microsoft is not enabled in this region (security.entra.enabled)"
+        )
+
+
+class SignInFailed(ServiceError):
+    """A sign-in round trip ended without an identity this region admits.
+
+    The message says which step failed and never what a token contained: a
+    refusal is read by whoever is signing in, who may not be who they claim.
+    """
+
+    status = 401
+    code = "SIGN_IN_FAILED"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Sign-in failed: {reason}")
+        self.reason = reason
+
+
+class PersonIdentityRequired(ServiceError):
+    """An operation that belongs to a signed-in person, asked by a credential.
+
+    Minting a personal key ties the key to someone; the shared token names
+    no one, so it cannot mint one.
+    """
+
+    status = 403
+    code = "PERSON_IDENTITY_REQUIRED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Sign in with Microsoft to manage personal keys; the shared token names no one"
+        )
+
+
+class StateStoreUnavailable(ServiceError):
+    """The region's database did not answer this call.
+
+    A connection that dropped, a server restarting, a pool with nothing free.
+    It says nothing about the request, so it is retryable -- and it is a
+    refusal rather than a crash so its reason reaches the caller: through the
+    MCP SDK an unexpected exception is a bare "Error executing tool", and on
+    Azure that is what every write after an idle spell returned, five in a
+    row, while an agent concluded the region was refusing what it asked for.
+    """
+
+    status = 503
+    code = "STATE_STORE_UNAVAILABLE"
+    retryable = True
+
+    def __init__(self, detail: object) -> None:
+        super().__init__(
+            f"The knowledge base's database did not answer ({detail}). "
+            "The statement that failed was not applied; retry the call."
+        )
+
+
+def transient_refusal(exc: BaseException) -> ServiceError | None:
+    """The retryable refusal ``exc`` amounts to, or ``None`` if it is not one.
+
+    Called by both transports for an exception no operation translated, so a
+    database failure reads the same on each. A server error with a SQLSTATE
+    (a constraint, bad SQL) is not transient and stays a crash.
+    """
+
+    from pheasant.persistence.pg_liveness import is_disconnect
+
+    if is_disconnect(exc):
+        return StateStoreUnavailable(f"{type(exc).__name__}: {str(exc).strip()[:200]}")
+    if type(exc).__name__ == "PoolTimeout" and type(exc).__module__.startswith("psycopg_pool"):
+        return StateStoreUnavailable("no database connection became free in time")
+    return None
+
+
+def database_exception_types() -> tuple[type[BaseException], ...]:
+    """The exception classes `transient_refusal` may translate, for an adapter
+    that registers handlers by type. Empty when psycopg is not installed."""
+
+    try:
+        import psycopg
+        import psycopg_pool
+    except ModuleNotFoundError:
+        return ()
+    return (psycopg.OperationalError, psycopg_pool.PoolTimeout)

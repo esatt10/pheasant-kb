@@ -53,6 +53,7 @@ from pheasant.services.inventory import (
     extension_of,
     reader,
 )
+from pheasant.services.sync_wait import last_sync
 
 #: Edges that describe where a document sits rather than what it points at.
 STRUCTURAL_EDGES = frozenset(
@@ -153,6 +154,9 @@ def source(
             "documents": len(own),
             "size_bytes": sum(int(r["size_bytes"] or 0) for r in own),
         },
+        # What the last sync did, unreadable items included: "healthy" alone
+        # was all a reader got of a sync that kept 1 of 80 pages.
+        "last_sync": last_sync(context.state, source_name),
         "by_extension": by_extension,
         "by_directory": by_directory,
         "recent": [document_row(r) for r in recent],

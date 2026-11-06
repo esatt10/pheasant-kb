@@ -63,6 +63,33 @@ CREATE TABLE IF NOT EXISTS removed_sources (
   source_id TEXT PRIMARY KEY,
   removed_at TEXT NOT NULL
 );
+-- Credentials the region issued (`persistence/auth_tokens.py`): browser
+-- sessions, personal keys, MCP OAuth tokens and codes, and the short-lived
+-- state of a sign-in round trip. Only a digest of each secret is stored; the
+-- id is the public half a presented credential is looked up by.
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  principal TEXT,
+  display_name TEXT,
+  subject TEXT,
+  roles_json TEXT,
+  name TEXT,
+  client_id TEXT,
+  data_json TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_principal ON auth_tokens(principal, kind);
+-- MCP clients registered through OAuth dynamic client registration.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 -- The same tombstone for one document (`persistence/archive.py`). Every sync
 -- skips a path held here before reading it, so the removal survives
 -- incremental and full syncs. `kind` is `archived` (reinstatable) or
@@ -165,6 +192,8 @@ CREATE TABLE IF NOT EXISTS sync_events (
   details_json TEXT,
   error_json TEXT
 );
+-- A source's latest sync is read per source (`describe_source`, `wait_for_sync`).
+CREATE INDEX IF NOT EXISTS idx_sync_events_source ON sync_events(source_id, finished_at);
 CREATE TABLE IF NOT EXISTS source_checkpoints (
   source_id TEXT PRIMARY KEY,
   connector_type TEXT NOT NULL,

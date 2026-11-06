@@ -62,9 +62,11 @@ class RemotePdfPages:
         transport: str = "grpc",
         pool_factory: Any = None,
         math: bool = False,
+        identity: Any = None,
     ) -> None:
         self.urls = list(urls)
         self.token_env = token_env
+        self.identity = identity
         self.pages_per_task = max(1, int(pages_per_task))
         self.timeout = float(timeout)
         self.max_parallel_files = max(1, int(max_parallel_files or 1))
@@ -146,7 +148,7 @@ class RemotePdfPages:
     def _worker_pool(self) -> Any:
         with self._lock:
             if self._pool is None:
-                token = configured_token(self.token_env)
+                token = configured_token(self.token_env, self.identity)
                 if self._pool_factory is not None:
                     self._pool = self._pool_factory(self.urls, token)
                 else:
@@ -184,6 +186,7 @@ def remote_pdf_pages(config: Any) -> RemotePdfPages | None:
         max_inflight=int(getattr(concurrency, "remote_worker_max_inflight_batches", 0) or 0),
         transport=str(concurrency.worker_transport or "http").lower(),
         math=math_enabled(getattr(getattr(config, "ingestion", None), "extractor", None)),
+        identity=getattr(getattr(config, "security", None), "service_identity", None),
     )
 
 

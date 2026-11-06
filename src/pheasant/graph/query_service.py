@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import os
 import socket
 import threading
 import time
@@ -20,6 +19,7 @@ from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from pheasant.security.service_auth import outbound_token
 from pheasant.telemetry.interactions import inject_traceparent
 
 
@@ -54,9 +54,13 @@ class GraphQueryClient:
         token_env: str,
         timeout_seconds: float = 30.0,
         retries: int = 1,
+        identity: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token_env = token_env
+        #: `security.service_identity`: a managed identity stands in for an
+        #: unset token (`security/service_auth.py`).
+        self.identity = identity
         self.timeout = max(0.1, float(timeout_seconds))
         self.retries = max(0, int(retries))
         self._replica_lock = threading.Lock()
@@ -169,7 +173,7 @@ class GraphQueryClient:
         retries: int | None = None,
         **parameters: Any,
     ) -> Any:
-        token = os.environ.get(self.token_env or "", "")
+        token = outbound_token(self.token_env, self.identity)
         if not token:
             raise GraphQueryError(
                 f"Graph queries require a token in environment variable {self.token_env!r}"
@@ -448,5 +452,6 @@ def graph_for_config(config: Any, local_graph: Any, *, force_local: bool = False
             url,
             str(getattr(settings, "query_service_token_env", "") or ""),
             float(getattr(settings, "query_service_timeout_seconds", 30.0) or 30.0),
+            identity=getattr(getattr(config, "security", None), "service_identity", None),
         )
     )

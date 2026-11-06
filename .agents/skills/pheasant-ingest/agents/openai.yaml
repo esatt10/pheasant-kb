@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pheasant Ingest"
+  short_description: "Add sources, pages or documents to a Pheasant region and wait until they are searchable"
+  default_prompt: "Use $pheasant-ingest to add content to a Pheasant region, wait for the index to finish, and check that it holds what was added before relying on it."

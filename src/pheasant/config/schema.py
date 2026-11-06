@@ -19,6 +19,7 @@ from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
 from pheasant.config.flagship import with_table_defaults
+from pheasant.config.identity import EntraSettings, ServiceIdentitySettings
 from pheasant.config.model import ModelMixin
 from pheasant.config.retired import resolve_source_type
 from pheasant.ingestion.content_types import default_include_globs
@@ -1361,11 +1362,8 @@ class ApiAuthSettings(ModelMixin):
     operator can reasonably change — while the surface behind it can register
     a source over any allow-listed path and read what it finds.
 
-    So this exists to make "behind an authenticating ingress" the *default*
-    rather than the instruction. A static shared token is deliberately the
-    whole feature: it is enough to close the gap, it needs no IdP, and it
-    cannot rot into a half-built identity system. Anything richer belongs to
-    the ingress, which is what ``behind_authenticating_proxy`` declares.
+    So this makes "behind an authenticating ingress" the default rather than
+    the instruction; ``security.entra`` (``config/identity.py``) adds people.
 
     Roles other than ``all`` refuse to serve a non-loopback bind with neither
     of the two set — see :func:`pheasant.deployment.roles.validate_role`.
@@ -1404,6 +1402,8 @@ class SecuritySettings(ModelMixin):
     groups: dict[str, list[str]] = field(default_factory=dict)
     idp: IdPSettings = field(default_factory=IdPSettings)
     api_auth: ApiAuthSettings = field(default_factory=ApiAuthSettings)
+    entra: EntraSettings = field(default_factory=EntraSettings)
+    service_identity: ServiceIdentitySettings = field(default_factory=ServiceIdentitySettings)
     allow_user_selected_source_paths: bool = True
     #: Whether a web source registered over MCP may name a loopback, private,
     #: link-local or otherwise non-public address. Off: an agent steered by a

@@ -6062,3 +6062,54 @@ select.text-input {
     border-right: none;
   }
 }
+
+/* Connect dialog: sign in with Microsoft, personal keys, or a pasted token. */
+.auth-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sp));
+  padding-top: calc(12px * var(--sp));
+  border-top: 1px solid var(--border);
+  margin-top: calc(12px * var(--sp));
+}
+.auth-section:first-of-type {
+  border-top: 0;
+  margin-top: 0;
+}
+.auth-signin {
+  align-self: flex-start;
+}
+.auth-heading {
+  margin: 0;
+  font-size: calc(15px * var(--fs));
+}
+.auth-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--sp));
+}
+.auth-keys li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--sp));
+  min-width: 0;
+}
+.auth-keys li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.auth-keyform {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--sp));
+}
+.auth-keyform .text-input:first-child {
+  flex: 1 1 180px;
+}
+.auth-created .code-line code {
+  overflow-wrap: anywhere;
+}

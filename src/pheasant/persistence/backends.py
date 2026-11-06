@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from pheasant.persistence.pg_liveness import TCP_KEEPALIVES, IdleCheck, is_disconnect
 from pheasant.persistence.sql import POSTGRES, SQLITE, Dialect, Row
 
 logger = logging.getLogger(__name__)
@@ -352,13 +353,19 @@ class PostgresBackend(StateBackend):
 
         self.dsn = dsn
         self._local = threading.local()
+        self._idle_check = IdleCheck()
         # min_size=1 so a container that never queries does not hold a pool of
         # idle server processes; the pool grows on demand up to pool_size.
         self._pool = ConnectionPool(
             dsn,
             min_size=1,
             max_size=max(1, int(pool_size)),
-            kwargs={"application_name": application_name, "autocommit": False},
+            kwargs={
+                "application_name": application_name,
+                "autocommit": False,
+                **TCP_KEEPALIVES,
+            },
+            check=self._idle_check,
             open=True,
         )
 
@@ -467,6 +474,20 @@ class PostgresBackend(StateBackend):
         self.release()
 
     def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
+        """Run a read, once more if its connection dropped and nothing was pending:
+        that read was autocommit, and `_abort` already discarded the connection."""
+
+        if self._pending:
+            return self._rows_once(sql, params)
+        try:
+            return self._rows_once(sql, params)
+        except Exception as exc:
+            if not is_disconnect(exc):
+                raise
+            logger.warning("PostgreSQL connection dropped during a read; retrying once: %s", exc)
+            return self._rows_once(sql, params)
+
+    def _rows_once(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
         conn = self._conn()
         from pheasant.request_budget import DeadlineExceeded, remaining_seconds
 
@@ -696,6 +717,7 @@ class PostgresBackend(StateBackend):
             conn.rollback()
         except Exception:  # pragma: no cover - already-broken connection
             pass
+        self._idle_check.returned(conn)
         try:
             self._pool.putconn(conn)
         except Exception:  # pragma: no cover

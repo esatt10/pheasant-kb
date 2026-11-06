@@ -53,7 +53,16 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "inspect graph relationships, and record or recall agent memory. To offload "
             "building a new artifact (a configuration, script or set of files) assembled "
             "from many documented parts, call compose_artifact and follow its job with "
-            "get_job: the region plans, retrieves, writes and checks it against the sources."
+            "get_job: the region plans, retrieves, writes and checks it against the sources. "
+            "Adding content is not instant: after register_source, edit_source_urls, "
+            "submit_documents or sync_source, a response or job result with status "
+            "'queued' means the sync was only published (a job can read 'succeeded' "
+            "then). Before relying on the content, call wait_for_sync with since set to "
+            "the source's last_indexed_at from describe_source before the write, and "
+            "call it again while timed_out is true. When it finishes, compare documents "
+            "with what you added: last_sync.status 'degraded' and last_sync.unreadable "
+            "name what could not be read, so tell the user what is missing. An error "
+            "saying to retry the call is temporary; retry it."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`
         # (1.x reported the SDK's own version, which was never pheasant's).
@@ -1044,6 +1053,12 @@ def _anticipated_failures(surface: str) -> Any:
                         else str(exc)
                     )
                     raise deliberate(message) from exc
+                except Exception as exc:
+                    from pheasant.services.errors import transient_refusal
+
+                    if (refusal := transient_refusal(exc)) is None:
+                        raise
+                    raise deliberate(str(refusal)) from exc
 
             buffer = _interaction_buffer()
             if buffer is None:
@@ -1077,6 +1092,7 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
     to read them from and there deliberately is not going to be one.
     """
 
+    from pheasant.security.identity import current_identity, effective_principal
     from pheasant.telemetry.interactions import (
         InteractionContext,
         Modality,
@@ -1084,9 +1100,12 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
         observe,
     )
 
+    identity = current_identity()
     context = InteractionContext.create(
         Modality.MCP,
-        principal=kwargs.get("principal"),
+        # Verified when the call arrived through the guard (`api/auth.py`);
+        # asserted, as it always was, when it did not.
+        principal=effective_principal(kwargs.get("principal")),
         session_id=kwargs.get("session"),
         client_id=kwargs.get("client_id"),
     )
@@ -1096,6 +1115,8 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
         kb_id=str(kwargs.get("knowledge_base") or ""),
         operation=operation,
     ) as event:
+        if identity is not None:
+            event.attributes["auth_method"] = identity.method
         query = kwargs.get("query")
         event.query_text = str(query) if isinstance(query, str) else None
         event.criteria = {
@@ -1168,7 +1189,11 @@ def _transport_security(config: PheasantConfig) -> Any:
         return TransportSecuritySettings(enable_dns_rebinding_protection=False)
     hosts = list(_LOOPBACK_HOSTS)
     origins = list(_LOOPBACK_ORIGINS)
-    for origin in api.cors_origins or []:
+    # `security.entra.public_url` is the operator's statement of where this
+    # region is reached -- the address its OAuth metadata hands MCP clients --
+    # so a client following that metadata must not then be refused by host.
+    public_url = str(getattr(getattr(config.security, "entra", None), "public_url", "") or "")
+    for origin in [*(api.cors_origins or []), *([public_url.rstrip("/")] if public_url else [])]:
         parsed = urlsplit(origin)
         if not parsed.netloc:
             continue

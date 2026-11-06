@@ -394,8 +394,7 @@ class OpenAISpecEmbedder:
 
         headers = {"Accept": "application/json"}
         key = os.environ.get(self.api_key_env or "", "")
-        if key:
-            headers.update(foundry.auth_headers(self.base_url, key))
+        headers.update(foundry.credential_headers(self.base_url, key))
         try:
             _transport(Request(f"{self.base_url}/models", headers=headers, method="GET"), timeout)
             return True
@@ -563,9 +562,9 @@ class OpenAISpecEmbedder:
             body["encoding_format"] = "base64"
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
-        if api_key:
-            # `api-key` on a Foundry resource, Bearer everywhere else.
-            headers.update(foundry.auth_headers(self.base_url, api_key))
+        # `api-key` on a Foundry resource, Bearer everywhere else, and a
+        # managed identity's token for a Foundry resource with no key.
+        headers.update(foundry.credential_headers(self.base_url, api_key))
         request = Request(
             f"{self.base_url}/embeddings",
             data=json.dumps(body).encode("utf-8"),

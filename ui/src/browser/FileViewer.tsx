@@ -514,7 +514,16 @@ function renderView({
     case "svg":
       return <SvgView text={text} />;
     case "pdf":
-      return <PdfView source={doc.source} path={doc.path} passage={passage} />;
+      return (
+        <PdfView
+          source={doc.source}
+          path={doc.path}
+          passage={passage}
+          // The passage's line as a share of the extracted text: pages are
+          // joined in order, so it is roughly the share of the pages before it.
+          passageAt={lineFocus ? (lineFocus.start - 1) / Math.max(1, text.split("\n").length - 1) : null}
+        />
+      );
     case "pdf-text":
     case "document":
       return (

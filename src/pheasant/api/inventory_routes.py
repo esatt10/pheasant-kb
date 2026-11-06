@@ -16,10 +16,50 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from pheasant.services import inventory, inventory_detail, source_browser, web_pages
+
+
+def ranged_bytes(
+    content: bytes,
+    *,
+    media_type: str,
+    headers: dict[str, str],
+    range_header: str | None,
+    if_range: str | None,
+) -> Response:
+    """``content`` whole (200) or one ``bytes=`` range of it (206), as
+    ``FileResponse`` answers for a file. Several ranges, or an ``If-Range``
+    naming another version, get the whole body: always correct, if larger.
+    """
+
+    size = len(content)
+    headers = {**headers, "Accept-Ranges": "bytes"}
+    spec = (range_header or "").strip().lower()
+    if (
+        not spec.startswith("bytes=")
+        or "," in spec
+        or (if_range and if_range != headers.get("ETag"))
+    ):
+        return Response(content, media_type=media_type, headers=headers)
+    first, _, last = spec[len("bytes=") :].strip().partition("-")
+    try:
+        if first:
+            start = int(first)
+            end = min(int(last), size - 1) if last else size - 1
+        else:
+            start, end = max(0, size - int(last)), size - 1
+    except ValueError:
+        return Response(content, media_type=media_type, headers=headers)
+    if start > end or start >= size:
+        headers["Content-Range"] = f"bytes */{size}"
+        return Response(b"", status_code=416, headers=headers)
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return Response(
+        content[start : end + 1], status_code=206, media_type=media_type, headers=headers
+    )
 
 
 def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
@@ -167,6 +207,7 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
 
     @app.get("/documents/raw")
     def raw_document(
+        request: Request,
         path: str,
         source_name: str | None = None,
         principal: str | None = None,
@@ -197,8 +238,16 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
             "ETag": f'"{found["sha256"]}"',
         }
         if found["content"] is not None:
-            # A member of an indexed ZIP archive: inflated, not a file to stream.
-            return Response(found["content"], media_type=found["mime_type"], headers=headers)
+            # A member of an indexed ZIP archive: inflated, not a file to
+            # stream, and served by range like one, because pdf.js reads a
+            # long PDF a few ranges at a time instead of all of it.
+            return ranged_bytes(
+                found["content"],
+                media_type=found["mime_type"],
+                headers=headers,
+                range_header=request.headers.get("range"),
+                if_range=request.headers.get("if-range"),
+            )
         return FileResponse(found["path"], media_type=found["mime_type"], headers=headers)
 
     @app.get("/documents/page")

@@ -79,7 +79,9 @@ CEILINGS: dict[str, int] = {
     "graph/enrichment.py": 1000,
     "ingestion/taxonomy.py": 1100,
     # Lowered from 950 when the shared snapshot store moved to `job_snapshots.py`.
-    "jobs.py": 800,
+    # Raised by 3 for the job-clear client taking a managed identity
+    # (`security/service_auth.py` holds the rule).
+    "jobs.py": 803,
     "mcp_server/server.py": 1300,
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,
@@ -96,7 +98,12 @@ CEILINGS: dict[str, int] = {
     # the same grounds: a table's DDL belongs in the file that declares tables.
     # Raised to 1124 for `sync_runs` (a running sync and its cancel request),
     # on those grounds again; its code lives in `sync/cancellation.py`.
-    "persistence/schema.py": 1124,
+    # Raised to 1151 for `auth_tokens` and `oauth_clients` (credentials the
+    # region issued, MCP clients registered), the same grounds; their code
+    # lives in `persistence/auth_tokens.py`.
+    # Raised to 1153 for `idx_sync_events_source`, the per-source lookup
+    # `describe_source` and `wait_for_sync` make; DDL belongs here.
+    "persistence/schema.py": 1153,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only

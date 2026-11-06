@@ -1157,6 +1157,17 @@ shard into several regions.
 | `api_auth.token_env` | string | `PHEASANT_API_TOKEN` | Name of the env var holding a static shared bearer token; never the value. When it resolves, every route outside `public_paths` (and outside `/internal/*`, which enforces its own per-boundary tokens) needs `Authorization: Bearer <value>` or answers `401`. |
 | `api_auth.behind_authenticating_proxy` | bool | `false` | "An ingress already authenticates callers." Satisfies the startup check below without a token of pheasant's own. |
 | `api_auth.public_paths` | list[str] | `[/health, /ready, /metrics]` | Answerable without a token. The probes must stay open or an orchestrator cannot tell a healthy pod from an unauthorized one. |
+| `entra.enabled` | bool | `false` | Sign-in with Microsoft Entra ID **beside** the shared token: Entra access tokens for this app, browser sign-in sessions, personal keys, and MCP OAuth. Off changes nothing. See [Sign-in with Microsoft](security.md#sign-in-with-microsoft-entra-id). |
+| `entra.tenant_id` / `entra.client_id` | string | `""` | The tenant and the app registration users sign in to (`client_id` is the audience of their tokens). |
+| `entra.audiences` | list[str] | `[]` | Further accepted token audiences, e.g. `api://<client id>`. |
+| `entra.allowed_roles` | list[str] | `[Reader, Admin]` | A sign-in or token must carry one of these app roles; empty admits anyone the app registration lets through. |
+| `entra.public_url` | string | `""` | The externally reachable `https://host`. Required for the MCP OAuth server, whose metadata URLs are absolute. |
+| `entra.federated_identity_client_id` | string | `""` | A managed identity whose token is the client credential when redeeming a sign-in code (a federated credential on the app registration, no secret). Empty: the secret in `client_secret_env`. |
+| `entra.client_secret_env` | string | `PHEASANT_ENTRA_CLIENT_SECRET` | Env var holding the app registration's client secret, when no federated identity is used. |
+| `entra.session_hours` / `personal_key_max_days` / `oauth_access_minutes` / `oauth_refresh_days` | integer | `12` / `365` / `60` / `30` | Lifetimes of what the region issues. |
+| `service_identity.enabled` | bool | `false` | Managed-identity tokens on the internal boundaries: a sender whose token variable is unset asks its identity for `audience`; a receiver admits a token carrying the boundary's app role (`graph.query`, `worker.prepare`, `ingestion.land`). Configured tokens keep working on both sides. |
+| `service_identity.tenant_id` / `audience` / `app_id` | string | `""` | The internal app registration: `audience` is what a sender asks for (`api://<app id>`), `app_id` the `aud` of a v2 token. |
+| `service_identity.managed_identity_client_id` | string | `""` | A user-assigned identity's client id; empty uses `AZURE_CLIENT_ID`. |
 
 The built-in secret and generated-directory exclude globs are maintained in
 `src/pheasant/config/exclusions.py` and remain available through

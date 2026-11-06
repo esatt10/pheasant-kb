@@ -392,9 +392,10 @@ def _validate_serving_exposure(policy: RolePolicy, config: object) -> None:
     the warning into the refusal it always described — the same shape as
     ``api`` without a queue.
 
-    Two ways to satisfy it, because both are real deployments: set a token
-    (``security.api_auth.token_env``), or declare the ingress that already
-    authenticates (``security.api_auth.behind_authenticating_proxy``).
+    Three ways to satisfy it, because all are real deployments: set a token
+    (``security.api_auth.token_env``), turn on sign-in with Microsoft
+    (``security.entra``), or declare the ingress that already authenticates
+    (``security.api_auth.behind_authenticating_proxy``).
     """
 
     if policy.role is Role.ALL:
@@ -414,6 +415,15 @@ def _validate_serving_exposure(policy: RolePolicy, config: object) -> None:
         return
     token_env = str(getattr(auth, "token_env", "") or "")
     if _env_value(token_env):
+        return
+    entra = getattr(getattr(config, "security", None), "entra", None)
+    if (
+        getattr(entra, "enabled", False)
+        and getattr(entra, "tenant_id", "")
+        and getattr(entra, "client_id", "")
+    ):
+        # Sign-in with Microsoft is the third way: the guard then admits only
+        # verified Entra identities (`services/identity.py`).
         return
     raise RoleConfigurationError(
         f"role {policy.name!r} binds {host}, which other machines can reach, and nothing "

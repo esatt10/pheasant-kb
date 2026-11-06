@@ -51,7 +51,7 @@ from pheasant.ingestion.content_types import (
     MEMORY_ARTIFACT_TYPE,
 )
 from pheasant.ingestion.media import is_fetched_page
-from pheasant.services import ServiceContext
+from pheasant.services import ServiceContext, raw_bytes
 from pheasant.services.errors import DocumentNotFound, InvalidRequest
 from pheasant.services.inventory import ARTIFACT_SCOPE, extension_of, reader
 from pheasant.services.web_pages import snapshot_path
@@ -380,10 +380,15 @@ def raw_document(context: ServiceContext, request: ReadRequest) -> dict[str, Any
     original = _original(row) if _raw_available(row) else None
     content: bytes | None = None
     if original is not None and original.member is not None:
-        content = _indexed_bytes(row, limit=MAX_RAW_BYTES)
+        content = raw_bytes.member_bytes(
+            original.path,
+            original.member,
+            row["sha256"],
+            lambda: _indexed_bytes(row, limit=MAX_RAW_BYTES),
+        )
         readable = content is not None
     else:
-        readable = original is not None and _sha256_file(original.path) == row["sha256"]
+        readable = original is not None and raw_bytes.file_sha256(original.path) == row["sha256"]
     if original is None or not readable:
         raise DocumentNotFound(f"{relative} (its original file is not readable here)")
     return {
@@ -698,17 +703,6 @@ def _raw_available(row: Any) -> bool:
     if size is None or size > MAX_RAW_BYTES:
         return False
     return row["size_bytes"] is None or size == row["size_bytes"]
-
-
-def _sha256_file(path: Path) -> str | None:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(block)
-    except OSError:
-        return None
-    return digest.hexdigest()
 
 
 def _chunk_text(context: ServiceContext, artifact_id: str) -> str:

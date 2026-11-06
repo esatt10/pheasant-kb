@@ -52,6 +52,11 @@ TABLE_ORDER = (
     "manifests",
     "idp_groups",
     "idp_sync_meta",
+    # Credentials the region issued and the MCP clients registered with it.
+    # Dropping them would sign everyone out and invalidate every personal key
+    # on the new backend; they are digests, so copying them reveals nothing.
+    "auth_tokens",
+    "oauth_clients",
     "memory_records",
     # Phase 3: after memory_records — its rows reference record_id (member
     # and canonical), the same FK-dependency-order rule every other table

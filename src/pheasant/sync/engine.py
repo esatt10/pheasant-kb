@@ -7,7 +7,6 @@ import os
 import shutil
 import threading
 import time
-import uuid
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -1329,7 +1328,10 @@ class SyncEngine:
         if remote_safe:
             from pheasant.sync.remote_worker import configured_token
 
-            remote_token = configured_token(self.config.sync.concurrency.remote_worker_token_env)
+            remote_token = configured_token(
+                self.config.sync.concurrency.remote_worker_token_env,
+                self.config.security.service_identity,
+            )
         if requested_executor not in {"thread", "process", "remote"}:
             logger.warning(
                 "Unknown sync.concurrency.file_executor=%r; using thread workers",
@@ -2312,6 +2314,9 @@ class SyncEngine:
                 )
             unreadable.require_some_read(total_items)
             details_extra.update(unreadable.details())
+            # Read *some* of its items: committed, and not called healthy. The
+            # next sync reads the rest again; until then the source says so.
+            outcome = "degraded" if len(unreadable) else "healthy"
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed
@@ -2356,8 +2361,8 @@ class SyncEngine:
             high_watermark.update({"indexed_artifacts": indexed, "skipped_artifacts": skipped})
             if remote_state is not None:
                 high_watermark["repository"] = remote_state
-            connector.set_checkpoint(cursor, high_watermark, "healthy")
-            self.state.mark_source_indexed(source.name, now)
+            connector.set_checkpoint(cursor, high_watermark, outcome)
+            self.state.mark_source_indexed(source.name, now, outcome)
             if self.vectors is not None:
                 # Synapse 21.4: additive keys, present only when embeddings
                 # are enabled so default sync_events stay byte-identical.
@@ -2369,10 +2374,10 @@ class SyncEngine:
                 )
             # Synapse 21.3: record skipped-vs-fetched transfer counts per sync.
             self.state.append_sync_event(
-                uuid.uuid4().hex,
+                self.state.new_sync_event_id(),
                 source.name,
                 "sync.completed",
-                "healthy",
+                outcome,
                 started_at,
                 now,
                 {
@@ -2399,7 +2404,7 @@ class SyncEngine:
                 skipped,
                 graph_nodes,
                 graph_edges,
-                "healthy",
+                outcome,
                 {
                     "connector_type": connector.connector_type,
                     "fetched": fetched,
