@@ -60,8 +60,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "then). Before relying on the content, call wait_for_sync with since set to "
             "the source's last_indexed_at from describe_source before the write, and "
             "call it again while timed_out is true. When it finishes, compare documents "
-            "with what you added: last_sync.status 'degraded' and last_sync.unreadable "
-            "name what could not be read, so tell the user what is missing. An error "
+            "with what you added: health.percent is the share that reads (status "
+            "'degraded' when at most half does) and last_sync.unreadable names what "
+            "could not be read, so tell the user what is missing. An error "
             "saying to retry the call is temporary; retry it."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`

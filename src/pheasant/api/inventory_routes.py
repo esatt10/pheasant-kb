@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, Response
 
-from pheasant.services import inventory, inventory_detail, source_browser, web_pages
+from pheasant.services import inventory, inventory_detail, quality, source_browser, web_pages
 
 
 def ranged_bytes(
@@ -125,6 +125,31 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
 
         return inventory_detail.document(
             services, path, source_name, None, principal, principal_groups
+        )
+
+    @app.get("/quality")
+    def quality_issues(  # noqa: PLR0913 - one argument per filter
+        source_name: str | None = None,
+        severity: str | None = None,
+        code: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        principal: str | None = None,
+        principal_groups: list[str] | None = Query(default=None),
+    ) -> dict:
+        """The files flagged for cleanup, worst first, each with its reasons."""
+
+        return quality.quality_issues(
+            services,
+            quality.QualityRequest(
+                source_name=source_name,
+                severity=severity,
+                code=code,
+                limit=limit,
+                offset=offset,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
         )
 
     @app.get("/documents/links")

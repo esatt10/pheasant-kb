@@ -53,7 +53,9 @@ from pheasant.services.inventory import (
     extension_of,
     reader,
 )
+from pheasant.services.quality import document_quality, source_quality
 from pheasant.services.sync_wait import last_sync
+from pheasant.sync.health import scored_status
 
 #: Edges that describe where a document sits rather than what it points at.
 STRUCTURAL_EDGES = frozenset(
@@ -138,13 +140,19 @@ def source(
     )[:5]
     links = _source_links(context, source_name, own, everything)
     settings = _settings(row)
+    synced = last_sync(context.state, source_name)
+    health = synced["health"] if synced else None
     return {
         "knowledge_base": kb_id,
         "source": {
             "name": source_name,
             "type": row.get("type"),
             "enabled": bool(row.get("enabled")),
-            "status": row.get("last_status"),
+            "status": scored_status(row.get("last_status"), health),
+            "health": health,
+            # Files by state (ok / warning / error) and by flag; the files
+            # themselves are list_quality_issues.
+            "quality": source_quality(context, row, principal, principal_groups),
             "location": _location(row, settings),
             "description": settings.get("description"),
             "last_indexed_at": row.get("last_indexed_at")
@@ -156,7 +164,7 @@ def source(
         },
         # What the last sync did, unreadable items included: "healthy" alone
         # was all a reader got of a sync that kept 1 of 80 pages.
-        "last_sync": last_sync(context.state, source_name),
+        "last_sync": synced,
         "by_extension": by_extension,
         "by_directory": by_directory,
         "recent": [document_row(r) for r in recent],
@@ -246,6 +254,9 @@ def document(
     detail = document_row(row)
     detail["sha256"] = row["sha256"]
     detail["mime_type"] = row["mime_type"]
+    # The file's health and data quality, every flag with its reason, so a
+    # cleanup can be decided from the file's own metadata.
+    detail["quality"] = document_quality(context, row)
     chunks = int(
         context.state.rows("SELECT COUNT(*) AS n FROM chunks WHERE artifact_id=?", (artifact_id,))[
             0
@@ -273,7 +284,10 @@ def _find(
 
     admit = reader(context, principal, groups)
     acl = ", a.acl" if admit is not None else ""
-    base = f"SELECT {_COLUMNS}, a.sha256, a.mime_type{acl} FROM artifacts a WHERE {ARTIFACT_SCOPE}"
+    base = (
+        f"SELECT {_COLUMNS}, a.sha256, a.mime_type, a.path{acl} "
+        f"FROM artifacts a WHERE {ARTIFACT_SCOPE}"
+    )
     lowered = wanted.lower()
     attempts: list[tuple[str, tuple[Any, ...]]] = []
     if source_name:

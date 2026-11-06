@@ -412,6 +412,11 @@ select.text-input {
   color: var(--danger);
 }
 
+/* A source that reads, with some items it could not: see SourceStatus.tsx. */
+.source-status--partial {
+  color: var(--warn);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

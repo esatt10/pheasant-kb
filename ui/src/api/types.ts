@@ -67,6 +67,18 @@ export interface ExplainResponse {
   node?: GraphNode;
 }
 
+export interface SourceHealth {
+  /** Readable share, rounded down to one decimal: 100 only when nothing failed. */
+  percent: number | null;
+  status: string;
+  readable: number;
+  unreadable: number;
+  /** Failures taken out since the sync: a removed URL, an archived document. */
+  dropped: number;
+  as_of?: string | null;
+  unreadable_sample: { path: string; error?: string | null }[];
+}
+
 export interface SourceRecord {
   id: string;
   name: string;
@@ -75,6 +87,9 @@ export interface SourceRecord {
   enabled: number | boolean;
   config_json?: string;
   last_status?: string;
+  /** The share of the source the index can read, from its last sync less any
+   * item dropped since; `null` before a sync has finished reading. */
+  health?: SourceHealth | null;
   last_indexed_at?: string;
   checkpoint?: Record<string, unknown> | null;
   /** ZIPs currently stored in this UI-owned upload source. */

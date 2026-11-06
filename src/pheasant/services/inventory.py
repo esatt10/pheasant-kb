@@ -223,12 +223,14 @@ def overview(
     sources = []
     for row in registered:
         name = str(row["name"])
+        health = row.get("health")
         sources.append(
             {
                 "name": name,
                 "type": row.get("type"),
                 "enabled": bool(row.get("enabled")),
                 "status": row.get("last_status"),
+                "health_percent": health["percent"] if health else None,
                 "last_indexed_at": row.get("last_indexed_at") or latest.get(name),
                 "documents": per_source.get(name, 0),
                 "size_bytes": bytes_per_source.get(name, 0),

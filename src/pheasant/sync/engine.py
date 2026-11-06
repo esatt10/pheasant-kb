@@ -54,6 +54,7 @@ from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync import archived
+from pheasant.sync import health as read_health
 from pheasant.sync.cancellation import (
     SyncCancelled,
     SyncRun,
@@ -2314,9 +2315,13 @@ class SyncEngine:
                 )
             unreadable.require_some_read(total_items)
             details_extra.update(unreadable.details())
-            # Read *some* of its items: committed, and not called healthy. The
-            # next sync reads the rest again; until then the source says so.
-            outcome = "degraded" if len(unreadable) else "healthy"
+            # Read *some* of its items: committed, scored by the share that
+            # read, and called degraded only when that is not a majority. The
+            # next sync reads the rest again; until then the score says so.
+            readable_share = read_health.percent(total_items - len(unreadable), len(unreadable))
+            outcome = read_health.status_for(readable_share)
+            if len(unreadable):
+                details_extra["readable_percent"] = readable_share
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed

@@ -10,6 +10,7 @@ from pheasant.config.loader import config_hash
 from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.persistence.state_store import StateStore
+from pheasant.sync.health import scored_status, source_health
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,10 @@ class SourceRegistry:
         ):
             source = dict(row)
             source["checkpoint"] = checkpoints.get(source["id"])
+            # The share of the source the index can read, and the status that
+            # follows from it, as of now: a dropped item no longer counts.
+            source["health"] = source_health(self.state, source)
+            source["last_status"] = scored_status(source.get("last_status"), source["health"])
             upload_dir = owned_upload_directory(
                 self.config.pheasant.state_path,
                 str(source["name"]),
