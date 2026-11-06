@@ -80,6 +80,7 @@ INGEST_SKILL = REPO_ROOT / ".agents" / "skills" / "pheasant-ingest" / "SKILL.md"
 #: Fields of a tool's answer the skill names in backticks, which are not tools.
 RESPONSE_FIELDS = {"sync_result"}
 INGEST_VERBS = {
+    "wait",
     "register",
     "edit",
     "submit",
@@ -129,7 +130,7 @@ def test_ingest_skill_names_only_tools_the_server_publishes(tmp_path) -> None:
         for name in re.findall(r"`([a-z]+(?:_[a-z]+)+)(?:\(|`)", text)
         if name.split("_")[0] in INGEST_VERBS and name not in RESPONSE_FIELDS
     }
-    assert {"describe_source", "get_index_queue", "get_ingest_status", "get_job"} <= named
+    assert {"wait_for_sync", "describe_source", "get_index_queue", "get_ingest_status"} <= named
     assert not named - published, f"the skill names tools the server lacks: {named - published}"
     metadata = yaml.safe_load((INGEST_SKILL.parent / "agents" / "openai.yaml").read_text())
     assert "$pheasant-ingest" in metadata["interface"]["default_prompt"]
@@ -144,5 +145,5 @@ def test_server_instructions_tell_every_agent_to_wait_for_the_index(tmp_path) ->
 
     pytest.importorskip("mcp")
     instructions = _standalone_server(tmp_path).instructions or ""
-    for phrase in ("queued", "describe_source", "last_indexed_at", "totals.documents"):
+    for phrase in ("queued", "wait_for_sync", "last_indexed_at", "degraded", "retry"):
         assert phrase in instructions, phrase

@@ -4,6 +4,8 @@ import hashlib
 import json
 import logging
 import sqlite3
+import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -63,7 +65,8 @@ SCHEMA = schema_for(SQLITE)
 
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
-SCHEMA_VERSION = "2"
+# 3: idx_sync_events_source.
+SCHEMA_VERSION = "3"
 
 
 class StateStore:
@@ -1586,6 +1589,12 @@ class StateStore:
             self.conn.execute("DELETE FROM archived_documents WHERE source_id=?", (source_id,))
             self.conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
 
+    @staticmethod
+    def new_sync_event_id() -> str:
+        """An id in write order: it breaks a tie between two events in one second."""
+
+        return f"{time.time_ns():020d}{uuid.uuid4().hex[:12]}"
+
     def append_sync_event(
         self,
         event_id: str,
@@ -1621,7 +1630,7 @@ class StateStore:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Most-recent-first sync events (rowid order is insertion order)."""
+        """Most-recent-first sync events, by their own times (`rowid` is SQLite's)."""
         where = ""
         params: list[Any] = []
         if source_id:
@@ -1631,7 +1640,7 @@ class StateStore:
         rows = self.rows(
             f"""SELECT * FROM sync_events
                 {where}
-                ORDER BY rowid DESC
+                ORDER BY finished_at DESC, started_at DESC, id DESC
                 LIMIT ? OFFSET ?""",
             tuple(params),
         )

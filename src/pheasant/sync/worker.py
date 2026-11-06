@@ -149,7 +149,30 @@ def run_sync(
             "results": [],
         }
 
+    _forward_child_log(stderr)
     return _parse_report(stdout, source_name)
+
+
+#: Lines of a successful child's stderr repeated in this process's log.
+FORWARDED_LOG_LINES = 200
+
+
+def _forward_child_log(stderr: str | None) -> None:
+    """Repeat what a successful sync logged, where an operator can read it.
+
+    The child's warnings -- a page that could not be fetched, a file that would
+    not parse -- reached only its stderr, which was read on failure alone. So a
+    sync that kept 1 of 80 pages logged nothing anywhere and called itself
+    healthy; the only trace was a count in a checkpoint.
+    """
+
+    lines = [line for line in (stderr or "").splitlines() if line.strip()]
+    for line in lines[:FORWARDED_LOG_LINES]:
+        logger.warning("sync worker: %s", line)
+    if len(lines) > FORWARDED_LOG_LINES:
+        logger.warning(
+            "sync worker: %d more line(s) not repeated", len(lines) - FORWARDED_LOG_LINES
+        )
 
 
 def _run_streaming(

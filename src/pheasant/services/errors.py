@@ -502,3 +502,54 @@ class PersonIdentityRequired(ServiceError):
         super().__init__(
             "Sign in with Microsoft to manage personal keys; the shared token names no one"
         )
+
+
+class StateStoreUnavailable(ServiceError):
+    """The region's database did not answer this call.
+
+    A connection that dropped, a server restarting, a pool with nothing free.
+    It says nothing about the request, so it is retryable -- and it is a
+    refusal rather than a crash so its reason reaches the caller: through the
+    MCP SDK an unexpected exception is a bare "Error executing tool", and on
+    Azure that is what every write after an idle spell returned, five in a
+    row, while an agent concluded the region was refusing what it asked for.
+    """
+
+    status = 503
+    code = "STATE_STORE_UNAVAILABLE"
+    retryable = True
+
+    def __init__(self, detail: object) -> None:
+        super().__init__(
+            f"The knowledge base's database did not answer ({detail}). "
+            "The statement that failed was not applied; retry the call."
+        )
+
+
+def transient_refusal(exc: BaseException) -> ServiceError | None:
+    """The retryable refusal ``exc`` amounts to, or ``None`` if it is not one.
+
+    Called by both transports for an exception no operation translated, so a
+    database failure reads the same on each. A server error with a SQLSTATE
+    (a constraint, bad SQL) is not transient and stays a crash.
+    """
+
+    from pheasant.persistence.pg_liveness import is_disconnect
+
+    if is_disconnect(exc):
+        return StateStoreUnavailable(f"{type(exc).__name__}: {str(exc).strip()[:200]}")
+    if type(exc).__name__ == "PoolTimeout" and type(exc).__module__.startswith("psycopg_pool"):
+        return StateStoreUnavailable("no database connection became free in time")
+    return None
+
+
+def database_exception_types() -> tuple[type[BaseException], ...]:
+    """The exception classes `transient_refusal` may translate, for an adapter
+    that registers handlers by type. Empty when psycopg is not installed."""
+
+    try:
+        import psycopg
+        import psycopg_pool
+    except ModuleNotFoundError:
+        return ()
+    return (psycopg.OperationalError, psycopg_pool.PoolTimeout)

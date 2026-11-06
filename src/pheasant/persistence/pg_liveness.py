@@ -35,6 +35,27 @@ TCP_KEEPALIVES = {
 }
 
 
+def is_disconnect(exc: BaseException) -> bool:
+    """Whether ``exc`` is the connection failing rather than the server refusing.
+
+    A connection that was closed or never answered has no SQLSTATE; one the
+    server ended -- terminated, shutting down, restarting -- carries class
+    ``57P``, and a connection exception class ``08``. None of those says
+    anything about the statement, so they are worth repeating on another
+    connection. Every other SQLSTATE (a constraint, bad SQL, ``57014`` a
+    cancelled statement) is the server answering, and is not.
+    """
+
+    try:
+        import psycopg
+    except ModuleNotFoundError:  # pragma: no cover - dep-gated
+        return False
+    if not isinstance(exc, psycopg.OperationalError):
+        return False
+    sqlstate = str(getattr(exc, "sqlstate", None) or "")
+    return not sqlstate or sqlstate.startswith(("57P", "08"))
+
+
 class IdleCheck:
     """The pool's ``check`` callback, and the record of when each connection came back."""
 

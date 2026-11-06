@@ -25,6 +25,7 @@ from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.api.sync_control_routes import register_sync_control_routes
+from pheasant.api.sync_wait_routes import register_sync_wait_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
     ConfigError,
@@ -1642,6 +1643,22 @@ def create_app(
             headers=headers,
         )
 
+    async def transient_error(request, exc: Exception):  # type: ignore[no-untyped-def]
+        """A database failure no operation translated: retryable, said the way
+        MCP says it. Anything else re-raises into the ordinary logged 500."""
+
+        from pheasant.services.errors import transient_refusal
+
+        if (refusal := transient_refusal(exc)) is None:
+            raise exc
+        logger.warning("%s %s: %s", request.method, request.url.path, refusal)
+        return await service_error(request, refusal)
+
+    from pheasant.services.errors import database_exception_types
+
+    for transient_type in database_exception_types():
+        app.add_exception_handler(transient_type, transient_error)
+
     @app.get("/health")
     async def health() -> dict:
         """Liveness: is this process running at all.
@@ -2008,6 +2025,7 @@ def create_app(
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
     register_source_url_routes(app, services=services)
+    register_sync_wait_routes(app, services=services)
     register_sync_control_routes(app, services=services)
 
     @app.get("/contract")

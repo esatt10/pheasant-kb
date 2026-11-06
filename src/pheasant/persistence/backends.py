@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from pheasant.persistence.pg_liveness import TCP_KEEPALIVES, IdleCheck
+from pheasant.persistence.pg_liveness import TCP_KEEPALIVES, IdleCheck, is_disconnect
 from pheasant.persistence.sql import POSTGRES, SQLITE, Dialect, Row
 
 logger = logging.getLogger(__name__)
@@ -474,6 +474,20 @@ class PostgresBackend(StateBackend):
         self.release()
 
     def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
+        """Run a read, once more if its connection dropped and nothing was pending:
+        that read was autocommit, and `_abort` already discarded the connection."""
+
+        if self._pending:
+            return self._rows_once(sql, params)
+        try:
+            return self._rows_once(sql, params)
+        except Exception as exc:
+            if not is_disconnect(exc):
+                raise
+            logger.warning("PostgreSQL connection dropped during a read; retrying once: %s", exc)
+            return self._rows_once(sql, params)
+
+    def _rows_once(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
         conn = self._conn()
         from pheasant.request_budget import DeadlineExceeded, remaining_seconds
 
