@@ -53,7 +53,15 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "inspect graph relationships, and record or recall agent memory. To offload "
             "building a new artifact (a configuration, script or set of files) assembled "
             "from many documented parts, call compose_artifact and follow its job with "
-            "get_job: the region plans, retrieves, writes and checks it against the sources."
+            "get_job: the region plans, retrieves, writes and checks it against the sources. "
+            "Adding content is not instant: after register_source, edit_source_urls, "
+            "submit_documents or sync_source, wait for the index before searching or "
+            "composing over it. A response or job result with status 'queued' means the "
+            "sync was only published (a job can read 'succeeded' at that point): note the "
+            "source's last_indexed_at from describe_source first, then call describe_source "
+            "every 20-30 seconds until it moves (get_index_queue shows outstanding work). "
+            "Then compare totals.documents with what you added, since a sync reports "
+            "healthy when it read only some pages, and tell the user what is missing."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`
         # (1.x reported the SDK's own version, which was never pheasant's).

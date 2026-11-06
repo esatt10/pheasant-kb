@@ -74,3 +74,75 @@ def test_retrieval_skill_names_only_tools_the_server_publishes(tmp_path) -> None
 
     metadata = yaml.safe_load((RETRIEVAL_SKILL.parent / "agents" / "openai.yaml").read_text())
     assert "$pheasant-retrieval" in metadata["interface"]["default_prompt"]
+
+
+INGEST_SKILL = REPO_ROOT / ".agents" / "skills" / "pheasant-ingest" / "SKILL.md"
+#: Fields of a tool's answer the skill names in backticks, which are not tools.
+RESPONSE_FIELDS = {"sync_result"}
+INGEST_VERBS = {
+    "register",
+    "edit",
+    "submit",
+    "sync",
+    "start",
+    "describe",
+    "get",
+    "acknowledge",
+    "search",
+}
+
+
+def _standalone_server(tmp_path):
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.mcp_server.server import create_mcp_server
+
+    return create_mcp_server(
+        PheasantConfig.model_validate(
+            {
+                "pheasant": {
+                    "name": "skill",
+                    "defaults": "standalone",
+                    "state_path": str(tmp_path / "state"),
+                    "exports_path": str(tmp_path / "exports"),
+                    "workspace_root": str(tmp_path),
+                },
+                "sources": [],
+            }
+        )
+    )
+
+
+def test_ingest_skill_names_only_tools_the_server_publishes(tmp_path) -> None:
+    """The waiting protocol is only as good as the tools it names."""
+
+    import asyncio
+    import re
+
+    import pytest
+
+    pytest.importorskip("mcp")
+    text = INGEST_SKILL.read_text(encoding="utf-8")
+    assert yaml.safe_load(text.split("---", 2)[1])["name"] == "pheasant-ingest"
+    published = {tool.name for tool in asyncio.run(_standalone_server(tmp_path).list_tools())}
+    named = {
+        name
+        for name in re.findall(r"`([a-z]+(?:_[a-z]+)+)(?:\(|`)", text)
+        if name.split("_")[0] in INGEST_VERBS and name not in RESPONSE_FIELDS
+    }
+    assert {"describe_source", "get_index_queue", "get_ingest_status", "get_job"} <= named
+    assert not named - published, f"the skill names tools the server lacks: {named - published}"
+    metadata = yaml.safe_load((INGEST_SKILL.parent / "agents" / "openai.yaml").read_text())
+    assert "$pheasant-ingest" in metadata["interface"]["default_prompt"]
+
+
+def test_server_instructions_tell_every_agent_to_wait_for_the_index(tmp_path) -> None:
+    """The skill reaches agents with this repository; the server's instructions
+    reach every connected client, so the rule that matters most lives there too:
+    a published sync is not an indexed one."""
+
+    import pytest
+
+    pytest.importorskip("mcp")
+    instructions = _standalone_server(tmp_path).instructions or ""
+    for phrase in ("queued", "describe_source", "last_indexed_at", "totals.documents"):
+        assert phrase in instructions, phrase

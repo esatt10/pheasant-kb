@@ -217,7 +217,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 190 pytest modules, offline by design
+└── tests/                     ← 191 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -289,6 +289,10 @@ Agents *querying* a region (raw hybrid search + graph traversal, judged by
 their own harness) use `.agents/skills/pheasant-retrieval/SKILL.md`; agents
 *offloading a composition* (a new artifact built from documented parts, as a
 job: MCP `compose_artifact` + `get_job`) use `.agents/skills/pheasant-compose/SKILL.md`.
+Agents *adding* content (register a source, edit a web collection's pages,
+submit documents) and then relying on it use
+`.agents/skills/pheasant-ingest/SKILL.md`: on a fleet a write only publishes a
+sync, and its job reads `succeeded` before anything is indexed.
 
 ---
 

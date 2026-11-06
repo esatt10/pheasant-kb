@@ -39,3 +39,5 @@ your own harness rather than the region's answering workflow — use
 `.agents/skills/pheasant-retrieval/SKILL.md`. To offload building a new artifact
 (a configuration, script or set of files assembled from documented parts) to the
 region, use `.agents/skills/pheasant-compose/SKILL.md` (MCP `compose_artifact`).
+To add content and wait until it is searchable before relying on it, use
+`.agents/skills/pheasant-ingest/SKILL.md`.
