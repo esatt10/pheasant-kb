@@ -398,27 +398,30 @@ class PreparationWorkerServicer:
         self.version = version
 
     def _authenticate(self, context: Any) -> None:
-        import hmac
-
         import grpc
 
-        from pheasant.sync.remote_worker import configured_token
+        from pheasant.security.service_auth import (
+            WORKER_PREPARE,
+            inbound_configured,
+            inbound_method,
+        )
 
         concurrency = self.config.sync.concurrency
         if not concurrency.remote_worker_enabled:
             context.abort(grpc.StatusCode.UNIMPLEMENTED, "remote indexing worker is disabled")
-        try:
-            expected = configured_token(concurrency.remote_worker_token_env)
-        except RemoteWorkerError as exc:
-            context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
-        supplied = ""
+        token_env = concurrency.remote_worker_token_env
+        identity = self.config.security.service_identity
+        if not inbound_configured(token_env, identity):
+            context.abort(
+                grpc.StatusCode.UNAVAILABLE,
+                f"Remote indexing requires a token in environment variable {token_env!r}",
+            )
+        authorization = ""
         for name, value in context.invocation_metadata():
             if name.lower() == "authorization":
-                scheme, _, supplied = str(value).partition(" ")
-                if scheme.lower() != "bearer":
-                    supplied = ""
+                authorization = str(value)
                 break
-        if not supplied or not hmac.compare_digest(supplied, expected):
+        if inbound_method(authorization, token_env, WORKER_PREPARE, identity) is None:
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "invalid indexing worker token")
 
     def PrepareBatch(self, request_iterator: Any, context: Any):  # noqa: N802 - gRPC spelling

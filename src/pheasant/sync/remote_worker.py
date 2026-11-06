@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import threading
 from collections import OrderedDict
 from dataclasses import asdict
@@ -52,8 +51,12 @@ def _remote_preparation_path(path: str, *, html_text: bool = False) -> bool:
     )
 
 
-def configured_token(env_name: str) -> str:
-    token = os.environ.get(env_name or "", "")
+def configured_token(env_name: str, identity: Any = None) -> str:
+    """The worker boundary's bearer value: the token, else a managed identity's."""
+
+    from pheasant.security.service_auth import outbound_token
+
+    token = outbound_token(env_name, identity)
     if not token:
         raise RemoteWorkerError(
             f"Remote indexing requires a token in environment variable {env_name!r}"

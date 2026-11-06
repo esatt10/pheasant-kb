@@ -23,7 +23,10 @@ surface: it answers the System One API at the resource root
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
 
 #: The variable the shipped Foundry examples read a resource key from. Any
 #: name works (every section has its own ``api_key_env``); this one is listed
@@ -57,6 +60,37 @@ def auth_headers(url: str | None, api_key: str) -> dict[str, str]:
     if is_foundry_url(url):
         return {"api-key": api_key}
     return {"authorization": f"Bearer {api_key}"}
+
+
+#: What a managed identity asks Entra for to call a Foundry resource.
+COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com"
+
+
+def credential_headers(url: str | None, api_key: str) -> dict[str, str]:
+    """The header that authenticates a request to ``url``, or ``{}``.
+
+    :func:`auth_headers` when a key is configured -- unchanged. Without one,
+    a request to a Foundry host is signed with this process's managed
+    identity (``Authorization: Bearer``, the Entra half of the rule above), so
+    a deployment can turn key access off on the resource. Anywhere else, and
+    anywhere no identity endpoint exists, it is ``{}``: exactly what a
+    missing key sent before.
+    """
+
+    if api_key:
+        return auth_headers(url, api_key)
+    if not is_foundry_url(url):
+        return {}
+    from pheasant.security import entra
+
+    if not entra.managed_identity_available():
+        return {}
+    try:
+        token = entra.managed_identity_token(COGNITIVE_SERVICES_RESOURCE)
+    except entra.EntraUnavailable:
+        logger.warning("No managed-identity token for %s; sending none", url, exc_info=True)
+        return {}
+    return {"authorization": f"Bearer {token}"}
 
 
 def resource_root(url: str) -> str:

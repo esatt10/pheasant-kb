@@ -1329,7 +1329,10 @@ class SyncEngine:
         if remote_safe:
             from pheasant.sync.remote_worker import configured_token
 
-            remote_token = configured_token(self.config.sync.concurrency.remote_worker_token_env)
+            remote_token = configured_token(
+                self.config.sync.concurrency.remote_worker_token_env,
+                self.config.security.service_identity,
+            )
         if requested_executor not in {"thread", "process", "remote"}:
             logger.warning(
                 "Unknown sync.concurrency.file_executor=%r; using thread workers",

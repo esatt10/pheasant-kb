@@ -130,9 +130,9 @@ class OpenAISpecTranscriber:
         body, content_type = self._multipart(content, relative_path)
         headers = {"Content-Type": content_type, "User-Agent": "pheasant/0.1"}
         api_key = os.environ.get(self.api_key_env or "", "")
-        if api_key:
-            # `api-key` on an Azure AI Foundry resource, Bearer everywhere else.
-            headers.update(foundry.auth_headers(self.base_url, api_key))
+        # `api-key` on an Azure AI Foundry resource, Bearer everywhere else,
+        # and a managed identity's token for a Foundry resource with no key.
+        headers.update(foundry.credential_headers(self.base_url, api_key))
         request = Request(
             f"{self.base_url}/audio/transcriptions",
             data=body,

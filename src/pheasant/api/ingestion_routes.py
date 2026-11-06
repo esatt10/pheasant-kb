@@ -24,8 +24,6 @@ future composition without any of them knowing about the others.
 
 from __future__ import annotations
 
-import hmac
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -59,17 +57,23 @@ def register_ingestion_routes(
         Compose file once demonstrated by not doing it.
         """
 
-        expected = os.environ.get(config.ingestion.landing_service_token_env or "", "")
-        if not expected:
+        from pheasant.security.service_auth import (
+            INGESTION_LAND,
+            inbound_configured,
+            inbound_method,
+        )
+
+        token_env = config.ingestion.landing_service_token_env
+        identity = config.security.service_identity
+        if not inbound_configured(token_env, identity):
             raise HTTPException(
                 status_code=503,
                 detail=(
                     "The landing service is not configured on this process: "
-                    f"{config.ingestion.landing_service_token_env!r} is unset."
+                    f"{token_env!r} is unset."
                 ),
             )
-        scheme, _, supplied = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+        if inbound_method(authorization, token_env, INGESTION_LAND, identity) is None:
             raise HTTPException(status_code=401, detail="invalid landing service token")
 
     @app.api_route(LANDING_PATH, methods=["GET", "POST"])

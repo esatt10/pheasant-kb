@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 import os
@@ -19,6 +18,7 @@ from pydantic import BaseModel
 
 from pheasant.api.archive_routes import register_archive_routes
 from pheasant.api.assistant_routes import register_assistant_routes
+from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
@@ -64,11 +64,19 @@ from pheasant.security.path_policy import (
     resolve_config_write_target,
     resolve_under,
 )
+from pheasant.security.service_auth import (
+    GRAPH_QUERY,
+    INGESTION_LAND,
+    WORKER_PREPARE,
+    inbound_configured,
+    inbound_method,
+)
 from pheasant.services import ServiceContext, ServiceError
 from pheasant.services import assistant as assistant_service
 from pheasant.services import graph as graph_service
 from pheasant.services import retrieval as retrieval_service
 from pheasant.services.archive import Indexing
+from pheasant.services.identity import IdentityService
 from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
@@ -947,19 +955,6 @@ def _edge_type_set(value: str | None) -> set[str] | None:
     return items or None
 
 
-def _resolved_api_token(config: PheasantConfig) -> str:
-    """The shared bearer token for this region's API, or "" when there is none.
-
-    Read once at startup rather than per request: it is a process-wide secret,
-    and rotating it is a restart — the same contract as every other credential
-    here, none of which is ever read out of YAML.
-    """
-
-    auth = getattr(getattr(config, "security", None), "api_auth", None)
-    name = str(getattr(auth, "token_env", "") or "").strip()
-    return (os.environ.get(name, "") or "").strip() if name else ""
-
-
 def create_app(
     config: PheasantConfig | None = None,
     config_path: str | Path | None = None,
@@ -1243,6 +1238,7 @@ def create_app(
         JobClearServiceClient(
             str(config.ingestion.landing_service_url),
             str(config.ingestion.landing_service_token_env),
+            identity=config.security.service_identity,
         )
         if role_policy.role is Role.API and config.ingestion.landing_service_url
         else None
@@ -1351,6 +1347,7 @@ def create_app(
             # One bounded append per request and nothing else. Everything the
             # ledger costs beyond this happens on the flusher thread or on the
             # log tier — see `pheasant.telemetry.interactions`.
+            from pheasant.security.identity import effective_principal
             from pheasant.telemetry.interactions import (
                 InteractionContext,
                 cap_answer,
@@ -1358,9 +1355,10 @@ def create_app(
                 redact,
             )
 
+            identity = getattr(request.state, "identity", None)
             context = InteractionContext.create(
                 _request_modality(request),
-                principal=request.headers.get("x-pheasant-principal"),
+                principal=effective_principal(request.headers.get("x-pheasant-principal")),
                 session_id=request.headers.get("x-pheasant-session"),
                 client_id=request.headers.get("x-pheasant-client"),
                 traceparent=request.headers.get("traceparent"),
@@ -1380,6 +1378,8 @@ def create_app(
                 # and no content, and three of the four formation rules would
                 # have worked for MCP agents only.
                 request.state.interaction = event
+                if identity is not None:
+                    event.attributes["auth_method"] = identity.method
                 response = await continue_request()
                 event.status = "ok" if response.status_code < 400 else "error"
                 event.attributes["http_status"] = response.status_code
@@ -1437,9 +1437,15 @@ def create_app(
                 )
             return await call_next(request)
 
-    api_token = _resolved_api_token(config)
-    if api_token:
-        expected_token = api_token.encode("utf-8")
+    # Who is calling. `services.identity` resolves every credential this
+    # region accepts -- the 35.8 shared token unchanged, and with
+    # `security.entra` on, Entra tokens, sign-in sessions, personal keys and
+    # MCP OAuth tokens -- and `api.auth` is the HTTP half: the guard, the
+    # sign-in routes and the authorization server MCP clients connect through.
+    identity_service = IdentityService(config, state)
+    app.state.identity = identity_service
+    register_identity_routes(app, identity_service, resource_name=config.pheasant.name)
+    if identity_service.enforcing:
         auth_public_paths = frozenset(config.security.api_auth.public_paths or ())
 
         def is_public_ui_request(request: Request) -> bool:
@@ -1462,46 +1468,12 @@ def create_app(
                 return True
             return path in {"/", "/index.html", "/pheasant.png"} or path.startswith("/assets/")
 
-        @app.middleware("http")
-        async def require_api_token(request, call_next):  # type: ignore[no-untyped-def]
-            """A static shared bearer token, when one is configured.
-
-            Deliberately the whole feature. It is enough to make "behind an
-            authenticating ingress" the default rather than the instruction,
-            it needs no identity provider, and it cannot rot into a half-built
-            one. Anything richer belongs to the ingress —
-            `security.api_auth.behind_authenticating_proxy` says so and turns
-            this off.
-
-            `/internal/*` is exempt structurally rather than by the configured
-            list: each of those routes already enforces the token for its own
-            trust boundary (the worker token, the graph token), and requiring
-            a second one would mean handing the region's API credential to
-            every worker — the shape of the bug this phase removed from the
-            Compose file.
-            """
-
-            path = request.url.path
-            if (
-                path.startswith("/internal/")
-                or path in auth_public_paths
-                or is_public_ui_request(request)
-            ):
-                return await call_next(request)
-            scheme, _, supplied = (request.headers.get("authorization") or "").partition(" ")
-            # Compared as bytes: Starlette decodes headers as latin-1, so a
-            # single byte above 127 in the header makes `compare_digest` raise
-            # TypeError on str operands -- a 500 from the auth guard, on input
-            # any caller can send.
-            if scheme.lower() != "bearer" or not hmac.compare_digest(
-                supplied.encode("utf-8", "surrogateescape"), expected_token
-            ):
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "this region requires a bearer token"},
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            return await call_next(request)
+        install_guard(
+            app,
+            identity_service,
+            public_paths=auth_public_paths,
+            is_public_ui_request=is_public_ui_request,
+        )
 
     def _record_stream_answer(parent: Any, req: Any, answer: Any, started: Any) -> None:
         """Observe a streamed answer as a child of the request that opened it.
@@ -1737,7 +1709,7 @@ def create_app(
             payload["refreshes_graph"] = False
         if role_policy.role is Role.GRAPH:
             token_env = config.graph.query_service_token_env
-            if not os.environ.get(token_env or "", ""):
+            if not inbound_configured(token_env, config.security.service_identity):
                 payload["status"] = "not_ready"
                 payload["reason"] = "graph query service token is not configured"
                 return JSONResponse(status_code=503, content=payload)  # type: ignore[return-value]
@@ -1800,16 +1772,14 @@ def create_app(
         concurrency = config.sync.concurrency
         if not concurrency.remote_worker_enabled:
             raise HTTPException(status_code=404, detail="remote indexing worker is disabled")
-        import hmac
-
-        from pheasant.sync.remote_worker import RemoteWorkerError, configured_token
-
-        try:
-            expected = configured_token(concurrency.remote_worker_token_env)
-        except RemoteWorkerError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        scheme, _, supplied = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+        token_env = concurrency.remote_worker_token_env
+        identity = config.security.service_identity
+        if not inbound_configured(token_env, identity):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Remote indexing requires a token in environment variable {token_env!r}",
+            )
+        if inbound_method(authorization, token_env, WORKER_PREPARE, identity) is None:
             raise HTTPException(status_code=401, detail="invalid indexing worker token")
 
     def _check_task_size(payload: dict) -> None:
@@ -3798,17 +3768,17 @@ def create_app(
 
         if role_policy.role is not Role.INDEXER:
             raise HTTPException(status_code=404, detail="job clear service is not enabled")
-        expected = os.environ.get(config.ingestion.landing_service_token_env or "", "")
-        if not expected:
+        token_env = config.ingestion.landing_service_token_env
+        identity = config.security.service_identity
+        if not inbound_configured(token_env, identity):
             raise HTTPException(
                 status_code=503,
                 detail=(
                     "The job clear service is not configured on this process: "
-                    f"{config.ingestion.landing_service_token_env!r} is unset."
+                    f"{token_env!r} is unset."
                 ),
             )
-        scheme, _, supplied = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+        if inbound_method(authorization, token_env, INGESTION_LAND, identity) is None:
             raise HTTPException(status_code=401, detail="invalid job clear service token")
 
     @app.delete(JOBS_CLEAR_PATH)
@@ -4250,17 +4220,14 @@ def create_app(
 
         if role_policy.role is not Role.GRAPH:
             raise HTTPException(status_code=404, detail="graph query service is not enabled")
-        import hmac
-
         env_name = config.graph.query_service_token_env
-        expected = os.environ.get(env_name or "", "")
-        if not expected:
+        identity = config.security.service_identity
+        if not inbound_configured(env_name, identity):
             raise HTTPException(
                 status_code=503,
                 detail=f"graph query token environment variable {env_name!r} is empty",
             )
-        scheme, _, supplied = (authorization or "").partition(" ")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+        if inbound_method(authorization, env_name, GRAPH_QUERY, identity) is None:
             raise HTTPException(status_code=401, detail="invalid graph query token")
 
     @app.post("/internal/graph/query")

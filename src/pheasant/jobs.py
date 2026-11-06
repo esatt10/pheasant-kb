@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -101,15 +100,19 @@ class JobClearServiceClient:
         token_env: str,
         *,
         timeout_seconds: float = 10.0,
+        identity: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token_env = token_env
+        self.identity = identity
         self.timeout = max(0.1, float(timeout_seconds))
         # Internal traffic must not be sent through an ambient HTTP proxy.
         self._opener = build_opener(ProxyHandler({}))
 
     def clear(self, job_id: str | None = None) -> int:
-        token = os.environ.get(self.token_env or "", "")
+        from pheasant.security.service_auth import outbound_token
+
+        token = outbound_token(self.token_env, self.identity)
         if not token:
             raise JobClearServiceError(
                 f"The job service requires a token in environment variable {self.token_env!r}"

@@ -119,6 +119,63 @@ enforced rather than declared, so such a process answers `/health`, `/ready`,
 else. That flag had been in `deploy/compose/worker.yaml` since the tier
 existed, and nothing read it.
 
+## Sign-in with Microsoft (Entra ID)
+
+`security.entra` adds verified people beside the shared token; it does not
+replace it. With it on, the guard in front of the HTTP API and `/mcp`
+resolves five credentials, one way (`services/identity.py`):
+
+| Credential | Auth method recorded | Who it names |
+|---|---|---|
+| The shared token (`api_auth.token_env`) | `api_token` | `shared-token` -- a credential, not a person |
+| An Entra access token for the app (`az account get-access-token --scope api://<client id>/access`) | `entra_token` | the signed-in user |
+| A session issued after **Sign in with Microsoft** in the UI | `entra_sso` | the signed-in user |
+| A personal key the user minted in the UI | `personal_key` | the user who minted it |
+| An access token issued to an MCP client after sign-in | `mcp_oauth` | the user who approved the client |
+
+Every request then carries a verified principal and its auth method: one
+`pheasant.access` log line per request (`GET /sources 200 principal=… auth=…`,
+and `401 … auth=rejected` for a refused credential), and, with the
+observation plane on, the `principal` column and `attributes.auth_method` of
+its interaction row. A verified principal overrules an asserted
+`X-Pheasant-Principal` header or `principal` tool argument in that record.
+
+**Who may sign in** is decided in Entra: the app registration requires
+assignment, and a token or sign-in must also carry one of
+`entra.allowed_roles`. An unassigned account cannot get a token at all.
+
+**MCP clients** (Claude Code, Claude's custom connectors, VS Code) find the
+region's OAuth server through `401 WWW-Authenticate: Bearer
+resource_metadata=…`, register themselves, and send the person to Microsoft.
+After sign-in the region asks, on its own page, whether *that client* may act
+for them -- registration is open to anyone, and without the consent step a
+client registered with an attacker's redirect URI would receive the code of
+anyone already signed in. Clients that cannot open a browser use a personal
+key as a bearer token.
+
+**Credentials the region issues** are rows in `auth_tokens`, stored as a
+SHA-256 digest of the secret; a copy of the table opens nothing. A resolved
+credential is cached in each process for 60 seconds, so a revoked key stops
+working everywhere within a minute. The region redeems sign-in codes as a
+confidential client; with `federated_identity_client_id` its managed identity
+is the client assertion, so no client secret exists.
+
+### Managed identity between tiers
+
+`security.service_identity` lets the api -> graph, indexer -> worker and
+api -> indexer (landing) boundaries run without their shared tokens. A sender
+with its token variable unset asks its managed identity for a token for the
+internal app; a receiver admits it only if it carries that boundary's app role
+(`security/service_auth.py`). The roles keep the boundaries apart exactly as
+separate tokens did: the indexer's identity holds `worker.prepare` and nothing
+that reads the graph. A configured token still works on both ends, so a fleet
+can move one boundary at a time. With no token and no identity, a receiver
+answers 503, as it always did.
+
+Foundry follows the same rule: with no key configured, a request to a Foundry
+host is signed with the process's managed identity, so key access can be
+switched off on the resource.
+
 ## Path and write policy
 
 ### Indexing any readable path — the deliberate tradeoff

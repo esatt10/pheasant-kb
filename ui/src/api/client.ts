@@ -105,6 +105,45 @@ export function setApiToken(value: string): void {
   }
 }
 
+/**
+ * A browser sign-in comes back as `#pheasant_session=<credential>` (the
+ * fragment never reaches a server log or a Referer). Adopt it as this tab's
+ * bearer, exactly like a pasted token, and drop it from the address bar.
+ */
+export function adoptSignInSession(): boolean {
+  if (typeof window === "undefined") return false;
+  const match = /(?:^#|&)pheasant_session=([^&]+)/.exec(window.location.hash);
+  if (!match) return false;
+  setApiToken(decodeURIComponent(match[1]));
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return true;
+}
+
+/** What a client may know before it holds a credential (`GET /auth/config`). */
+export interface AuthConfig {
+  shared_token: boolean;
+  entra: boolean;
+  login_url: string | null;
+}
+
+/** Who this tab's credential names, and how it was proven (`GET /auth/me`). */
+export interface AuthIdentity {
+  principal: string | null;
+  auth_method: string | null;
+  display_name?: string;
+  roles: string[];
+  person: boolean;
+}
+
+export interface PersonalKey {
+  id: string;
+  name: string | null;
+  created_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
 export function onApiAuthRequired(listener: () => void): () => void {
   if (typeof window === "undefined") return () => undefined;
   const handler = () => listener();
@@ -709,6 +748,19 @@ export const api = {
 
   // MCP
   mcpInfo: () => request<McpInfo>("/mcp/info"),
+
+  // Identity: the shared token, or sign-in with Microsoft and personal keys.
+  authConfig: () => request<AuthConfig>("/auth/config"),
+  me: () => request<AuthIdentity>("/auth/me"),
+  signOut: () => request<{ signed_out: boolean }>("/auth/logout", { method: "POST" }),
+  personalKeys: () => request<{ keys: PersonalKey[] }>("/auth/keys"),
+  createPersonalKey: (body: { name: string; days?: number }) =>
+    request<PersonalKey & { key: string }>("/auth/keys", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokePersonalKey: (id: string) =>
+    request<{ revoked: boolean }>(`/auth/keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // Config
   getConfig: () => request<ConfigResponse>("/config"),

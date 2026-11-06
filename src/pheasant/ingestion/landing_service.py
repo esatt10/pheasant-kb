@@ -39,7 +39,6 @@ the filesystem was ever the problem, so only the filesystem write moves.
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,9 +182,11 @@ class LandingServiceClient:
         token_env: str,
         timeout_seconds: float = 120.0,
         retries: int = 1,
+        identity: Any = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token_env = token_env
+        self.identity = identity
         self.timeout = max(0.1, float(timeout_seconds))
         self.retries = max(0, int(retries))
         # Internal endpoint: bypass any ambient HTTP_PROXY, exactly as the
@@ -193,7 +194,9 @@ class LandingServiceClient:
         self._opener = build_opener(ProxyHandler({}))
 
     def _token(self) -> str:
-        token = os.environ.get(self.token_env or "", "")
+        from pheasant.security.service_auth import outbound_token
+
+        token = outbound_token(self.token_env, self.identity)
         if not token:
             raise LandingServiceError(
                 f"The landing service requires a token in environment variable {self.token_env!r}"
@@ -309,6 +312,7 @@ def landing_zone_for_config(
             url,
             str(getattr(settings, "landing_service_token_env", "") or ""),
             float(getattr(settings, "landing_service_timeout_seconds", 120.0) or 120.0),
+            identity=getattr(getattr(config, "security", None), "service_identity", None),
         )
     )
 

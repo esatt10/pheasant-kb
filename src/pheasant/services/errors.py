@@ -455,3 +455,50 @@ class VoiceUnavailable(ServiceError):
     def __init__(self, reason: object) -> None:
         super().__init__(f"The transcription service did not start a session: {reason}")
         self.reason = str(reason)
+
+
+class IdentityNotConfigured(ServiceError):
+    """Sign-in with Microsoft was asked for and this region has it off.
+
+    A 404 rather than a 503: the feature is not part of this region, the same
+    answer a build without it would give. ``security.entra`` turns it on.
+    """
+
+    status = 404
+    code = "IDENTITY_NOT_CONFIGURED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Sign-in with Microsoft is not enabled in this region (security.entra.enabled)"
+        )
+
+
+class SignInFailed(ServiceError):
+    """A sign-in round trip ended without an identity this region admits.
+
+    The message says which step failed and never what a token contained: a
+    refusal is read by whoever is signing in, who may not be who they claim.
+    """
+
+    status = 401
+    code = "SIGN_IN_FAILED"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Sign-in failed: {reason}")
+        self.reason = reason
+
+
+class PersonIdentityRequired(ServiceError):
+    """An operation that belongs to a signed-in person, asked by a credential.
+
+    Minting a personal key ties the key to someone; the shared token names
+    no one, so it cannot mint one.
+    """
+
+    status = 403
+    code = "PERSON_IDENTITY_REQUIRED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Sign in with Microsoft to manage personal keys; the shared token names no one"
+        )

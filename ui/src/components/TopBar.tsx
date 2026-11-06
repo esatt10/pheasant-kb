@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, getApiToken, onApiAuthChanged, onApiAuthRequired } from "../api/client";
+import {
+  api,
+  getApiToken,
+  onApiAuthChanged,
+  onApiAuthRequired,
+  type AuthIdentity,
+} from "../api/client";
 import { ApiTokenDialog } from "./ApiTokenDialog";
 import { HealthBadge } from "./HealthBadge";
 import { McpDialog } from "./McpDialog";
@@ -13,6 +19,7 @@ export function TopBar() {
   const [showMcp, setShowMcp] = useState(false);
   const [showApiAuth, setShowApiAuth] = useState(false);
   const [apiToken, setApiTokenState] = useState(getApiToken);
+  const [identity, setIdentity] = useState<AuthIdentity | null>(null);
   const queryClient = useQueryClient();
   // Below 860px the nav and the actions do not fit beside the brand -- seven
   // links and three buttons laid the page out 1,075px wide on a 390px phone,
@@ -49,6 +56,15 @@ export function TopBar() {
       removeChangedListener();
     };
   }, []);
+
+  // Who the tab's credential names, for the button's label.
+  useEffect(() => {
+    if (!apiToken) {
+      setIdentity(null);
+      return;
+    }
+    api.me().then(setIdentity).catch(() => setIdentity(null));
+  }, [apiToken]);
 
   function onApiTokenSaved() {
     setApiTokenState(getApiToken());
@@ -133,7 +149,11 @@ export function TopBar() {
       <div className="topbar__right">
         <HealthBadge />
         <button className="btn btn--small" onClick={() => { setMenuOpen(false); setShowApiAuth(true); }}>
-          {apiToken ? "API connected" : "Connect API"}
+          {apiToken
+            ? identity?.person
+              ? identity.display_name || identity.principal
+              : "API connected"
+            : "Connect API"}
         </button>
         <button className="btn btn--small" onClick={() => { setMenuOpen(false); setShowMcp(true); }}>
           Connect agent
