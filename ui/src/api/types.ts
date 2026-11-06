@@ -759,6 +759,11 @@ export interface McpToolSummary {
 export interface McpInfo {
   enabled: boolean;
   transports: Record<string, boolean>;
+  /** `remote` when the region is reached from another machine: HTTP configs, not stdio. */
+  mode?: "remote" | "local";
+  server_name?: string;
+  /** How a client may authenticate: Microsoft sign-in over OAuth, the shared token, personal keys. */
+  auth?: { oauth: boolean; api_token: boolean; personal_keys: boolean };
   streamable_http_url: string | null;
   stdio_command: string[];
   config_path: string;

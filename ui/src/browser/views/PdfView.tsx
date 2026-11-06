@@ -19,40 +19,39 @@ const MAX_ZOOM = 4;
  * better tool for printing and searching — and it is where this falls back to
  * if pdf.js cannot read the file.
  */
-export function PdfView({ source, path, passage }: { source: string; path: string; passage: string | null }) {
-  const { url, error } = useObjectUrl(
-    () => api.documentRawObjectUrl({ source, path, mimeType: "application/pdf" }),
-    `${source}/${path}`,
-  );
+export function PdfView({
+  source,
+  path,
+  passage,
+  passageAt = null,
+}: {
+  source: string;
+  path: string;
+  passage: string | null;
+  /** Where the passage sits in the extracted text, 0 to 1: the page to search first. */
+  passageAt?: number | null;
+}) {
   const [native, setNative] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [citedPage, setCitedPage] = useState<number | null>(null);
 
-  if (error) return <p className="error small viewer-pad">The PDF could not be loaded: {error}</p>;
-  if (!url) return <ViewerLoading label="Loading the PDF…" />;
   if (native || failure) {
     return (
-      <div className="pdf-shell">
-        <div className="pdf-bar">
-          {failure ? (
-            <span className="muted small">This PDF could not be drawn with highlights ({failure}).</span>
-          ) : (
-            <button type="button" className="btn btn--small" onClick={() => setNative(false)}>
-              Show highlights
-            </button>
-          )}
-          {citedPage ? <span className="muted small">cited passage on page {citedPage}</span> : null}
-        </div>
-        {/* `#page=` opens the browser's viewer at the cited page, where it
-            honours it; the passage itself cannot be marked in there. */}
-        <iframe className="pdf-view" src={citedPage ? `${url}#page=${citedPage}` : url} title={path} />
-      </div>
+      <NativePdf
+        source={source}
+        path={path}
+        failure={failure}
+        citedPage={citedPage}
+        onHighlights={() => setNative(false)}
+      />
     );
   }
   return (
     <PdfPages
-      url={url}
+      source={source}
+      path={path}
       passage={passage}
+      passageAt={passageAt}
       onCitedPage={setCitedPage}
       onNative={() => setNative(true)}
       onFail={setFailure}
@@ -60,15 +59,77 @@ export function PdfView({ source, path, passage }: { source: string; path: strin
   );
 }
 
+/**
+ * The browser's own viewer, in a frame: it needs the whole file as an object
+ * URL (a frame cannot send the token), so that download happens only here.
+ */
+function NativePdf({
+  source,
+  path,
+  failure,
+  citedPage,
+  onHighlights,
+}: {
+  source: string;
+  path: string;
+  failure: string | null;
+  citedPage: number | null;
+  onHighlights: () => void;
+}) {
+  const { url, error } = useObjectUrl(
+    () => api.documentRawObjectUrl({ source, path, mimeType: "application/pdf" }),
+    `${source}/${path}`,
+  );
+  if (error) return <p className="error small viewer-pad">The PDF could not be loaded: {error}</p>;
+  if (!url) return <ViewerLoading label="Loading the PDF…" />;
+  return (
+    <div className="pdf-shell">
+      <div className="pdf-bar">
+        {failure ? (
+          <span className="muted small">This PDF could not be drawn with highlights ({failure}).</span>
+        ) : (
+          <button type="button" className="btn btn--small" onClick={onHighlights}>
+            Show highlights
+          </button>
+        )}
+        {citedPage ? <span className="muted small">cited passage on page {citedPage}</span> : null}
+      </div>
+      {/* `#page=` opens the browser's viewer at the cited page, where it
+          honours it; the passage itself cannot be marked in there. */}
+      <iframe className="pdf-view" src={citedPage ? `${url}#page=${citedPage}` : url} title={path} />
+    </div>
+  );
+}
+
+/**
+ * Pages in the order the passage search reads them: the estimated page, then
+ * outward one page either side, so a passage is usually found on the first
+ * few pages read rather than after every page before it.
+ */
+export function searchOrder(pages: number, at: number | null): number[] {
+  if (at === null || !Number.isFinite(at)) return Array.from({ length: pages }, (_, i) => i + 1);
+  const start = Math.min(pages, Math.max(1, Math.round(at * (pages - 1)) + 1));
+  const order = [start];
+  for (let step = 1; order.length < pages; step += 1) {
+    if (start + step <= pages) order.push(start + step);
+    if (start - step >= 1) order.push(start - step);
+  }
+  return order;
+}
+
 function PdfPages({
-  url,
+  source,
+  path,
   passage,
+  passageAt,
   onCitedPage,
   onNative,
   onFail,
 }: {
-  url: string;
+  source: string;
+  path: string;
   passage: string | null;
+  passageAt: number | null;
   onCitedPage: (page: number | null) => void;
   onNative: () => void;
   onFail: (reason: string) => void;
@@ -81,6 +142,7 @@ function PdfPages({
   const [target, setTarget] = useState<number | null>(null);
   const [locating, setLocating] = useState(Boolean(passage));
   const stageRef = useRef<HTMLDivElement>(null);
+  const key = `${source}/${path}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -88,8 +150,7 @@ function PdfPages({
     (async () => {
       try {
         const { loadPdf } = await import("./pdfjs");
-        const bytes = await (await fetch(url)).arrayBuffer();
-        loaded = await loadPdf(bytes);
+        loaded = await loadPdf(api.documentRawSource({ source, path }));
         if (cancelled) {
           void loaded.destroy();
           return;
@@ -107,8 +168,8 @@ function PdfPages({
       cancelled = true;
       if (loaded) void loaded.destroy();
     };
-    // `onFail` is a state setter; the document is a function of the URL alone.
-  }, [url]);
+    // `onFail` is a state setter; the document is a function of its path alone.
+  }, [key]);
 
   // Which page the cited passage starts on: read page texts in order (no
   // drawing) until one holds it. The page is then drawn and scrolled to, and
@@ -119,24 +180,33 @@ function PdfPages({
     const needle = normalizeForMatch(passage);
     setLocating(true);
     (async () => {
-      // Every page is read and the one most of the passage's anchors agree on
-      // wins: a sentence repeated on every page must not pull the passage to
-      // page 1.
-      let carried = "";
+      // Pages are read outward from where the passage sits in the extracted
+      // text, and the one most of the passage's anchors agree on wins: a
+      // sentence repeated on every page must not pull the passage elsewhere,
+      // and a perfect match ends the search. Reading from page 1 cost every
+      // page before the passage -- seconds for a book, and with range loading
+      // every one of those pages' bytes too.
+      const texts = new Map<number, string>();
+      const pageText = async (number: number) => {
+        let text = texts.get(number);
+        if (text === undefined) {
+          const content = await (await doc.getPage(number)).getTextContent();
+          text = normalizeForMatch(content.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+          texts.set(number, text);
+        }
+        return text;
+      };
       let best: { page: number; score: number } | null = null;
-      for (let number = 1; number <= doc.numPages && !cancelled; number += 1) {
-        const content = await (await doc.getPage(number)).getTextContent();
-        const text = normalizeForMatch(
-          content.items.map((item) => ("str" in item ? item.str : "")).join(" "),
-        );
+      for (const number of searchOrder(doc.numPages, passageAt)) {
+        if (cancelled) break;
         // The previous page's tail rides along, so a passage that starts at
         // the foot of one page and runs onto the next is still found.
-        const match = matchPassage(carried + text, needle);
+        const carried = number > 1 ? (await pageText(number - 1)).slice(-needle.length) : "";
+        const match = matchPassage(carried + (await pageText(number)), needle);
         if (match && (!best || match.score > best.score)) {
           best = { page: match.start < carried.length ? number - 1 : number, score: match.score };
           if (match.score === match.anchors) break;
         }
-        carried = text.slice(-needle.length);
       }
       if (!cancelled) {
         setTarget(best?.page ?? null);
@@ -149,7 +219,7 @@ function PdfPages({
     return () => {
       cancelled = true;
     };
-  }, [doc, passage]);
+  }, [doc, passage, passageAt]);
 
   // Fit-to-width follows the pane: the viewer is resized with the tiles.
   useEffect(() => {
@@ -165,7 +235,7 @@ function PdfPages({
   // Keyed on the document too: the stage exists only once it has loaded.
   // And held until the page is known, so a lookalike on page 1 is never
   // highlighted (and scrolled to) on the way.
-  usePassageHighlight(stageRef, locating ? null : passage, `${url}:${doc ? doc.numPages : "loading"}`);
+  usePassageHighlight(stageRef, locating ? null : passage, `${key}:${doc ? doc.numPages : "loading"}`);
 
   const fit = base && fitWidth > 0 ? Math.max(MIN_ZOOM, (fitWidth - 32) / base.width) : 1;
   // Quantized, so a pane resized by a pixel does not redraw every page.
