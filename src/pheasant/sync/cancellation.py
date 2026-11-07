@@ -40,13 +40,13 @@ from __future__ import annotations
 import logging
 import os
 import socket
-import threading
 import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pheasant.persistence.heartbeat import Heartbeat, HeartbeatWriter
 from pheasant.sync.locks import SOURCE_HEARTBEAT_SECONDS, SOURCE_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -108,8 +108,7 @@ class SyncRun:
         #: memory -- the node index's pending delta -- was lost with it.
         self.predecessor_died = False
         self._next_check = 0.0
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._heartbeat: Heartbeat | None = None
 
     def __enter__(self) -> SyncRun:
         now = _now()
@@ -135,19 +134,19 @@ class SyncRun:
             logger.warning("could not register the sync of %s as running", self.source_id)
             logger.debug("sync_runs registration failed", exc_info=True)
             return self
-        self._thread = threading.Thread(
-            target=self._heartbeat_loop,
-            name=f"pheasant-sync-run-{self.source_id}",
-            daemon=True,
-        )
-        self._thread.start()
+        # Its own thread and its own connection (`persistence.heartbeat`): a
+        # beat that shared the sync's pool stopped at 00:41 on the Azure fleet
+        # while the sync committed for another hour, so every reader called it
+        # dead.
+        self._heartbeat = Heartbeat(
+            self.state, f"sync-run-{self.source_id}", self._beat, self.heartbeat_interval_s
+        ).start()
         return self
 
     def __exit__(self, *_exc: Any) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self.heartbeat_interval_s * 2))
-            self._thread = None
+        if self._heartbeat is not None:
+            self._heartbeat.stop()
+            self._heartbeat = None
         if not self._registered:
             return
         try:
@@ -160,15 +159,11 @@ class SyncRun:
         except Exception:  # noqa: BLE001 - shutdown must not raise
             logger.debug("could not clear the sync_runs row for %s", self.source_id, exc_info=True)
 
-    def _heartbeat_loop(self) -> None:
-        while not self._stop.wait(self.heartbeat_interval_s):
-            try:
-                self.state.execute(
-                    "UPDATE sync_runs SET heartbeat_at=? WHERE source_id=? AND run_id=?",
-                    (_now(), self.source_id, self.run_id),
-                )
-            except Exception:  # noqa: BLE001 - a missed beat costs a refused cancel
-                logger.debug("sync_runs heartbeat failed for %s", self.source_id, exc_info=True)
+    def _beat(self, writer: HeartbeatWriter) -> None:
+        writer.execute(
+            "UPDATE sync_runs SET heartbeat_at=? WHERE source_id=? AND run_id=?",
+            (_now(), self.source_id, self.run_id),
+        )
 
     def checkpoint(self) -> None:
         """Raise :class:`SyncCancelled` if this run was asked to stop.

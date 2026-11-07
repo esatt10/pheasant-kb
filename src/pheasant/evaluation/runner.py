@@ -80,6 +80,7 @@ from pheasant.evaluation.contracts import (
 )
 from pheasant.evaluation.metrics import MetricContext, MetricSet
 from pheasant.evaluation.replay import ReplayEngine, VariantReplay
+from pheasant.persistence.heartbeat import WARN_EVERY
 
 logger = logging.getLogger(__name__)
 
@@ -217,15 +218,31 @@ class _RunProgress:
         self._thread.start()
 
     def _beat(self) -> None:
+        failures = 0
         while not self._stop.wait(self.heartbeat_seconds):
             if self.run_id is None:
                 continue
-            evaluation_store.heartbeat_run(
-                self.state,
-                run_id=self.run_id,
-                now=utc_now(),
-                completed_units=self.completed_units,
-            )
+            # One failed write used to end this thread for the rest of the
+            # batch, and the run was then reclaimed as `interrupted` while it
+            # was still working. A failure is a missed beat, said and retried.
+            try:
+                evaluation_store.heartbeat_run(
+                    self.state,
+                    run_id=self.run_id,
+                    now=utc_now(),
+                    completed_units=self.completed_units,
+                )
+            except Exception as exc:  # noqa: BLE001 - retried on the next beat
+                failures += 1
+                if failures == 1 or failures % WARN_EVERY == 0:
+                    logger.warning(
+                        "evaluation run %s heartbeat failed (%d in a row): %s",
+                        self.run_id,
+                        failures,
+                        exc,
+                    )
+                continue
+            failures = 0
 
     def fail(self, error: BaseException) -> None:
         """Mark the run failed, durably, with the reason.

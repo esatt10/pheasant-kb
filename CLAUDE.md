@@ -220,7 +220,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 194 pytest modules, offline by design
+└── tests/                     ← 195 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -2813,6 +2813,23 @@ Each of these cost real time. They are listed because the shape recurs.
   `succeeded` once the task is published, and an agent following the job did
   exactly what it was told. `wait_for_sync` is the answer for callers; the
   job's own meaning is unchanged, because it is public behaviour.
+- **A heartbeat that shares the work's resources stops when the work is
+  busiest, and then every reader calls the work dead.** On the Azure fleet a
+  23,691-page web sync committed for another hour after its `sync_runs`
+  heartbeat stopped at 00:41: `wait_for_sync` said `queued` about a sync the
+  UI showed indexing, and a cancel would have been refused as "not running".
+  The beat went through the sync's own connection pool, and a failed beat was
+  logged at debug inside a child process whose output is read when it ends.
+  `persistence/heartbeat.py` is the one mechanism now: `HeartbeatWriter`
+  writes on a dedicated autocommit Postgres connection outside the pool (TCP
+  keepalives, a 10 s statement timeout, replaced after a failure), and
+  `Heartbeat` warns on the first failed beat and every sixth, and says when
+  it recovers. The sync run and the source lease use it; the evaluation
+  heartbeat no longer dies on its first failed write, and the queue claim's
+  failures are warnings. `tests/test_heartbeats.py` holds a pool of one with
+  an open transaction and asserts both beats still land -- each fails on the
+  old code. Found by reading the row from inside the indexer container; no
+  log said anything.
 - **A fallback that scans is a capacity limit nobody wrote down.**
   `describe_document` found one document's in-links by asking the graph for
   in-edges, and the graph service's proxy had no such lookup, so on every api
