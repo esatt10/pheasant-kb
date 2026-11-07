@@ -141,16 +141,41 @@ def run_sync(
         # stderr carries the child's traceback; surface the tail, which is the
         # part that says what actually went wrong.
         tail = (stderr or "").strip().splitlines()[-5:]
-        logger.error("Sync worker failed (exit %s): %s", returncode, " / ".join(tail))
+        error = "\n".join(tail)
+        if returncode < 0:
+            # Killed by a signal: the child said nothing about why, so its last
+            # lines are only context. They used to be the whole error -- a
+            # 23,691-page sync OOM-killed on Azure was reported as one of its
+            # 404 warnings.
+            error = "\n".join([killed_by(-returncode), *(["last output:", *tail] if tail else [])])
+        logger.error("Sync worker failed (exit %s): %s", returncode, " / ".join(error.splitlines()))
         return {
             "status": "failed",
             "source_id": source_name,
-            "error": "\n".join(tail),
+            "error": error,
             "results": [],
         }
 
     _forward_child_log(stderr)
     return _parse_report(stdout, source_name)
+
+
+def killed_by(signum: int) -> str:
+    """Why a sync worker ended on a signal, in words an operator can act on."""
+
+    import signal
+
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:
+        name = f"signal {signum}"
+    if signum == 9:  # SIGKILL on every POSIX system; Windows has no such member
+        return (
+            "the sync worker was killed (SIGKILL); in a container that is almost always "
+            "the memory limit. Nothing it read after its last commit was recorded: raise "
+            "the indexer's memory or split the source"
+        )
+    return f"the sync worker was killed by {name}"
 
 
 #: Lines of a successful child's stderr repeated in this process's log.

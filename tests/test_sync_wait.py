@@ -244,3 +244,21 @@ def test_a_successful_sync_worker_logs_what_it_warned(monkeypatch, caplog) -> No
     with caplog.at_level(logging.WARNING, logger="pheasant.sync.worker"):
         worker.run_sync("pheasant.yaml", "site")
     assert "sync worker: site: could not read two" in caplog.text
+
+
+def test_a_killed_sync_worker_says_it_was_killed(monkeypatch) -> None:
+    """An OOM-killed sync of 23,691 pages was reported as one of its 404
+    warnings -- the last line it happened to print."""
+
+    from pheasant.sync import worker
+
+    monkeypatch.setattr(
+        worker,
+        "_run_streaming",
+        lambda *_a, **_k: (-9, "", "site: could not read a.html (HTTP Error 404)"),
+    )
+    report = worker.run_sync("pheasant.yaml", "site")
+    assert report["status"] == "failed"
+    assert report["error"].startswith("the sync worker was killed (SIGKILL)")
+    assert "memory limit" in report["error"]
+    assert "last output:\nsite: could not read a.html" in report["error"]
