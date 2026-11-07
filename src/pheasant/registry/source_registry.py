@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from itertools import islice
+from typing import Any
 
 from pheasant.config.loader import config_hash
 from pheasant.config.schema import PheasantConfig, SourceConfig
@@ -195,5 +196,42 @@ class SourceRegistry:
                     evidence.get("fresh") and source.get("last_status") == "healthy"
                 )
                 source["repository"] = evidence
+            source["checkpoint"] = summarized_checkpoint(source["checkpoint"])
             sources.append(source)
         return sources
+
+
+#: A checkpoint collection longer than this is listed as its length.
+CHECKPOINT_LIST_LIMIT = 100
+
+
+def summarized_checkpoint(checkpoint: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A source's checkpoint as the source listing carries it: no per-item collections.
+
+    A web collection's checkpoint holds a validator for every page and every
+    URL again: 6.9 MB of the 8.9 MB ``GET /sources`` answered for a
+    17,000-page collection, which the UI polls every second while anything
+    syncs. Each collection longer than :data:`CHECKPOINT_LIST_LIMIT` becomes
+    its length, and ``summarized`` names what was shortened; ``GET
+    /sync/status`` still carries every checkpoint whole.
+    """
+
+    if not checkpoint:
+        return checkpoint
+    shortened: list[str] = []
+    compact = dict(checkpoint)
+    for part in ("cursor", "high_watermark"):
+        values = checkpoint.get(part)
+        if not isinstance(values, dict):
+            continue
+        kept = {}
+        for key, value in values.items():
+            if isinstance(value, (list, dict)) and len(value) > CHECKPOINT_LIST_LIMIT:
+                kept[key] = len(value)
+                shortened.append(f"{part}.{key}")
+            else:
+                kept[key] = value
+        compact[part] = kept
+    if shortened:
+        compact["summarized"] = shortened
+    return compact

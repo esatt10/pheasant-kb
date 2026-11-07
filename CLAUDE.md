@@ -555,7 +555,12 @@ read; error), `stale` (served from an earlier read), `script_shell`,
 failures, the connector's checkpoint and the chunk rows, so it needs no
 column and no model, and a dropped item leaves it at once.
 `describe_document` carries `document.quality`, `describe_source` the counts,
-and MCP `list_quality_issues` / `GET /quality` the files to clean up. The
+MCP `list_quality_issues` / `GET /quality` the files to clean up, and the
+taxonomy (`browse_source` / `GET /documents/tree`) each file's state and each
+folder's health over everything beneath it, a never-read file shown in its
+folder. The source listing summarizes a checkpoint's per-item collections to
+their length (`summarized_checkpoint`): one validator per page was 6.9 MB of
+an 8.9 MB `GET /sources` the UI polls every second during a sync. The
 indexer repeats a successful sync child's stderr into its own log, which it
 used to read only on failure. The MCP server's `instructions` and
 `.agents/skills/pheasant-ingest/` tell every agent to wait.

@@ -438,7 +438,11 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         in it (paged with limit, at most 500, and offset). breadcrumbs and
         parent lead back up. Each file carries its viewer ("markdown", "code",
         "pdf", "table" ...) and its id, which is its graph node id; read it
-        with read_document. Reads what was indexed, not the filesystem. With
+        with read_document. Each file carries "quality" (ok, warning or error,
+        and its flags with reasons), and each folder -- and the folder listed
+        -- "health": the percent readable and the ok / warning / error counts
+        beneath it. A file the source lists and never read appears with id
+        null and its url. Reads what was indexed, not the filesystem. With
         security.acl_enforced on, only documents the principal may read.
         """
 

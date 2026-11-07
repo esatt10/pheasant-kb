@@ -261,3 +261,43 @@ def test_access_control_hides_held_files_and_lists_never_read_ones(
         engine.close()
     assert set(_by_path(report)) == {"gone"}, "a file the caller may not read was listed"
     assert report["totals"]["files"] == 1
+
+
+def test_the_taxonomy_shows_each_folder_and_files_health(tmp_path: Path, site: _Site) -> None:
+    """The tree carries what the cleanup list does: each file's state and
+    flags, each folder's health counted over everything beneath it, and a
+    file never read in the folder its path names."""
+
+    from pheasant.services.source_browser import BrowseRequest, browse
+
+    site.pages = {"good": (LONG, "text/plain"), "thin": ("Contact us.", "text/plain")}
+    engine = _engine(tmp_path, site, ["good", "thin", "gone", "dead"])
+    context = _context(engine)
+    try:
+        engine.sync_source("site", "incremental")
+        top = browse(context, BrowseRequest())
+        root = browse(context, BrowseRequest(source_name="site"))
+        host = root["directories"][0]
+        inside = browse(context, BrowseRequest(source_name="site", path=host["path"]))
+    finally:
+        engine.close()
+
+    listed = {d["name"]: d for d in top["directories"]}
+    assert listed["site"]["health"] == {"percent": 50.0, "status": "degraded"}
+    assert host["health"] == {
+        "percent": 50.0,
+        "status": "degraded",
+        "ok": 1,
+        "warning": 1,
+        "error": 2,
+    }
+    assert host["documents"] == 2, "documents still counts what the index holds"
+    assert root["health"] == host["health"]
+    files = {f["name"].split(".")[0]: f for f in inside["files"]}
+    assert set(files) == {"good", "thin", "gone", "dead"}
+    assert files["good"]["quality"] == {"status": "ok", "flags": []}
+    assert [f["code"] for f in files["thin"]["quality"]["flags"]] == ["little_text"]
+    assert files["gone"]["id"] is None and files["gone"]["viewer"] is None
+    assert files["gone"]["url"] == site.url("gone")
+    assert "HTTP Error 500" in files["gone"]["quality"]["flags"][0]["reason"]
+    assert inside["totals"]["files"] == 4

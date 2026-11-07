@@ -1707,26 +1707,52 @@ export interface BrowseCrumb {
   path: string;
 }
 
+/** One flag on a file: what is wrong with it and why (`services/quality.py`). */
+export interface QualityFlag {
+  code: string;
+  severity: "warning" | "error";
+  reason: string;
+}
+
+export interface FileQuality {
+  status: "ok" | "warning" | "error";
+  flags: QualityFlag[];
+}
+
+/** A folder's health, everything beneath it counted; a source's has the first two only. */
+export interface FolderHealth {
+  percent: number | null;
+  status: string;
+  ok?: number;
+  warning?: number;
+  error?: number;
+}
+
 export interface BrowseFolder {
   name: string;
   /** The folder's path inside its source; `""` for a source at the top level. */
   path: string;
   documents: number;
+  health?: FolderHealth | null;
   /** Set at the top level, where every folder is a source. */
   source?: string;
   source_type?: string | null;
 }
 
 export interface BrowseFile {
-  id: string;
+  /** `null` for a file the source lists and the index holds nothing for. */
+  id: string | null;
   name: string;
   path: string;
-  type: string;
+  type: string | null;
   extension: string;
   size_bytes?: number | null;
   last_indexed_at?: string | null;
-  viewer: DocumentViewer;
+  viewer: DocumentViewer | null;
   language?: string | null;
+  /** Where a never-read file was fetched from. */
+  url?: string | null;
+  quality?: FileQuality;
 }
 
 /** One level of a source (`GET /documents/tree`); no source is the sources. */
@@ -1736,6 +1762,8 @@ export interface BrowseResponse {
   path: string;
   parent: string | null;
   breadcrumbs: BrowseCrumb[];
+  /** This folder's health, everything beneath it counted. */
+  health?: FolderHealth | null;
   directories: BrowseFolder[];
   files: BrowseFile[];
   totals: { directories: number; files: number; documents: number };

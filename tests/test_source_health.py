@@ -185,3 +185,26 @@ def test_a_failed_sync_is_not_scored(tmp_path: Path, site: _FlakySite, backend: 
     finally:
         engine.close()
     assert listed["health"] is None
+
+
+def test_the_source_listing_does_not_carry_every_page_of_a_checkpoint(
+    tmp_path: Path, site: _FlakySite
+) -> None:
+    """GET /sources answered 8.9 MB for a 17,000-page collection, 6.9 MB of it
+    one validator per page, and the UI polls it every second while a sync
+    runs. A collection past the limit is its length in the listing."""
+
+    from pheasant.registry.source_registry import CHECKPOINT_LIST_LIMIT
+
+    pages = [f"p{n}" for n in range(CHECKPOINT_LIST_LIMIT + 5)]
+    engine = _web_engine(tmp_path, site.base, pages)
+    try:
+        engine.sync_source("site", "incremental")
+        listed = _listed(engine)["site"]["checkpoint"]
+        whole = engine.state.get_source_checkpoint("site")
+    finally:
+        engine.close()
+    assert len(whole["high_watermark"]["urls"]) == len(pages), "the stored checkpoint is whole"
+    assert listed["high_watermark"]["urls"] == len(pages)
+    assert "high_watermark.urls" in listed["summarized"]
+    assert listed["high_watermark"]["item_count"] == whole["high_watermark"]["item_count"]

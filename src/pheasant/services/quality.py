@@ -27,7 +27,13 @@ from pheasant.ingestion.content_types import MEMORY_ARTIFACT_TYPE
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound
 from pheasant.services.inventory import reader
-from pheasant.sync.health import current_failures, file_quality, script_shells
+from pheasant.sync.health import (
+    current_failures,
+    file_quality,
+    percent,
+    script_shells,
+    status_for,
+)
 
 SEVERITIES = ("warning", "error")
 MAX_ISSUES = 500
@@ -64,7 +70,7 @@ def quality_issues(context: ServiceContext, request: QualityRequest) -> dict[str
 
     files: list[dict[str, Any]] = []
     for source in sources:
-        files.extend(_source_files(context, source, request.principal, request.principal_groups))
+        files.extend(source_files(context, source, request.principal, request.principal_groups))
     status_totals = Counter(file["status"] for file in files)
     code_totals = Counter(flag["code"] for file in files for flag in file["flags"])
 
@@ -106,7 +112,7 @@ def source_quality(
 ) -> dict[str, Any]:
     """How many of one source's files are ok, warning and error, by flag code."""
 
-    files = _source_files(context, source, principal, principal_groups)
+    files = source_files(context, source, principal, principal_groups)
     statuses = Counter(file["status"] for file in files)
     return {
         "ok": statuses.get("ok", 0),
@@ -158,26 +164,40 @@ def _sources(context: ServiceContext, name: str | None) -> list[dict[str, Any]]:
     ]
 
 
-def _source_files(
+def source_files(
     context: ServiceContext,
     source: dict[str, Any],
-    principal: str | None,
-    principal_groups: list[str] | None,
+    principal: str | None = None,
+    principal_groups: list[str] | None = None,
+    *,
+    folder: str = "",
 ) -> list[dict[str, Any]]:
-    """Every file of one source -- indexed, or listed and never read -- with its quality."""
+    """Every file of one source (or of one ``folder`` of it, any depth), with its quality.
+
+    Indexed files and files listed but never read alike; the taxonomy view
+    rolls these up into each folder's health (:func:`summarize`).
+    """
 
     name = str(source["name"])
     acl = ", a.acl" if context.config.security.acl_enforced else ""
+    within = ""
+    params: list[Any] = [name, MEMORY_ARTIFACT_TYPE]
+    prefix = folder.strip("/").lower()
+    if prefix:
+        within = " AND LOWER(a.relative_path) LIKE ? ESCAPE '\\'"
+        params.append(f"{_escape_like(prefix)}/%")
     rows = context.state.rows(
         "SELECT a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl + ", "
         f"COUNT(c.id) AS chunks, {_TOKENS} AS tokens "
         "FROM artifacts a LEFT JOIN chunks c ON c.artifact_id = a.id "
-        "WHERE a.source_id = ? AND a.type <> ? "
+        f"WHERE a.source_id = ? AND a.type <> ?{within} "
         "GROUP BY a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl,
-        (name, MEMORY_ARTIFACT_TYPE),
+        tuple(params),
     )
     failures = current_failures(context.state, source)
     failed = dict(failures.items) if failures else {}
+    if prefix:
+        failed = {p: item for p, item in failed.items() if p.lower().startswith(prefix + "/")}
     # A failing file the index holds is judged by its own ACL below; only the
     # ones it holds nothing for are listed as never read.
     indexed = _paths(rows)
@@ -205,6 +225,130 @@ def _source_files(
         quality = file_quality(held=False, read_error=error or "no error was recorded")
         files.append({**_file(None, name, path, None, quality), "url": uri})
     return files
+
+
+@dataclass(frozen=True)
+class Level:
+    """One folder of the taxonomy: what is beneath each sub-folder, and what is here."""
+
+    #: Sub-folder -> documents beneath it that the index holds.
+    folders: dict[str, int]
+    #: Sub-folder -> every file beneath it, indexed or never read, with its quality.
+    beneath: dict[str, list[dict[str, Any]]]
+    #: The files directly here, in name order: (name, "indexed", id) or
+    #: (name, "never_read", file).
+    here: list[tuple[str, str, Any]]
+    by_id: dict[str, dict[str, Any]]
+
+    def directories(self, prefix: str) -> list[dict[str, Any]]:
+        """Each sub-folder with its document count and its health."""
+
+        return [
+            {
+                "name": name,
+                "path": f"{prefix}/{name}" if prefix else name,
+                "documents": count,
+                "health": summarize(self.beneath.get(name, [])),
+            }
+            for name, count in sorted(self.folders.items(), key=lambda item: item[0].lower())
+        ]
+
+    def state(self, artifact_id: str) -> dict[str, Any]:
+        file = self.by_id.get(artifact_id) or UNSCORED
+        return {"status": file["status"], "flags": file["flags"]}
+
+
+#: A file the quality pass did not score (it arrived between the two reads).
+UNSCORED: dict[str, Any] = {"status": "ok", "flags": []}
+
+
+def place(rows: list[Any], files: list[dict[str, Any]], depth: int) -> Level:
+    """Group a folder's indexed ``rows`` and its never-read ``files`` one level down.
+
+    A never-read file belongs in the folder its path names, like any other:
+    it counts in that folder's health and is listed among its files.
+    """
+
+    by_id = {str(file["id"]): file for file in files if file["id"] is not None}
+    folders: dict[str, int] = {}
+    beneath: dict[str, list[dict[str, Any]]] = {}
+    here: list[tuple[str, str, Any]] = []
+    entries = [(row["relative_path"], "indexed", str(row["id"])) for row in rows] + [
+        (file["path"], "never_read", file) for file in files if file["id"] is None
+    ]
+    for path, kind, key in entries:
+        rest = [part for part in str(path or "").split("/") if part][depth:]
+        if len(rest) > 1:
+            folders[rest[0]] = folders.get(rest[0], 0) + (kind == "indexed")
+            beneath.setdefault(rest[0], []).append(
+                (by_id.get(key) or UNSCORED) if kind == "indexed" else key
+            )
+        elif rest:
+            here.append((rest[0].lower(), kind, key))
+    # Name order, so a page is stable from one call to the next.
+    here.sort(key=lambda entry: (entry[0], entry[1]))
+    return Level(folders=folders, beneath=beneath, here=here, by_id=by_id)
+
+
+def never_read_row(file: dict[str, Any]) -> dict[str, Any]:
+    """A file the source lists and the index holds nothing for: no id, no viewer."""
+
+    from pathlib import PurePosixPath
+
+    from pheasant.services.inventory import extension_of
+
+    relative = str(file["path"])
+    return {
+        "id": None,
+        "name": PurePosixPath(relative).name or relative,
+        "path": relative,
+        "type": None,
+        "extension": extension_of(relative),
+        "size_bytes": None,
+        "last_indexed_at": None,
+        "viewer": None,
+        "language": None,
+        "url": file.get("url"),
+        "quality": {"status": file["status"], "flags": file["flags"]},
+    }
+
+
+def source_score(context: ServiceContext, row: Any, name: str) -> dict[str, Any] | None:
+    """A source's percent and status, for the taxonomy's top level."""
+
+    from pheasant.sync.health import source_health
+
+    health = source_health(context.state, dict(row) if row is not None else {"name": name})
+    return {"percent": health["percent"], "status": health["status"]} if health else None
+
+
+def summarize(files: list[dict[str, Any]]) -> dict[str, Any]:
+    """The health of a set of files -- a folder's -- in a source's own terms.
+
+    ``percent`` is the share that reads (a file whose last read failed does
+    not, whether or not older text is held), and ``status`` follows the same
+    majority rule as a source's; ``ok`` / ``warning`` / ``error`` count the
+    files by state. ``percent`` is ``None`` for a folder with no files.
+    """
+
+    statuses = Counter(file["status"] for file in files)
+    failing = sum(1 for file in files if any(f["code"] in _READ_FAILURES for f in file["flags"]))
+    score = percent(len(files) - failing, failing)
+    return {
+        "percent": score,
+        "status": status_for(score),
+        "ok": statuses.get("ok", 0),
+        "warning": statuses.get("warning", 0),
+        "error": statuses.get("error", 0),
+    }
+
+
+#: The flags that mean a file did not read, which is what a folder's percent counts.
+_READ_FAILURES = frozenset({"unreadable", "stale"})
+
+
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _paths(rows: list[Any]) -> set[str]:
