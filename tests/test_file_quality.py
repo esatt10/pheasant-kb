@@ -81,12 +81,15 @@ def site():
         served.server.server_close()
 
 
-def _engine(root: Path, site: _Site, names: list[str], store: str = "sqlite") -> SyncEngine:
+def _engine(
+    root: Path, site: _Site, names: list[str], store: str = "sqlite", **extra: Any
+) -> SyncEngine:
     storage = (
         {"storage": {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}}
         if store == "postgres"
         else {}
     )
+    storage.update(extra)
     return SyncEngine(
         PheasantConfig.model_validate(
             {
@@ -237,3 +240,24 @@ def test_both_transports_list_the_same_issues(tmp_path: Path, site: _Site) -> No
     assert {i["status"] for i in over_mcp["issues"]} == {"warning", "error"}
     refused = client.get("/quality", params={"severity": "bad"})
     assert refused.status_code == 422 and "severity" in refused.json()["detail"]
+
+
+def test_access_control_hides_held_files_and_lists_never_read_ones(
+    tmp_path: Path, site: _Site
+) -> None:
+    """A failing file the index holds is judged by its own ACL; one it holds
+    nothing for is the source's own URL and error, listed for any caller."""
+
+    site.pages = {"good": (LONG, "text/plain"), "once": (LONG, "text/plain")}
+    private = {"acl_enforced": True, "default_visibility": "private"}
+    engine = _engine(tmp_path, site, ["good", "once", "gone"], security=private)
+    context = _context(engine)
+    try:
+        engine.sync_source("site", "incremental")
+        site.broken = {"once"}
+        engine.sync_source("site", "incremental")
+        report = quality_issues(context, QualityRequest(source_name="site"))
+    finally:
+        engine.close()
+    assert set(_by_path(report)) == {"gone"}, "a file the caller may not read was listed"
+    assert report["totals"]["files"] == 1

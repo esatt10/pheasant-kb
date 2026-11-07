@@ -4312,6 +4312,18 @@ def create_app(
                 graph_neighbors(graph_obj, str(node_id), int(parameters.get("depth") or 1))
                 for node_id in node_ids
             ]
+        elif operation == "edges_batch":
+            from pheasant.graph.query_service import edges_batch
+
+            try:
+                result = edges_batch(
+                    graph_obj,
+                    str(parameters.get("direction") or ""),
+                    list(parameters.get("node_ids") or []),
+                    set(parameters.get("exclude_types") or []),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         elif operation == "slice":
             result = graph_slice(
                 graph_obj,

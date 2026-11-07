@@ -369,7 +369,7 @@ def _document_links(
         return {"links_to": None, "linked_from": None, "unresolved_references": None}
     graph = context.graph
     out = [(s, t, types) for s, t, types in _outgoing(graph, [artifact_id]) if types]
-    if callable(getattr(graph, "in_edges_batch", None)):
+    if _has_in_edges(graph):
         into = list(_incoming(graph, [artifact_id], everyone=[]))
     else:
         everyone = [str(r["id"]) for r in _artifacts(context, principal, groups)]
@@ -646,6 +646,13 @@ def _outgoing(graph: Any, ids: list[str]) -> Iterator[tuple[str, str, set[str]]]
                 for src, tgt, edge_map in entries:
                     yield str(src), str(tgt), _types(edge_map)
         return
+    remote_batch = getattr(graph, "remote_edges_batch", None)
+    answer = remote_batch("out", list(ids), STRUCTURAL_EDGES) if callable(remote_batch) else None
+    if answer is not None:
+        for rows in answer.values():
+            for src, tgt, types in rows:
+                yield str(src), str(tgt), set(types)
+        return
     remote = getattr(graph, "remote_neighbors_many", None)
     if callable(remote):
         for answer in remote(list(ids), depth=1):
@@ -676,10 +683,25 @@ def _incoming(
                 for src, tgt, edge_map in entries:
                     yield str(src), str(tgt), _types(edge_map)
         return
+    remote_batch = getattr(graph, "remote_edges_batch", None)
+    answer = remote_batch("in", list(ids), STRUCTURAL_EDGES) if callable(remote_batch) else None
+    if answer is not None:
+        for rows in answer.values():
+            for src, tgt, types in rows:
+                yield str(src), str(tgt), set(types)
+        return
     wanted = set(ids)
     for src, tgt, types in _outgoing(graph, everyone):
         if tgt in wanted:
             yield src, tgt, types
+
+
+def _has_in_edges(graph: Any) -> bool:
+    """Whether in-edges can be asked for directly, rather than found by scanning."""
+
+    return callable(getattr(graph, "in_edges_batch", None)) or callable(
+        getattr(graph, "remote_edges_batch", None)
+    )
 
 
 def _pairs(

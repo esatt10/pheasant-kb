@@ -275,6 +275,41 @@ class RemoteNodeView:
         return self.graph.get_node(key) is not None
 
 
+#: Node ids one ``edges_batch`` request may name.
+MAX_EDGE_BATCH = 500
+
+
+def edges_batch(
+    graph: Any, direction: str, node_ids: list[str], exclude_types: set[str]
+) -> dict[str, list[list[Any]]]:
+    """``{node_id: [[source, target, [types]], ...]}``: one batch's in- or out-edges.
+
+    The graph service's half of :meth:`RemoteGraph.remote_edges_batch`. An
+    endpoint pair and its link types, nothing else, and no pair whose every
+    type is excluded: `services.inventory_detail` asked for the in-links of
+    one document by reading the *out*-edges of every document in the region,
+    16 at a time with every neighbour attached, and at 18,000 documents the
+    api replica ran out of memory holding them.
+    """
+
+    if direction not in {"in", "out"}:
+        raise ValueError("direction must be 'in' or 'out'")
+    if len(node_ids) > MAX_EDGE_BATCH:
+        raise ValueError(f"edges_batch takes at most {MAX_EDGE_BATCH} nodes")
+    fetch = graph.in_edges_batch if direction == "in" else graph.out_edges_batch
+    answer: dict[str, list[list[Any]]] = {}
+    with graph.reading():
+        for node_id, entries in fetch([str(n) for n in node_ids]).items():
+            rows = []
+            for source, target, edge_map in entries:
+                values = edge_map.values() if hasattr(edge_map, "values") else edge_map
+                types = {str(d.get("type")) for d in values if d and d.get("type")}
+                if kept := sorted(types - exclude_types):
+                    rows.append([str(source), str(target), kept])
+            answer[str(node_id)] = rows
+    return answer
+
+
 class RemoteGraph:
     """Query-shaped proxy that never materializes the full graph locally."""
 
@@ -361,6 +396,32 @@ class RemoteGraph:
                     )
                 answers.append(dict(item))
         return answers
+
+    def remote_edges_batch(
+        self, direction: str, node_ids: list[str], exclude_types: set[str] | frozenset[str]
+    ) -> dict[str, list[list[Any]]] | None:
+        """In- or out-edges of ``node_ids`` as endpoint pairs and types (:func:`edges_batch`).
+
+        ``None`` from a graph service older than the operation, so a caller
+        keeps its previous path through a rolling deployment.
+        """
+
+        answer: dict[str, list[list[Any]]] = {}
+        for offset in range(0, len(node_ids), MAX_EDGE_BATCH):
+            batch = node_ids[offset : offset + MAX_EDGE_BATCH]
+            try:
+                result = self.client.query(
+                    "edges_batch",
+                    direction=direction,
+                    node_ids=batch,
+                    exclude_types=sorted(exclude_types),
+                )
+            except GraphQueryError as exc:
+                if "unknown graph operation: edges_batch" in str(exc):
+                    return None
+                raise
+            answer.update(result or {})
+        return answer
 
     def remote_slice(self, **parameters: Any) -> dict[str, Any]:
         return dict(self.client.query("slice", **parameters))

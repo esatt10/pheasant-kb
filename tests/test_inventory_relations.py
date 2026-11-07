@@ -271,6 +271,59 @@ def test_a_graph_with_no_in_edge_lookup_scans_and_agrees(region: dict[str, Any])
     assert found["linked_from"] == expected["linked_from"]
 
 
+def test_the_graph_service_answers_links_by_endpoint_pairs(region: dict[str, Any]) -> None:
+    """An api replica asks the graph service for in- and out-edges by pair.
+
+    It used to find one document's in-links by reading the out-edges of every
+    document in the region, 16 at a time with every neighbour attached: on the
+    Azure region at 18,000 documents that ran the api out of memory.
+    """
+
+    from pheasant.graph.query_service import GraphQueryError, RemoteGraph, edges_batch
+
+    graph = region["tools"].services.graph
+
+    class Service:
+        timeout = 5.0
+
+        def __init__(self) -> None:
+            self.operations: list[str] = []
+
+        def query(self, operation: str, **parameters: Any) -> Any:
+            self.operations.append(operation)
+            if operation == "edges_batch":
+                return edges_batch(
+                    graph,
+                    parameters["direction"],
+                    parameters["node_ids"],
+                    set(parameters["exclude_types"]),
+                )
+            if operation == "node":
+                attrs = graph.nodes.get(parameters["node_id"])
+                return dict(attrs) if attrs is not None else None
+            raise GraphQueryError(f"unknown graph operation: {operation}")
+
+    service = Service()
+    resident = region["tools"].services
+    remote = ServiceContext(
+        config=resident.config,
+        state=resident.state,
+        searcher=resident.searcher,
+        graph=RemoteGraph(service),
+    )
+    for path in ("sync.py", "deploy.md"):
+        expected = inventory_detail.document(resident, path)
+        found = inventory_detail.document(remote, path)
+        assert found["linked_from"] == expected["linked_from"]
+        assert found["links_to"] == expected["links_to"]
+    assert (
+        inventory_detail.source(remote, "code")["links"]
+        == inventory_detail.source(resident, "code")["links"]
+    )
+    assert "edges_batch" in service.operations
+    assert "neighbors_many" not in service.operations, "fell back to the per-document scan"
+
+
 # ---------------------------------------------------------------------------
 # 3. Reading the narrower questions
 # ---------------------------------------------------------------------------
@@ -525,6 +578,14 @@ def test_details_agree_across_backends(tmp_path: Path) -> None:
                     # The clock, and the two regions' own temp directories.
                     for varies in ("last_indexed_at", "location"):
                         payload[key].pop(varies, None)
+                    if isinstance(payload[key].get("health"), dict):
+                        payload[key]["health"].pop("as_of", None)
+            if isinstance(payload.get("last_sync"), dict):
+                # When each region's sync ran: seconds apart, so the clock.
+                for varies in ("started_at", "finished_at"):
+                    payload["last_sync"].pop(varies, None)
+                if isinstance(payload["last_sync"].get("health"), dict):
+                    payload["last_sync"]["health"].pop("as_of", None)
             payload.pop("recent", None)
         assert a == b, (name, args, kwargs)
 

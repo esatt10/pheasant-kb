@@ -176,11 +176,15 @@ def _source_files(
         "GROUP BY a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl,
         (name, MEMORY_ARTIFACT_TYPE),
     )
+    failures = current_failures(context.state, source)
+    failed = dict(failures.items) if failures else {}
+    # A failing file the index holds is judged by its own ACL below; only the
+    # ones it holds nothing for are listed as never read.
+    indexed = _paths(rows)
+    never_read = {path: item for path, item in failed.items() if path not in indexed}
     admit = reader(context, principal, principal_groups)
     if admit is not None:
         rows = admit(rows)
-    failures = current_failures(context.state, source)
-    failed = dict(failures.items) if failures else {}
     shells = script_shells(context.state, name)
 
     files = []
@@ -190,17 +194,21 @@ def _source_files(
             held=True,
             chunks=int(row["chunks"] or 0),
             tokens=int(row["tokens"] or 0),
-            read_error=_error(failed.pop(path, None)),
+            read_error=_error(failed.get(path)),
             script_shell=str(row["path"]) in shells,
         )
         files.append(_file(row["id"], name, path, row["last_indexed_at"], quality))
-    # Listed and never read: nothing in the index carries an ACL to judge them
-    # by, so they are shown only where documents are not access-controlled.
-    if admit is None:
-        for path, (uri, error) in failed.items():
-            quality = file_quality(held=False, read_error=error or "no error was recorded")
-            files.append({**_file(None, name, path, None, quality), "url": uri})
+    # Listed and never read: the source's own URL or path and the error. The
+    # index holds nothing for them, so there is no ACL to judge them by, and
+    # the source's listing already shows its URLs to the same callers.
+    for path, (uri, error) in never_read.items():
+        quality = file_quality(held=False, read_error=error or "no error was recorded")
+        files.append({**_file(None, name, path, None, quality), "url": uri})
     return files
+
+
+def _paths(rows: list[Any]) -> set[str]:
+    return {str(row["relative_path"]) for row in rows}
 
 
 def _file(

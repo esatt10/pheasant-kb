@@ -2808,6 +2808,18 @@ Each of these cost real time. They are listed because the shape recurs.
   `succeeded` once the task is published, and an agent following the job did
   exactly what it was told. `wait_for_sync` is the answer for callers; the
   job's own meaning is unchanged, because it is public behaviour.
+- **A fallback that scans is a capacity limit nobody wrote down.**
+  `describe_document` found one document's in-links by asking the graph for
+  in-edges, and the graph service's proxy had no such lookup, so on every api
+  replica it read the *out*-edges of every document in the region instead:
+  `neighbors_many`, 16 documents a call with every neighbour (chunks
+  included) attached, all held in one list. Invisible at 1,300 documents;
+  at 18,000 (one web collection grew) the api was OOM-killed (exit 137)
+  after 218 s. The graph service answers `edges_batch` now -- endpoint pairs
+  and link types, structural edges dropped on its side -- and an older
+  service still gets the scan. `tests/test_inventory_relations.py` drives
+  both describes through a `RemoteGraph` and fails if `neighbors_many` is
+  called. The offline suite could not see it: `role: all` holds the graph.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is
