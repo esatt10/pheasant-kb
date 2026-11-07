@@ -78,6 +78,22 @@ export function McpAppFrame({
   // picture it just drew itself.
   const shown = useRef<unknown>(null);
 
+  // The result object the current load of the frame was last given.
+  const delivered = useRef<unknown>(null);
+
+  const deliver = (next: Record<string, unknown>) => {
+    delivered.current = next;
+    shown.current = next.visual;
+    frameRef.current?.contentWindow?.postMessage(
+      {
+        jsonrpc: "2.0",
+        method: "ui/notifications/tool-result",
+        params: { content: [], structuredContent: next },
+      },
+      "*",
+    );
+  };
+
   useEffect(() => {
     const post = (message: Record<string, unknown>) =>
       frameRef.current?.contentWindow?.postMessage({ jsonrpc: "2.0", ...message }, "*");
@@ -106,7 +122,15 @@ export function McpAppFrame({
           });
           return;
         case "ui/notifications/initialized":
+          // Every load of the frame says this, not only the first. A browser
+          // reloads an iframe whose element is moved in the document -- the
+          // narrow layout's tab strip and every tile move do -- and the
+          // component survives it, so `ready` was already true, nothing
+          // re-ran, and the reloaded view sat at "Waiting for a result..."
+          // with the diagram gone. The view is blank after any load, so the
+          // result goes to it now, whatever was sent to the previous load.
           setReady(true);
+          deliver(latest.current.result);
           return;
         case "ui/request-display-mode": {
           // The view asks; the host decides, and answers with the mode it is
@@ -182,17 +206,14 @@ export function McpAppFrame({
   // a deferred visual arrives after the answer that asked for it.
   useEffect(() => {
     if (!ready) return;
+    // Already given to this load (the `initialized` handler delivers it).
+    if (result === delivered.current) return;
     // The redraw the host just adopted is already on screen.
-    if (result.visual !== undefined && result.visual === shown.current) return;
-    shown.current = result.visual;
-    frameRef.current?.contentWindow?.postMessage(
-      {
-        jsonrpc: "2.0",
-        method: "ui/notifications/tool-result",
-        params: { content: [], structuredContent: result },
-      },
-      "*",
-    );
+    if (result.visual !== undefined && result.visual === shown.current) {
+      delivered.current = result;
+      return;
+    }
+    deliver(result); // reads refs only, so it is not a dependency
   }, [ready, result]);
 
   useEffect(() => {
