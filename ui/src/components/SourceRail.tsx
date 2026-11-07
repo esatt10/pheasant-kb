@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SourceRecord } from "../api/types";
 import { QuickAdd } from "./QuickAdd";
+import { SourceStatus } from "./SourceStatus";
 import { TileFold, TileGrip } from "./Tiles";
 import { colorForNode } from "../graph/graphStyles";
 
@@ -153,7 +154,7 @@ export function SourceRail({
                       sync failed
                     </span>
                   ) : source.last_status ? (
-                    <span>{source.last_status}</span>
+                    <SourceStatus source={source} />
                   ) : null}
                 </span>
                 <span className="source-item__path">

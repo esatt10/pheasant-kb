@@ -8,6 +8,7 @@ import { QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegio
 import { AddSourceWizard } from "../sources/AddSourceWizard";
 import { TaxonomyOutline } from "../sources/TaxonomyOutline";
 import { QuickAdd } from "../components/QuickAdd";
+import { SourceStatus } from "../components/SourceStatus";
 import { useSession } from "../state/session";
 
 const SYNC_MODES = ["incremental", "full", "validate_only", "repair"];
@@ -207,7 +208,7 @@ export function SourcesPage() {
                     sync failed
                   </span>
                 ) : (
-                  (source.last_status ?? "—")
+                  <SourceStatus source={source} />
                 )}
                 {source.repository?.managed ? (
                   <div

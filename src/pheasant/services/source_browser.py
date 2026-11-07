@@ -52,6 +52,7 @@ from pheasant.ingestion.content_types import (
 )
 from pheasant.ingestion.media import is_fetched_page
 from pheasant.services import ServiceContext, raw_bytes
+from pheasant.services import quality as quality_service
 from pheasant.services.errors import DocumentNotFound, InvalidRequest
 from pheasant.services.inventory import ARTIFACT_SCOPE, extension_of, reader
 from pheasant.services.web_pages import snapshot_path
@@ -206,7 +207,8 @@ def browse(context: ServiceContext, request: BrowseRequest) -> dict[str, Any]:
         return _sources_level(context, kb_id, request)
     from pheasant.services.inventory_detail import _registered
 
-    source = str(_registered(context, request.source_name)["name"])
+    registered = _registered(context, request.source_name)
+    source = str(registered["name"])
     wanted = clean_directory(request.path)
     admit = reader(context, request.principal, request.principal_groups)
     acl = ", a.acl" if admit is not None else ""
@@ -223,26 +225,32 @@ def browse(context: ServiceContext, request: BrowseRequest) -> dict[str, Any]:
     )
     if admit is not None:
         rows = admit(rows)
-    if wanted and not rows:
+    # Every file's quality beneath this folder, never-read ones included.
+    quality = quality_service.source_files(
+        context, registered, request.principal, request.principal_groups, folder=wanted
+    )
+    never_read = [file for file in quality if file["id"] is None]
+    if wanted and not rows and not never_read:
         raise InvalidRequest(f"No folder {wanted!r} in source {source!r}")
 
-    actual = _actual_prefix(wanted, [str(r["relative_path"] or "") for r in rows])
-    folders: Counter[str] = Counter()
-    here: list[tuple[str, str]] = []
+    paths = [str(r["relative_path"] or "") for r in rows] + [f["path"] for f in never_read]
+    actual = _actual_prefix(wanted, paths)
     depth = len(actual.split("/")) if actual else 0
-    for row in rows:
-        rest = _parts(row["relative_path"])[depth:]
-        if len(rest) > 1:
-            folders[rest[0]] += 1
-        elif rest:
-            here.append((rest[0].lower(), str(row["id"])))
-    # Name order, so a page is stable from one call to the next.
-    here.sort()
-    files = _file_rows(context, [artifact_id for _, artifact_id in here[offset : offset + limit]])
-    directories = [
-        {"name": name, "path": _join(actual, name), "documents": count}
-        for name, count in sorted(folders.items(), key=lambda item: item[0].lower())
+    level = quality_service.place(rows, quality, depth)
+    here = level.here
+    page_entries = here[offset : offset + limit]
+    indexed = {
+        row["id"]: row
+        for row in _file_rows(context, [key for _, kind, key in page_entries if kind == "indexed"])
+    }
+    files = [
+        {**indexed[key], "quality": level.state(key)}
+        if kind == "indexed"
+        else quality_service.never_read_row(key)
+        for _, kind, key in page_entries
+        if kind != "indexed" or key in indexed
     ]
+    directories = level.directories(actual)
     returned = len(files)
     return {
         "knowledge_base": kb_id,
@@ -250,6 +258,8 @@ def browse(context: ServiceContext, request: BrowseRequest) -> dict[str, Any]:
         "path": actual,
         "parent": _parent(actual),
         "breadcrumbs": _breadcrumbs(source, actual),
+        # This folder's health, everything beneath it counted.
+        "health": quality_service.summarize(quality),
         "directories": directories,
         "files": files,
         "totals": {
@@ -451,7 +461,7 @@ def _sources_level(context: ServiceContext, kb_id: str, request: BrowseRequest) 
     registered = {
         str(row["name"]): row
         for row in context.state.rows(
-            "SELECT s.name, s.type FROM sources s WHERE NOT EXISTS "
+            "SELECT s.name, s.type, s.config_json FROM sources s WHERE NOT EXISTS "
             "(SELECT 1 FROM removed_sources r WHERE r.source_id = s.id)"
         )
         if not str(row["name"]).startswith("__")
@@ -463,6 +473,7 @@ def _sources_level(context: ServiceContext, kb_id: str, request: BrowseRequest) 
             "source": name,
             "source_type": registered[name]["type"] if name in registered else None,
             "documents": counts.get(name, 0),
+            "health": quality_service.source_score(context, registered.get(name), name),
         }
         for name in sorted(set(registered) | set(counts), key=str.lower)
         if name in counts or admit is None
@@ -541,10 +552,6 @@ def _breadcrumbs(source: str, directory: str) -> list[dict[str, Any]]:
 
 def _parts(path: Any) -> list[str]:
     return [p for p in str(path or "").replace("\\", "/").split("/") if p and p != "."]
-
-
-def _join(prefix: str, name: str) -> str:
-    return f"{prefix}/{name}" if prefix else name
 
 
 def _parent(path: str) -> str | None:

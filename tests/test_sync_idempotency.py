@@ -1596,9 +1596,10 @@ def test_an_unreadable_page_is_recorded_and_the_rest_of_the_sync_goes_on(
 ) -> None:
     """One page that cannot be fetched used to fail the whole pass, and a
     queued sync of a large collection was redelivered from its first page,
-    forever. It is that page's failure now, and the sync completes -- as
-    ``degraded``, not ``healthy``, with the page and its error in the source's
-    ``last_sync``, which is where a reader looks."""
+    forever. It is that page's failure now, and the sync completes, scored
+    by the share that read (two of three: healthy, at 66.6%), with the page
+    and its error in the source's ``last_sync``, which is where a reader
+    looks."""
 
     from pheasant.services import ServiceContext
     from pheasant.services.inventory_detail import source as describe_source
@@ -1608,15 +1609,17 @@ def test_an_unreadable_page_is_recorded_and_the_rest_of_the_sync_goes_on(
     try:
         flaky_site.broken = {"two"}
         result = engine.sync_source("site", "incremental")
-        assert result.status == "degraded"
+        assert result.status == "healthy"
+        assert result.details["readable_percent"] == 66.6
         assert result.indexed_artifacts == 2
         assert result.details["unreadable_items"] == 1
         assert result.details["unreadable"][0]["path"].endswith("two.txt")
         assert "HTTPError" in result.details["unreadable"][0]["error"]
         context = ServiceContext(config=engine.config, state=engine.state, searcher=None)
         described = describe_source(context, "site")
-        assert described["source"]["status"] == "degraded"
-        assert described["last_sync"]["status"] == "degraded"
+        assert described["source"]["status"] == "healthy"
+        assert described["source"]["health"]["percent"] == 66.6
+        assert described["last_sync"]["status"] == "healthy"
         assert described["last_sync"]["unreadable_items"] == 1
         assert described["last_sync"]["unreadable"][0]["path"].endswith("two.txt")
 

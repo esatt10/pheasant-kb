@@ -89,21 +89,35 @@ def wait_for_sync(
 
 
 def _outcome(context: ServiceContext, observed: dict[str, Any], waited: float) -> dict[str, Any]:
+    from pheasant.sync.health import scored_status, source_health
+
     name = observed["source_name"]
     finished = observed["state"] == "finished"
+    health = source_health(context.state, context.state.get_source(name) or {"name": name})
     return {
         **observed,
+        "status": scored_status(observed["status"], health),
+        "health": health,
         "since": observed["since"].isoformat() if observed["since"] else None,
         "documents": _documents(context, name),
-        "last_sync": last_sync(context.state, name) if finished else None,
+        "last_sync": last_sync(context.state, name, health=health) if finished else None,
         "waited_seconds": round(waited, 1),
         "timed_out": observed["state"] in {"running", "queued"},
         "next": _next(observed["state"]),
     }
 
 
-def last_sync(state: Any, source_name: str) -> dict[str, Any] | None:
-    """What the source's most recent sync did, from its event; ``None`` if none ran."""
+def last_sync(
+    state: Any, source_name: str, *, health: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """What the source's most recent sync did, from its event; ``None`` if none ran.
+
+    ``status`` is the health score's for a sync that finished reading, so an
+    event recorded as ``degraded`` for 4 dead links among 17,000 pages reads
+    as what it is, and ``health`` carries the percentage (`sync/health.py`).
+    """
+
+    from pheasant.sync.health import scored_status, source_health
 
     events = state.list_sync_events(source_name, limit=1)
     if not events:
@@ -111,8 +125,11 @@ def last_sync(state: Any, source_name: str) -> dict[str, Any] | None:
     event = events[0]
     details = event.get("details") or {}
     unreadable = details.get("unreadable") or []
+    if health is None:
+        health = source_health(state, state.get_source(source_name) or {"name": source_name})
     return {
-        "status": event.get("status"),
+        "status": scored_status(event.get("status"), health),
+        "health": health,
         "mode": details.get("mode"),
         "started_at": event.get("started_at"),
         "finished_at": event.get("finished_at"),
@@ -121,7 +138,9 @@ def last_sync(state: Any, source_name: str) -> dict[str, Any] | None:
         "unchanged_artifacts": details.get("skipped_artifacts"),
         "removed_artifacts": details.get("removed_artifacts", 0),
         "unreadable_items": int(details.get("unreadable_items") or len(unreadable)),
-        "unreadable": unreadable[:UNREADABLE_SAMPLE],
+        # The items still counted against the source: a removed URL or an
+        # archived document is no longer one of them.
+        "unreadable": health["unreadable_sample"] if health else unreadable[:UNREADABLE_SAMPLE],
     }
 
 

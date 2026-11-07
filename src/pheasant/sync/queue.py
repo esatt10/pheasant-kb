@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pheasant.persistence.heartbeat import WARN_EVERY
+
 logger = logging.getLogger(__name__)
 
 PENDING = "pending"
@@ -988,11 +990,22 @@ def _keepalive(queue: TaskQueue, task: IndexTask, visibility_seconds: float):
     done = threading.Event()
 
     def beat() -> None:
+        failures = 0
         while not done.wait(interval):
             try:
                 queue.heartbeat(task, visibility_seconds=visibility_seconds)
-            except Exception:  # noqa: BLE001 - a missed ping costs a redelivery, not a sync
-                logger.debug("Heartbeat failed for index task %s", task.id, exc_info=True)
+                failures = 0
+            except Exception as exc:  # noqa: BLE001 - a missed ping costs a redelivery, not a sync
+                # Said, not swallowed at debug: enough missed pings and the task
+                # is redelivered to a second worker while this one still runs.
+                failures += 1
+                if failures == 1 or failures % WARN_EVERY == 0:
+                    logger.warning(
+                        "Heartbeat failed for index task %s (%d in a row): %s",
+                        task.id,
+                        failures,
+                        exc,
+                    )
 
     thread = threading.Thread(target=beat, name=f"pheasant-queue-heartbeat-{task.id}", daemon=True)
     thread.start()

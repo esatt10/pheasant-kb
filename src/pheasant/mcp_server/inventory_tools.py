@@ -13,6 +13,8 @@ bounded context. Two adapters over `services.inventory`:
   detail, links in and out included (`services.inventory_detail`);
 * ``list_document_links`` — document-to-document links, per source pair and
   edge type, paged;
+* ``list_quality_issues`` — the files flagged for cleanup, each with its
+  state and reasons (`services.quality`);
 * ``browse_source`` / ``read_document`` — a source as folders and files, one
   level at a time, and one file's content classified for a viewer
   (`services.source_browser`).
@@ -107,6 +109,34 @@ class InventoryTools:
 
         return inventory_detail.document(
             self.services, path, source_name, knowledge_base, principal, principal_groups
+        )
+
+    def list_quality_issues(  # noqa: PLR0913 - one argument per filter
+        self,
+        knowledge_base: str,
+        source_name: str | None = None,
+        severity: str | None = None,
+        code: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import quality
+
+        return quality.quality_issues(
+            self.services,
+            quality.QualityRequest(
+                knowledge_base=knowledge_base,
+                source_name=source_name,
+                severity=severity,
+                code=code,
+                limit=limit,
+                offset=offset,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
         )
 
     def list_document_links(  # noqa: PLR0913 - one argument per filter
@@ -300,12 +330,50 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         chunk count, the section headings, the symbols it defines, the
         documents it links to ("links_to") and that link to it
         ("linked_from"), each with edge types and whether it crosses sources,
-        and references that resolve to nothing this region holds. For the
-        text itself use get_file_summary.
+        and references that resolve to nothing this region holds.
+        document.quality is the file's state (ok, warning, error) and its
+        flags, each with a reason. For the text itself use get_file_summary.
         """
 
         return tools.describe_document(
             knowledge_base, path, source_name, principal, principal_groups
+        )
+
+    @mcp.tool()
+    @anticipated
+    def list_quality_issues(  # noqa: PLR0913 - one argument per filter
+        knowledge_base: str,
+        source_name: str | None = None,
+        severity: str | None = None,
+        code: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        """List the files that need cleaning up, each with its state and the reason.
+
+        Every file is ok, warning or error. Each issue carries "flags", one per
+        problem, with "code", "severity" and "reason": unreadable (the last
+        sync could not read it and the index holds nothing for it: error),
+        stale (its last read failed, so the text served is older: warning),
+        script_shell (its server sent only a JavaScript shell), no_text and
+        little_text (it extracted no text, or almost none). Errors come first.
+        Filter by source_name, severity ("warning" or "error") or one code;
+        "totals" counts every file by state and by code. A URL removed with
+        edit_source_urls or a document archived is no longer listed. One
+        file's own flags are in describe_document's document.quality.
+        """
+
+        return tools.list_quality_issues(
+            knowledge_base,
+            source_name,
+            severity,
+            code,
+            limit,
+            offset,
+            principal,
+            principal_groups,
         )
 
     @mcp.tool()
@@ -370,7 +438,11 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         in it (paged with limit, at most 500, and offset). breadcrumbs and
         parent lead back up. Each file carries its viewer ("markdown", "code",
         "pdf", "table" ...) and its id, which is its graph node id; read it
-        with read_document. Reads what was indexed, not the filesystem. With
+        with read_document. Each file carries "quality" (ok, warning or error,
+        and its flags with reasons), and each folder -- and the folder listed
+        -- "health": the percent readable and the ok / warning / error counts
+        beneath it. A file the source lists and never read appears with id
+        null and its url. Reads what was indexed, not the filesystem. With
         security.acl_enforced on, only documents the principal may read.
         """
 

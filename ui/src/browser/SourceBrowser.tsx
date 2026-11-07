@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { BrowseFile, BrowseFolder, BrowseResponse } from "../api/types";
+import type { BrowseFile, BrowseFolder, BrowseResponse, FileQuality, FolderHealth } from "../api/types";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileDock, TileFold, TileGrip } from "../components/Tiles";
 import { ArchivedList } from "./ArchivedList";
@@ -67,7 +67,7 @@ export function SourceBrowser({
   const openFolder = (folder: BrowseFolder) =>
     folder.source && !browser.source ? go(folder.source, "") : go(browser.source, folder.path);
   const openFile = (file: BrowseFile) => {
-    if (!browser.source) return;
+    if (!browser.source || file.id === null) return;
     dispatch({ type: "open-file", file: { source: browser.source, path: file.path } });
   };
 
@@ -188,6 +188,7 @@ export function SourceBrowser({
                     </span>
                   ) : null}
                   {folder.source_type ? <span className="pill">{folder.source_type}</span> : null}
+                  <HealthPill health={folder.health} />
                   <span className="browser-row__count" title={`${folder.documents} documents beneath`}>
                     {folder.documents.toLocaleString()}
                   </span>
@@ -203,15 +204,19 @@ export function SourceBrowser({
                     type="button"
                     role="option"
                     aria-selected={active}
-                    key={`f:${file.id}`}
-                    className={`browser-row browser-row--file${active ? " browser-row--active" : ""}`}
+                    key={`f:${file.id ?? file.path}`}
+                    className={`browser-row browser-row--file${active ? " browser-row--active" : ""}${
+                      file.id === null ? " browser-row--unread" : ""
+                    }`}
                     onClick={() => openFile(file)}
-                    title={file.path}
+                    aria-disabled={file.id === null}
+                    title={qualityTitle(file)}
                   >
                     <span className="browser-row__icon" aria-hidden>
-                      {fileIcon(file.viewer)}
+                      {file.viewer ? fileIcon(file.viewer) : "⛔"}
                     </span>
                     <span className="browser-row__name">{file.name}</span>
+                    <QualityMark quality={file.quality} />
                     {scopes(browser.source, file.path) ? (
                       <span className="browser-row__scope" title="Questions are answered only from this file">
                         ⌖
@@ -288,7 +293,9 @@ function FolderSummary({ listing }: { listing?: BrowseResponse }) {
   if (!listing) return null;
   const { totals } = listing;
   const kinds = new Map<string, number>();
-  for (const file of listing.files) kinds.set(file.viewer, (kinds.get(file.viewer) ?? 0) + 1);
+  for (const file of listing.files) {
+    if (file.viewer) kinds.set(file.viewer, (kinds.get(file.viewer) ?? 0) + 1);
+  }
   return (
     <div className="folder-summary">
       <div className="folder-summary__icon" aria-hidden>
@@ -300,6 +307,14 @@ function FolderSummary({ listing }: { listing?: BrowseResponse }) {
           ? `${count(totals.directories, "folder")} · ${count(totals.files, "file")} here · ${count(totals.documents, "document")} beneath`
           : `${count(totals.directories, "source")} · ${count(totals.documents, "document")}`}
       </p>
+      {listing.health && listing.health.percent !== null ? (
+        <p className={`small ${healthClass(listing.health)}`}>
+          {listing.health.percent}% readable
+          {listing.health.ok !== undefined
+            ? ` · ${listing.health.ok} ok · ${listing.health.warning} warning · ${listing.health.error} error`
+            : ""}
+        </p>
+      ) : null}
       {kinds.size ? (
         <div className="folder-summary__kinds">
           {[...kinds.entries()]
@@ -316,6 +331,43 @@ function FolderSummary({ listing }: { listing?: BrowseResponse }) {
       </p>
     </div>
   );
+}
+
+/** A folder's (or a source's) readable share, beside its count; nothing when all reads. */
+function HealthPill({ health }: { health?: FolderHealth | null }) {
+  if (!health || health.percent === null || (health.percent === 100 && !health.warning)) return null;
+  const detail =
+    health.ok !== undefined
+      ? `${health.ok} ok, ${health.warning} warning, ${health.error} error beneath`
+      : `${health.percent}% of this source reads`;
+  return (
+    <span className={`pill browser-row__health ${healthClass(health)}`} title={detail}>
+      {health.percent}%
+    </span>
+  );
+}
+
+/** A file's state: nothing when ok, a mark naming its flags otherwise. */
+function QualityMark({ quality }: { quality?: FileQuality }) {
+  if (!quality || quality.status === "ok") return null;
+  return (
+    <span
+      className={`browser-row__quality ${quality.status === "error" ? "error" : "source-status--partial"}`}
+      aria-label={quality.flags.map((flag) => flag.code).join(", ")}
+    >
+      {quality.status === "error" ? "✕" : "⚠"}
+    </span>
+  );
+}
+
+function qualityTitle(file: BrowseFile): string {
+  const reasons = (file.quality?.flags ?? []).map((flag) => `${flag.code}: ${flag.reason}`);
+  return [file.url ?? file.path, ...reasons].join("\n");
+}
+
+function healthClass(health: FolderHealth): string {
+  if (health.status === "degraded" || health.error) return "error";
+  return health.percent === 100 && !health.warning ? "muted" : "source-status--partial";
 }
 
 function count(n: number, noun: string): string {

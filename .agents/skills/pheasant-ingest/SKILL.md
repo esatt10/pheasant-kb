@@ -50,10 +50,16 @@ check that it holds what you meant to add.
 5. **Check the result, not just the state.** A finished wait carries
    `documents` (what the source holds now) and `last_sync`. Compare
    `documents` with what you added -- the number of URLs, files or submitted
-   documents. `last_sync.status` is `degraded` when the sync could not read
-   some items, and `last_sync.unreadable` names them with the error (a site
-   refusing Pheasant's fetcher shows up here as an HTTP error per page).
-   `describe_source` shows the same `last_sync` at any time. Then search for a
+   documents. `health.percent` is the share of the source that reads (its
+   status is `degraded` only when at most half does), and
+   `last_sync.unreadable` names what could not be read, with the error (a
+   site refusing Pheasant's fetcher shows up here as an HTTP error per page).
+   Removing a failing URL with `edit_source_urls`, or archiving a document,
+   raises the score at once.
+   `describe_source` shows the same `last_sync` at any time, and
+   `list_quality_issues(knowledge_base, source_name)` lists every file that
+   needs attention -- unreadable, stale, a JavaScript shell, no text or
+   almost none -- each with its reason. Then search for a
    phrase only the new content contains (`search_context(query,
    source_name=...)`).
 6. **Say what is missing.** If documents are short, tell the user which ones

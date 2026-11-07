@@ -272,7 +272,7 @@ def test_a_dead_writers_lease_is_taken_over_once_it_goes_stale() -> None:
     try:
         dead = SourceLease(store, "stale", owner="dead-writer", stale_after_s=0.0)
         assert dead.try_acquire() is True
-        dead._stop.set()  # stop heartbeating, as a killed process would
+        dead._heartbeat.stop()  # stop heartbeating, as a killed process would
 
         # stale_after_s=0 makes every heartbeat instantly ancient.
         taker = SourceLease(store, "stale", owner="live-writer", stale_after_s=0.0)
@@ -293,7 +293,7 @@ def test_releasing_a_lease_we_already_lost_does_not_steal_it_back() -> None:
     try:
         loser = SourceLease(store, "contested", owner="loser", stale_after_s=0.0)
         assert loser.try_acquire() is True
-        loser._stop.set()
+        loser._heartbeat.stop()
         winner = SourceLease(store, "contested", owner="winner", stale_after_s=0.0)
         assert winner.try_acquire() is True
 

@@ -412,6 +412,11 @@ select.text-input {
   color: var(--danger);
 }
 
+/* A source that reads, with some items it could not: see SourceStatus.tsx. */
+.source-status--partial {
+  color: var(--warn);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -5047,6 +5052,11 @@ select.text-input {
   font-variant-numeric: tabular-nums;
 }
 .browser-row__size { font-size: calc(11px * var(--fs)); color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Health and data quality: a folder's readable share, a file's state (services/quality.py). */
+.browser-row__health { font-size: calc(11px * var(--fs)); font-variant-numeric: tabular-nums; }
+.browser-row__quality { font-size: calc(12px * var(--fs)); }
+.browser-row--unread { opacity: 0.75; cursor: default; }
+.browser-row--unread .browser-row__name { text-decoration: line-through; text-decoration-color: var(--danger); }
 .browser-row__chevron { color: var(--muted); }
 .browser__state { padding: calc(16px * var(--sp)); }
 .browser__more { margin: calc(8px * var(--sp)); }

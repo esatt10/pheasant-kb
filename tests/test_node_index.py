@@ -261,7 +261,7 @@ def test_a_killed_run_is_noticed_and_its_lost_rows_restored(tmp_path) -> None:
         engine.node_index.apply([], [lost])  # an upsert that never landed
         run = SyncRun(engine.state, "docs")
         run.__enter__()  # registered, then the process "died" without __exit__
-        run._stop.set()
+        run._heartbeat.stop()
 
         engine.sync_source("docs", "incremental")
         assert lost in engine.node_index.ids("docs")

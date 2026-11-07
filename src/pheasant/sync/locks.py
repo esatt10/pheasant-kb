@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pheasant.persistence.heartbeat import Heartbeat, HeartbeatWriter
+
 logger = logging.getLogger(__name__)
 
 
@@ -313,8 +315,7 @@ class SourceLease:
         self.heartbeat_interval_s = heartbeat_interval_s
         self.stale_after_s = stale_after_s
         self._held = False
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._heartbeat: Heartbeat | None = None
 
     @property
     def held(self) -> bool:
@@ -385,12 +386,11 @@ class SourceLease:
         """Drop the lease so the next writer need not wait it out."""
 
         was_held = self._held
-        if not was_held and self._thread is None:
+        if not was_held and self._heartbeat is None:
             return
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self.heartbeat_interval_s * 2))
-            self._thread = None
+        if self._heartbeat is not None:
+            self._heartbeat.stop()
+            self._heartbeat = None
         self._held = False
         if not was_held:
             # A conditional heartbeat discovered that ownership was lost.
@@ -409,47 +409,40 @@ class SourceLease:
             logger.warning("Could not release lease for %s: %s", self.source_id, exc)
 
     def _start_heartbeat(self) -> None:
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._heartbeat_loop,
-            name=f"pheasant-source-lease-{self.source_id}",
-            daemon=True,
-        )
-        self._thread.start()
+        # Its own connection (`persistence.heartbeat`), so a sync that holds
+        # every pooled connection cannot starve the proof that its writer is
+        # alive -- and three starved beats would hand the source to a second.
+        self._heartbeat = Heartbeat(
+            self.state,
+            f"source-lease-{self.source_id}",
+            self._beat,
+            self.heartbeat_interval_s,
+            on_failure=self._missed,
+        ).start()
 
-    def _heartbeat_loop(self) -> None:
-        failures = 0
-        while not self._stop.wait(self.heartbeat_interval_s):
-            try:
-                result = self.state.conn.execute(
-                    "UPDATE source_leases SET heartbeat_at=? "
-                    "WHERE source_id=? AND owner=? RETURNING owner",
-                    (self._now(), self.source_id, self.owner),
-                )
-                rows = list(result)
-                self.state.conn.commit()
-                failures = 0
-                if not rows:
-                    self._held = False
-                    logger.error(
-                        "Lease ownership was lost for %s; stopping its heartbeat",
-                        self.source_id,
-                    )
-                    return
-            except Exception as exc:  # pragma: no cover - disk/network blip
-                failures += 1
-                logger.warning("Lease heartbeat failed for %s: %s", self.source_id, exc)
-                if failures >= 3:
-                    # Continuing to orchestrate after three missed heartbeats
-                    # risks overlapping a successor that correctly took the
-                    # stale lease. The supervisor observes this and stops all
-                    # leader-only services before trying to reacquire.
-                    self._held = False
-                    logger.error(
-                        "Lease heartbeat failed three times for %s; relinquishing leadership",
-                        self.source_id,
-                    )
-                    return
+    def _beat(self, writer: HeartbeatWriter) -> bool:
+        rows = writer.execute(
+            "UPDATE source_leases SET heartbeat_at=? WHERE source_id=? AND owner=? RETURNING owner",
+            (self._now(), self.source_id, self.owner),
+        )
+        if not rows:
+            self._held = False
+            logger.error("Lease ownership was lost for %s; stopping its heartbeat", self.source_id)
+            return False
+        return True
+
+    def _missed(self, failures: int) -> bool:
+        if failures < 3:
+            return True
+        # Continuing to orchestrate after three missed heartbeats risks
+        # overlapping a successor that correctly took the stale lease. The
+        # supervisor observes this and stops all leader-only services before
+        # trying to reacquire.
+        self._held = False
+        logger.error(
+            "Lease heartbeat failed three times for %s; relinquishing leadership", self.source_id
+        )
+        return False
 
     def __enter__(self) -> SourceLease:
         self.acquire()

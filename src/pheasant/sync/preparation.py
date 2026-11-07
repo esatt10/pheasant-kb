@@ -170,6 +170,7 @@ class ReadFailures:
     def __init__(self, source_name: str) -> None:
         self.source_name = source_name
         self.items: list[tuple[str, str]] = []
+        self.uris: list[str | None] = []
 
     def __len__(self) -> int:
         return len(self.items)
@@ -181,6 +182,7 @@ class ReadFailures:
             return []
         path = prepared.item.relative_path
         self.items.append((path, prepared.read_error))
+        self.uris.append(prepared.item.uri)
         logger.warning(
             "%s: could not read %s (%s); keeping what the index holds",
             self.source_name,
@@ -200,7 +202,18 @@ class ReadFailures:
     def details(self) -> dict[str, Any]:
         if not self.items:
             return {}
+        from pheasant.sync.health import MAX_ERROR_CHARS, MAX_RECORDED_UNREADABLE
+
         return {
             "unreadable_items": len(self.items),
             "unreadable": [{"path": p, "error": e} for p, e in self.items[:25]],
+            # Every item, path, URL and error, so a removal can take it out of
+            # the source's health score before the next sync, and each file
+            # can say why it is flagged (`sync/health.py`).
+            "unreadable_all": [
+                [path, uri, error[:MAX_ERROR_CHARS]]
+                for (path, error), uri in zip(
+                    self.items[:MAX_RECORDED_UNREADABLE], self.uris, strict=False
+                )
+            ],
         }
