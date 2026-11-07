@@ -208,3 +208,46 @@ def test_the_source_listing_does_not_carry_every_page_of_a_checkpoint(
     assert listed["high_watermark"]["urls"] == len(pages)
     assert "high_watermark.urls" in listed["summarized"]
     assert listed["high_watermark"]["item_count"] == whole["high_watermark"]["item_count"]
+
+
+def test_the_source_listing_reads_the_job_snapshots_once(tmp_path: Path) -> None:
+    """Each source's syncing/job/progress lookup read every shared job
+    snapshot afresh -- three per source, on /state, which on the Azure fleet
+    is an NFS share -- and GET /sources took 5.8 s with eight sources."""
+
+    from fastapi.testclient import TestClient
+
+    from pheasant.api.app import create_app
+
+    sources = []
+    for name in ("one", "two", "three"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "a.md").write_text("# A\n\nText.\n", encoding="utf-8")
+        sources.append({"name": name, "type": "document_folder", "path": str(folder)})
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "listing",
+                "defaults": "standalone",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": sources,
+        }
+    )
+    app = create_app(config, config_path=str(tmp_path / "pheasant.yaml"))
+    shared = app.state.jobs._shared
+    reads = []
+    original = shared.list
+
+    def counted(*args, **kwargs):
+        reads.append(1)
+        return original(*args, **kwargs)
+
+    shared.list = counted
+    response = TestClient(app).get("/sources")
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+    assert len(reads) == 1, f"{len(reads)} reads of the job snapshots for one listing"

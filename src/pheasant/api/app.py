@@ -2064,16 +2064,17 @@ def create_app(
         list showed the same aggregate counter and the one source that was
         stuck looked exactly like the seven that were fine.
         """
+        snapshot = jobs.snapshot()  # once: each lookup alone re-reads the jobs table
         for record in records:
             name = record.get("name")
             if not name:
                 continue
-            active = jobs.active_snapshot_for(name)
-            last = jobs.last_outcome_snapshot_for(name)
+            active = jobs.active_snapshot_for(name, snapshot)
+            last = jobs.last_outcome_snapshot_for(name, snapshot)
             record["syncing"] = active is not None
             record["sync_error"] = last.get("error") if last else None
             record["job"] = active
-            record["progress"] = jobs.source_progress(name)
+            record["progress"] = jobs.source_progress(name, snapshot)
         return records
 
     @app.get("/sources")
