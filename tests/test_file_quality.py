@@ -301,3 +301,48 @@ def test_the_taxonomy_shows_each_folder_and_files_health(tmp_path: Path, site: _
     assert files["gone"]["url"] == site.url("gone")
     assert "HTTP Error 500" in files["gone"]["quality"]["flags"][0]["reason"]
     assert inside["totals"]["files"] == 4
+
+
+def test_the_taxonomy_reads_a_source_once_per_version(
+    tmp_path: Path, site: _Site, monkeypatch
+) -> None:
+    """Every level used to aggregate the chunk table over its whole folder:
+    1.5-2.1 s a level on a 25,000-page source. The source's files and their
+    quality are computed once per version of the source; a level is a filter
+    over that, and anything that changes the answer changes the version."""
+
+    from pheasant.services import quality as quality_service
+    from pheasant.services.source_browser import BrowseRequest, browse
+
+    builds: list[str] = []
+    real = quality_service._build_snapshot
+
+    def counted(context: Any, source: Any) -> Any:
+        builds.append(str(source["name"]))
+        return real(context, source)
+
+    monkeypatch.setattr(quality_service, "_build_snapshot", counted)
+    site.pages = {n: (LONG, "text/plain") for n in ("good", "once", "more")}
+    engine = _engine(tmp_path, site, ["good", "once", "more"])
+    context = _context(engine)
+    try:
+        engine.sync_source("site", "incremental")
+        root = browse(context, BrowseRequest(source_name="site"))
+        host = root["directories"][0]["path"]
+        browse(context, BrowseRequest(source_name="site", path=host))
+        browse(context, BrowseRequest(source_name="site"))
+        assert builds == ["site"], "a level recomputed the source"
+
+        archive_documents(context, ArchiveRequest(documents=["once.txt"], source_name="site"))
+        after = browse(context, BrowseRequest(source_name="site", path=host))
+        assert len(builds) == 2, "an archive did not move the version"
+        assert {f["name"] for f in after["files"]} == {"good.txt", "more.txt"}
+
+        site.broken = {"good"}
+        engine.sync_source("site", "incremental")
+        flagged = browse(context, BrowseRequest(source_name="site", path=host))
+        assert len(builds) == 3, "a sync did not move the version"
+        good = next(f for f in flagged["files"] if f["name"] == "good.txt")
+        assert good["quality"]["flags"][0]["code"] == "stale"
+    finally:
+        engine.close()

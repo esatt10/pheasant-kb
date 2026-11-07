@@ -19,7 +19,11 @@ answer that ``describe_document`` carries.
 
 from __future__ import annotations
 
-from collections import Counter
+import hashlib
+import threading
+import weakref
+from collections import Counter, OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,36 +182,178 @@ def source_files(
     rolls these up into each folder's health (:func:`summarize`).
     """
 
+    snapshot = _snapshot(context, source)
+    prefix = _prefix(folder)
+    rows = folder_rows(context, source, principal, principal_groups, folder=folder)
+    files = [snapshot.by_id[str(row["id"])] for row in rows]
+    # Listed and never read: the source's own URL or path and the error. The
+    # index holds nothing for them, so there is no ACL to judge them by, and
+    # the source's listing already shows its URLs to the same callers.
+    files += [f for f in snapshot.never_read if not prefix or f["path"].lower().startswith(prefix)]
+    return files
+
+
+def folder_rows(
+    context: ServiceContext,
+    source: dict[str, Any],
+    principal: str | None = None,
+    principal_groups: list[str] | None = None,
+    *,
+    folder: str = "",
+) -> list[Any]:
+    """The indexed files of ``folder`` (any depth) the caller may read: id and path."""
+
+    prefix = _prefix(folder)
+    rows = _snapshot(context, source).rows
+    if prefix:
+        rows = [row for row in rows if str(row["relative_path"]).lower().startswith(prefix)]
+    admit = reader(context, principal, principal_groups)
+    return list(admit(rows)) if admit is not None else rows
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    """One source's files and their quality, as of one version of the source."""
+
+    rows: list[dict[str, Any]]
+    by_id: dict[str, dict[str, Any]]
+    never_read: list[dict[str, Any]]
+
+
+#: Sources whose snapshot one process keeps. Navigating the taxonomy reads
+#: every level of one source, so the few being browsed are what matters.
+SNAPSHOTS_KEPT = 16
+
+_SNAPSHOTS_LOCK = threading.Lock()
+
+#: Per state store: (snapshots, levels). Held weakly, so a store's caches go
+#: with it and no later store can be handed them -- an object id is reused
+#: once its object is collected.
+_CACHES: weakref.WeakKeyDictionary[Any, tuple[OrderedDict, OrderedDict]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _caches(state: Any) -> tuple[OrderedDict, OrderedDict]:
+    with _SNAPSHOTS_LOCK:
+        caches = _CACHES.get(state)
+        if caches is None:
+            caches = _CACHES[state] = (OrderedDict(), OrderedDict())
+        return caches
+
+
+def _snapshot(context: ServiceContext, source: dict[str, Any]) -> _Snapshot:
+    """The source's files with their quality, computed once per version of the source.
+
+    Every taxonomy level used to aggregate the chunk table over the whole
+    folder and re-read the connector's checkpoint: 1.5-2.1 s a level on a
+    25,000-page collection, for an answer that changes only when the source
+    does. The version is what can change it -- the artifact count and newest
+    index time (a commit), the latest sync event, the archive and the source's
+    URL list -- read in four indexed statements, so a stale health cannot be
+    served after any of them moves. ACLs are applied per request, after.
+    """
+
+    key = _snapshot_key(context, source)
+    snapshots, _levels = _caches(context.state)
+    with _SNAPSHOTS_LOCK:
+        if key in snapshots:
+            snapshots.move_to_end(key)
+            return snapshots[key]
+    snapshot = _build_snapshot(context, source)
+    with _SNAPSHOTS_LOCK:
+        for stale in [k for k in snapshots if k[0] == key[0]]:
+            del snapshots[stale]
+        snapshots[key] = snapshot
+        while len(snapshots) > SNAPSHOTS_KEPT:
+            snapshots.popitem(last=False)
+    return snapshot
+
+
+def _snapshot_key(context: ServiceContext, source: dict[str, Any]) -> tuple:
+    """Which version of the source a snapshot (or a level built on one) is of."""
+
+    from pheasant.persistence import archive
+
+    name = str(source["name"])
+    state = context.state
+    held = state.rows(
+        "SELECT COUNT(*) AS n, MAX(last_indexed_at) AS latest FROM artifacts WHERE source_id=?",
+        (name,),
+    )[0]
+    event = state.list_sync_events(name, limit=1)
+    archived = archive.for_source(state, name)
+    raw = str(source.get("config_json") or "")
+    version = (
+        int(held["n"] or 0),
+        str(held["latest"] or ""),
+        str(event[0]["id"]) if event else "",
+        len(archived),
+        hashlib.sha256(raw.encode()).hexdigest() if raw else "",
+        bool(context.config.security.acl_enforced),
+    )
+    return (name, version)
+
+
+#: Taxonomy levels one process keeps: a level is a folder seen by one caller.
+LEVELS_KEPT = 256
+
+
+def cached_level(
+    context: ServiceContext,
+    source: dict[str, Any],
+    principal: str | None,
+    principal_groups: list[str] | None,
+    folder: str,
+    build: Callable[[], Any],
+) -> Any:
+    """``build()`` for one folder of one version of a source, as one caller sees it.
+
+    Grouping a level and rolling up its folders' health walks every file
+    beneath it -- 20,000 on a large collection's root, ~150 ms in Python --
+    and the answer moves only with the source's version, so a level comes back
+    from memory until the source changes. The caller is part of the key
+    because an ACL can show two callers two different folders.
+    """
+
+    key = (
+        _snapshot_key(context, source),
+        folder.strip("/").lower(),
+        principal,
+        tuple(sorted(principal_groups or [])),
+    )
+    _snapshots, levels = _caches(context.state)
+    with _SNAPSHOTS_LOCK:
+        if key in levels:
+            levels.move_to_end(key)
+            return levels[key]
+    value = build()
+    with _SNAPSHOTS_LOCK:
+        levels[key] = value
+        while len(levels) > LEVELS_KEPT:
+            levels.popitem(last=False)
+    return value
+
+
+def _build_snapshot(context: ServiceContext, source: dict[str, Any]) -> _Snapshot:
     name = str(source["name"])
     acl = ", a.acl" if context.config.security.acl_enforced else ""
-    within = ""
-    params: list[Any] = [name, MEMORY_ARTIFACT_TYPE]
-    prefix = folder.strip("/").lower()
-    if prefix:
-        within = " AND LOWER(a.relative_path) LIKE ? ESCAPE '\\'"
-        params.append(f"{_escape_like(prefix)}/%")
-    rows = context.state.rows(
-        "SELECT a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl + ", "
-        f"COUNT(c.id) AS chunks, {_TOKENS} AS tokens "
-        "FROM artifacts a LEFT JOIN chunks c ON c.artifact_id = a.id "
-        f"WHERE a.source_id = ? AND a.type <> ?{within} "
-        "GROUP BY a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl,
-        tuple(params),
-    )
+    rows = [
+        dict(row)
+        for row in context.state.rows(
+            "SELECT a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl + ", "
+            f"COUNT(c.id) AS chunks, {_TOKENS} AS tokens "
+            "FROM artifacts a LEFT JOIN chunks c ON c.artifact_id = a.id "
+            "WHERE a.source_id = ? AND a.type <> ? "
+            "GROUP BY a.id, a.source_id, a.path, a.relative_path, a.last_indexed_at" + acl,
+            (name, MEMORY_ARTIFACT_TYPE),
+        )
+    ]
+    rows.sort(key=lambda row: str(row["relative_path"]))
     failures = current_failures(context.state, source)
     failed = dict(failures.items) if failures else {}
-    if prefix:
-        failed = {p: item for p, item in failed.items() if p.lower().startswith(prefix + "/")}
-    # A failing file the index holds is judged by its own ACL below; only the
-    # ones it holds nothing for are listed as never read.
-    indexed = _paths(rows)
-    never_read = {path: item for path, item in failed.items() if path not in indexed}
-    admit = reader(context, principal, principal_groups)
-    if admit is not None:
-        rows = admit(rows)
     shells = script_shells(context.state, name)
-
-    files = []
+    by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         path = str(row["relative_path"])
         quality = file_quality(
@@ -217,14 +363,30 @@ def source_files(
             read_error=_error(failed.get(path)),
             script_shell=str(row["path"]) in shells,
         )
-        files.append(_file(row["id"], name, path, row["last_indexed_at"], quality))
-    # Listed and never read: the source's own URL or path and the error. The
-    # index holds nothing for them, so there is no ACL to judge them by, and
-    # the source's listing already shows its URLs to the same callers.
-    for path, (uri, error) in never_read.items():
-        quality = file_quality(held=False, read_error=error or "no error was recorded")
-        files.append({**_file(None, name, path, None, quality), "url": uri})
-    return files
+        by_id[str(row["id"])] = _file(row["id"], name, path, row["last_indexed_at"], quality)
+    # A failing file the index holds is judged by its own ACL; only the ones
+    # it holds nothing for are listed as never read.
+    indexed = _paths(rows)
+    never_read = [
+        {
+            **_file(
+                None,
+                name,
+                path,
+                None,
+                file_quality(held=False, read_error=error or "no error was recorded"),
+            ),
+            "url": uri,
+        }
+        for path, (uri, error) in failed.items()
+        if path not in indexed
+    ]
+    return _Snapshot(rows=rows, by_id=by_id, never_read=never_read)
+
+
+def _prefix(folder: str) -> str:
+    clean = folder.strip("/").lower()
+    return f"{clean}/" if clean else ""
 
 
 @dataclass(frozen=True)
@@ -345,10 +507,6 @@ def summarize(files: list[dict[str, Any]]) -> dict[str, Any]:
 
 #: The flags that mean a file did not read, which is what a folder's percent counts.
 _READ_FAILURES = frozenset({"unreadable", "stale"})
-
-
-def _escape_like(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _paths(rows: list[Any]) -> set[str]:

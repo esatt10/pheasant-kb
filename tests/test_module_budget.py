@@ -103,7 +103,9 @@ CEILINGS: dict[str, int] = {
     # lives in `persistence/auth_tokens.py`.
     # Raised to 1153 for `idx_sync_events_source`, the per-source lookup
     # `describe_source` and `wait_for_sync` make; DDL belongs here.
-    "persistence/schema.py": 1153,
+    # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
+    # source, and the taxonomy reads a source's version on every level.
+    "persistence/schema.py": 1154,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
