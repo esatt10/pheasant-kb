@@ -485,9 +485,7 @@ class PostgresBackend(StateBackend):
             if not is_disconnect(exc):
                 raise
             logger.warning("PostgreSQL connection dropped during a read; retrying once: %s", exc)
-            # One dropped connection is rarely alone: a database restart drops
-            # every idle one in the pool, and the retry would be handed the
-            # next. `check()` tests the idle ones and replaces the dead.
+            # A restart drops every idle connection; replace them before retrying.
             try:
                 self._pool.check()
             except Exception:  # pragma: no cover - the retry reports what is wrong
@@ -594,14 +592,8 @@ class PostgresBackend(StateBackend):
     def _discard(self, conn: Any) -> None:
         """Close this thread's connection and hand it back; the pool replaces it.
 
-        psycopg_pool's ``putconn`` takes no ``close`` flag, and both places
-        that discard a connection after a failed ``RESET statement_timeout``
-        passed one: a deadline-bound read on a connection Postgres had dropped
-        (a restart, a scale-to-zero wake) raised ``TypeError`` instead of the
-        disconnect ``rows`` retries on. Rare while only answers carried a
-        deadline; every graph-service read carries one now, and the first
-        reads after a database restart all took this path. A closed
-        connection returned to the pool is discarded and replaced by it.
+        ``putconn`` takes no ``close`` flag: passing one turned a dropped
+        connection under a deadline into ``TypeError`` rather than a retry.
         """
 
         try:

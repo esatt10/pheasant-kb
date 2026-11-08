@@ -65,9 +65,7 @@ export function RegionBanner() {
         ? `${wakeDuration(wake.elapsed_seconds)} so far; a wake usually takes about ${wakeDuration(
             wake.typical_seconds,
           )}. Requests that need it may fail until then.`
-        : wake.status === "warming"
-          ? "Everything answers; the first answers may be slower."
-          : "";
+        : "";
     return (
       <div className={`region-banner region-banner--${tone}`} role="status">
         <span className={`region-banner__dot${wake.status === "unavailable" ? "" : " region-banner__dot--live"}`} />

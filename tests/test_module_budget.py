@@ -111,6 +111,10 @@ CEILINGS: dict[str, int] = {
     # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
     # source, and the taxonomy reads a source's version on every level.
     "persistence/schema.py": 1154,
+    # The SQLite and Postgres backends are one unit: the shared interface and
+    # its two implementations. Crossed 800 with the Postgres read path's
+    # dropped-connection discard and pool check before a retry.
+    "persistence/backends.py": 815,
     # Lowered from 1800 when the derived-index migrations moved to
     # `persistence/derived_indexes.py`.
     "persistence/state_store.py": 1780,
