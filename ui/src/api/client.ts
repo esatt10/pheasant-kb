@@ -335,12 +335,15 @@ export const api = {
   regionStatus: async (): Promise<RegionStatus | null> => {
     const response = await fetch(`${API_BASE}/region/status`, { headers: requestHeaders() });
     if (response.status === 404) return null; // a server that predates it
-    try {
-      const body = await response.json();
-      return (body.region ?? body) as RegionStatus;
-    } catch {
-      return null;
+    // Anything else that is not a status -- the platform's own 503 in the
+    // seconds between the wake gate exiting and the server listening -- is an
+    // error, so the banner keeps the last status it had rather than vanishing
+    // mid-wake and coming back.
+    const body = await response.json();
+    if (!body || typeof body !== "object" || !("status" in (body.region ?? body))) {
+      throw new Error(`no region status (HTTP ${response.status})`);
     }
+    return (body.region ?? body) as RegionStatus;
   },
   /** Index-queue tasks: what a `queued` sync is doing before an indexer claims it. */
   indexQueue: () => request<IndexQueueStatus>("/queue"),
