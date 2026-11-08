@@ -21,6 +21,7 @@ import { colorForNode } from "../graph/graphStyles";
  */
 export function SourceRail({
   sources,
+  waiting = false,
   selected,
   selectedType,
   onSelect,
@@ -31,6 +32,8 @@ export function SourceRail({
   onToggle,
 }: {
   sources: SourceRecord[];
+  /** The sources have not loaded yet (the region may be waking): not "0 indexed". */
+  waiting?: boolean;
   selected: string | null;
   selectedType: string | null;
   onSelect: (name: string | null) => void;
@@ -115,7 +118,11 @@ export function SourceRail({
               <span className="source-item__name">All sources</span>
             </div>
             <span className="source-item__meta">
-              {selectedType ? `${visible.length} ${selectedType}` : `${sources.length} indexed`}
+              {waiting
+                ? "waiting for the knowledge base…"
+                : selectedType
+                  ? `${visible.length} ${selectedType}`
+                  : `${sources.length} indexed`}
             </span>
           </button>
 

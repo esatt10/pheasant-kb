@@ -32,6 +32,8 @@ interface ChatPanelProps {
   status?: AssistantStatus;
   sessionId: string | null;
   hasContent: boolean;
+  /** False until the knowledge base has answered once (it may be waking). */
+  contentKnown?: boolean;
   onCitationClick: (nodeId: string | undefined) => void;
   onConnectModel: () => void;
 }
@@ -78,6 +80,7 @@ export function ChatPanel({
   status,
   sessionId,
   hasContent,
+  contentKnown = true,
   onCitationClick,
   onConnectModel,
 }: ChatPanelProps) {
@@ -263,9 +266,11 @@ export function ChatPanel({
           <div className="chat-empty">
             <h2>Ask your knowledge base</h2>
             <p>
-              {hasContent
-                ? "Answers are grounded in your indexed sources and cite the passages they came from."
-                : "Nothing is indexed yet. Add a source and it becomes answerable here."}
+              {!contentKnown
+                ? "Waiting for the knowledge base to answer. If it was idle it is waking up; the banner above says what is still starting."
+                : hasContent
+                  ? "Answers are grounded in your indexed sources and cite the passages they came from."
+                  : "Nothing is indexed yet. Add a source and it becomes answerable here."}
             </p>
             {hasContent ? (
               <div className="suggestions">

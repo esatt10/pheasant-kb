@@ -184,6 +184,11 @@ export function Notebook() {
   );
 
   const hasContent = overview.data?.has_content ?? false;
+  // Not loaded is not empty. While the region wakes the overview fails or is
+  // still on its way, and drawing that as "0 indexed" / "Nothing is indexed
+  // yet" told a person their knowledge base was gone. The data survives a
+  // failed refetch, so this is only true before the first answer.
+  const contentKnown = overview.data !== undefined;
   const browserOpen = state.browser.open;
 
   const hosts = useTileHosts();
@@ -370,6 +375,8 @@ export function Notebook() {
                 <div className="centered muted">
                   <span className="spinner" />
                 </div>
+              ) : !contentKnown ? (
+                <div className="centered muted small">Waiting for the knowledge base to answer…</div>
               ) : graph.nodes.length === 0 ? (
                 <div className="centered muted small">
                   Nothing within {state.depth} layers of here. Widen the depth, or show all.
@@ -559,6 +566,7 @@ export function Notebook() {
             <TileScope spec={specs.sources}>
               <aside className="pane pane--rail">
                 <SourceRail
+                  waiting={!contentKnown}
                   sources={overview.data?.sources ?? []}
                   selected={state.sourceFilter}
                   selectedType={state.sourceTypeFilter}
@@ -648,6 +656,7 @@ export function Notebook() {
                 status={status.data}
                 sessionId={sessionId}
                 hasContent={hasContent}
+                contentKnown={contentKnown}
                 onCitationClick={focusNode}
                 onConnectModel={() => setShowModelDialog(true)}
               />
