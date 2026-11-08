@@ -1819,3 +1819,99 @@ export interface DocumentContent {
    */
   page?: { url: string; available: boolean } | null;
 }
+
+// -- Syncs: every source's pipeline (`services/sync_pipelines.py`) ---------------
+
+export type PipelineState = "scheduled" | "paused" | "manual" | "deleted";
+
+export interface PipelineRun {
+  id: string;
+  status: string;
+  mode?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_seconds?: number | null;
+  fetched?: number | null;
+  indexed?: number | null;
+  unchanged?: number | null;
+  removed?: number | null;
+  unreadable: number;
+  error?: string | null;
+  /** The run's OpenTelemetry trace: its spans are in the region's logs under this id. */
+  trace_id?: string | null;
+}
+
+export interface PipelineSettings {
+  schedule: "auto" | "manual";
+  paused: boolean;
+  pipeline: boolean;
+  interval_seconds: number | null;
+  max_refresh_seconds: number | null;
+  max_items_per_run: number | null;
+  min_request_interval_seconds: number | null;
+  respect_robots: boolean;
+  on_startup: boolean;
+  on_file_change: string | boolean;
+  on_git_commit: boolean;
+}
+
+export interface PipelineRow {
+  name: string;
+  type: string;
+  description?: string | null;
+  state: PipelineState;
+  documents?: number | null;
+  schedule: { mode: string; label: string; min_interval_seconds?: number; max_interval_seconds?: number };
+  settings: Partial<PipelineSettings>;
+  last_run: PipelineRun | null;
+  running: { since?: string | null; heartbeat_at?: string | null; phase?: string | null; progress?: { current?: number; total?: number } | null } | null;
+  queued: { task_id: string; state: string; waiting_seconds?: number | null }[];
+  next_run: { label: string; at: string | null } | null;
+  due_next_hour: number | null;
+  health: { percent: number | null; status: string; readable: number; unreadable: number } | null;
+  quality: { ok: number; warning: number; error: number; by_code: Record<string, number> } | null;
+  pacing: { label: string; source?: string; delay_seconds?: number; hosts?: Record<string, number>; budget_deferred?: number | null };
+}
+
+export interface PipelineList {
+  knowledge_base: string;
+  pipelines: PipelineRow[];
+  totals: Record<string, number>;
+  beat_seconds: number;
+}
+
+export interface PipelineDetail extends PipelineRow {
+  stages: { phase: string; seconds: number }[];
+  runs: PipelineRun[];
+  failures: { cause: string; documents: number; examples: string[] }[];
+  next_due: { url: string; at: string | null }[];
+}
+
+export interface LedgerDocument {
+  id: string | null;
+  path: string;
+  url: string | null;
+  status: "ok" | "warning" | "error";
+  flags: { code: string; severity: string; reason: string }[];
+  last_read_at: string | null;
+  last_changed_at: string | null;
+  next_check_at: string | null;
+  next_check: string | null;
+  interval_seconds: number | null;
+  server_said: string | null;
+  validator: string | null;
+}
+
+export interface LedgerPage {
+  source_name: string;
+  state: string;
+  documents: LedgerDocument[];
+  totals: Record<string, number>;
+  pagination: { limit: number; offset: number; returned: number; next_offset: number | null };
+}
+
+export interface LedgerDetail {
+  source_name: string;
+  document: LedgerDocument;
+  failed_runs: { at: string | null; error: string | null }[];
+}

@@ -25,6 +25,7 @@ from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.api.sync_control_routes import register_sync_control_routes
+from pheasant.api.sync_pipeline_routes import register_sync_pipeline_routes
 from pheasant.api.sync_wait_routes import register_sync_wait_routes
 from pheasant.assistant.credentials import SessionKeyStore
 from pheasant.config.loader import (
@@ -1135,9 +1136,9 @@ def create_app(
             except Exception:  # noqa: BLE001 - recovery must never block a boot
                 logger.debug("Evaluation reclamation failed at startup", exc_info=True)
 
-        startup_sources = [
-            source.name for source in engine.enabled_sources() if source.sync.on_startup
-        ]
+        from pheasant.sync import pipeline
+
+        startup_sources = pipeline.startup_sources(engine.enabled_sources())
         # A Postgres indexer runs this from its elected leader's promotion
         # callback. Doing it here would let every hot standby index before it
         # has won the orchestration lease.
@@ -2026,6 +2027,7 @@ def create_app(
     register_archive_routes(app, services=services)
     register_source_url_routes(app, services=services)
     register_sync_wait_routes(app, services=services)
+    register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
 
     @app.get("/contract")
@@ -5372,7 +5374,9 @@ def _mcp_asgi_app(config: PheasantConfig):
 #: below never reaches them: a browser refreshing the Sources tab was answered
 #: by the API and shown JSON. `tests/test_api_ui_routes.py` reads App.tsx and
 #: fails when this set and the router disagree.
-UI_ROUTES = frozenset({"/graph", "/memory", "/evaluation", "/tuning", "/sources", "/config"})
+UI_ROUTES = frozenset(
+    {"/graph", "/memory", "/evaluation", "/tuning", "/sources", "/syncs", "/config"}
+)
 
 
 def is_document_navigation(request: Request) -> bool:

@@ -33,6 +33,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from pheasant.telemetry.sync_trace import CHILD_ENV, SyncTrace
+from pheasant.telemetry.sync_trace import emit as emit_spans
+
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +123,7 @@ def run_sync(
     command += ["--wait-for-lease", str(DEFAULT_LEASE_WAIT_S)]
 
     logger.info("Starting sync worker: %s", " ".join(command[3:]))
+    failed_run = SyncTrace(source_name or "all", mode)
     try:
         returncode, stdout, stderr = _run_streaming(command, timeout, on_progress)
     except SyncWorkerStalled as exc:
@@ -149,6 +153,8 @@ def run_sync(
             # 404 warnings.
             error = "\n".join([killed_by(-returncode), *(["last output:", *tail] if tail else [])])
         logger.error("Sync worker failed (exit %s): %s", returncode, " / ".join(error.splitlines()))
+        # A child that died wrote no trace of its own: this one says it ended.
+        emit_spans(failed_run.finish("failed", {"exit_code": returncode}, error=error[:500]))
         return {
             "status": "failed",
             "source_id": source_name,
@@ -213,9 +219,12 @@ def _run_streaming(
     stderr stays fully buffered, because it is only read on failure and
     draining two pipes by hand is how you deadlock on a full one.
     """
+    # The child's stdout is its report, so it hands its trace back in it
+    # rather than writing spans to a log nobody reads (`telemetry.sync_trace`).
+    env = {**os.environ, CHILD_ENV: "1"}
     if on_progress is None:
         completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout, check=False
+            command, capture_output=True, text=True, timeout=timeout, check=False, env=env
         )
         return completed.returncode, completed.stdout, completed.stderr
 
@@ -225,6 +234,7 @@ def _run_streaming(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env=env,
     ) as process:
         assert process.stdout is not None
         assert process.stderr is not None
@@ -502,8 +512,10 @@ class WorkerBackedEngine:
         # search when it ran here). The worker builds it — see the CLI sync
         # path — and until it exists, graph search falls back to scanning.
         engine.reconcile_embeddings()
+        from pheasant.sync.pipeline import startup_sources
+
         enabled = engine.enabled_sources()
-        names = [source.name for source in enabled if source.sync.on_startup]
+        names = startup_sources(enabled)
         # The normal deployment starts every enabled source. Delegate that as
         # one sync-all child so the engine can apply its bounded source-level
         # parallelism and rebuild the shared graph index once at the end.
@@ -519,6 +531,9 @@ class WorkerBackedEngine:
 
         from pheasant.sync.engine import SyncResult
 
+        for item in report.get("results") or []:
+            # The child's sync trace, written where this process's logs go.
+            emit_spans((item.get("details") or {}).pop("otel_spans", None) or [])
         results = [
             SyncResult(
                 source_id=str(item.get("source_id") or ""),

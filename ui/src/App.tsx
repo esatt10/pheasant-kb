@@ -8,6 +8,7 @@ import { MemoryPage } from "./pages/MemoryPage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { TuningPage } from "./pages/TuningPage";
 import { SourcesPage } from "./pages/SourcesPage";
+import { SyncsPage } from "./pages/SyncsPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { SessionProvider } from "./state/session";
 
@@ -34,6 +35,7 @@ export function App() {
             <Route path="/evaluation" element={<EvaluationPage />} />
             <Route path="/tuning" element={<TuningPage />} />
             <Route path="/sources" element={<SourcesPage />} />
+            <Route path="/syncs" element={<SyncsPage />} />
             <Route path="/config" element={<ConfigPage />} />
           </Routes>
         </main>

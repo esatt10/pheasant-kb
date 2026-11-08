@@ -2194,6 +2194,14 @@ server restart.
 | `on_file_change` | bool/string | `debounce` | File-change trigger behavior. |
 | `on_git_commit` | bool | `true` | React to git commits for this source. |
 | `interval_seconds` | int/null | `null` | `web_collection`: the shortest time between checks of one page (`null` = 3600). Each page is re-checked on its own schedule, which doubles while the page is unchanged (up to `connector.max_refresh_seconds`) and resets when it changes; `0` checks every page on every scheduler beat. Other source types do not read it. |
+| `schedule` | string | `auto` | The source's sync pipeline. `auto`: the scheduler beat, startup and the triggers above. `manual`: only when somebody asks (deleting a schedule on the Syncs page sets this). |
+| `paused` | bool | `false` | Hold an `auto` schedule without forgetting it: nothing syncs the source by itself until it is resumed. Asking still syncs it. |
+| `pipeline` | bool | `true` | `false` is a deleted pipeline: nothing syncs the source, not even when asked (`409 PIPELINE_DELETED`), and its indexed documents stay searchable until the source is removed. |
+| `max_items_per_run` | int/null | `null` | `web_collection`: pages fetched per run at most; the rest are due on the next run, most-waited first. `null`: unbounded, except for a site with a crawl delay, which gets what fits in ~55 minutes of its delay. |
+| `min_request_interval_seconds` | float/null | `null` | `web_collection`: seconds between requests to one site, across every fetching thread. `null` reads the site's robots.txt `Crawl-delay` (re-read daily). |
+| `respect_robots` | bool | `true` | `web_collection`: read robots.txt for a crawl delay. Disallow rules are not applied: every listed URL was listed on purpose. |
+
+All six are also set from the **Syncs** page, `PATCH /sync/pipelines/{name}` and MCP `configure_sync_pipeline`; adding a source never needs them.
 
 ### `sources[].taxonomy`
 

@@ -15,6 +15,7 @@ from pheasant.mcp_server.inventory_tools import register_inventory_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.source_url_tools import register_source_url_tools
 from pheasant.mcp_server.sync_control_tools import register_sync_control_tools
+from pheasant.mcp_server.sync_pipeline_tools import register_sync_pipeline_tools
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.version import __version__
 
@@ -961,6 +962,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     register_archive_tools(mcp, tools, anticipated)
     register_source_url_tools(mcp, tools, anticipated)
     register_sync_control_tools(mcp, tools, anticipated)
+    register_sync_pipeline_tools(mcp, tools, anticipated)
 
     return mcp
 

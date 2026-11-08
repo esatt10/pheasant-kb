@@ -519,6 +519,34 @@ connector through `complete_listing`), and re-indexing an edited file retracts
 the imports, calls and symbols its new text dropped (`graph/retraction.py`).
 After either, incremental equals a full sync of what is there now.
 
+**Every source has a sync pipeline, and the Syncs page is where it is
+adjusted** (`sync/pipeline.py`, `services/sync_pipelines.py`; `/sync/pipelines*`,
+MCP `list_sync_pipelines` / `describe_sync_pipeline` / `configure_sync_pipeline`
+/ `delete_sync_pipeline` / `list_pipeline_documents`; `ui/src/pages/SyncsPage.tsx`).
+Adding a source stays one field: the pipeline is derived from it, and its
+settings are `sources[].sync` (`schedule` auto|manual, `paused`, `pipeline`,
+and for web collections `max_items_per_run`, `min_request_interval_seconds`,
+`respect_robots`). `runs_automatically` is the one test every automatic
+trigger asks (beat, startup via `startup_sources`, watcher, git), so a paused
+or manual pipeline cannot be started by a path that forgot; a deleted one is
+also refused when asked (`PIPELINE_DELETED`, 409). The document ledger is
+per document: last read, last changed, next check, the server's answer, and
+`file_quality`. **A web collection is paced per host** (`sync/web_pacing.py`):
+robots.txt `Crawl-delay`, cached a day in the cursor, is one slot schedule
+shared across the prepare threads, and a paced host gets a per-run budget
+(~55 minutes of its delay, or `max_items_per_run`) planned at listing time
+over the due pages sorted most-waited first -- so a first sync of a large
+paced site is a series of short runs, never a 13-hour one holding the
+indexer. **Each sync is an OpenTelemetry-shaped trace** (`telemetry/sync_trace.py`):
+a `pheasant.sync` span and one `pheasant.sync.<phase>` child per progress
+phase, written as one `{"type":"otel.span",...}` JSON line to stdout (which
+is what Container Apps ships to Log Analytics) and exported over OTLP when an
+SDK provider is configured. It joins the caller's ambient trace; a sync child
+process returns its spans in `details.otel_spans` and the parent emits them,
+and a child that dies gets an error span from the parent. The `trace_id` is
+on the sync event, so the Syncs page's runs name the trace to search for.
+`tests/test_sync_pipelines.py`.
+
 **A running sync can be stopped from any process** (`sync/cancellation.py`,
 `services/sync_control.py`, table `sync_runs`; MCP `cancel_sync`, `POST
 /sources/{name}/cancel`). The run holds a heartbeated row per source, a cancel

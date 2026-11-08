@@ -42,6 +42,7 @@ from pheasant.sync.connectors import (
     require_fetchable_url,
 )
 from pheasant.sync.web_adapters import SiteAdapter, adapter_for
+from pheasant.sync.web_pacing import HostPacer
 
 
 def registration_connector(source_type: str, connector: dict[str, Any] | None) -> dict[str, Any]:
@@ -92,6 +93,9 @@ class WebCollectionConnector(SourceConnector):
         self.script_shells: list[str] = []
         #: What site adapters fetched once and share across pages, this sync.
         self._adapter_cache: dict[str, Any] = {}
+        #: Each host's pace and this run's budget (`web_pacing`).
+        self._pacer = HostPacer(source, self._robots_text)
+        self._over_budget: set[str] = set()
 
     def begin_sync(self, mode: str = "incremental") -> None:
         super().begin_sync(mode)
@@ -100,6 +104,16 @@ class WebCollectionConnector(SourceConnector):
         self.deferred = 0
         self.script_shells = []
         self._adapter_cache = {}
+        known = (self._previous_cursor or {}).get("robots") if mode == "incremental" else None
+        self._pacer = HostPacer(self.source, self._robots_text, known=known)
+
+    def _robots_text(self, url: str) -> str | None:
+        response = _urlopen(
+            url,
+            headers=self.source.connector.headers,
+            timeout=self.source.connector.request_timeout_seconds,
+        )
+        return bytes(response.get("content") or b"").decode("utf-8", "replace")
 
     def _adapter(self, url: str) -> SiteAdapter | None:
         return adapter_for(url) if self.source.connector.site_adapters else None
@@ -159,7 +173,18 @@ class WebCollectionConnector(SourceConnector):
                     metadata={"url": url, **({"adapter": adapter.name} if adapter else {})},
                 )
             )
-        return _distinct_paths(items)
+        # Most in need first: a page never read, then the one checked longest
+        # ago. A run with a budget (`web_pacing`) then always moves the
+        # collection forward rather than re-reading its first pages forever.
+        # Paths were named before this, so the order renames nothing.
+        ordered = sorted(_distinct_paths(items), key=self._last_checked)
+        due = [item.uri for item in ordered if self._due(self._cached_validators(item.uri))]
+        self._over_budget = self._pacer.plan(due)
+        return ordered
+
+    def _last_checked(self, item: ConnectorItem) -> float:
+        checked = self._cached_validators(item.uri).get("checked_at")
+        return float(checked) if isinstance(checked, int | float) else -1.0
 
     def _allows_url(self, relative: str) -> bool:
         """Depth and excludes always apply; ``include`` only when it was chosen.
@@ -229,6 +254,13 @@ class WebCollectionConnector(SourceConnector):
             self._seen_validators[item.uri] = cached
             self.deferred += 1
             raise ItemNotModified(f"not due for revalidation: {item.uri}")
+        if item.uri in self._over_budget:
+            # Past this run's budget for a paced site: left as it is and due
+            # on the next run, exactly like a page that is not due yet.
+            self._seen_validators[item.uri] = cached
+            self.deferred += 1
+            raise ItemNotModified(f"deferred to the next run (crawl budget): {item.uri}")
+        self._pacer.admit(item.uri)
         self.revalidated += 1
         adapter = self._adapter(item.uri)
         if adapter is not None:
@@ -246,6 +278,7 @@ class WebCollectionConnector(SourceConnector):
             self._seen_validators[item.uri] = {
                 **cached,
                 **self._schedule(cached, changed=False, max_age=None),
+                "status": 304,
             }
             raise ItemNotModified(f"not modified (HTTP 304): {item.uri}")
         content = response["content"]
@@ -270,6 +303,10 @@ class WebCollectionConnector(SourceConnector):
             **self._schedule(
                 cached, changed=changed, max_age=_max_age(response.get("headers") or {})
             ),
+            # For the Syncs page's document ledger: what the server said last,
+            # and when the content last changed.
+            "status": 200,
+            "changed_at": _wall_clock() if changed else cached.get("changed_at"),
         }
         return ConnectorPayload(
             item=item,
@@ -310,6 +347,7 @@ class WebCollectionConnector(SourceConnector):
                 "item_count": len(items),
                 "last_url": urls[-1] if urls else None,
                 "validators": validators,
+                "robots": self._pacer.robots_state(),
             },
             {
                 "item_count": len(items),
@@ -321,6 +359,8 @@ class WebCollectionConnector(SourceConnector):
                 "deferred": self.deferred,
                 # Pages whose server sent only a JavaScript shell.
                 "script_shells": list(self.script_shells),
+                # Each site's pace and what this run asked of it (`web_pacing`).
+                **self._pacer.report(),
             },
         )
 

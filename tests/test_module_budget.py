@@ -72,7 +72,10 @@ CEILINGS: dict[str, int] = {
     # over the table it names; the table itself is `config/flagship.py`.
     # Raised by 3 for `assistant.voice`: its import, the nested field and its
     # comment line; the section itself is `config/assistant_voice.py`.
-    "config/schema.py": 2294,
+    # Raised by 14 for the sync pipeline's six `sources[].sync` fields
+    # (schedule, paused, pipeline, the pacing three) and their docstring: they
+    # are per-source settings, so they live on `SourceSyncSettings`.
+    "config/schema.py": 2308,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

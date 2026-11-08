@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pheasant.mcp_server.sync_pipeline_tools import SyncPipelineTools
 
-class SyncControlTools:
+
+class SyncControlTools(SyncPipelineTools):
     """``services.sync_control`` and ``services.sync_wait`` adapters. Parse, call, return."""
 
     services: Any
