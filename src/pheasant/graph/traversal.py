@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 
 from pheasant.graph.simple import SimpleMultiDiGraph
@@ -28,6 +30,39 @@ HIERARCHY_EDGE_TYPES = ("contains",)
 #: Hard ceiling on traversal depth, whatever a caller asks for. Ten hops off a
 #: hub node is already most of the graph.
 MAX_DEPTH = 10
+
+#: Walks :func:`neighbors_many` runs at once. Each is a handful of reads that
+#: mostly wait on the store, so they overlap well; four is the answerer's
+#: batch (it expands its top four hits) and a small share of a Postgres pool.
+NEIGHBORS_MANY_PARALLELISM = 4
+
+
+def neighbors_many(
+    graph: Any, node_ids: Sequence[str], depth: int = 1, max_nodes: int | None = None
+) -> list[dict[str, Any]]:
+    """:func:`neighbors` for several roots, walked side by side, in input order.
+
+    One after another, a batch cost the sum of its walks, and on the Azure
+    fleet a walk that reads cold pages off the database's network share is
+    seconds, so four of them overran the answerer's 10 s expansion budget
+    together when each fit alone. Each walk runs in a copy of the caller's
+    context, which carries the request deadline the store turns into a
+    statement timeout.
+    """
+
+    roots = [str(node_id) for node_id in node_ids]
+    if len(roots) <= 1:
+        return [neighbors(graph, root, depth, max_nodes=max_nodes) for root in roots]
+    contexts = [copy_context() for _ in roots]
+    with ThreadPoolExecutor(
+        max_workers=min(len(roots), NEIGHBORS_MANY_PARALLELISM),
+        thread_name_prefix="pheasant-graph-walk",
+    ) as pool:
+        futures = [
+            pool.submit(context.run, neighbors, graph, root, depth, None, max_nodes)
+            for context, root in zip(contexts, roots, strict=True)
+        ]
+        return [future.result() for future in futures]
 
 
 def _hierarchy_first(out_edges: list) -> list:
