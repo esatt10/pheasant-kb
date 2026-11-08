@@ -37,13 +37,18 @@ export function useReady() {
  * What is still waking after the region scaled up from idle. Polled every
  * 3 s while anything is, and every 30 s once everything is ready, so the
  * banner leaves as soon as the last part answers and costs nothing after.
+ *
+ * ``urgent`` (the replica's `/ready` says it is not ready) holds it at 3 s
+ * too: a fetch that fails mid-restart keeps the last status, "ready", and
+ * waiting 30 s for the next one left a wake showing as "Region not ready"
+ * for half a minute (watched on Azure).
  */
-export function useRegionStatus() {
+export function useRegionStatus(urgent = false) {
   return useQuery({
     queryKey: ["region-status"],
     queryFn: api.regionStatus,
     retry: false,
-    refetchInterval: (query) => (regionSettled(query.state.data) ? 30000 : 3000),
+    refetchInterval: (query) => (!urgent && regionSettled(query.state.data) ? 30000 : 3000),
     refetchIntervalInBackground: false,
   });
 }

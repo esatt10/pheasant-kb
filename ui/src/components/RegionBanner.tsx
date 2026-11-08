@@ -32,12 +32,13 @@ function wakeDuration(seconds: number): string {
 export function RegionBanner() {
   const ready = useReady();
   const queue = useIndexQueue();
-  const region = useRegionStatus();
   // `/ready` notices a wake first (it is polled every 15 s, the status every
   // 30 s while all is well), so ask what is waking the moment it goes not
-  // ready -- otherwise a wake showed as "Region not ready" for up to half a
-  // minute before the banner could say what was starting.
+  // ready, and keep asking every 3 s while it stays so -- otherwise a wake
+  // showed as "Region not ready" for up to half a minute before the banner
+  // could say what was starting.
   const notReady = ready.data?.status === "not_ready";
+  const region = useRegionStatus(notReady);
   const refetchRegion = region.refetch;
   useEffect(() => {
     if (notReady) void refetchRegion();
