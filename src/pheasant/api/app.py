@@ -4311,8 +4311,14 @@ def create_app(
                 raise HTTPException(
                     status_code=400, detail="neighbors_many requires at most 16 nodes"
                 )
+            max_nodes = parameters.get("max_nodes")
             result = [
-                graph_neighbors(graph_obj, str(node_id), int(parameters.get("depth") or 1))
+                graph_neighbors(
+                    graph_obj,
+                    str(node_id),
+                    int(parameters.get("depth") or 1),
+                    max_nodes=int(max_nodes) if max_nodes else None,
+                )
                 for node_id in node_ids
             ]
         elif operation == "edges_batch":

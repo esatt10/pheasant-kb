@@ -152,7 +152,9 @@ pheasant-kb/
 │   │                            schema, lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
 │   │                            (file|rows), graph_rows
-│   │                            (the delta write), graph_codec (rows to
+│   │                            (the delta write), graph_frontier (a
+│   │                            walk's out-edges, bounded ones read in
+│   │                            key order), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
 │   │                            receipts (what happened to what a caller
 │   │                            submitted), manifest, migrate, paths
@@ -2270,6 +2272,22 @@ Each of these cost real time. They are listed because the shape recurs.
   arrive are rows nobody builds a `Row` dict for, decodes into `_LazyAttrs`,
   or groups into pairs, and that is where the time was. Timing the SQL alone
   said do not do it.
+- **A window function reads everything it numbers, so a limit applied after
+  one bounds the rows sent, not the rows read.** The ranked frontier kept a
+  hub's first 213 pairs by numbering all of them, which was fine for a
+  1,620-edge `source` node and not for an entity every page of a 25k-page web
+  source mentions: 24,970 edges read with their attributes per entity, eleven
+  entities per page, per hop. On the Azure fleet the answerer's unbounded
+  two-hop expansion through those held the graph service on Postgres (NFS,
+  so CPU sat idle) until its liveness probe killed it, and every compose
+  answer fell over. Three changes: the expansion walk is bounded
+  (`EXPAND_MAX_NODES`), best-effort with one 10 s wait (like facts), and a
+  bounded frontier with no `targets` is read in key order
+  (`persistence/graph_frontier.bounded_rows`): two `DISTINCT target …
+  ORDER BY target LIMIT n` scans of the primary key per source (priority
+  targets, then any), merged by `MIN(rank)`, one `LATERAL` statement on
+  Postgres. Same pairs, proven per limit in `tests/test_graph_backends.py`;
+  **91 ms against 1,166 ms** for 11 such hubs on a local Postgres.
 - **A lazy mapping is a cost to a reader that wants all of it.**
   `_LazyAttrs` exists because a traversal hop reads `type` and nothing else,
   and it is exactly wrong for the search arm, which reads every attribute of

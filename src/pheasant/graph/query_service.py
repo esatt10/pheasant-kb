@@ -370,19 +370,43 @@ class RemoteGraph:
     def remote_neighbors(self, **parameters: Any) -> dict[str, Any]:
         return dict(self.client.query("neighbors", **parameters))
 
-    def remote_neighbors_many(self, node_ids: list[str], depth: int = 1) -> list[dict[str, Any]]:
-        """Expand several answer hits through one graph-service request."""
+    def remote_neighbors_many(
+        self,
+        node_ids: list[str],
+        depth: int = 1,
+        max_nodes: int | None = None,
+        timeout_seconds: float | None = None,
+        retries: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Expand several answer hits through one graph-service request.
+
+        ``max_nodes`` bounds each walk (`traversal.neighbors`). A graph
+        service older than the parameter ignores it and walks unbounded, as
+        it did before. ``timeout_seconds``/``retries`` override the client's
+        for a caller to whom the answer is optional, as for facts.
+        """
         answers: list[dict[str, Any]] = []
+        bound = {"max_nodes": max_nodes} if max_nodes else {}
         for offset in range(0, len(node_ids), 16):
             batch = node_ids[offset : offset + 16]
             try:
-                result = self.client.query("neighbors_many", node_ids=batch, depth=depth)
+                result = self.client.query(
+                    "neighbors_many",
+                    timeout_seconds=timeout_seconds,
+                    retries=retries,
+                    node_ids=batch,
+                    depth=depth,
+                    **bound,
+                )
             except GraphQueryError as exc:
                 # During a rolling deployment an older graph service can still
                 # answer the existing single-node operation.
                 if "unknown graph operation: neighbors_many" not in str(exc):
                     raise
-                result = [self.remote_neighbors(node_id=node_id, depth=depth) for node_id in batch]
+                result = [
+                    self.remote_neighbors(node_id=node_id, depth=depth, max_nodes=max_nodes)
+                    for node_id in batch
+                ]
             if not isinstance(result, list) or len(result) != len(batch):
                 raise GraphQueryError("graph service returned an invalid neighbors_many response")
             for node_id, item in zip(batch, result, strict=True):
