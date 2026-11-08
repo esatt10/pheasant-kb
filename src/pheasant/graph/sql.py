@@ -218,6 +218,7 @@ class SqlGraph:
         targets: list[str] | None = None,
         priority_types: Sequence[str] = (),
         limit_per_source: int | None = None,
+        keys_only: bool = False,
     ) -> dict[str, list[tuple[str, str, dict[int, dict]]]]:
         """One query for a whole BFS frontier, grouped the way callers expect.
 
@@ -229,13 +230,17 @@ class SqlGraph:
         slice asks for and what keeps a hub node's fan-out off the wire.
         ``priority_types`` and ``limit_per_source`` do the same for a bounded
         *walk*: the pairs come back priority-first, so a prefix of them is the
-        prefix the caller would have taken anyway.
+        prefix the caller would have taken anyway. ``keys_only`` asks for the
+        edges' keys and types alone, which is all a walk reads of them.
         """
 
         # Already grouped by pair in the store, which is the shape callers
         # want: regrouping here meant a second pass and a second set of
         # objects over every row a hub node returns.
-        return self.rows.out_edges(self.kb_id, node_ids, targets, priority_types, limit_per_source)
+        extra = {"keys_only": True} if keys_only else {}
+        return self.rows.out_edges(
+            self.kb_id, node_ids, targets, priority_types, limit_per_source, **extra
+        )
 
     def in_edges_batch(self, node_ids: list[str]) -> dict[str, list[tuple[str, str, dict]]]:
         """``{target: [(source, target, {seq: attrs})]}``: what points at each node.

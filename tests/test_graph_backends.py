@@ -1372,6 +1372,15 @@ def test_the_index_ordered_frontier_keeps_the_pairs_the_ranking_keeps(
                 bounded = shaped(store.out_edges(KB, hubs, None, priority, limit))
                 expected = {source: entries[:limit] for source, entries in ordered.items()}
                 assert bounded == expected, f"limit {limit}, priority {priority or 'none'}"
+                # What a walk asks for: the same pairs and edge types, no attributes.
+                keys = shaped(store.out_edges(KB, hubs, None, priority, limit, keys_only=True))
+                assert {
+                    source: [(s, t, [a["type"] for a in attrs]) for s, t, attrs in entries]
+                    for source, entries in keys.items()
+                } == {
+                    source: [(s, t, [a["type"] for a in attrs]) for s, t, attrs in entries]
+                    for source, entries in expected.items()
+                }, f"keys-only, limit {limit}, priority {priority or 'none'}"
     finally:
         engine.close()
 
@@ -1383,6 +1392,40 @@ def test_the_index_ordered_frontier_keeps_the_pairs_the_ranking_keeps(
         "leaf:031",
     ], "the fixture's priority order is not the one the ranking promises"
     assert len(whole[()]["hub:plain"]) == 40 and "hub:empty" not in whole[()]
+
+
+def test_the_hierarchy_scan_reads_its_partial_index(tmp_path: Path) -> None:
+    """A source's first hierarchy targets come from an index of hierarchy edges.
+
+    Off the primary key that scan read a source's whole key range, and an
+    entity hub has no hierarchy edges at all: 4,396 of the 13,465 pages one
+    7-hub fetch touched. The index's predicate is spelled in persistence,
+    which cannot import the walk, so the two spellings are held equal here,
+    and the plan is read rather than timed.
+    """
+
+    from pheasant.graph.traversal import HIERARCHY_EDGE_TYPES
+    from pheasant.persistence import derived_indexes, graph_frontier
+
+    assert (derived_indexes.HIERARCHY_EDGE_TYPE,) == HIERARCHY_EDGE_TYPES
+    engine = _synced(tmp_path, "rows")
+    try:
+        engine.state.migrate()  # a second boot: the marker makes it a no-op
+        indexes = engine.state.rows(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_graph_edges_hierarchy'"
+        )
+        statement, _values = graph_frontier._source_statement(
+            engine.state.dialect, "?", HIERARCHY_EDGE_TYPES, graph_frontier._KEY_COLUMNS
+        )
+        plan = engine.state.rows(
+            "EXPLAIN QUERY PLAN " + statement, (KB, "x", 5, KB, "x", 5, 5, KB, "x")
+        )
+    finally:
+        engine.close()
+
+    assert indexes, "the migration did not create the hierarchy index"
+    details = " | ".join(str(row["detail"]) for row in plan)
+    assert "idx_graph_edges_hierarchy" in details, details
 
 
 def _wide_hop_graph(engine: SyncEngine, hubs: int = 40, fan_out: int = 300) -> str:

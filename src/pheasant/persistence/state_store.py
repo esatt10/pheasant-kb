@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.persistence.backends import SqliteBackend, StateBackend, open_backend
+from pheasant.persistence.derived_indexes import migrate_derived_indexes
 from pheasant.persistence.lexical_index import (
     bm25_repeat_counts,
     migrate_lexical_index,
@@ -195,7 +196,7 @@ class StateStore:
             self._migrate_postgres()
             return
         self.backend.executescript(schema_for(self.backend.dialect))
-        self._migrate_artifact_terms_node_lookup()
+        migrate_derived_indexes(self)
         # Step 32.1 — one-shot idempotent column add (additive; existing rows
         # keep acl NULL = "source expressed no ACL", the pre-32 semantics).
         if "acl" not in self.backend.table_columns("artifacts"):
@@ -322,34 +323,6 @@ class StateStore:
             "ON evaluation_runs(kb_id, status, heartbeat_at)"
         )
 
-    def _migrate_artifact_terms_node_lookup(self) -> None:
-        """Replace the legacy wide artifact-term B-tree index once.
-
-        ``node_id`` is a parser-produced text identifier, not a bounded key.
-        PostgreSQL rejects a B-tree row over one third of a page, which used to
-        turn one unusually long heading or symbol into a failed whole-source
-        sync. The old index serves only retired historical concept rollups;
-        the replacement retains their type/artifact filter without indexing an
-        unbounded value. This changes derived DDL only, never term rows.
-        """
-
-        marker = "artifact_terms_node_lookup_v2"
-        applied = self.rows("SELECT value FROM pheasant_schema_meta WHERE key=?", (marker,))
-        if applied:
-            return
-        self.conn.execute("DROP INDEX IF EXISTS idx_artifact_terms_node_lookup")
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_artifact_terms_type_artifact "
-            "ON artifact_terms(node_type, artifact_id)"
-        )
-        self.conn.execute(
-            "INSERT INTO pheasant_schema_meta(key, value, updated_at) VALUES(?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
-            "updated_at=excluded.updated_at",
-            (marker, "1", datetime.now(UTC).isoformat()),
-        )
-        self.conn.commit()
-
     def _migrate_postgres(self) -> None:
         """Run DDL once across a concurrently starting fleet.
 
@@ -392,7 +365,7 @@ class StateStore:
                 column in self.backend.table_columns(table) for table, column in required.items()
             )
             if version and str(version[0]["value"]) == SCHEMA_VERSION and schema_present:
-                self._migrate_artifact_terms_node_lookup()
+                migrate_derived_indexes(self)
                 # Outside the schema-version marker on purpose: the marker
                 # says the *tables* are current, and a region switching
                 # `lexical_index` changes no table.
@@ -417,7 +390,7 @@ class StateStore:
             # Postgres returns early from `migrate`, so an additive column
             # named in only one place exists on exactly one backend.
             self._migrate_tuning_control()
-            self._migrate_artifact_terms_node_lookup()
+            migrate_derived_indexes(self)
             migrate_lexical_index(self)
             self.conn.execute(
                 "INSERT INTO pheasant_schema_meta(key, value, updated_at) VALUES(?,?,?) "

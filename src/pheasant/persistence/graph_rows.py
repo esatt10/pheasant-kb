@@ -537,6 +537,7 @@ class GraphRowStore:
         targets: Iterable[str] | None = None,
         priority_types: Sequence[str] = (),
         limit_per_source: int | None = None,
+        keys_only: bool = False,
     ) -> dict[str, list[tuple[str, str, dict[int, Any]]]]:
         """``{source: [(source, target, {seq: attrs})]}`` for a whole BFS frontier.
 
@@ -591,6 +592,10 @@ class GraphRowStore:
 
         Whether a limit is *sound* is the caller's to decide, not this
         module's: see :func:`~pheasant.graph.traversal._out_edges_for`.
+
+        ``keys_only`` (bounded, untargeted fetches only) leaves out each
+        edge's ``source_id`` and attributes, which a walk never reads and
+        which cost a random heap page per edge (`graph_frontier`).
         """
 
         grouped: dict[str, list[tuple[str, str, dict[int, Any]]]] = {}
@@ -615,7 +620,12 @@ class GraphRowStore:
                     # Read in key order and stop at the limit, rather than
                     # ranking a hub's whole fan-out to keep its first pairs.
                     rows = bounded_rows(
-                        self.state, kb_id, batch, priority_types, int(limit_per_source)
+                        self.state,
+                        kb_id,
+                        batch,
+                        priority_types,
+                        int(limit_per_source),
+                        keys_only=keys_only,
                     )
                 elif not priority_types and limit_per_source is None:
                     rows = self.state.rows(
