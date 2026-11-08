@@ -167,6 +167,9 @@ pheasant-kb/
 │   │                            a published sync is doing before an
 │   │                            indexer claims it), inventory (what the
 │   │                            knowledge base holds: overview, documents),
+│   │                            quality (each file's health and data
+│   │                            quality, flags with reasons; + the
+│   │                            cleanup list),
 │   │                            inventory_detail (one source, one document,
 │   │                            the links between documents), source_browser
 │   │                            (a source as folders and files, one file
@@ -215,7 +218,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 192 pytest modules, offline by design
+└── tests/                     ← 196 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -514,6 +517,39 @@ connector through `complete_listing`), and re-indexing an edited file retracts
 the imports, calls and symbols its new text dropped (`graph/retraction.py`).
 After either, incremental equals a full sync of what is there now.
 
+**Every source has a sync pipeline, and the Syncs page is where it is
+adjusted** (`sync/pipeline.py`, `services/sync_pipelines.py`; `/sync/pipelines*`,
+MCP `list_sync_pipelines` / `describe_sync_pipeline` / `configure_sync_pipeline`
+/ `delete_sync_pipeline` / `list_pipeline_documents`; `ui/src/pages/SyncsPage.tsx`).
+Adding a source stays one field: the pipeline is derived from it, and its
+settings are `sources[].sync` (`schedule` auto|manual, `paused`, `pipeline`,
+and for web collections `max_items_per_run`, `min_request_interval_seconds`,
+`respect_robots`). `runs_automatically` is the one test every automatic
+trigger asks (beat, startup via `startup_sources`, watcher, git), so a paused
+or manual pipeline cannot be started by a path that forgot; a deleted one is
+also refused when asked (`PIPELINE_DELETED`, 409). The document ledger is
+per document: last read, last changed, next check, the server's answer, and
+`file_quality` (`services/sync_ledger.py`), built once per version of the
+source -- the taxonomy snapshot's key plus the checkpoint's write time, which
+a recheck moves -- and kept in `quality.cached_view`, so a page of a large
+source is a filter over numbers rather than a rebuild of every row. **A web collection is paced per host** (`sync/web_pacing.py`):
+robots.txt `Crawl-delay`, cached a day in the cursor, is one slot schedule
+shared across the prepare threads, and a paced host gets a per-run budget
+(~55 minutes of its delay, or `max_items_per_run`) planned at listing time
+over the due pages sorted most-waited first -- so a first sync of a large
+paced site is a series of short runs, never a 13-hour one holding the
+indexer. **Each sync is an OpenTelemetry-shaped trace** (`telemetry/sync_trace.py`):
+a `pheasant.sync` span and one `pheasant.sync.<phase>` child per progress
+phase, written as one `{"type":"otel.span",...}` JSON line to stdout (which
+is what Container Apps ships to Log Analytics) and exported over OTLP when an
+SDK provider is configured. `resource["pheasant.role"]` names the tier
+(`PHEASANT_ROLE`: `serve` sets its role, `pheasant sync` defaults to `cli`,
+and a sync child inherits it). It joins the caller's ambient trace; a sync child
+process returns its spans in `details.otel_spans` and the parent emits them,
+and a child that dies gets an error span from the parent. The `trace_id` is
+on the sync event, so the Syncs page's runs name the trace to search for.
+`tests/test_sync_pipelines.py`.
+
 **A running sync can be stopped from any process** (`sync/cancellation.py`,
 `services/sync_control.py`, table `sync_runs`; MCP `cancel_sync`, `POST
 /sources/{name}/cancel`). The run holds a heartbeated row per source, a cancel
@@ -533,9 +569,29 @@ once, so an agent composed over content not yet indexed. The wait is built
 from state alone -- the queue, the `sync_runs` heartbeat, the source row --
 bounded at 55 s a call, and answers `finished` / `running` / `queued` /
 `not_started` against a caller's `since`. A sync that read some items and not
-others records `degraded` (not a failed status: its job still succeeds and
-nothing retries it in a loop), and `describe_source` carries `last_sync`, the
-latest `sync_events` row with its unreadable items and their errors. The
+others is scored, not condemned (`sync/health.py`): `health.percent` is the
+readable share (documents held over those plus the still-unreadable, rounded
+down so a failure never shows 100%), and the status is `degraded` only at or
+below 50% -- not a failed status either way, so its job still succeeds and
+nothing retries it in a loop. The score is computed when read, from the last
+event's full list of failures (path and URL) less every URL since removed and
+every document archived, so dropping an item moves it before the next sync;
+`list_sources`, `describe_source`, the overview and `wait_for_sync` all carry
+it, and `describe_source` has `last_sync`, the latest `sync_events` row with
+its unreadable items and their errors. **Each file has a state too**
+(`sync/health.file_quality`, `services/quality.py`): `ok`, `warning` or
+`error`, one flag per problem with a code and a reason -- `unreadable` (never
+read; error), `stale` (served from an earlier read), `script_shell`,
+`no_text`, `little_text` (under `LOW_TEXT_TOKENS`) -- read off the same
+failures, the connector's checkpoint and the chunk rows, so it needs no
+column and no model, and a dropped item leaves it at once.
+`describe_document` carries `document.quality`, `describe_source` the counts,
+MCP `list_quality_issues` / `GET /quality` the files to clean up, and the
+taxonomy (`browse_source` / `GET /documents/tree`) each file's state and each
+folder's health over everything beneath it, a never-read file shown in its
+folder. The source listing summarizes a checkpoint's per-item collections to
+their length (`summarized_checkpoint`): one validator per page was 6.9 MB of
+an 8.9 MB `GET /sources` the UI polls every second during a sync. The
 indexer repeats a successful sync child's stderr into its own log, which it
 used to read only on failure. The MCP server's `instructions` and
 `.agents/skills/pheasant-ingest/` tell every agent to wait.
@@ -2788,6 +2844,35 @@ Each of these cost real time. They are listed because the shape recurs.
   `succeeded` once the task is published, and an agent following the job did
   exactly what it was told. `wait_for_sync` is the answer for callers; the
   job's own meaning is unchanged, because it is public behaviour.
+- **A heartbeat that shares the work's resources stops when the work is
+  busiest, and then every reader calls the work dead.** On the Azure fleet a
+  23,691-page web sync committed for another hour after its `sync_runs`
+  heartbeat stopped at 00:41: `wait_for_sync` said `queued` about a sync the
+  UI showed indexing, and a cancel would have been refused as "not running".
+  The beat went through the sync's own connection pool, and a failed beat was
+  logged at debug inside a child process whose output is read when it ends.
+  `persistence/heartbeat.py` is the one mechanism now: `HeartbeatWriter`
+  writes on a dedicated autocommit Postgres connection outside the pool (TCP
+  keepalives, a 10 s statement timeout, replaced after a failure), and
+  `Heartbeat` warns on the first failed beat and every sixth, and says when
+  it recovers. The sync run and the source lease use it; the evaluation
+  heartbeat no longer dies on its first failed write, and the queue claim's
+  failures are warnings. `tests/test_heartbeats.py` holds a pool of one with
+  an open transaction and asserts both beats still land -- each fails on the
+  old code. Found by reading the row from inside the indexer container; no
+  log said anything.
+- **A fallback that scans is a capacity limit nobody wrote down.**
+  `describe_document` found one document's in-links by asking the graph for
+  in-edges, and the graph service's proxy had no such lookup, so on every api
+  replica it read the *out*-edges of every document in the region instead:
+  `neighbors_many`, 16 documents a call with every neighbour (chunks
+  included) attached, all held in one list. Invisible at 1,300 documents;
+  at 18,000 (one web collection grew) the api was OOM-killed (exit 137)
+  after 218 s. The graph service answers `edges_batch` now -- endpoint pairs
+  and link types, structural edges dropped on its side -- and an older
+  service still gets the scan. `tests/test_inventory_relations.py` drives
+  both describes through a `RemoteGraph` and fails if `neighbors_many` is
+  called. The offline suite could not see it: `role: all` holds the graph.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

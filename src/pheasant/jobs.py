@@ -621,29 +621,28 @@ class JobRegistry:
                     return job
         return None
 
-    def active_snapshot_for(self, target: str) -> dict[str, Any] | None:
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Every job, read once, for the ``*_for`` lookups over many targets: alone,
+        each re-reads the shared snapshots (~30 reads per ``GET /sources``, 5.8 s)."""
+
+        return self.list(limit=self._max_records)
+
+    def active_snapshot_for(self, target: str, records: list | None = None) -> dict | None:
         """Newest active local or shared job touching ``target``."""
 
+        records = self.snapshot() if records is None else records
         return next(
-            (
-                record
-                for record in self.list(active_only=True, limit=self._max_records)
-                if target in (record.get("targets") or [])
-            ),
+            (r for r in records if r.get("active") and target in (r.get("targets") or [])), None
+        )
+
+    def last_outcome_snapshot_for(self, target: str, records: list | None = None) -> dict | None:
+        records = self.snapshot() if records is None else records
+        return next(
+            (r for r in records if not r.get("active") and target in (r.get("targets") or [])),
             None,
         )
 
-    def last_outcome_snapshot_for(self, target: str) -> dict[str, Any] | None:
-        return next(
-            (
-                record
-                for record in self.list(limit=self._max_records)
-                if not record.get("active") and target in (record.get("targets") or [])
-            ),
-            None,
-        )
-
-    def source_progress(self, target: str) -> dict[str, Any] | None:
+    def source_progress(self, target: str, records: list | None = None) -> dict[str, Any] | None:
         """The live per-source record for ``target``, if one is running."""
 
         now = time.monotonic()
@@ -655,7 +654,7 @@ class JobRegistry:
                 record = job.sources.get(target)
                 if record is not None:
                     return record.as_dict(now)
-        active = self.active_snapshot_for(target)
+        active = self.active_snapshot_for(target, records)
         if active is None:
             return None
         return next(

@@ -52,6 +52,7 @@ from pheasant.ingestion.content_types import (
 )
 from pheasant.ingestion.media import is_fetched_page
 from pheasant.services import ServiceContext, raw_bytes
+from pheasant.services import quality as quality_service
 from pheasant.services.errors import DocumentNotFound, InvalidRequest
 from pheasant.services.inventory import ARTIFACT_SCOPE, extension_of, reader
 from pheasant.services.web_pages import snapshot_path
@@ -206,42 +207,54 @@ def browse(context: ServiceContext, request: BrowseRequest) -> dict[str, Any]:
         return _sources_level(context, kb_id, request)
     from pheasant.services.inventory_detail import _registered
 
-    source = str(_registered(context, request.source_name)["name"])
+    registered = _registered(context, request.source_name)
+    source = str(registered["name"])
     wanted = clean_directory(request.path)
-    admit = reader(context, request.principal, request.principal_groups)
-    acl = ", a.acl" if admit is not None else ""
-    where = f"{ARTIFACT_SCOPE} AND a.source_id = ?"
-    params: list[Any] = [MEMORY_ARTIFACT_TYPE, source]
-    if wanted:
-        where += " AND LOWER(a.relative_path) LIKE ? ESCAPE '\\'"
-        params.append(f"{_escape_like(wanted.lower())}/%")
-    # Only the paths, for the grouping: a level is decided by the next path
-    # segment, which neither dialect spells the same way in SQL, and a path
-    # column is cheap to carry even for a large source.
-    rows = context.state.rows(
-        f"SELECT a.id, a.relative_path{acl} FROM artifacts a WHERE {where}", tuple(params)
-    )
-    if admit is not None:
-        rows = admit(rows)
-    if wanted and not rows:
-        raise InvalidRequest(f"No folder {wanted!r} in source {source!r}")
 
-    actual = _actual_prefix(wanted, [str(r["relative_path"] or "") for r in rows])
-    folders: Counter[str] = Counter()
-    here: list[tuple[str, str]] = []
-    depth = len(actual.split("/")) if actual else 0
-    for row in rows:
-        rest = _parts(row["relative_path"])[depth:]
-        if len(rest) > 1:
-            folders[rest[0]] += 1
-        elif rest:
-            here.append((rest[0].lower(), str(row["id"])))
-    # Name order, so a page is stable from one call to the next.
-    here.sort()
-    files = _file_rows(context, [artifact_id for _, artifact_id in here[offset : offset + limit]])
-    directories = [
-        {"name": name, "path": _join(actual, name), "documents": count}
-        for name, count in sorted(folders.items(), key=lambda item: item[0].lower())
+    # Every file beneath this folder that the caller may read, with its
+    # quality, never-read ones included: from the source's snapshot, computed
+    # once per version of the source (`services.quality`), so a level is a
+    # filter over memory rather than an aggregate over the chunk table.
+    def build() -> tuple | None:
+        quality = quality_service.source_files(
+            context, registered, request.principal, request.principal_groups, folder=wanted
+        )
+        rows = [{"id": f["id"], "relative_path": f["path"]} for f in quality if f["id"] is not None]
+        never_read = [file for file in quality if file["id"] is None]
+        if wanted and not rows and not never_read:
+            return None
+        paths = [str(r["relative_path"] or "") for r in rows] + [f["path"] for f in never_read]
+        actual = _actual_prefix(wanted, paths)
+        depth = len(actual.split("/")) if actual else 0
+        level = quality_service.place(rows, quality, depth)
+        return (
+            actual,
+            level,
+            level.directories(actual),
+            quality_service.summarize(quality),
+            len(rows),
+        )
+
+    # Every level of one version of the source is computed once per caller
+    # (`quality.cached_level`): a warm level is a page of rows, not a walk.
+    built = quality_service.cached_level(
+        context, registered, request.principal, request.principal_groups, wanted, build
+    )
+    if built is None:
+        raise InvalidRequest(f"No folder {wanted!r} in source {source!r}")
+    actual, level, directories, health, documents = built
+    here = level.here
+    page_entries = here[offset : offset + limit]
+    indexed = {
+        row["id"]: row
+        for row in _file_rows(context, [key for _, kind, key in page_entries if kind == "indexed"])
+    }
+    files = [
+        {**indexed[key], "quality": level.state(key)}
+        if kind == "indexed"
+        else quality_service.never_read_row(key)
+        for _, kind, key in page_entries
+        if kind != "indexed" or key in indexed
     ]
     returned = len(files)
     return {
@@ -250,12 +263,14 @@ def browse(context: ServiceContext, request: BrowseRequest) -> dict[str, Any]:
         "path": actual,
         "parent": _parent(actual),
         "breadcrumbs": _breadcrumbs(source, actual),
+        # This folder's health, everything beneath it counted.
+        "health": health,
         "directories": directories,
         "files": files,
         "totals": {
             "directories": len(directories),
             "files": len(here),
-            "documents": len(rows),
+            "documents": documents,
         },
         "page": {
             "offset": offset,
@@ -451,7 +466,7 @@ def _sources_level(context: ServiceContext, kb_id: str, request: BrowseRequest) 
     registered = {
         str(row["name"]): row
         for row in context.state.rows(
-            "SELECT s.name, s.type FROM sources s WHERE NOT EXISTS "
+            "SELECT s.name, s.type, s.config_json FROM sources s WHERE NOT EXISTS "
             "(SELECT 1 FROM removed_sources r WHERE r.source_id = s.id)"
         )
         if not str(row["name"]).startswith("__")
@@ -463,6 +478,7 @@ def _sources_level(context: ServiceContext, kb_id: str, request: BrowseRequest) 
             "source": name,
             "source_type": registered[name]["type"] if name in registered else None,
             "documents": counts.get(name, 0),
+            "health": quality_service.source_score(context, registered.get(name), name),
         }
         for name in sorted(set(registered) | set(counts), key=str.lower)
         if name in counts or admit is None
@@ -543,10 +559,6 @@ def _parts(path: Any) -> list[str]:
     return [p for p in str(path or "").replace("\\", "/").split("/") if p and p != "."]
 
 
-def _join(prefix: str, name: str) -> str:
-    return f"{prefix}/{name}" if prefix else name
-
-
 def _parent(path: str) -> str | None:
     if not path:
         return None
@@ -555,15 +567,6 @@ def _parent(path: str) -> str | None:
 
 def _batches(ids: list[str], size: int = 500) -> list[list[str]]:
     return [ids[i : i + size] for i in range(0, len(ids), size)]
-
-
-def _escape_like(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-# ---------------------------------------------------------------------------
-# One document
-# ---------------------------------------------------------------------------
 
 
 def _resolve(

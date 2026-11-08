@@ -139,6 +139,12 @@ export function TopBar() {
           Sources
         </NavLink>
         <NavLink
+          to="/syncs"
+          className={({ isActive }) => (isActive ? "navlink active" : "navlink")}
+        >
+          Syncs
+        </NavLink>
+        <NavLink
           to="/config"
           className={({ isActive }) => (isActive ? "navlink active" : "navlink")}
         >

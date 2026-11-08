@@ -54,6 +54,7 @@ from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
 from pheasant.sync import archived
+from pheasant.sync import health as read_health
 from pheasant.sync.cancellation import (
     SyncCancelled,
     SyncRun,
@@ -82,6 +83,7 @@ from pheasant.sync.graph_history import snapshot_after_sync
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
+from pheasant.sync.pipeline import runs_automatically
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
     ReadFailures,
     _media_bytes,
@@ -94,6 +96,7 @@ from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers 
 from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
 from pheasant.sync.vanished import prune_vanished
+from pheasant.telemetry.sync_trace import current as _current_sync_trace
 
 logger = logging.getLogger(__name__)
 
@@ -655,7 +658,7 @@ class SyncEngine:
         self.ensure_node_index()
         results = []
         for source in self.enabled_sources():
-            if source.enabled and source.sync.on_startup:
+            if source.enabled and source.sync.on_startup and runs_automatically(source):
                 mode: SyncMode = "incremental"
                 # Unconditional: a graph missing artifacts SQLite already has
                 # is never a state anyone wants served, and repair is the
@@ -753,8 +756,11 @@ class SyncEngine:
         max_depth: int | None = None,
         full_scan: bool = False,
         on_progress: ProgressHook | None = None,
+        scheduled: bool = False,
     ) -> list[SyncResult]:
         sources = self.enabled_sources()
+        # A beat syncs only what runs by itself; a deleted pipeline never runs.
+        sources = [s for s in sources if (runs_automatically(s) if scheduled else s.sync.pipeline)]
         if not sources:
             return []
         workers = min(
@@ -1920,6 +1926,36 @@ class SyncEngine:
         _resume_interrupted_full: bool = False,
         enrich: str = "now",
     ) -> SyncResult:
+        """Sync one source, as one OpenTelemetry-shaped trace (`telemetry.sync_trace`)."""
+
+        from pheasant.telemetry.sync_trace import traced
+
+        return traced(
+            source_name,
+            mode,
+            on_progress,
+            lambda hook: self._sync_source(
+                source_name,
+                mode,
+                max_depth=max_depth,
+                full_scan=full_scan,
+                on_progress=hook,
+                _resume_interrupted_full=_resume_interrupted_full,
+                enrich=enrich,
+            ),
+        )
+
+    def _sync_source(
+        self,
+        source_name: str,
+        mode: SyncMode = "incremental",
+        *,
+        max_depth: int | None = None,
+        full_scan: bool = False,
+        on_progress: ProgressHook | None = None,
+        _resume_interrupted_full: bool = False,
+        enrich: str = "now",
+    ) -> SyncResult:
         """Sync one source.
 
         ``max_depth`` caps directory depth for this run only, and
@@ -1950,6 +1986,11 @@ class SyncEngine:
         source = self.config.effective_source(
             self._source(source_name), max_depth=max_depth, full_scan=full_scan
         )
+        if not source.sync.pipeline:
+            # A deleted pipeline syncs nothing, asked or not (`sync/pipeline.py`);
+            # not a failure, so a queued task for it finishes instead of retrying.
+            logger.info("%s: sync skipped, its pipeline was deleted", source_name)
+            return SyncResult(source_name, 0, 0, 0, 0, "skipped", {"reason": "pipeline deleted"})
         self._ensure_modal_handlers(source)
         # A container restart must never re-index by itself, but a config edit
         # that changes what the content pipeline produces must. Compare what
@@ -2314,9 +2355,13 @@ class SyncEngine:
                 )
             unreadable.require_some_read(total_items)
             details_extra.update(unreadable.details())
-            # Read *some* of its items: committed, and not called healthy. The
-            # next sync reads the rest again; until then the source says so.
-            outcome = "degraded" if len(unreadable) else "healthy"
+            # Read *some* of its items: committed, scored by the share that
+            # read, and called degraded only when that is not a majority. The
+            # next sync reads the rest again; until then the score says so.
+            readable_share = read_health.percent(total_items - len(unreadable), len(unreadable))
+            outcome = read_health.status_for(readable_share)
+            if len(unreadable):
+                details_extra["readable_percent"] = readable_share
             removed = archived.prune(self, source.name, artifacts)
             if removed := removed + prune_vanished(self, source.name, connector, items, artifacts):
                 details_extra["removed_artifacts"] = removed
@@ -2373,6 +2418,8 @@ class SyncEngine:
                     }
                 )
             # Synapse 21.3: record skipped-vs-fetched transfer counts per sync.
+            if (trace := _current_sync_trace()) is not None:
+                details_extra.update(trace_id=trace.trace_id, stage_seconds=trace.stage_seconds())
             self.state.append_sync_event(
                 self.state.new_sync_event_id(),
                 source.name,

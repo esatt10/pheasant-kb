@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pheasant.mcp_server.sync_pipeline_tools import SyncPipelineTools
 
-class SyncControlTools:
+
+class SyncControlTools(SyncPipelineTools):
     """``services.sync_control`` and ``services.sync_wait`` adapters. Parse, call, return."""
 
     services: Any
@@ -104,8 +106,9 @@ def register_sync_control_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         ``state`` is ``finished``, ``running`` or ``queued`` (call again while
         ``timed_out`` is true), or ``not_started`` (start one with
         sync_source). When finished, compare ``documents`` with what you added:
-        ``last_sync.status`` is ``degraded`` when the sync could not read some
-        items, and ``last_sync.unreadable`` names them with the error.
+        ``health.percent`` is the share of the source that reads (status
+        ``degraded`` only when at most half does), and ``last_sync.unreadable``
+        names what could not be read, with the error.
         """
 
         return tools.wait_for_sync(knowledge_base, source_name, since, timeout_seconds)

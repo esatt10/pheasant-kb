@@ -303,7 +303,8 @@ def live_site() -> Iterator[tuple[str, _Site]]:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            state.hits += 1
+            # Page requests: robots.txt is read for the pace (`web_pacing`).
+            state.hits += self.path != "/robots.txt"
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             if state.cache_control:

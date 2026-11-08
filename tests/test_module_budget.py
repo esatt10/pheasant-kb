@@ -72,7 +72,10 @@ CEILINGS: dict[str, int] = {
     # over the table it names; the table itself is `config/flagship.py`.
     # Raised by 3 for `assistant.voice`: its import, the nested field and its
     # comment line; the section itself is `config/assistant_voice.py`.
-    "config/schema.py": 2294,
+    # Raised by 14 for the sync pipeline's six `sources[].sync` fields
+    # (schedule, paused, pipeline, the pacing three) and their docstring: they
+    # are per-source settings, so they live on `SourceSyncSettings`.
+    "config/schema.py": 2308,
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -103,7 +106,9 @@ CEILINGS: dict[str, int] = {
     # lives in `persistence/auth_tokens.py`.
     # Raised to 1153 for `idx_sync_events_source`, the per-source lookup
     # `describe_source` and `wait_for_sync` make; DDL belongs here.
-    "persistence/schema.py": 1153,
+    # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
+    # source, and the taxonomy reads a source's version on every level.
+    "persistence/schema.py": 1154,
     "persistence/state_store.py": 1800,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only

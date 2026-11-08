@@ -1440,10 +1440,24 @@ class ChunkingSettings(ModelMixin):
 
 @dataclass
 class SourceSyncSettings(ModelMixin):
+    """A source's pipeline (`sync/pipeline.py`); the Syncs page edits these."""
+
     on_startup: bool = True
     on_file_change: str | bool = "debounce"
     on_git_commit: bool = True
     interval_seconds: int | None = None
+    #: ``auto`` runs on the scheduler beat and the triggers above; ``manual``
+    #: only when asked ("Delete schedule"). ``paused`` holds ``auto`` for now.
+    schedule: str = "auto"
+    paused: bool = False
+    #: False is a deleted pipeline: nothing syncs it, its documents stay.
+    pipeline: bool = True
+    #: Web: pages fetched per run at most (``None``: as many as ~55 min of a
+    #: site's crawl delay allows); the rest stay due for the next run.
+    max_items_per_run: int | None = None
+    #: Web: seconds between requests to one host; ``None`` reads robots.txt.
+    min_request_interval_seconds: float | None = None
+    respect_robots: bool = True
 
 
 @dataclass

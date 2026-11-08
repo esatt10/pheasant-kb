@@ -221,7 +221,7 @@ class SchedulerService:
         while not self._stop.wait(self.interval_seconds):
             try:
                 with self._sync_lock:
-                    results = self.engine.sync_all("incremental")
+                    results = self.engine.sync_all("incremental", scheduled=True)
                     # Step 33.2: memory consolidation rides the same beat —
                     # archive superseded/expired records, then a full re-sync
                     # of the (small) memory source drops them from the index.

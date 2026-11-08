@@ -15,6 +15,7 @@ from pheasant.mcp_server.inventory_tools import register_inventory_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.source_url_tools import register_source_url_tools
 from pheasant.mcp_server.sync_control_tools import register_sync_control_tools
+from pheasant.mcp_server.sync_pipeline_tools import register_sync_pipeline_tools
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.version import __version__
 
@@ -60,8 +61,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             "then). Before relying on the content, call wait_for_sync with since set to "
             "the source's last_indexed_at from describe_source before the write, and "
             "call it again while timed_out is true. When it finishes, compare documents "
-            "with what you added: last_sync.status 'degraded' and last_sync.unreadable "
-            "name what could not be read, so tell the user what is missing. An error "
+            "with what you added: health.percent is the share that reads (status "
+            "'degraded' when at most half does) and last_sync.unreadable names what "
+            "could not be read, so tell the user what is missing. An error "
             "saying to retry the call is temporary; retry it."
         ),
         # An unversioned SDK 2.x server reports an empty `serverInfo.version`
@@ -960,6 +962,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     register_archive_tools(mcp, tools, anticipated)
     register_source_url_tools(mcp, tools, anticipated)
     register_sync_control_tools(mcp, tools, anticipated)
+    register_sync_pipeline_tools(mcp, tools, anticipated)
 
     return mcp
 

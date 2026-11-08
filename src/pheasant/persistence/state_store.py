@@ -65,8 +65,8 @@ SCHEMA = schema_for(SQLITE)
 
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
-# 3: idx_sync_events_source.
-SCHEMA_VERSION = "3"
+# 3: idx_sync_events_source. 4: idx_artifacts_source.
+SCHEMA_VERSION = "4"
 
 
 class StateStore:

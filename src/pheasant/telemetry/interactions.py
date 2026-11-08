@@ -874,9 +874,16 @@ class _Tracing:
             return False
 
         headers = _parse_headers(os.environ.get(getattr(settings, "otlp_headers_env", "") or ""))
+        from pheasant.telemetry.sync_trace import ROLE_ENV
+
+        role = os.environ.get(ROLE_ENV)
         provider = TracerProvider(
             resource=Resource.create(
-                {"service.name": str(getattr(settings, "service_name", "pheasant"))}
+                {
+                    "service.name": str(getattr(settings, "service_name", "pheasant")),
+                    # Which tier emitted a span: the stdout spans say so too.
+                    **({"pheasant.role": role} if role else {}),
+                }
             ),
             sampler=TraceIdRatioBased(float(getattr(settings, "sample_ratio", 1.0) or 1.0)),
         )

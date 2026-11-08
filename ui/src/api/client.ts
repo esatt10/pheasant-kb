@@ -38,6 +38,11 @@ import type {
   DocumentContent,
   ArchiveResult,
   ArchivedListing,
+  LedgerDetail,
+  LedgerPage,
+  PipelineDetail,
+  PipelineList,
+  PipelineSettings,
 } from "./types";
 import type {
   ConfigSection,
@@ -655,6 +660,42 @@ export const api = {
         limit: options.limit,
       })}`,
     ),
+  /** Every source's sync pipeline (`/sync/pipelines`): the Syncs page. */
+  pipelines: () => request<PipelineList>("/sync/pipelines"),
+  pipeline: (name: string) => request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}`),
+  configurePipeline: (name: string, settings: Partial<PipelineSettings>, syncNow = false) =>
+    request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ ...settings, sync_now: syncNow }),
+    }),
+  deletePipelineSchedule: (name: string) =>
+    request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}/schedule`, { method: "DELETE" }),
+  deletePipeline: (name: string) =>
+    request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  restorePipeline: (name: string) =>
+    request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}/restore`, { method: "POST" }),
+  pipelineDocuments: (name: string, options: { state?: string; pathContains?: string; offset?: number; limit?: number }) =>
+    request<LedgerPage>(
+      `/sync/pipelines/${encodeURIComponent(name)}/documents${qs({
+        state: options.state,
+        path_contains: options.pathContains || undefined,
+        offset: options.offset,
+        limit: options.limit,
+      })}`,
+    ),
+  pipelineDocument: (name: string, path: string) =>
+    request<LedgerDetail>(`/sync/pipelines/${encodeURIComponent(name)}/documents/detail${qs({ path })}`),
+  recheckDocuments: (name: string, paths: string[]) =>
+    request<{ marked_due: number }>(`/sync/pipelines/${encodeURIComponent(name)}/documents/recheck`, {
+      method: "POST",
+      body: JSON.stringify({ paths }),
+    }),
+  /** Add or remove a web collection's pages, keeping the rest. */
+  editSourceUrls: (name: string, change: { add?: string[]; remove?: string[] }) =>
+    request<{ status: string; urls: string[] }>(`/sources/${encodeURIComponent(name)}/urls`, {
+      method: "POST",
+      body: JSON.stringify(change),
+    }),
   /** Remove documents from the index; they stay out of every sync until reinstated. */
   archiveDocuments: (documents: string[]) =>
     request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ documents }) }),

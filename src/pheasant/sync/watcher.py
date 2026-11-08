@@ -26,6 +26,7 @@ from watchdog.observers import Observer
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.pipeline import _match_any, within_max_depth
+from pheasant.sync.pipeline import runs_automatically
 
 if TYPE_CHECKING:
     from pheasant.sync.engine import SyncEngine
@@ -106,6 +107,7 @@ class WatcherService:
             source
             for source in self.config.sources
             if source.enabled
+            and runs_automatically(source)
             and source.type.value in FILESYSTEM_SOURCE_TYPES
             and source.path.exists()
         ]
