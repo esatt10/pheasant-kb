@@ -141,6 +141,16 @@ def test_graph_service_expands_multiple_roots_in_one_bounded_operation(
         json={"operation": "neighbors_many", "parameters": {"node_ids": roots, "depth": 1}},
     ).json()["result"]
     assert many == singles
+    # The answerer's expansion bounds each walk; the service has to honour it.
+    bounded = client.post(
+        "/internal/graph/query",
+        headers=headers,
+        json={
+            "operation": "neighbors_many",
+            "parameters": {"node_ids": ["perf:a"], "depth": 2, "max_nodes": 1},
+        },
+    ).json()["result"]
+    assert [len(item["neighbors"]) for item in bounded] == [1]
     assert (
         client.post(
             "/internal/graph/query",

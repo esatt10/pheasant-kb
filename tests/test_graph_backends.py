@@ -1308,6 +1308,83 @@ def test_the_bounded_frontier_returns_what_the_unbounded_one_would(tmp_path: Pat
     assert whole.index(mixed) < 5, "a pair with a priority edge did not rank ahead whole"
 
 
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=postgres)])
+def test_the_index_ordered_frontier_keeps_the_pairs_the_ranking_keeps(
+    tmp_path: Path, backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read in key order and stopped at the limit, the same pairs come back.
+
+    The bounded fetch used to rank a source's whole fan-out with a window and
+    keep its first pairs; an entity every page of a 25k-page source mentions
+    made that 24,970 rows read to keep 213, per entity per walk. It now scans
+    the primary key twice per source and stops. That is only an optimization
+    if every source, at every limit, gets exactly the prefix the ranking gave:
+    priority pairs first (whole, when a pair also has an ordinary edge), then
+    the rest, each by target, every edge of a kept pair included.
+    """
+
+    from pheasant.persistence import graph_rows
+
+    engine = _synced(tmp_path, "rows", backend=backend)
+    try:
+        graph = engine.graph_builder.graph
+
+        def node(node_id: str) -> None:
+            graph.add_node(node_id, id=node_id, type="chunk", label=node_id, source_id="docs")
+
+        for hub in ("hub:mixed", "hub:plain", "hub:tree", "hub:empty"):
+            node(hub)
+        for index in range(40):
+            node(f"leaf:{index:03d}")
+            graph.add_edge("hub:mixed", f"leaf:{index:03d}", type="indexes")
+            graph.add_edge("hub:plain", f"leaf:{index:03d}", type="mentions")
+        graph.add_edge("hub:plain", "leaf:007", type="mentions")  # a parallel edge
+        for index in (3, 17, 31):  # priority pairs that are also ordinary ones
+            graph.add_edge("hub:mixed", f"leaf:{index:03d}", type="contains")
+        for index in range(6):
+            node(f"dir:{index}")
+            graph.add_edge("hub:mixed", f"dir:{index}", type="contains")
+            graph.add_edge("hub:tree", f"dir:{index}", type="contains")
+        engine.graph_store.save(KB, graph)
+        store = SqlGraph(engine.state, KB).rows
+        hubs = ["hub:mixed", "hub:plain", "hub:tree", "hub:empty"]
+
+        def shaped(found: dict) -> dict:
+            return {
+                source: [
+                    (entry[0], entry[1], [dict(attrs) for attrs in entry[2].values()])
+                    for entry in entries
+                ]
+                for source, entries in found.items()
+            }
+
+        whole = {
+            priority: shaped(store.out_edges(KB, hubs, None, priority, None))
+            for priority in (("contains",), ())
+        }
+
+        def refused(*_args: Any, **_kwargs: Any) -> str:
+            raise AssertionError("a bounded walk ranked a whole fan-out")
+
+        monkeypatch.setattr(graph_rows, "ranked_frontier", refused)
+        for priority, ordered in whole.items():
+            for limit in (1, 2, 3, 4, 5, 9, 10, 12, 40, 49, 200):
+                bounded = shaped(store.out_edges(KB, hubs, None, priority, limit))
+                expected = {source: entries[:limit] for source, entries in ordered.items()}
+                assert bounded == expected, f"limit {limit}, priority {priority or 'none'}"
+    finally:
+        engine.close()
+
+    mixed = whole[("contains",)]["hub:mixed"]
+    assert [entry[1] for entry in mixed[:9]] == [
+        *(f"dir:{index}" for index in range(6)),
+        "leaf:003",
+        "leaf:017",
+        "leaf:031",
+    ], "the fixture's priority order is not the one the ranking promises"
+    assert len(whole[()]["hub:plain"]) == 40 and "hub:empty" not in whole[()]
+
+
 def test_a_filtered_walk_is_not_bounded(tmp_path: Path) -> None:
     """Because the bound would be unsound, and correct beats fast.
 
