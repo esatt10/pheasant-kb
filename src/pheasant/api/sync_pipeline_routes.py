@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
 
-from pheasant.services import sync_pipelines
+from pheasant.services import sync_ledger, sync_pipelines
 
 
 class PipelineSettings(BaseModel):
@@ -90,9 +90,9 @@ def register_sync_pipeline_routes(app: FastAPI, *, services: Any) -> None:
     ) -> dict:
         """The document ledger: last read, last changed, next check, quality."""
 
-        return sync_pipelines.documents(
+        return sync_ledger.documents(
             services,
-            sync_pipelines.DocumentsRequest(
+            sync_ledger.DocumentsRequest(
                 source_name=source_name,
                 state=state,
                 path_contains=path_contains,
@@ -112,12 +112,10 @@ def register_sync_pipeline_routes(app: FastAPI, *, services: Any) -> None:
     ) -> dict:
         """One document's schedule, quality and the runs that could not read it."""
 
-        return sync_pipelines.document(
-            services, source_name, path, None, principal, principal_groups
-        )
+        return sync_ledger.document(services, source_name, path, None, principal, principal_groups)
 
     @app.post("/sync/pipelines/{source_name}/documents/recheck")
     def recheck_documents(source_name: str, req: Recheck) -> dict:
         """Make these pages due now and start a sync."""
 
-        return sync_pipelines.recheck(services, source_name, req.paths)
+        return sync_ledger.recheck(services, source_name, req.paths)

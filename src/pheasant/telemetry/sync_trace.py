@@ -24,6 +24,13 @@ A sync run in a child process (`sync/worker.py`) cannot reach the container's
 log -- its stdout is the report -- so it hands its spans back in the report
 (``details.otel_spans``) and the indexer writes them. ``PHEASANT_SYNC_CHILD``
 tells the two apart.
+
+Each span's ``resource`` names the role that ran it (``pheasant.role``:
+``indexer``, ``api``, ``all``, ``cli`` ...) from ``PHEASANT_ROLE``, which
+``pheasant serve`` sets to its resolved role and ``pheasant sync`` defaults to
+``cli`` -- an environment variable because a sync child inherits it, so the
+spans a child hands back carry its parent's role. The OTLP tracer provider's
+resource carries it too (`telemetry.interactions`).
 """
 
 from __future__ import annotations
@@ -44,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 #: Set in a sync child's environment: spans go back in the report, not to stdout.
 CHILD_ENV = "PHEASANT_SYNC_CHILD"
+#: The role this process serves; see the module docstring.
+ROLE_ENV = "PHEASANT_ROLE"
 SPAN_TYPE = "otel.span"
 
 _CURRENT: contextvars.ContextVar[SyncTrace | None] = contextvars.ContextVar(
@@ -64,7 +73,7 @@ class SyncTrace:
         self.span_id = secrets.token_hex(8)
         self.source_name = source_name
         self.mode = mode
-        self.role = role or os.environ.get("PHEASANT_ROLE") or None
+        self.role = role or os.environ.get(ROLE_ENV) or None
         self.start = time.time()
         self._lock = threading.Lock()
         self._phase: str | None = None

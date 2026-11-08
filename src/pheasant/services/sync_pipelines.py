@@ -1,4 +1,4 @@
-"""Every source's sync pipeline: what it does, when it runs, how it went, per document.
+"""Every source's sync pipeline: what it does, when it runs, and how it went.
 
 A pipeline is made for a source when it is added -- adding a source stays one
 field -- and this is where it is seen and changed in depth: the Syncs page,
@@ -15,10 +15,9 @@ and a web page's schedule is its entry in the connector's checkpoint.
 * :func:`configure` -- change settings; :func:`delete` removes the schedule
   (manual runs only) or the pipeline (nothing syncs the source; its documents
   stay); :func:`restore` brings a deleted one back.
-* :func:`documents` / :func:`document` -- the ledger: per document, when it
-  was last read, last changed and is next checked, its interval, what the
-  server said and its quality, filtered and paged.
-* :func:`recheck` -- make pages due now and start a sync.
+
+The drill-down, each pipeline's document ledger (``documents``, ``document``,
+``recheck``), is `services/sync_ledger.py`.
 """
 
 from __future__ import annotations
@@ -59,16 +58,6 @@ SYNC_FIELDS = (
 )
 CONNECTOR_FIELDS = ("max_refresh_seconds",)
 
-DOCUMENT_STATES = (
-    "all",
-    "due_soon",
-    "changed_week",
-    "attention",
-    "unreadable",
-    "stale",
-    "little_text",
-)
-MAX_DOCUMENTS = 500
 RECENT_RUNS = 10
 
 
@@ -232,133 +221,6 @@ def _check(key: str, value: Any) -> None:
     if key == "min_request_interval_seconds" and value is not None:
         if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
             raise InvalidRequest(f"{key} must be a number of seconds, 0 or more")
-
-
-# -- the document ledger -------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class DocumentsRequest:
-    source_name: str
-    knowledge_base: str | None = None
-    state: str = "all"
-    path_contains: str | None = None
-    limit: int = 100
-    offset: int = 0
-    principal: str | None = None
-    principal_groups: list[str] | None = None
-
-
-def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, Any]:
-    """Every document of one pipeline with its schedule and quality, filtered and paged."""
-
-    kb_id = context.knowledge_base(request.knowledge_base)
-    if request.state not in DOCUMENT_STATES:
-        raise InvalidRequest(
-            f"state must be one of {', '.join(DOCUMENT_STATES)}; got {request.state!r}"
-        )
-    source = _registered(context, request.source_name)
-    rows = _ledger(context, source, request.principal, request.principal_groups)
-    now = time.time()
-    counts = {
-        state: sum(1 for row in rows if _in_state(row, state, now)) for state in DOCUMENT_STATES
-    }
-    needle = (request.path_contains or "").strip().lower()
-    chosen = [
-        row
-        for row in rows
-        if _in_state(row, request.state, now) and (not needle or needle in row["path"].lower())
-    ]
-    chosen.sort(key=lambda r: (_rank(r["status"]), r["next_check_at"] or "~", r["path"]))
-    limit = max(1, min(int(request.limit), MAX_DOCUMENTS))
-    offset = max(0, int(request.offset))
-    page = chosen[offset : offset + limit]
-    return {
-        "knowledge_base": kb_id,
-        "source_name": request.source_name,
-        "state": request.state,
-        "documents": page,
-        "totals": {**counts, "matching": len(chosen)},
-        "pagination": {
-            "limit": limit,
-            "offset": offset,
-            "returned": len(page),
-            "next_offset": offset + limit if offset + limit < len(chosen) else None,
-        },
-    }
-
-
-def document(
-    context: ServiceContext,
-    name: str,
-    path: str,
-    knowledge_base: str | None = None,
-    principal: str | None = None,
-    principal_groups: list[str] | None = None,
-) -> dict[str, Any]:
-    """One document's schedule, quality and the runs that could not read it."""
-
-    kb_id = context.knowledge_base(knowledge_base)
-    source = _registered(context, name)
-    wanted = path.strip()
-    row = next(
-        (
-            r
-            for r in _ledger(context, source, principal, principal_groups)
-            if wanted in (r["path"], r["url"], r["id"])
-        ),
-        None,
-    )
-    if row is None:
-        from pheasant.services.errors import DocumentNotFound
-
-        raise DocumentNotFound(path)
-    failed_runs = []
-    for event in context.state.list_sync_events(name, limit=RECENT_RUNS):
-        for item in (event.get("details") or {}).get("unreadable_all") or []:
-            if item and item[0] == row["path"]:
-                failed_runs.append(
-                    {"at": event.get("finished_at"), "error": item[2] if len(item) > 2 else None}
-                )
-    return {
-        "knowledge_base": kb_id,
-        "source_name": name,
-        "document": row,
-        "failed_runs": failed_runs,
-    }
-
-
-def recheck(
-    context: ServiceContext, name: str, paths: list[str], knowledge_base: str | None = None
-) -> dict[str, Any]:
-    """Make the named pages due now (a web pipeline) and start a sync."""
-
-    context.knowledge_base(knowledge_base)
-    source = _registered(context, name)
-    if not paths:
-        raise InvalidRequest("name at least one document to recheck")
-    marked = 0
-    if str(source.get("type")) in WEB_TYPES:
-        checkpoint = context.state.get_source_checkpoint(name)
-        if checkpoint:
-            cursor = dict(checkpoint.get("cursor") or {})
-            validators = dict(cursor.get("validators") or {})
-            wanted = set(paths)
-            for url, entry in validators.items():
-                if url in wanted or _url_path(url) in wanted:
-                    validators[url] = {**entry, "checked_at": 0}
-                    marked += 1
-            cursor["validators"] = validators
-            context.state.set_source_checkpoint(
-                name,
-                checkpoint.get("connector_type") or str(source.get("type")),
-                cursor,
-                checkpoint.get("high_watermark") or {},
-                datetime.now(UTC).isoformat(),
-                checkpoint.get("status") or "healthy",
-            )
-    started = context.indexing.start_sync(name) if context.indexing is not None else None
-    return {"source_name": name, "marked_due": marked, "sync": started}
 
 
 # -- rows -----------------------------------------------------------------------
@@ -565,103 +427,19 @@ def _cause(error: Any) -> str:
     return text.split(":", 1)[0][:60]
 
 
-def _ledger(
-    context: ServiceContext,
-    source: dict[str, Any],
-    principal: str | None,
-    principal_groups: list[str] | None,
-) -> list[dict[str, Any]]:
-    from pheasant.services.quality import source_files
-
-    name = str(source["name"])
-    kind = str(source.get("type"))
-    files = source_files(context, source, principal, principal_groups)
-    validators, _ = _web_schedule(context, name) if kind in WEB_TYPES else ({}, {})
-    indexed = _indexed_rows(context, name)
-    rows = []
-    for file in files:
-        row = indexed.get(str(file["id"])) if file["id"] is not None else None
-        url = (row or {}).get("path") or file.get("url")
-        entry = validators.get(str(url)) if url else None
-        last_read = entry.get("checked_at") if entry else None
-        next_check = _next_check(entry) if entry else None
-        changed = entry.get("changed_at") if entry else None
-        indexed_at = (row or {}).get("last_indexed_at")
-        rows.append(
-            {
-                "id": file["id"],
-                "path": file["path"],
-                "url": url if kind in WEB_TYPES else None,
-                "status": file["status"],
-                "flags": file["flags"],
-                "last_read_at": _iso(last_read) if last_read else indexed_at,
-                "last_changed_at": _iso(changed) if changed else indexed_at,
-                "next_check_at": _iso(next_check) if next_check else None,
-                "next_check": _iso(next_check) if next_check else _trigger_label(kind),
-                "interval_seconds": entry.get("interval") if entry else None,
-                "server_said": _server_said(entry, file),
-                "validator": "etag"
-                if entry and entry.get("etag")
-                else ("last-modified" if entry and entry.get("last_modified") else None),
-            }
-        )
-    return rows
-
-
-def _indexed_rows(context: ServiceContext, name: str) -> dict[str, dict[str, Any]]:
-    return {
-        str(row["id"]): dict(row)
-        for row in context.state.rows(
-            "SELECT id, path, last_indexed_at FROM artifacts WHERE source_id=?", (name,)
-        )
-    }
-
-
-def _server_said(entry: dict[str, Any] | None, file: dict[str, Any]) -> str | None:
-    for flag in file.get("flags") or []:
-        if flag.get("code") in ("unreadable", "stale"):
-            match = re.search(r"HTTP Error (\d{3})", str(flag.get("reason") or ""))
-            return match.group(1) if match else "error"
-    if entry and entry.get("status"):
-        return str(entry["status"])
-    return None
-
-
-def _trigger_label(kind: str) -> str:
-    if kind in WATCHED_TYPES:
-        return "on change"
-    return "next beat"
-
-
-def _in_state(row: dict[str, Any], state: str, now: float) -> bool:
-    if state == "all":
-        return True
-    codes = {flag["code"] for flag in row["flags"]}
-    if state == "attention":
-        return row["status"] != "ok"
-    if state == "unreadable":
-        return "unreadable" in codes
-    if state == "stale":
-        return "stale" in codes
-    if state == "little_text":
-        return bool(codes & {"no_text", "little_text"})
-    if state == "due_soon":
-        at = _epoch(row["next_check_at"])
-        return at is not None and at <= now + 3600
-    if state == "changed_week":
-        at = _epoch(row["last_changed_at"])
-        return at is not None and at >= now - 7 * 86400
-    return False
-
-
-def _rank(status: str) -> int:
-    return {"error": 0, "warning": 1}.get(status, 2)
-
-
 # -- shared reads (cached per checkpoint version) ------------------------------------
 
 _CACHE_LOCK = threading.Lock()
 _SCHEDULES: weakref.WeakKeyDictionary[Any, dict[str, tuple[str, Any]]] = weakref.WeakKeyDictionary()
+
+
+def _checkpoint_version(context: ServiceContext, name: str) -> str:
+    """When the source's checkpoint was last written ("" when it has none)."""
+
+    rows = context.state.rows(
+        "SELECT updated_at FROM source_checkpoints WHERE source_id=?", (name,)
+    )
+    return str(rows[0]["updated_at"]) if rows else ""
 
 
 def _web_schedule(context: ServiceContext, name: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -671,12 +449,9 @@ def _web_schedule(context: ServiceContext, name: str) -> tuple[dict[str, Any], d
     parsed once per checkpoint write, not once per request.
     """
 
-    rows = context.state.rows(
-        "SELECT updated_at FROM source_checkpoints WHERE source_id=?", (name,)
-    )
-    if not rows:
+    version = _checkpoint_version(context, name)
+    if not version:
         return {}, {}
-    version = str(rows[0]["updated_at"])
     with _CACHE_LOCK:
         cached = _SCHEDULES.setdefault(context.state, {}).get(name)
     if cached and cached[0] == version:

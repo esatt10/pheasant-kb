@@ -187,6 +187,7 @@ def _serve_app(cfg, config_path: str, *, report_ui: bool = True, role: str | Non
     from pheasant.deployment.roles import resolve_role
 
     policy = resolve_role(cfg, role)
+    os.environ["PHEASANT_ROLE"] = policy.name  # telemetry.sync_trace.ROLE_ENV: spans' role
     app_obj = create_app(cfg, config_path=config_path, role=policy.name)
     if report_ui and policy.serves_ui:
         _report_ui(app_obj, cfg)
@@ -2301,6 +2302,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "sync":
+        os.environ.setdefault("PHEASANT_ROLE", "cli")  # a serve's sync child keeps its role
         from pheasant.sync.locks import EngineLeaseError
 
         on_progress = _progress_emitter() if getattr(args, "progress", False) else None

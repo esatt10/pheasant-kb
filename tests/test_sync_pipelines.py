@@ -23,6 +23,7 @@ import pytest
 
 from pheasant.config.schema import PheasantConfig
 from pheasant.services import ServiceContext
+from pheasant.services import sync_ledger as ledger_service
 from pheasant.services import sync_pipelines as pipes
 from pheasant.services.errors import InvalidRequest
 from pheasant.sync.engine import SyncEngine
@@ -286,13 +287,19 @@ def test_the_ledger_says_when_each_document_was_read_changed_and_is_due(
     context = _context(engine)
     try:
         engine.sync_source("web", "incremental")
-        ledger = pipes.documents(context, pipes.DocumentsRequest("web"))
-        attention = pipes.documents(context, pipes.DocumentsRequest("web", state="attention"))
-        one = pipes.document(context, "web", f"{site.base}/p0")
-        marked = pipes.recheck(context, "web", [f"{site.base}/p0"])
-        due = pipes.documents(context, pipes.DocumentsRequest("web", state="due_soon"))
+        ledger = ledger_service.documents(context, ledger_service.DocumentsRequest("web"))
+        attention = ledger_service.documents(
+            context, ledger_service.DocumentsRequest("web", state="attention")
+        )
+        one = ledger_service.document(context, "web", f"{site.base}/p0")
+        marked = ledger_service.recheck(context, "web", [f"{site.base}/p0"])
+        due = ledger_service.documents(
+            context, ledger_service.DocumentsRequest("web", state="due_soon")
+        )
         with pytest.raises(InvalidRequest, match="state must be"):
-            pipes.documents(context, pipes.DocumentsRequest("web", state="sometimes"))
+            ledger_service.documents(
+                context, ledger_service.DocumentsRequest("web", state="sometimes")
+            )
     finally:
         engine.close()
     rows = {row["path"].rsplit("/", 1)[-1].split(".")[0]: row for row in ledger["documents"]}
@@ -431,3 +438,83 @@ def test_a_served_beat_skips_paused_pipelines_in_the_child_processes_too(monkeyp
 
     engine.sync_all("incremental", scheduled=True)
     assert synced == ["a", "c"]
+
+
+def test_the_ledger_is_built_once_per_version_of_the_source(
+    tmp_path: Path, site: _Site, monkeypatch
+) -> None:
+    """A page of the ledger, a filter and one document reuse one build; a
+    recheck (a checkpoint write) or a sync (a new event) makes a new one, and
+    the source's older version is dropped rather than left holding memory."""
+
+    from pheasant.services import quality
+
+    # Two hours: only the recheck makes a page due within the hour.
+    engine = _engine(tmp_path, site, ["p0", "p1"], interval_seconds=7200)
+    context = _context(engine)
+    built: list[str] = []
+    build = ledger_service._build_ledger
+    monkeypatch.setattr(
+        ledger_service, "_build_ledger", lambda c, s, *a: built.append(s["name"]) or build(c, s, *a)
+    )
+    try:
+        engine.sync_source("web", "incremental")
+        first = ledger_service.documents(context, ledger_service.DocumentsRequest("web"))
+        ledger_service.documents(
+            context, ledger_service.DocumentsRequest("web", state="attention", offset=1)
+        )
+        ledger_service.document(context, "web", f"{site.base}/p1")
+        assert built == ["web"], "one build serves every read of one version"
+
+        ledger_service.recheck(context, "web", [f"{site.base}/p0"])
+        due = ledger_service.documents(
+            context, ledger_service.DocumentsRequest("web", state="due_soon")
+        )
+        assert len(built) == 2 and due["totals"]["due_soon"] == 1, "a recheck is a new version"
+
+        engine.sync_source("web", "incremental")
+        ledger_service.documents(context, ledger_service.DocumentsRequest("web"))
+        assert len(built) == 3, "a sync is a new version"
+        held = quality._caches(context.state)[1]["ledgers"]
+        assert len(held) == 1, "the source's older ledgers are dropped once replaced"
+    finally:
+        engine.close()
+    assert first["totals"]["all"] == 2
+
+
+def test_a_span_names_the_role_that_ran_the_sync(monkeypatch) -> None:
+    """``pheasant serve`` sets PHEASANT_ROLE; a span (and a sync child, which
+    inherits the environment) carries it as ``resource["pheasant.role"]``."""
+
+    from pheasant.telemetry.sync_trace import ROLE_ENV, SyncTrace
+
+    monkeypatch.setenv(ROLE_ENV, "indexer")
+    spans = SyncTrace("docs", "incremental").finish("healthy", {})
+    assert {span["resource"]["pheasant.role"] for span in spans} == {"indexer"}
+
+    monkeypatch.delenv(ROLE_ENV)
+    spans = SyncTrace("docs", "incremental").finish("healthy", {})
+    assert "pheasant.role" not in spans[0]["resource"]
+
+
+def test_a_hand_run_sync_is_the_clis_and_a_serves_child_keeps_its_role(monkeypatch) -> None:
+    import os
+
+    from pheasant import cli
+
+    class _Stop(Exception):
+        pass
+
+    def stop(*_a: Any, **_k: Any) -> None:
+        raise _Stop
+
+    monkeypatch.setattr(cli, "_engine", stop)
+    monkeypatch.delenv("PHEASANT_ROLE", raising=False)
+    with pytest.raises(_Stop):
+        cli.main(["sync", "--all"])
+    assert os.environ["PHEASANT_ROLE"] == "cli"
+
+    monkeypatch.setenv("PHEASANT_ROLE", "indexer")
+    with pytest.raises(_Stop):
+        cli.main(["sync", "--all"])
+    assert os.environ["PHEASANT_ROLE"] == "indexer"

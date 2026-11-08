@@ -66,15 +66,15 @@ class SyncPipelineTools:
         principal_groups: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
-        from pheasant.services import sync_pipelines
+        from pheasant.services import sync_ledger
 
         if path:
-            return sync_pipelines.document(
+            return sync_ledger.document(
                 self.services, source_name, path, knowledge_base, principal, principal_groups
             )
-        return sync_pipelines.documents(
+        return sync_ledger.documents(
             self.services,
-            sync_pipelines.DocumentsRequest(
+            sync_ledger.DocumentsRequest(
                 source_name=source_name,
                 knowledge_base=knowledge_base,
                 state=state,

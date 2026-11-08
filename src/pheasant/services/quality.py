@@ -226,19 +226,19 @@ SNAPSHOTS_KEPT = 16
 
 _SNAPSHOTS_LOCK = threading.Lock()
 
-#: Per state store: (snapshots, levels). Held weakly, so a store's caches go
-#: with it and no later store can be handed them -- an object id is reused
-#: once its object is collected.
-_CACHES: weakref.WeakKeyDictionary[Any, tuple[OrderedDict, OrderedDict]] = (
+#: Per state store: (snapshots, views by name). Held weakly, so a store's
+#: caches go with it and no later store can be handed them -- an object id is
+#: reused once its object is collected.
+_CACHES: weakref.WeakKeyDictionary[Any, tuple[OrderedDict, dict[str, OrderedDict]]] = (
     weakref.WeakKeyDictionary()
 )
 
 
-def _caches(state: Any) -> tuple[OrderedDict, OrderedDict]:
+def _caches(state: Any) -> tuple[OrderedDict, dict[str, OrderedDict]]:
     with _SNAPSHOTS_LOCK:
         caches = _CACHES.get(state)
         if caches is None:
-            caches = _CACHES[state] = (OrderedDict(), OrderedDict())
+            caches = _CACHES[state] = (OrderedDict(), {})
         return caches
 
 
@@ -255,7 +255,7 @@ def _snapshot(context: ServiceContext, source: dict[str, Any]) -> _Snapshot:
     """
 
     key = _snapshot_key(context, source)
-    snapshots, _levels = _caches(context.state)
+    snapshots, _views = _caches(context.state)
     with _SNAPSHOTS_LOCK:
         if key in snapshots:
             snapshots.move_to_end(key)
@@ -316,22 +316,42 @@ def cached_level(
     because an ACL can show two callers two different folders.
     """
 
-    key = (
-        _snapshot_key(context, source),
-        folder.strip("/").lower(),
-        principal,
-        tuple(sorted(principal_groups or [])),
-    )
-    _snapshots, levels = _caches(context.state)
+    scope = (folder.strip("/").lower(), principal, tuple(sorted(principal_groups or [])))
+    return cached_view(context, source, "levels", scope, build, kept=LEVELS_KEPT)
+
+
+def cached_view(  # noqa: PLR0913 - the cache's name, its key's two halves, its size
+    context: ServiceContext,
+    source: dict[str, Any],
+    view: str,
+    scope: tuple,
+    build: Callable[[], Any],
+    *,
+    kept: int,
+    version: tuple = (),
+) -> Any:
+    """``build()`` once per version of ``source`` (plus ``version``) for one ``scope``.
+
+    ``view`` names a cache of its own, ``kept`` entries long, so a few large
+    values (a ledger of every document) cannot push out many small ones (the
+    taxonomy's levels). Storing a new version drops the scope's older ones at
+    once, rather than leaving them to age out of the cache holding memory.
+    """
+
+    key = (_snapshot_key(context, source), version, scope)
+    _snapshots, views = _caches(context.state)
     with _SNAPSHOTS_LOCK:
-        if key in levels:
-            levels.move_to_end(key)
-            return levels[key]
+        store = views.setdefault(view, OrderedDict())
+        if key in store:
+            store.move_to_end(key)
+            return store[key]
     value = build()
     with _SNAPSHOTS_LOCK:
-        levels[key] = value
-        while len(levels) > LEVELS_KEPT:
-            levels.popitem(last=False)
+        for stale in [k for k in store if k[0][0] == key[0][0] and k[2] == scope]:
+            del store[stale]
+        store[key] = value
+        while len(store) > kept:
+            store.popitem(last=False)
     return value
 
 

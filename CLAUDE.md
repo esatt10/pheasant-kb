@@ -531,7 +531,10 @@ trigger asks (beat, startup via `startup_sources`, watcher, git), so a paused
 or manual pipeline cannot be started by a path that forgot; a deleted one is
 also refused when asked (`PIPELINE_DELETED`, 409). The document ledger is
 per document: last read, last changed, next check, the server's answer, and
-`file_quality`. **A web collection is paced per host** (`sync/web_pacing.py`):
+`file_quality` (`services/sync_ledger.py`), built once per version of the
+source -- the taxonomy snapshot's key plus the checkpoint's write time, which
+a recheck moves -- and kept in `quality.cached_view`, so a page of a large
+source is a filter over numbers rather than a rebuild of every row. **A web collection is paced per host** (`sync/web_pacing.py`):
 robots.txt `Crawl-delay`, cached a day in the cursor, is one slot schedule
 shared across the prepare threads, and a paced host gets a per-run budget
 (~55 minutes of its delay, or `max_items_per_run`) planned at listing time
@@ -541,7 +544,9 @@ indexer. **Each sync is an OpenTelemetry-shaped trace** (`telemetry/sync_trace.p
 a `pheasant.sync` span and one `pheasant.sync.<phase>` child per progress
 phase, written as one `{"type":"otel.span",...}` JSON line to stdout (which
 is what Container Apps ships to Log Analytics) and exported over OTLP when an
-SDK provider is configured. It joins the caller's ambient trace; a sync child
+SDK provider is configured. `resource["pheasant.role"]` names the tier
+(`PHEASANT_ROLE`: `serve` sets its role, `pheasant sync` defaults to `cli`,
+and a sync child inherits it). It joins the caller's ambient trace; a sync child
 process returns its spans in `details.otel_spans` and the parent emits them,
 and a child that dies gets an error span from the parent. The `trace_id` is
 on the sync event, so the Syncs page's runs name the trace to search for.
