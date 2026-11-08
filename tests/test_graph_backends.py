@@ -1385,6 +1385,111 @@ def test_the_index_ordered_frontier_keeps_the_pairs_the_ranking_keeps(
     assert len(whole[()]["hub:plain"]) == 40 and "hub:empty" not in whole[()]
 
 
+def _wide_hop_graph(engine: SyncEngine, hubs: int = 40, fan_out: int = 300) -> str:
+    """A page whose first hop is many entities, each a hub over many pages.
+
+    The shape of a web page on the Azure fleet: 68 entities one hop out, each
+    mentioned by thousands of pages, so a level fetched whole is the sum of
+    every hub's limit however few neighbours the walk still needs.
+    """
+
+    graph = engine.graph_builder.graph
+    root = "page:root"
+    graph.add_node(root, id=root, type="web_page", label="root", source_id="docs")
+    for index in range(fan_out):
+        page = f"page:{index:04d}"
+        graph.add_node(page, id=page, type="web_page", label=page, source_id="docs")
+    for hub_index in range(hubs):
+        hub = f"entity:{hub_index:02d}"
+        graph.add_node(hub, id=hub, type="entity", label=hub, source_id="docs")
+        graph.add_edge(root, hub, type="mentions")
+        for index in range(fan_out):
+            graph.add_edge(hub, f"page:{(index * 7 + hub_index) % fan_out:04d}", type="mentions")
+    chunk = "chunk:root:0"
+    graph.add_node(chunk, id=chunk, type="chunk", label=chunk, source_id="docs")
+    graph.add_edge(root, chunk, type="has_chunk")
+    engine.graph_store.save(KB, graph)
+    return root
+
+
+def test_a_bounded_walk_reads_a_wide_hop_a_fetch_at_a_time(tmp_path: Path) -> None:
+    """The per-source limit bounds each source; the fetch cap bounds their sum.
+
+    Off a root with 80 hub neighbours, a 100-node walk fills its second hop
+    from the first few hubs. Fetched whole, that hop read every hub's ~100
+    pairs: 8,000 to keep 59. Asserted as pairs read, so it fails if the level
+    is fetched whole again.
+    """
+
+    from pheasant.graph.traversal import FRONTIER_PAIRS_PER_FETCH
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        root = _wide_hop_graph(engine, hubs=80)
+        stored = SqlGraph(engine.state, KB)
+        pairs: list[int] = []
+        real = stored.rows.out_edges
+
+        def counted(kb_id: str, sources: Any, *args: Any, **kwargs: Any) -> Any:
+            found = real(kb_id, sources, *args, **kwargs)
+            pairs.append(sum(len(entries) for entries in found.values()))
+            return found
+
+        stored.rows.out_edges = counted  # type: ignore[method-assign]
+        found = neighbors(stored, root, depth=2, max_nodes=100)
+    finally:
+        engine.close()
+
+    assert len(found["neighbors"]) == 100, "the walk did not fill its budget"
+    first_hop = pairs[0]
+    assert sum(pairs) - first_hop <= FRONTIER_PAIRS_PER_FETCH, (
+        f"read {sum(pairs) - first_hop} pairs on the second hop of a 100-node walk; "
+        "it is being fetched for every frontier source at once"
+    )
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=postgres)])
+def test_a_walk_fetched_in_blocks_keeps_the_neighbours_a_whole_level_would(
+    tmp_path: Path, backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same sources, same order: the blocks change what is read, never what is kept."""
+
+    from pheasant.graph import traversal
+
+    engine = _synced(tmp_path, "rows", backend=backend)
+    try:
+        root = _wide_hop_graph(engine, hubs=12, fan_out=60)
+        stored = SqlGraph(engine.state, KB)
+        shapes: list[dict[str, Any]] = [
+            {"depth": 2, "max_nodes": cap} for cap in (1, 2, 5, 13, 14, 40, 100, 400, 2000)
+        ]
+        shapes += [
+            {"depth": 3, "max_nodes": 50},
+            {"depth": 2, "max_nodes": 30, "edge_types": ["mentions"]},
+            {"depth": 2, "max_nodes": 30, "exclude_node_types": {"chunk"}},
+            {"depth": 2, "max_nodes": None},
+        ]
+
+        def walk(shape: dict[str, Any]) -> list[tuple[str, int, tuple[str, ...]]]:
+            result = neighbors(stored, root, **shape)
+            return [
+                (item["node_id"], item["depth"], tuple(item["edge_types"]))
+                for item in result["neighbors"]
+            ]
+
+        walks = {}
+        for cap in (1, 64, 10**9):  # one source a fetch, a few, the level whole
+            monkeypatch.setattr(traversal, "FRONTIER_PAIRS_PER_FETCH", cap)
+            walks[cap] = [walk(shape) for shape in shapes]
+    finally:
+        engine.close()
+
+    for cap in (1, 64):
+        for shape, got, expected in zip(shapes, walks[cap], walks[10**9], strict=True):
+            assert got == expected, f"fetching {cap} pairs at a time changed the walk {shape}"
+    assert any(len(got) > 13 for got in walks[1]), "no walk reached past the first hop"
+
+
 def test_a_filtered_walk_is_not_bounded(tmp_path: Path) -> None:
     """Because the bound would be unsound, and correct beats fast.
 
