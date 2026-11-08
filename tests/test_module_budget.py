@@ -85,7 +85,9 @@ CEILINGS: dict[str, int] = {
     # Raised by 3 for the job-clear client taking a managed identity
     # (`security/service_auth.py` holds the rule).
     "jobs.py": 803,
-    "mcp_server/server.py": 1300,
+    # Raised from 1300 for `get_region_status`, registered from its own
+    # module (`mcp_server/region_tools.py`) like every newer plane.
+    "mcp_server/server.py": 1303,
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,
     "memory/store.py": 950,
@@ -109,7 +111,13 @@ CEILINGS: dict[str, int] = {
     # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
     # source, and the taxonomy reads a source's version on every level.
     "persistence/schema.py": 1154,
-    "persistence/state_store.py": 1800,
+    # The SQLite and Postgres backends are one unit: the shared interface and
+    # its two implementations. Crossed 800 with the Postgres read path's
+    # dropped-connection discard and pool check before a retry.
+    "persistence/backends.py": 815,
+    # Lowered from 1800 when the derived-index migrations moved to
+    # `persistence/derived_indexes.py`.
+    "persistence/state_store.py": 1780,
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.

@@ -485,6 +485,11 @@ class PostgresBackend(StateBackend):
             if not is_disconnect(exc):
                 raise
             logger.warning("PostgreSQL connection dropped during a read; retrying once: %s", exc)
+            # A restart drops every idle connection; replace them before retrying.
+            try:
+                self._pool.check()
+            except Exception:  # pragma: no cover - the retry reports what is wrong
+                logger.debug("pool check before the retry failed", exc_info=True)
             return self._rows_once(sql, params)
 
     def _rows_once(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
@@ -536,11 +541,7 @@ class PostgresBackend(StateBackend):
                         "Could not restore PostgreSQL statement_timeout; discarding connection",
                         exc_info=True,
                     )
-                    try:
-                        self._pool.putconn(conn, close=True)
-                    finally:
-                        self._local.conn = None
-                        self._local.adapter = None
+                    self._discard(conn)
                     from pheasant.request_budget import record_active_timing
 
                     record_active_timing("postgres_read", time.perf_counter() - read_started)
@@ -569,11 +570,7 @@ class PostgresBackend(StateBackend):
                     "Could not restore PostgreSQL statement_timeout; discarding connection",
                     exc_info=True,
                 )
-                try:
-                    self._pool.putconn(conn, close=True)
-                finally:
-                    self._local.conn = None
-                    self._local.adapter = None
+                self._discard(conn)
                 from pheasant.request_budget import record_active_timing
 
                 record_active_timing("postgres_read", time.perf_counter() - read_started)
@@ -591,6 +588,23 @@ class PostgresBackend(StateBackend):
         if timeout_installed and (remaining_seconds() or 0) <= 0:
             raise DeadlineExceeded("assistant request deadline exceeded during a PostgreSQL read")
         return result
+
+    def _discard(self, conn: Any) -> None:
+        """Close this thread's connection and hand it back; the pool replaces it.
+
+        ``putconn`` takes no ``close`` flag: passing one turned a dropped
+        connection under a deadline into ``TypeError`` rather than a retry.
+        """
+
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - already broken
+            pass
+        try:
+            self._pool.putconn(conn)
+        finally:
+            self._local.conn = None
+            self._local.adapter = None
 
     @staticmethod
     def _restore_transactional(conn: Any) -> None:

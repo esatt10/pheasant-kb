@@ -1308,6 +1308,231 @@ def test_the_bounded_frontier_returns_what_the_unbounded_one_would(tmp_path: Pat
     assert whole.index(mixed) < 5, "a pair with a priority edge did not rank ahead whole"
 
 
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=postgres)])
+def test_the_index_ordered_frontier_keeps_the_pairs_the_ranking_keeps(
+    tmp_path: Path, backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read in key order and stopped at the limit, the same pairs come back.
+
+    The bounded fetch used to rank a source's whole fan-out with a window and
+    keep its first pairs; an entity every page of a 25k-page source mentions
+    made that 24,970 rows read to keep 213, per entity per walk. It now scans
+    the primary key twice per source and stops. That is only an optimization
+    if every source, at every limit, gets exactly the prefix the ranking gave:
+    priority pairs first (whole, when a pair also has an ordinary edge), then
+    the rest, each by target, every edge of a kept pair included.
+    """
+
+    from pheasant.persistence import graph_rows
+
+    engine = _synced(tmp_path, "rows", backend=backend)
+    try:
+        graph = engine.graph_builder.graph
+
+        def node(node_id: str) -> None:
+            graph.add_node(node_id, id=node_id, type="chunk", label=node_id, source_id="docs")
+
+        for hub in ("hub:mixed", "hub:plain", "hub:tree", "hub:empty"):
+            node(hub)
+        for index in range(40):
+            node(f"leaf:{index:03d}")
+            graph.add_edge("hub:mixed", f"leaf:{index:03d}", type="indexes")
+            graph.add_edge("hub:plain", f"leaf:{index:03d}", type="mentions")
+        graph.add_edge("hub:plain", "leaf:007", type="mentions")  # a parallel edge
+        for index in (3, 17, 31):  # priority pairs that are also ordinary ones
+            graph.add_edge("hub:mixed", f"leaf:{index:03d}", type="contains")
+        for index in range(6):
+            node(f"dir:{index}")
+            graph.add_edge("hub:mixed", f"dir:{index}", type="contains")
+            graph.add_edge("hub:tree", f"dir:{index}", type="contains")
+        engine.graph_store.save(KB, graph)
+        store = SqlGraph(engine.state, KB).rows
+        hubs = ["hub:mixed", "hub:plain", "hub:tree", "hub:empty"]
+
+        def shaped(found: dict) -> dict:
+            return {
+                source: [
+                    (entry[0], entry[1], [dict(attrs) for attrs in entry[2].values()])
+                    for entry in entries
+                ]
+                for source, entries in found.items()
+            }
+
+        whole = {
+            priority: shaped(store.out_edges(KB, hubs, None, priority, None))
+            for priority in (("contains",), ())
+        }
+
+        def refused(*_args: Any, **_kwargs: Any) -> str:
+            raise AssertionError("a bounded walk ranked a whole fan-out")
+
+        monkeypatch.setattr(graph_rows, "ranked_frontier", refused)
+        for priority, ordered in whole.items():
+            for limit in (1, 2, 3, 4, 5, 9, 10, 12, 40, 49, 200):
+                bounded = shaped(store.out_edges(KB, hubs, None, priority, limit))
+                expected = {source: entries[:limit] for source, entries in ordered.items()}
+                assert bounded == expected, f"limit {limit}, priority {priority or 'none'}"
+                # What a walk asks for: the same pairs and edge types, no attributes.
+                keys = shaped(store.out_edges(KB, hubs, None, priority, limit, keys_only=True))
+                assert {
+                    source: [(s, t, [a["type"] for a in attrs]) for s, t, attrs in entries]
+                    for source, entries in keys.items()
+                } == {
+                    source: [(s, t, [a["type"] for a in attrs]) for s, t, attrs in entries]
+                    for source, entries in expected.items()
+                }, f"keys-only, limit {limit}, priority {priority or 'none'}"
+    finally:
+        engine.close()
+
+    mixed = whole[("contains",)]["hub:mixed"]
+    assert [entry[1] for entry in mixed[:9]] == [
+        *(f"dir:{index}" for index in range(6)),
+        "leaf:003",
+        "leaf:017",
+        "leaf:031",
+    ], "the fixture's priority order is not the one the ranking promises"
+    assert len(whole[()]["hub:plain"]) == 40 and "hub:empty" not in whole[()]
+
+
+def test_the_hierarchy_scan_reads_its_partial_index(tmp_path: Path) -> None:
+    """A source's first hierarchy targets come from an index of hierarchy edges.
+
+    Off the primary key that scan read a source's whole key range, and an
+    entity hub has no hierarchy edges at all: 4,396 of the 13,465 pages one
+    7-hub fetch touched. The index's predicate is spelled in persistence,
+    which cannot import the walk, so the two spellings are held equal here,
+    and the plan is read rather than timed.
+    """
+
+    from pheasant.graph.traversal import HIERARCHY_EDGE_TYPES
+    from pheasant.persistence import derived_indexes, graph_frontier
+
+    assert (derived_indexes.HIERARCHY_EDGE_TYPE,) == HIERARCHY_EDGE_TYPES
+    engine = _synced(tmp_path, "rows")
+    try:
+        engine.state.migrate()  # a second boot: the marker makes it a no-op
+        indexes = engine.state.rows(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_graph_edges_hierarchy'"
+        )
+        statement, _values = graph_frontier._source_statement(
+            engine.state.dialect, "?", HIERARCHY_EDGE_TYPES, graph_frontier._KEY_COLUMNS
+        )
+        plan = engine.state.rows(
+            "EXPLAIN QUERY PLAN " + statement, (KB, "x", 5, KB, "x", 5, 5, KB, "x")
+        )
+    finally:
+        engine.close()
+
+    assert indexes, "the migration did not create the hierarchy index"
+    details = " | ".join(str(row["detail"]) for row in plan)
+    assert "idx_graph_edges_hierarchy" in details, details
+
+
+def _wide_hop_graph(engine: SyncEngine, hubs: int = 40, fan_out: int = 300) -> str:
+    """A page whose first hop is many entities, each a hub over many pages.
+
+    The shape of a web page on the Azure fleet: 68 entities one hop out, each
+    mentioned by thousands of pages, so a level fetched whole is the sum of
+    every hub's limit however few neighbours the walk still needs.
+    """
+
+    graph = engine.graph_builder.graph
+    root = "page:root"
+    graph.add_node(root, id=root, type="web_page", label="root", source_id="docs")
+    for index in range(fan_out):
+        page = f"page:{index:04d}"
+        graph.add_node(page, id=page, type="web_page", label=page, source_id="docs")
+    for hub_index in range(hubs):
+        hub = f"entity:{hub_index:02d}"
+        graph.add_node(hub, id=hub, type="entity", label=hub, source_id="docs")
+        graph.add_edge(root, hub, type="mentions")
+        for index in range(fan_out):
+            graph.add_edge(hub, f"page:{(index * 7 + hub_index) % fan_out:04d}", type="mentions")
+    chunk = "chunk:root:0"
+    graph.add_node(chunk, id=chunk, type="chunk", label=chunk, source_id="docs")
+    graph.add_edge(root, chunk, type="has_chunk")
+    engine.graph_store.save(KB, graph)
+    return root
+
+
+def test_a_bounded_walk_reads_a_wide_hop_a_fetch_at_a_time(tmp_path: Path) -> None:
+    """The per-source limit bounds each source; the fetch cap bounds their sum.
+
+    Off a root with 80 hub neighbours, a 100-node walk fills its second hop
+    from the first few hubs. Fetched whole, that hop read every hub's ~100
+    pairs: 8,000 to keep 59. Asserted as pairs read, so it fails if the level
+    is fetched whole again.
+    """
+
+    from pheasant.graph.traversal import FRONTIER_PAIRS_PER_FETCH
+
+    engine = _synced(tmp_path, "rows")
+    try:
+        root = _wide_hop_graph(engine, hubs=80)
+        stored = SqlGraph(engine.state, KB)
+        pairs: list[int] = []
+        real = stored.rows.out_edges
+
+        def counted(kb_id: str, sources: Any, *args: Any, **kwargs: Any) -> Any:
+            found = real(kb_id, sources, *args, **kwargs)
+            pairs.append(sum(len(entries) for entries in found.values()))
+            return found
+
+        stored.rows.out_edges = counted  # type: ignore[method-assign]
+        found = neighbors(stored, root, depth=2, max_nodes=100)
+    finally:
+        engine.close()
+
+    assert len(found["neighbors"]) == 100, "the walk did not fill its budget"
+    first_hop = pairs[0]
+    assert sum(pairs) - first_hop <= FRONTIER_PAIRS_PER_FETCH, (
+        f"read {sum(pairs) - first_hop} pairs on the second hop of a 100-node walk; "
+        "it is being fetched for every frontier source at once"
+    )
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=postgres)])
+def test_a_walk_fetched_in_blocks_keeps_the_neighbours_a_whole_level_would(
+    tmp_path: Path, backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same sources, same order: the blocks change what is read, never what is kept."""
+
+    from pheasant.graph import traversal
+
+    engine = _synced(tmp_path, "rows", backend=backend)
+    try:
+        root = _wide_hop_graph(engine, hubs=12, fan_out=60)
+        stored = SqlGraph(engine.state, KB)
+        shapes: list[dict[str, Any]] = [
+            {"depth": 2, "max_nodes": cap} for cap in (1, 2, 5, 13, 14, 40, 100, 400, 2000)
+        ]
+        shapes += [
+            {"depth": 3, "max_nodes": 50},
+            {"depth": 2, "max_nodes": 30, "edge_types": ["mentions"]},
+            {"depth": 2, "max_nodes": 30, "exclude_node_types": {"chunk"}},
+            {"depth": 2, "max_nodes": None},
+        ]
+
+        def walk(shape: dict[str, Any]) -> list[tuple[str, int, tuple[str, ...]]]:
+            result = neighbors(stored, root, **shape)
+            return [
+                (item["node_id"], item["depth"], tuple(item["edge_types"]))
+                for item in result["neighbors"]
+            ]
+
+        walks = {}
+        for cap in (1, 64, 10**9):  # one source a fetch, a few, the level whole
+            monkeypatch.setattr(traversal, "FRONTIER_PAIRS_PER_FETCH", cap)
+            walks[cap] = [walk(shape) for shape in shapes]
+    finally:
+        engine.close()
+
+    for cap in (1, 64):
+        for shape, got, expected in zip(shapes, walks[cap], walks[10**9], strict=True):
+            assert got == expected, f"fetching {cap} pairs at a time changed the walk {shape}"
+    assert any(len(got) > 13 for got in walks[1]), "no walk reached past the first hop"
+
+
 def test_a_filtered_walk_is_not_bounded(tmp_path: Path) -> None:
     """Because the bound would be unsound, and correct beats fast.
 

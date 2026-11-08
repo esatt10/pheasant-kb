@@ -152,7 +152,11 @@ pheasant-kb/
 │   │                            schema, lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
 │   │                            (file|rows), graph_rows
-│   │                            (the delta write), graph_codec (rows to
+│   │                            (the delta write), graph_frontier (a
+│   │                            walk's out-edges, bounded ones read in
+│   │                            key order), derived_indexes (indexes
+│   │                            added after their tables, once per
+│   │                            region), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
 │   │                            receipts (what happened to what a caller
 │   │                            submitted), manifest, migrate, paths
@@ -182,7 +186,9 @@ pheasant-kb/
 │   │                            (a web collection's pages: add, remove),
 │   │                            sync_control (cancel a source's running
 │   │                            sync), voice (the composer's dictation:
-│   │                            a live transcription session, HTTP only)
+│   │                            a live transcription session, HTTP only),
+│   │                            region_status (what is still waking or
+│   │                            warming after a scale-to-zero wake)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            compose_tools (compose_artifact as a job),
@@ -210,7 +216,9 @@ pheasant-kb/
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
-│   ├── deployment/            ← roles, serving durability, mounts, host
+│   ├── deployment/            ← roles, serving durability, mounts, host,
+│   │                            wake_gate (the api's port while its
+│   │                            database wakes)
 │   ├── security/              ← path_policy (what may be read),
 │   │                            corpus_policy (what may never be indexed),
 │   │                            acl, idp
@@ -218,7 +226,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 196 pytest modules, offline by design
+└── tests/                     ← 197 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1570,6 +1578,21 @@ Serving durability: bounded request concurrency answering `429` +
 `Retry-After` under saturation, and a SIGTERM drain that fails readiness and
 keeps serving on a timer thread — never by sleeping on the event loop.
 
+**Waking from zero is said, not suffered** (`deployment/wake_gate.py`,
+`services/region_status.py`; `GET /region/status`, MCP `get_region_status`,
+the web UI's banner). A region that scales to zero wakes on its first
+request, and the api cannot start until its database accepts a login; for
+that minute nothing listened on its port, so a page spun blank and an agent
+hung to its own timeout. `python -m pheasant.deployment.wake_gate` holds the
+port first: `/health` 200 (the platform routes to it at once),
+`/region/status` in the api's own shape (`served_by: "wake_gate"`), a page
+for a browser that opens the app once it answers, and 503 `REGION_WAKING`
+with `Retry-After` for everything else; it exits when the database answers
+and the server starts in its place. Once up, the api reports each part as
+`waking` (silent within `WAKE_WINDOW_SECONDS` of start), `warming` (Postgres's
+autoprewarm worker still loading) or `unavailable`, and the banner leaves
+when everything is `ready`. `tests/test_region_status.py`.
+
 **The fleet's invariants are refusals, not conventions** (`deployment/roles.py`,
 one pass at startup). A serving role other than `all` refuses a bind other
 machines can reach with neither `security.api_auth.token_env` resolving nor
@@ -2270,6 +2293,45 @@ Each of these cost real time. They are listed because the shape recurs.
   arrive are rows nobody builds a `Row` dict for, decodes into `_LazyAttrs`,
   or groups into pairs, and that is where the time was. Timing the SQL alone
   said do not do it.
+- **A window function reads everything it numbers, so a limit applied after
+  one bounds the rows sent, not the rows read.** The ranked frontier kept a
+  hub's first 213 pairs by numbering all of them, which was fine for a
+  1,620-edge `source` node and not for an entity every page of a 25k-page web
+  source mentions: 24,970 edges read with their attributes per entity, eleven
+  entities per page, per hop. On the Azure fleet the answerer's unbounded
+  two-hop expansion through those held the graph service on Postgres (NFS,
+  so CPU sat idle) until its liveness probe killed it, and every compose
+  answer fell over. Three changes: the expansion walk is bounded
+  (`EXPAND_MAX_NODES`), best-effort with one 10 s wait (like facts), and a
+  bounded frontier with no `targets` is read in key order
+  (`persistence/graph_frontier.bounded_rows`): two `DISTINCT target …
+  ORDER BY target LIMIT n` scans of the primary key per source (priority
+  targets, then any), merged by `MIN(rank)`, one `LATERAL` statement on
+  Postgres. Same pairs, proven per limit in `tests/test_graph_backends.py`;
+  **91 ms against 1,166 ms** for 11 such hubs on a local Postgres. Two
+  follow-ups: `neighbors_many` walks its roots side by side
+  (`traversal.neighbors_many`, the caller's context copied into each), since
+  four cold walks in a row overran 10 s that each fit alone; and **every**
+  graph request now carries `X-Pheasant-Remaining-Ms`, which the service
+  turns into each read's `statement_timeout` (504 when it runs out). It used
+  to be sent only inside an answer's latency budget, which is off by
+  default, so a walk the caller had abandoned ran on in Postgres to the end
+  -- once for over an hour. And a per-source limit is not a per-level one:
+  a page's first hop was 68 entities, each a hub, so the second hop asked
+  for ~18,000 edges to keep 200 and ran past a minute even warm (single
+  walks off narrower pages took 0.5 s, which is what hid it; Postgres
+  prewarm on the fleet changed nothing). A bounded walk now takes a level's
+  sources `FRONTIER_PAIRS_PER_FETCH // limit` at a time, in order, and stops
+  between fetches once full (`traversal._frontier_block`): same neighbours,
+  and a level of small sources is still one query. What a cold fetch still
+  paid was pages: of 13,465 one 7-hub fetch touched, 4,396 were the
+  hierarchy scan reading each hub's whole key range for `contains` edges it
+  has none of, and ~9,000 were a heap page per kept edge for attributes a
+  walk never reads. A partial index over `contains` edges
+  (`derived_indexes`, created once per region behind a marker, because
+  index DDL in `CORE_SCHEMA` never reaches an upgraded Postgres) and
+  `keys_only` reads for bounded walks make it 7 pages and an index-only
+  join: 38.9 -> 16.6 ms warm, and a few hundred distinct pages cold.
 - **A lazy mapping is a cost to a reader that wants all of it.**
   `_LazyAttrs` exists because a traversal hop reads `type` and nothing else,
   and it is exactly wrong for the search arm, which reads every attribute of

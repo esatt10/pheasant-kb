@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 
 from pheasant.graph.simple import SimpleMultiDiGraph
@@ -28,6 +30,39 @@ HIERARCHY_EDGE_TYPES = ("contains",)
 #: Hard ceiling on traversal depth, whatever a caller asks for. Ten hops off a
 #: hub node is already most of the graph.
 MAX_DEPTH = 10
+
+#: Walks :func:`neighbors_many` runs at once. Each is a handful of reads that
+#: mostly wait on the store, so they overlap well; four is the answerer's
+#: batch (it expands its top four hits) and a small share of a Postgres pool.
+NEIGHBORS_MANY_PARALLELISM = 4
+
+
+def neighbors_many(
+    graph: Any, node_ids: Sequence[str], depth: int = 1, max_nodes: int | None = None
+) -> list[dict[str, Any]]:
+    """:func:`neighbors` for several roots, walked side by side, in input order.
+
+    One after another, a batch cost the sum of its walks, and on the Azure
+    fleet a walk that reads cold pages off the database's network share is
+    seconds, so four of them overran the answerer's 10 s expansion budget
+    together when each fit alone. Each walk runs in a copy of the caller's
+    context, which carries the request deadline the store turns into a
+    statement timeout.
+    """
+
+    roots = [str(node_id) for node_id in node_ids]
+    if len(roots) <= 1:
+        return [neighbors(graph, root, depth, max_nodes=max_nodes) for root in roots]
+    contexts = [copy_context() for _ in roots]
+    with ThreadPoolExecutor(
+        max_workers=min(len(roots), NEIGHBORS_MANY_PARALLELISM),
+        thread_name_prefix="pheasant-graph-walk",
+    ) as pool:
+        futures = [
+            pool.submit(context.run, neighbors, graph, root, depth, None, max_nodes)
+            for context, root in zip(contexts, roots, strict=True)
+        ]
+        return [future.result() for future in futures]
 
 
 def _hierarchy_first(out_edges: list) -> list:
@@ -83,7 +118,8 @@ def neighbors(
     # is iterated in the order its nodes were discovered — but it lets a
     # store-backed graph fetch the whole level's edges and node attributes in
     # two queries instead of two per node. On the in-memory graph the batch
-    # methods are the same dict lookups under one lock hold.
+    # methods are the same dict lookups under one lock hold. A bounded walk
+    # fetches a wide level in blocks instead (`_frontier_block`).
     frontier: deque = deque([(node_id, 0, [node_id])])
     visited = {node_id}
     found: list[dict] = []
@@ -95,92 +131,152 @@ def neighbors(
             break
         level = list(frontier)
         frontier = deque()
-        adjacency = _out_edges_for(
-            graph,
-            [current for current, _d, _p in level],
-            priority_types=HIERARCHY_EDGE_TYPES,
-            limit_per_source=_frontier_budget(
-                max_nodes, len(visited), allowed, exclude_edge_types, exclude_node_types
-            ),
-        )
-        # Attributes are needed for the targets this level actually *keeps* —
-        # `max_nodes` of them — plus any it inspects and rejects. Fetching every
-        # reachable target instead is the shape that made a hub node expensive:
-        # one `source` node indexes every artifact, so a depth-3 walk asking for
-        # 100 neighbours fetched **8,040** node rows to keep 100. Measured 163ms
-        # against 13ms for the same walk over a resident graph, and it is the
-        # kind of waste only a real corpus exposes — a fixture's hub has four
-        # edges. `_BatchedNodes` keeps the batching (one query per block, not
-        # per node) and spends it only on what the loop reaches.
-        reachable = [
-            target
-            for entries in adjacency.values()
-            for _source, target, _edge_map in entries
-            if target not in visited
-        ]
-        attributes = _nodes_for(graph, reachable, budget=max_nodes)
-        for current, current_depth, path in level:
+        start = 0
+        while start < len(level):
             if max_nodes is not None and len(found) >= max_nodes:
                 break
-            # Hierarchy first. A source node carries an `indexes` shortcut to
-            # every one of its artifacts, so a plain fan-out spends the whole
-            # budget jumping straight to files and the directory tree between
-            # them never gets walked — the parent/child structure is present in
-            # the graph but invisible in any bounded view of it.
-            # Already hierarchy-first: `_out_edges_for` was asked for that
-            # order, and both backends promise it. Re-sorting here would be a
-            # stable no-op that costs a sort per level — and on the bounded
-            # path it would be sorting the wrong thing anyway, since the store
-            # already took its prefix in this order.
-            for _source, target, edge_map in adjacency.get(current, []):
-                matching = [
-                    data
-                    for data in edge_map.values()
-                    if (not allowed or data.get("type") in allowed)
-                    and not (exclude_edge_types and data.get("type") in exclude_edge_types)
-                ]
-                if not matching:
-                    continue
-                # Types the caller hides are pruned here rather than after the
-                # fetch: a concept-heavy graph otherwise spends the entire
-                # budget on nodes the view is about to discard, and the
-                # structure the caller actually asked for never fits.
-                if exclude_node_types:
-                    target_type = (attributes.get(target) or {}).get("type")
-                    if target_type in exclude_node_types:
-                        continue
-                next_depth = current_depth + 1
-                # One entry per *node*, not per edge into it. `visited` guarded the
-                # queue but not the append, so a node reachable by two paths was
-                # listed twice — every consumer treats this as a node list, and
-                # `slice_` built its `nodes` payload straight off it, so the canvas
-                # received duplicate element ids. It also charged the same node to
-                # the budget twice, cutting a bounded slice short of the structure
-                # it was asked for. First sighting wins, which is BFS order and
-                # therefore the shortest path — the same rule `depths` applies. No
-                # edge is lost: `slice_` derives links from the graph itself, so
-                # both parents still draw.
-                if target in visited:
-                    continue
-                visited.add(target)
-                edge_type_values = sorted(
-                    {data.get("type") for data in matching if data.get("type")}
-                )
-                found.append(
-                    {
-                        "node_id": target,
-                        "depth": next_depth,
-                        "edge_types": edge_type_values,
-                        "path": [*path, target],
-                        "node": dict(attributes.get(target) or {}),
-                    }
-                )
-                frontier.append((target, next_depth, [*path, target]))
-                # A single hub can have thousands of out-edges, so the budget
-                # has to bind inside the fan-out, not just between hops.
-                if max_nodes is not None and len(found) >= max_nodes:
-                    break
+            remaining = None if max_nodes is None else max_nodes - len(found)
+            limit = _frontier_budget(
+                remaining, len(visited), allowed, exclude_edge_types, exclude_node_types
+            )
+            part = level[start : start + _frontier_block(len(level), limit)]
+            start += len(part)
+            adjacency = _out_edges_for(
+                graph,
+                [current for current, _d, _p in part],
+                priority_types=HIERARCHY_EDGE_TYPES,
+                limit_per_source=limit,
+            )
+            # Attributes are needed for the targets this level actually *keeps* —
+            # `max_nodes` of them — plus any it inspects and rejects. Fetching every
+            # reachable target instead is the shape that made a hub node expensive:
+            # one `source` node indexes every artifact, so a depth-3 walk asking for
+            # 100 neighbours fetched **8,040** node rows to keep 100. Measured 163ms
+            # against 13ms for the same walk over a resident graph, and it is the
+            # kind of waste only a real corpus exposes — a fixture's hub has four
+            # edges. `_BatchedNodes` keeps the batching (one query per block, not
+            # per node) and spends it only on what the loop reaches.
+            reachable = [
+                target
+                for entries in adjacency.values()
+                for _source, target, _edge_map in entries
+                if target not in visited
+            ]
+            attributes = _nodes_for(graph, reachable, budget=remaining)
+            _expand_part(
+                part,
+                adjacency,
+                attributes,
+                allowed,
+                exclude_edge_types,
+                exclude_node_types,
+                visited,
+                found,
+                frontier,
+                max_nodes,
+            )
     return {"node_id": node_id, "depth": depth, "neighbors": found}
+
+
+#: Edge pairs one frontier fetch may return, when the walk bounds them. See
+#: :func:`_frontier_block`.
+FRONTIER_PAIRS_PER_FETCH = 2048
+
+
+def _frontier_block(level_size: int, limit: int | None) -> int:
+    """How many of a level's sources one fetch takes, in BFS order.
+
+    The per-source ``limit`` bounds each source, not their sum, so a level
+    fetched whole read ``sources x limit`` pairs however few neighbours the
+    walk still needed. On the Azure fleet a page's first hop was 68 entities,
+    each a hub over thousands of pages, so the second hop asked for ~18,000
+    edges to keep 200 and ran past a minute. Taking only as many sources as
+    fit :data:`FRONTIER_PAIRS_PER_FETCH` and stopping between fetches once the
+    walk is full bounds every fetch, and the walk takes the same sources in
+    the same order, so its neighbours are identical. A level whose sources
+    are small still fits one fetch, so an ordinary walk stays a query a
+    level; an unbounded or filtered walk (``limit`` None) reads every edge
+    anyway and takes the level whole, as before.
+    """
+
+    if limit is None:
+        return max(1, level_size)
+    return max(1, FRONTIER_PAIRS_PER_FETCH // max(1, int(limit)))
+
+
+def _expand_part(
+    part: list,
+    adjacency: dict,
+    attributes: Any,
+    allowed: set[str],
+    exclude_edge_types: set[str] | None,
+    exclude_node_types: set[str] | None,
+    visited: set[str],
+    found: list[dict],
+    frontier: deque,
+    max_nodes: int | None,
+) -> None:
+    """Take one block's sources' neighbours, in order, until the budget fills."""
+
+    for current, current_depth, path in part:
+        if max_nodes is not None and len(found) >= max_nodes:
+            break
+        # Hierarchy first. A source node carries an `indexes` shortcut to
+        # every one of its artifacts, so a plain fan-out spends the whole
+        # budget jumping straight to files and the directory tree between
+        # them never gets walked — the parent/child structure is present in
+        # the graph but invisible in any bounded view of it.
+        # Already hierarchy-first: `_out_edges_for` was asked for that
+        # order, and both backends promise it. Re-sorting here would be a
+        # stable no-op that costs a sort per level — and on the bounded
+        # path it would be sorting the wrong thing anyway, since the store
+        # already took its prefix in this order.
+        for _source, target, edge_map in adjacency.get(current, []):
+            matching = [
+                data
+                for data in edge_map.values()
+                if (not allowed or data.get("type") in allowed)
+                and not (exclude_edge_types and data.get("type") in exclude_edge_types)
+            ]
+            if not matching:
+                continue
+            # Types the caller hides are pruned here rather than after the
+            # fetch: a concept-heavy graph otherwise spends the entire
+            # budget on nodes the view is about to discard, and the
+            # structure the caller actually asked for never fits.
+            if exclude_node_types:
+                target_type = (attributes.get(target) or {}).get("type")
+                if target_type in exclude_node_types:
+                    continue
+            next_depth = current_depth + 1
+            # One entry per *node*, not per edge into it. `visited` guarded the
+            # queue but not the append, so a node reachable by two paths was
+            # listed twice — every consumer treats this as a node list, and
+            # `slice_` built its `nodes` payload straight off it, so the canvas
+            # received duplicate element ids. It also charged the same node to
+            # the budget twice, cutting a bounded slice short of the structure
+            # it was asked for. First sighting wins, which is BFS order and
+            # therefore the shortest path — the same rule `depths` applies. No
+            # edge is lost: `slice_` derives links from the graph itself, so
+            # both parents still draw.
+            if target in visited:
+                continue
+            visited.add(target)
+            edge_type_values = sorted({data.get("type") for data in matching if data.get("type")})
+            found.append(
+                {
+                    "node_id": target,
+                    "depth": next_depth,
+                    "edge_types": edge_type_values,
+                    "path": [*path, target],
+                    "node": dict(attributes.get(target) or {}),
+                }
+            )
+            frontier.append((target, next_depth, [*path, target]))
+            # A single hub can have thousands of out-edges, so the budget
+            # has to bind inside the fan-out, not just between hops.
+            if max_nodes is not None and len(found) >= max_nodes:
+                break
 
 
 def _frontier_budget(
@@ -240,6 +336,10 @@ def _out_edges_for(
 
     batch = getattr(graph, "out_edges_batch", None)
     if callable(batch):
+        if limit_per_source is not None:
+            # A bounded walk reads an edge's type and nothing else, and on a
+            # stored graph the rest is a random heap page per kept edge.
+            return batch(node_ids, targets, priority_types, limit_per_source, keys_only=True)
         return batch(node_ids, targets, priority_types, limit_per_source)
     # A graph-shaped object implementing only the single-node primitive. It
     # cannot promise the priority order, so the sort happens here and no limit

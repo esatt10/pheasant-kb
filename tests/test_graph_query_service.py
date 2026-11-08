@@ -141,6 +141,16 @@ def test_graph_service_expands_multiple_roots_in_one_bounded_operation(
         json={"operation": "neighbors_many", "parameters": {"node_ids": roots, "depth": 1}},
     ).json()["result"]
     assert many == singles
+    # The answerer's expansion bounds each walk; the service has to honour it.
+    bounded = client.post(
+        "/internal/graph/query",
+        headers=headers,
+        json={
+            "operation": "neighbors_many",
+            "parameters": {"node_ids": ["perf:a"], "depth": 2, "max_nodes": 1},
+        },
+    ).json()["result"]
+    assert [len(item["neighbors"]) for item in bounded] == [1]
     assert (
         client.post(
             "/internal/graph/query",
@@ -416,3 +426,157 @@ def test_graph_client_refuses_at_once_on_4xx_and_retries_5xx(monkeypatch: Any) -
         client = _client(server["port"], monkeypatch, retries=1)
         assert client.query("stats") == {"call": 2}
     assert len(server["requests"]) == 2
+
+
+def test_neighbors_many_walks_its_roots_side_by_side_and_in_order() -> None:
+    """Concurrently, each walk inside the caller's deadline, answers in input order.
+
+    One after another, four walks that each read cold pages off the Azure
+    fleet's database share overran the answerer's 10 s expansion budget
+    together. The barrier only opens when two walks are in flight at once, so
+    a serial loop fails it rather than passing slowly.
+    """
+
+    import time
+
+    from pheasant.graph.traversal import neighbors_many
+    from pheasant.request_budget import activate, remaining_seconds
+
+    together = threading.Barrier(2, timeout=5)
+    deadlines: list[float | None] = []
+
+    class SlowGraph:
+        def remote_neighbors(self, **parameters: Any) -> dict:
+            deadlines.append(remaining_seconds())
+            if parameters["node_id"] in {"a", "b"}:
+                together.wait()
+            node_id, cap = parameters["node_id"], parameters["max_nodes"]
+            return {"node_id": node_id, "neighbors": [], "cap": cap}
+
+    with activate(time.monotonic() + 30):
+        found = neighbors_many(SlowGraph(), ["a", "b", "c"], depth=2, max_nodes=7)
+
+    assert [item["node_id"] for item in found] == ["a", "b", "c"]
+    assert {item["cap"] for item in found} == {7}
+    assert len(deadlines) == 3 and all(deadline is not None for deadline in deadlines), (
+        "a walk ran outside the request deadline, so its reads had no statement timeout"
+    )
+
+
+def test_every_graph_request_carries_a_deadline_under_the_callers_timeout(
+    monkeypatch: Any,
+) -> None:
+    """Not only inside an answer's budget, which is off by default.
+
+    The service turns the header into every read's statement timeout; without
+    it a walk this side had abandoned ran on in Postgres until it finished.
+    """
+
+    monkeypatch.setenv("TEST_GRAPH_TOKEN", "secret")
+    client = GraphQueryClient("http://graph.internal:8765", "TEST_GRAPH_TOKEN", timeout_seconds=10)
+    sent: list[dict[str, str]] = []
+
+    def answer(target: str, body: bytes, headers: dict[str, str], timeout: float) -> tuple:
+        sent.append(dict(headers))
+        return 200, "OK", b'{"result": []}'
+
+    monkeypatch.setattr(client, "_post", answer)
+    monkeypatch.setattr(client, "_target", lambda: ("http://graph.internal:8765/q", None))
+    client.query("neighbors_many", timeout_seconds=3.0, node_ids=["a"], depth=1)
+    client.query("stats")
+
+    deadlines = [int(headers["X-Pheasant-Remaining-Ms"]) for headers in sent]
+    assert 0 < deadlines[0] < 3000, "the service must give up before this side does"
+    assert 0 < deadlines[1] < 10000
+
+
+def test_a_graph_service_out_of_time_answers_504(tmp_path: Path, monkeypatch: Any) -> None:
+    """A deadline is the caller's to act on, not a crash."""
+
+    from pheasant.graph import traversal
+    from pheasant.request_budget import DeadlineExceeded
+
+    config = _config(tmp_path)
+    writer = SyncEngine(config)
+    try:
+        writer.sync_source("docs", "full")
+    finally:
+        writer.close()
+    config.graph.query_service_token_env = "TEST_GRAPH_TOKEN"
+    monkeypatch.setenv("TEST_GRAPH_TOKEN", "secret")
+
+    def out_of_time(*_args: Any, **_kwargs: Any) -> list:
+        raise DeadlineExceeded("assistant request deadline exceeded during a PostgreSQL read")
+
+    monkeypatch.setattr(traversal, "neighbors_many", out_of_time)
+    client = TestClient(create_app(config, role="graph"))
+    response = client.post(
+        "/internal/graph/query",
+        headers={"Authorization": "Bearer secret", "X-Pheasant-Remaining-Ms": "500"},
+        json={"operation": "neighbors_many", "parameters": {"node_ids": ["a", "b"], "depth": 2}},
+    )
+    assert response.status_code == 504
+    assert "deadline" in response.json()["detail"]
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
+    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
+)
+def test_a_read_past_its_deadline_is_stopped_by_postgres(tmp_path: Path) -> None:
+    """The server cancels it, rather than this side merely ceasing to wait."""
+
+    import time
+
+    from pheasant.request_budget import DeadlineExceeded, activate
+
+    config = _config(tmp_path)
+    config.storage.backend = "postgres"
+    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    engine = SyncEngine(config)
+    try:
+        started = time.monotonic()
+        with activate(time.monotonic() + 0.3), pytest.raises(DeadlineExceeded):
+            engine.state.rows("SELECT pg_sleep(5)")
+        assert time.monotonic() - started < 3, "the read ran to the end of its sleep"
+        # And the connection is usable again, with no timeout left behind.
+        assert engine.state.rows("SELECT 1 AS one")[0]["one"] == 1
+    finally:
+        engine.close()
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
+    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
+)
+def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path: Path) -> None:
+    """A database restart drops pooled connections; the next read must reconnect.
+
+    Every graph-service read carries a deadline now, and a read under one on a
+    dropped connection discarded it with ``putconn(conn, close=True)``, an
+    argument psycopg_pool does not take: ``TypeError`` instead of the
+    disconnect ``rows`` retries on. Watched on Azure after a Postgres restart.
+    """
+
+    import os
+    import time
+
+    import psycopg
+
+    from pheasant.request_budget import activate
+
+    config = _config(tmp_path)
+    config.storage.backend = "postgres"
+    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    engine = SyncEngine(config)
+    try:
+        engine.state.rows("SELECT 1 AS one")  # a pooled connection, now idle
+        with psycopg.connect(os.environ["PHEASANT_TEST_POSTGRES_DSN"], autocommit=True) as admin:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
+        with activate(time.monotonic() + 10):
+            assert engine.state.rows("SELECT 1 AS one")[0]["one"] == 1
+    finally:
+        engine.close()

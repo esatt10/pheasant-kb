@@ -32,7 +32,11 @@ from fastapi.testclient import TestClient
 from pheasant.api.app import create_app
 from pheasant.assistant import providers as providers_module
 from pheasant.assistant.llm import LLM
-from pheasant.assistant.retrieval import PheasantRetriever
+from pheasant.assistant.retrieval import (
+    EXPAND_MAX_NODES,
+    EXPAND_TIMEOUT_SECONDS,
+    PheasantRetriever,
+)
 from pheasant.assistant.workflows import (
     WorkflowRequest,
     WorkflowResult,
@@ -44,6 +48,7 @@ from pheasant.assistant.workflows import (
     resolve_workflow_name,
 )
 from pheasant.assistant.workflows.simple import SimpleWorkflow
+from pheasant.graph.query_service import GraphQueryError
 from pheasant.graph.simple import SimpleMultiDiGraph
 
 langgraph = pytest.importorskip if False else None  # keep the import list tidy
@@ -246,8 +251,20 @@ def test_remote_graph_expansion_batches_hits_and_keeps_passage_order() -> None:
         def __init__(self) -> None:
             self.calls: list[list[str]] = []
 
-        def remote_neighbors_many(self, node_ids: list[str], depth: int) -> list[dict]:
+        def remote_neighbors_many(
+            self,
+            node_ids: list[str],
+            depth: int,
+            max_nodes: int | None = None,
+            timeout_seconds: float | None = None,
+            retries: int | None = None,
+        ) -> list[dict]:
             assert depth == 1
+            # Unbounded, two hops off a web page reached every page of the
+            # source through one shared entity (see EXPAND_MAX_NODES).
+            assert max_nodes == EXPAND_MAX_NODES
+            # Optional evidence: one short wait, not the client's 30 s twice.
+            assert (timeout_seconds, retries) == (EXPAND_TIMEOUT_SECONDS, 0)
             self.calls.append(node_ids)
             return [
                 {
@@ -272,6 +289,19 @@ def test_remote_graph_expansion_batches_hits_and_keeps_passage_order() -> None:
 
     assert graph.calls == [[hit.node_id for hit in hits]]
     assert [item.title for item in related] == [f"related:{hit.node_id}" for hit in hits]
+
+
+def test_a_graph_that_cannot_answer_leaves_the_direct_hits_to_stand() -> None:
+    """Expansion adds evidence; a stalled graph service must not fail the answer."""
+
+    class StalledGraph:
+        def remote_neighbors_many(self, **_kwargs: object) -> list[dict]:
+            raise GraphQueryError("graph service could not answer 'neighbors_many': timed out")
+
+    retriever = _retriever(graph=StalledGraph())
+    hits = retriever.search("hash", limit=5)
+
+    assert retriever.expand(hits, depth=2) == []
 
 
 def test_capabilities_describe_what_the_region_can_do() -> None:

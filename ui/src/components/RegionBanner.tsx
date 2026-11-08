@@ -1,4 +1,12 @@
-import { OPEN_JOBS_EVENT, outstanding, useIndexQueue, useReady } from "../hooks/useRegion";
+import { useEffect } from "react";
+import {
+  OPEN_JOBS_EVENT,
+  outstanding,
+  regionSettled,
+  useIndexQueue,
+  useReady,
+  useRegionStatus,
+} from "../hooks/useRegion";
 import { formatDuration } from "./SyncProgress";
 
 /**
@@ -13,9 +21,28 @@ import { formatDuration } from "./SyncProgress";
  * louder, and are said here for the same reason: a page that silently stops
  * updating is worse than one that says why.
  */
+/** Minutes and seconds: a wake is about a minute and a half, which "1m" undersells. */
+function wakeDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const rest = total % 60;
+  return rest ? `${Math.floor(total / 60)}m ${rest}s` : `${Math.floor(total / 60)}m`;
+}
+
 export function RegionBanner() {
   const ready = useReady();
   const queue = useIndexQueue();
+  // `/ready` notices a wake first (it is polled every 15 s, the status every
+  // 30 s while all is well), so ask what is waking the moment it goes not
+  // ready, and keep asking every 3 s while it stays so -- otherwise a wake
+  // showed as "Region not ready" for up to half a minute before the banner
+  // could say what was starting.
+  const notReady = ready.data?.status === "not_ready";
+  const region = useRegionStatus(notReady);
+  const refetchRegion = region.refetch;
+  useEffect(() => {
+    if (notReady) void refetchRegion();
+  }, [notReady, ready.data?.reason, refetchRegion]);
 
   const readiness = ready.data;
   const tasks = outstanding(queue.data);
@@ -24,6 +51,31 @@ export function RegionBanner() {
   const dead = tasks.filter((task) => task.state === "dead");
   const oldest = Math.max(0, ...waiting.map((task) => task.waiting_seconds ?? 0));
   const openJobs = () => window.dispatchEvent(new Event(OPEN_JOBS_EVENT));
+
+  // Waking after being idle comes first: while a part is still starting,
+  // "not ready" is expected and says less than what is starting and for how
+  // long. Draining and standby are this replica's own states, not a wake's.
+  const wake = region.data;
+  if (wake && !regionSettled(wake) && readiness?.status !== "draining" && readiness?.status !== "standby") {
+    const pending = wake.components.filter((part) => part.state !== "ready");
+    const tone = wake.status === "unavailable" ? "error" : wake.status === "warming" ? "info" : "warn";
+    const title =
+      wake.status === "waking" ? "Waking up" : wake.status === "warming" ? "Warming up" : "Not answering";
+    const after =
+      wake.status === "waking"
+        ? `${wakeDuration(wake.elapsed_seconds)} so far; a wake usually takes about ${wakeDuration(
+            wake.typical_seconds,
+          )}. Requests that need it may fail until then.`
+        : "";
+    return (
+      <div className={`region-banner region-banner--${tone}`} role="status">
+        <span className={`region-banner__dot${wake.status === "unavailable" ? "" : " region-banner__dot--live"}`} />
+        <span>
+          <b>{title}</b> · {pending.map((part) => `${part.label}: ${part.detail}`).join(" · ")}. {after}
+        </span>
+      </div>
+    );
+  }
 
   if (readiness && readiness.status !== "ready") {
     const text =

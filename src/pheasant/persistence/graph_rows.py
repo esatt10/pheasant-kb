@@ -71,6 +71,7 @@ from pheasant.persistence.graph_codec import (
     node_attrs_dict,
     node_row,
 )
+from pheasant.persistence.graph_frontier import bounded_rows, ranked_frontier
 
 __all__ = [
     "BATCH",
@@ -96,51 +97,6 @@ logger = logging.getLogger(__name__)
 #: shipping either for every row of a load was bytes nobody decoded.
 _NODE_READ = ("node_id", *PROMOTED_NODE_KEYS, "attrs")
 _EDGE_READ = (*EDGE_KEY, "source_id", "attrs")
-
-
-def _ranked_frontier(where: str, priority_types: Sequence[str], limited: bool) -> str:
-    """The frontier statement, ranked per source so a ``LIMIT`` is meaningful.
-
-    ``MIN(CASE …) OVER (PARTITION BY source, target)`` is the per-*pair*
-    priority — 0 when any edge of the pair carries a priority type — and
-    ``DENSE_RANK`` then numbers pairs within each source, so ``pr <= N`` is
-    "the first N pairs this source would have offered". Both halves are
-    ordinary SQL:2003 window functions, present in SQLite since 3.25 and in
-    every Postgres this supports.
-
-    Used whenever a caller asks for the order, ``limited`` or not. Asking for
-    priority order and getting insertion order back on the unbounded path is
-    the bug this shape was introduced with: the traversal stopped re-sorting
-    once it could ask, so an unordered answer silently changed which
-    neighbours a *filtered* walk returned — and filtered walks are exactly the
-    ones that lift the limit. A promise with an exception is not a promise.
-
-    Written as text rather than composed because the shape is fixed; the only
-    variable is how many priority types there are, and those are parameters.
-    """
-
-    if priority_types:
-        placeholders = ",".join("?" for _ in priority_types)
-        priority = f"MIN(CASE WHEN type IN ({placeholders}) THEN 0 ELSE 1 END)"
-    else:
-        priority = "MIN(0)"
-    ranked = (
-        f"SELECT *, {priority} OVER (PARTITION BY source, target) AS rank_group"
-        f" FROM graph_edges WHERE {where}"
-    )
-    order = " ORDER BY source, rank_group, target, type, seq"
-    if not limited:
-        # Ordering alone needs no numbering. The unbounded path is the
-        # *filtered* walk, which is already the expensive one, so paying for a
-        # DENSE_RANK nothing reads there would be a tax on the case that can
-        # least afford it.
-        return f"WITH ranked AS ({ranked}) SELECT * FROM ranked{order}"
-    return (
-        f"WITH ranked AS ({ranked}),"
-        " numbered AS (SELECT *, DENSE_RANK() OVER"
-        " (PARTITION BY source ORDER BY rank_group, target) AS pair_rank FROM ranked)"
-        f" SELECT * FROM numbered WHERE pair_rank <= ?{order}"
-    )
 
 
 class GraphRowStore:
@@ -581,6 +537,7 @@ class GraphRowStore:
         targets: Iterable[str] | None = None,
         priority_types: Sequence[str] = (),
         limit_per_source: int | None = None,
+        keys_only: bool = False,
     ) -> dict[str, list[tuple[str, str, dict[int, Any]]]]:
         """``{source: [(source, target, {seq: attrs})]}`` for a whole BFS frontier.
 
@@ -635,6 +592,10 @@ class GraphRowStore:
 
         Whether a limit is *sound* is the caller's to decide, not this
         module's: see :func:`~pheasant.graph.traversal._out_edges_for`.
+
+        ``keys_only`` (bounded, untargeted fetches only) leaves out each
+        edge's ``source_id`` and attributes, which a walk never reads and
+        which cost a random heap page per edge (`graph_frontier`).
         """
 
         grouped: dict[str, list[tuple[str, str, dict[int, Any]]]] = {}
@@ -655,23 +616,34 @@ class GraphRowStore:
                     target_clause, target_params = dialect.in_clause("target", target_batch)
                     where += f" AND {target_clause}"
                     params.extend(target_params)
-                if not priority_types and limit_per_source is None:
-                    statement = (
+                if target_batch is None and limit_per_source is not None:
+                    # Read in key order and stop at the limit, rather than
+                    # ranking a hub's whole fan-out to keep its first pairs.
+                    rows = bounded_rows(
+                        self.state,
+                        kb_id,
+                        batch,
+                        priority_types,
+                        int(limit_per_source),
+                        keys_only=keys_only,
+                    )
+                elif not priority_types and limit_per_source is None:
+                    rows = self.state.rows(
                         f"SELECT * FROM graph_edges WHERE {where}"
-                        " ORDER BY source, target, type, seq"
+                        " ORDER BY source, target, type, seq",
+                        tuple(params),
                     )
                 else:
-                    statement = _ranked_frontier(
-                        where, priority_types, limit_per_source is not None
-                    )
+                    statement = ranked_frontier(where, priority_types, limit_per_source is not None)
                     # The priority list is spelled *before* the WHERE in the
                     # ranked statement, so its parameters go in front of it.
                     params = [*priority_types, *params]
                     if limit_per_source is not None:
                         params.append(int(limit_per_source))
+                    rows = self.state.rows(statement, tuple(params))
                 current: tuple[str, str] | None = None
                 edge_map: dict[int, Any] = {}
-                for row in self.state.rows(statement, tuple(params)):
+                for row in rows:
                     pair = (str(row["source"]), str(row["target"]))
                     if pair != current:
                         current, edge_map = pair, {}

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { IndexQueueStatus, QueueTask } from "../api/types";
+import type { IndexQueueStatus, QueueTask, RegionStatus } from "../api/types";
 
 /**
  * The region's own view of whether work is waiting: `/ready` for this
@@ -31,6 +31,31 @@ export function useReady() {
     refetchInterval: (query) => (query.state.data?.status === "ready" ? 15000 : 3000),
     refetchIntervalInBackground: false,
   });
+}
+
+/**
+ * What is still waking after the region scaled up from idle. Polled every
+ * 3 s while anything is, and every 30 s once everything is ready, so the
+ * banner leaves as soon as the last part answers and costs nothing after.
+ *
+ * ``urgent`` (the replica's `/ready` says it is not ready) holds it at 3 s
+ * too: a fetch that fails mid-restart keeps the last status, "ready", and
+ * waiting 30 s for the next one left a wake showing as "Region not ready"
+ * for half a minute (watched on Azure).
+ */
+export function useRegionStatus(urgent = false) {
+  return useQuery({
+    queryKey: ["region-status"],
+    queryFn: api.regionStatus,
+    retry: false,
+    refetchInterval: (query) => (!urgent && regionSettled(query.state.data) ? 30000 : 3000),
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** Nothing to tell anyone: ready, or a server with no status to give. */
+export function regionSettled(status: RegionStatus | null | undefined): boolean {
+  return !status || status.status === "ready";
 }
 
 /** Tasks a person should be told about — everything the queue still holds. */

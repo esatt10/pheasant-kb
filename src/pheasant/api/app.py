@@ -22,6 +22,7 @@ from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
+from pheasant.api.region_routes import register_region_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.api.sync_control_routes import register_sync_control_routes
@@ -1338,10 +1339,15 @@ def create_app(
                     except (TypeError, ValueError):
                         remaining_ms = 0
                     if remaining_ms > 0:
-                        from pheasant.request_budget import activate
+                        from pheasant.request_budget import DeadlineExceeded, activate
 
-                        with activate(time.monotonic() + remaining_ms / 1000):
-                            return await timed_response()
+                        # The deadline is also every read's statement timeout,
+                        # so a walk the caller gave up on stops in Postgres too.
+                        try:
+                            with activate(time.monotonic() + remaining_ms / 1000):
+                                return await timed_response()
+                        except DeadlineExceeded as exc:
+                            return JSONResponse(status_code=504, content={"detail": str(exc)})
                 return await timed_response()
 
             if interaction_buffer is None or _metric_path(path) in UNOBSERVED_PATHS:
@@ -2029,6 +2035,7 @@ def create_app(
     register_sync_wait_routes(app, services=services)
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
+    register_region_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -4311,10 +4318,11 @@ def create_app(
                 raise HTTPException(
                     status_code=400, detail="neighbors_many requires at most 16 nodes"
                 )
-            result = [
-                graph_neighbors(graph_obj, str(node_id), int(parameters.get("depth") or 1))
-                for node_id in node_ids
-            ]
+            from pheasant.graph.traversal import neighbors_many
+
+            limit = parameters.get("max_nodes")
+            depth = int(parameters.get("depth") or 1)
+            result = neighbors_many(graph_obj, node_ids, depth, int(limit) if limit else None)
         elif operation == "edges_batch":
             from pheasant.graph.query_service import edges_batch
 

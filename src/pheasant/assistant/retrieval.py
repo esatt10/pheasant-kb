@@ -65,6 +65,24 @@ logger = logging.getLogger(__name__)
 
 VALID_MODES = ("hybrid", "text", "graph", "vector")
 
+#: Nodes one expansion walk may visit. An answer keeps a handful of documents
+#: per hit, but an unbounded walk enumerated everything within `depth` hops --
+#: and two hops off a web page goes through entities like "netsuite" that every
+#: page of the source mentions: 24,970 neighbours for one entity, tens of
+#: thousands of nodes per hit, four hits per round. On the Azure fleet that held
+#: the graph service on Postgres reads until it failed its liveness probe, and
+#: every compose answer fell over with it. Bounded, the walk reads each hub's
+#: first pairs in key order (`persistence/graph_frontier.py`), and the kept
+#: documents are the walk's BFS prefix, the ones an unbounded walk would have
+#: offered first.
+EXPAND_MAX_NODES = 200
+
+#: How long an answer waits for its expansion, once, before going on without
+#: it. Expansion adds evidence the direct hits did not find, so it is
+#: best-effort like facts and figures; with the client's 30 s and one retry a
+#: slow walk cost every agentic round a minute (measured on the Azure fleet).
+EXPAND_TIMEOUT_SECONDS = 10.0
+
 
 def _timed_request_stage(name: str):
     def decorate(fn):
@@ -785,12 +803,18 @@ class PheasantRetriever:
     # ----------------------------------------------------------------- graph
 
     def neighbors(
-        self, node_id: str, depth: int = 1, edge_types: list[str] | None = None
+        self,
+        node_id: str,
+        depth: int = 1,
+        edge_types: list[str] | None = None,
+        max_nodes: int | None = None,
     ) -> list[dict]:
         """Breadth-first neighbours of a node (same shape as the MCP tool)."""
         if self.graph is None:
             return []
-        return _graph_neighbors(self.graph, node_id, depth, edge_types).get("neighbors", [])
+        return _graph_neighbors(self.graph, node_id, depth, edge_types, max_nodes).get(
+            "neighbors", []
+        )
 
     def slice(self, node_id: str, depth: int = 1, limit: int = 40) -> dict:
         """Connected sub-graph around a node."""
@@ -809,9 +833,22 @@ class PheasantRetriever:
         with the query is still reachable through a shared concept or an
         import/call edge. Returned passages carry ``mode="graph-expand"`` so
         a caller can tell derived evidence from direct hits.
+
+        Best-effort, like :meth:`facts`: expansion adds evidence, so a graph
+        that cannot answer leaves the direct hits to stand alone rather than
+        failing the answer they were retrieved for.
         """
+        from pheasant.graph.query_service import GraphQueryError
+
         if self.graph is None:
             return []
+        try:
+            return self._expand(passages, depth=depth, per_node=per_node)
+        except GraphQueryError as exc:
+            logger.warning("graph expansion unavailable; answering without it: %s", exc)
+            return []
+
+    def _expand(self, passages: list[Passage], *, depth: int, per_node: int) -> list[Passage]:
         seen = {p.node_id for p in passages if p.node_id}
         found: list[Passage] = []
         remote_many = getattr(self.graph, "remote_neighbors_many", None)
@@ -819,7 +856,13 @@ class PheasantRetriever:
         if callable(remote_many):
             node_ids = list(dict.fromkeys(p.node_id for p in passages if p.node_id))
             if node_ids:
-                responses = remote_many(node_ids=node_ids, depth=depth)
+                responses = remote_many(
+                    node_ids=node_ids,
+                    depth=depth,
+                    max_nodes=EXPAND_MAX_NODES,
+                    timeout_seconds=EXPAND_TIMEOUT_SECONDS,
+                    retries=0,
+                )
                 expanded = {
                     node_id: response.get("neighbors", [])
                     for node_id, response in zip(node_ids, responses, strict=True)
@@ -831,7 +874,7 @@ class PheasantRetriever:
             entries = (
                 expanded[passage.node_id]
                 if callable(remote_many)
-                else self.neighbors(passage.node_id, depth)
+                else self.neighbors(passage.node_id, depth, max_nodes=EXPAND_MAX_NODES)
             )
             for entry in entries:
                 node = entry.get("node") or {}
