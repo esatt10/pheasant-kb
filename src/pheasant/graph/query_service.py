@@ -45,6 +45,12 @@ class GraphQueryError(RuntimeError):
     """The configured graph-query service could not answer a request."""
 
 
+def _service_deadline(timeout: float) -> float:
+    """The seconds the graph service gets for a request this side waits ``timeout`` for."""
+
+    return max(0.05, timeout - min(0.5, timeout * 0.1))
+
+
 class GraphQueryClient:
     """Small authenticated JSON client with bounded transport retries."""
 
@@ -204,8 +210,12 @@ class GraphQueryClient:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
-            if remaining is not None:
-                headers["X-Pheasant-Remaining-Ms"] = str(max(1, int(remaining * 1000)))
+            # Always, not only inside an answer's budget: the service turns it
+            # into every read's statement timeout, and without one a walk this
+            # side had stopped waiting for ran on in Postgres to the end (an
+            # hour, once, on a hub-heavy corpus). A little under this side's
+            # own timeout, so the service's 504 arrives before it gives up.
+            headers["X-Pheasant-Remaining-Ms"] = str(max(1, int(_service_deadline(timeout) * 1000)))
             if host_header:
                 headers["Host"] = host_header
             # Carry the caller's trace across the hop. Without it a trace stops

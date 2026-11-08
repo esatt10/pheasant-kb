@@ -2287,7 +2287,15 @@ Each of these cost real time. They are listed because the shape recurs.
   ORDER BY target LIMIT n` scans of the primary key per source (priority
   targets, then any), merged by `MIN(rank)`, one `LATERAL` statement on
   Postgres. Same pairs, proven per limit in `tests/test_graph_backends.py`;
-  **91 ms against 1,166 ms** for 11 such hubs on a local Postgres.
+  **91 ms against 1,166 ms** for 11 such hubs on a local Postgres. Two
+  follow-ups: `neighbors_many` walks its roots side by side
+  (`traversal.neighbors_many`, the caller's context copied into each), since
+  four cold walks in a row overran 10 s that each fit alone; and **every**
+  graph request now carries `X-Pheasant-Remaining-Ms`, which the service
+  turns into each read's `statement_timeout` (504 when it runs out). It used
+  to be sent only inside an answer's latency budget, which is off by
+  default, so a walk the caller had abandoned ran on in Postgres to the end
+  -- once for over an hour.
 - **A lazy mapping is a cost to a reader that wants all of it.**
   `_LazyAttrs` exists because a traversal hop reads `type` and nothing else,
   and it is exactly wrong for the search arm, which reads every attribute of
