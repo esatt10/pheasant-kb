@@ -32,6 +32,7 @@ import type {
   WorkflowCatalog,
   IndexQueueStatus,
   ReadyStatus,
+  RegionStatus,
   InventoryPage,
   InventoryListingPage,
   BrowseResponse,
@@ -324,6 +325,21 @@ export const api = {
       return (await response.json()) as ReadyStatus;
     } catch {
       return { status: "not_ready", reason: `${response.status} ${response.statusText}` };
+    }
+  },
+  /**
+   * What is still waking after the region scaled up. Read whatever the status
+   * code, like `ready`: while the database starts, the wake gate answers the
+   * api's own calls with a 503 whose body carries the same status.
+   */
+  regionStatus: async (): Promise<RegionStatus | null> => {
+    const response = await fetch(`${API_BASE}/region/status`, { headers: requestHeaders() });
+    if (response.status === 404) return null; // a server that predates it
+    try {
+      const body = await response.json();
+      return (body.region ?? body) as RegionStatus;
+    } catch {
+      return null;
     }
   },
   /** Index-queue tasks: what a `queued` sync is doing before an indexer claims it. */

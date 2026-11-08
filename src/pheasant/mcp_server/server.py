@@ -13,6 +13,7 @@ from pheasant.mcp_server.compose_tools import register_compose_tools
 from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.inventory_tools import register_inventory_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
+from pheasant.mcp_server.region_tools import register_region_tools
 from pheasant.mcp_server.source_url_tools import register_source_url_tools
 from pheasant.mcp_server.sync_control_tools import register_sync_control_tools
 from pheasant.mcp_server.sync_pipeline_tools import register_sync_pipeline_tools
@@ -963,6 +964,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     register_source_url_tools(mcp, tools, anticipated)
     register_sync_control_tools(mcp, tools, anticipated)
     register_sync_pipeline_tools(mcp, tools, anticipated)
+    register_region_tools(mcp, tools, anticipated)
 
     return mcp
 

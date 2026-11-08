@@ -85,7 +85,9 @@ CEILINGS: dict[str, int] = {
     # Raised by 3 for the job-clear client taking a managed identity
     # (`security/service_auth.py` holds the rule).
     "jobs.py": 803,
-    "mcp_server/server.py": 1300,
+    # Raised from 1300 for `get_region_status`, registered from its own
+    # module (`mcp_server/region_tools.py`) like every newer plane.
+    "mcp_server/server.py": 1303,
     "mcp_server/tools.py": 2050,
     "memory/formation.py": 1150,
     "memory/store.py": 950,

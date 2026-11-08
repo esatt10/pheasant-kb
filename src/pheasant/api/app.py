@@ -22,6 +22,7 @@ from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
+from pheasant.api.region_routes import register_region_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
 from pheasant.api.source_url_routes import register_source_url_routes
 from pheasant.api.sync_control_routes import register_sync_control_routes
@@ -2034,6 +2035,7 @@ def create_app(
     register_sync_wait_routes(app, services=services)
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
+    register_region_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
