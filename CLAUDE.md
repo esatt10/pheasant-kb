@@ -186,7 +186,9 @@ pheasant-kb/
 │   │                            (a web collection's pages: add, remove),
 │   │                            sync_control (cancel a source's running
 │   │                            sync), voice (the composer's dictation:
-│   │                            a live transcription session, HTTP only)
+│   │                            a live transcription session, HTTP only),
+│   │                            region_status (what is still waking or
+│   │                            warming after a scale-to-zero wake)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            compose_tools (compose_artifact as a job),
@@ -214,7 +216,9 @@ pheasant-kb/
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
-│   ├── deployment/            ← roles, serving durability, mounts, host
+│   ├── deployment/            ← roles, serving durability, mounts, host,
+│   │                            wake_gate (the api's port while its
+│   │                            database wakes)
 │   ├── security/              ← path_policy (what may be read),
 │   │                            corpus_policy (what may never be indexed),
 │   │                            acl, idp
@@ -222,7 +226,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 196 pytest modules, offline by design
+└── tests/                     ← 197 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1573,6 +1577,21 @@ arrangement of worker failures may change what a sync produces.
 Serving durability: bounded request concurrency answering `429` +
 `Retry-After` under saturation, and a SIGTERM drain that fails readiness and
 keeps serving on a timer thread — never by sleeping on the event loop.
+
+**Waking from zero is said, not suffered** (`deployment/wake_gate.py`,
+`services/region_status.py`; `GET /region/status`, MCP `get_region_status`,
+the web UI's banner). A region that scales to zero wakes on its first
+request, and the api cannot start until its database accepts a login; for
+that minute nothing listened on its port, so a page spun blank and an agent
+hung to its own timeout. `python -m pheasant.deployment.wake_gate` holds the
+port first: `/health` 200 (the platform routes to it at once),
+`/region/status` in the api's own shape (`served_by: "wake_gate"`), a page
+for a browser that opens the app once it answers, and 503 `REGION_WAKING`
+with `Retry-After` for everything else; it exits when the database answers
+and the server starts in its place. Once up, the api reports each part as
+`waking` (silent within `WAKE_WINDOW_SECONDS` of start), `warming` (Postgres's
+autoprewarm worker still loading) or `unavailable`, and the banner leaves
+when everything is `ready`. `tests/test_region_status.py`.
 
 **The fleet's invariants are refusals, not conventions** (`deployment/roles.py`,
 one pass at startup). A serving role other than `all` refuses a bind other

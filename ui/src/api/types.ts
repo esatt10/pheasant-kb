@@ -1642,6 +1642,29 @@ export interface ReadyStatus {
 }
 
 /**
+ * `GET /region/status` — what is still waking or warming after the region
+ * scaled up from idle. While the database starts, the same path is answered
+ * by the api's wake gate (`served_by: "wake_gate"`); `ready` means there is
+ * nothing to show.
+ */
+export interface RegionComponent {
+  name: string;
+  label: string;
+  state: "ready" | "warming" | "waking" | "unavailable";
+  detail: string;
+  up_seconds?: number;
+}
+
+export interface RegionStatus {
+  status: "ready" | "warming" | "waking" | "unavailable";
+  components: RegionComponent[];
+  elapsed_seconds: number;
+  typical_seconds: number;
+  message: string;
+  served_by: "api" | "wake_gate";
+}
+
+/**
  * Where a published sync is between being requested and being indexed. Only
  * `claimed` means an indexer is working on it; `awaiting_claim` is the
  * pre-claim interval a role-split region used to report as nothing at all.

@@ -1,4 +1,11 @@
-import { OPEN_JOBS_EVENT, outstanding, useIndexQueue, useReady } from "../hooks/useRegion";
+import {
+  OPEN_JOBS_EVENT,
+  outstanding,
+  regionSettled,
+  useIndexQueue,
+  useReady,
+  useRegionStatus,
+} from "../hooks/useRegion";
 import { formatDuration } from "./SyncProgress";
 
 /**
@@ -16,6 +23,7 @@ import { formatDuration } from "./SyncProgress";
 export function RegionBanner() {
   const ready = useReady();
   const queue = useIndexQueue();
+  const region = useRegionStatus();
 
   const readiness = ready.data;
   const tasks = outstanding(queue.data);
@@ -24,6 +32,33 @@ export function RegionBanner() {
   const dead = tasks.filter((task) => task.state === "dead");
   const oldest = Math.max(0, ...waiting.map((task) => task.waiting_seconds ?? 0));
   const openJobs = () => window.dispatchEvent(new Event(OPEN_JOBS_EVENT));
+
+  // Waking after being idle comes first: while a part is still starting,
+  // "not ready" is expected and says less than what is starting and for how
+  // long. Draining and standby are this replica's own states, not a wake's.
+  const wake = region.data;
+  if (wake && !regionSettled(wake) && readiness?.status !== "draining" && readiness?.status !== "standby") {
+    const pending = wake.components.filter((part) => part.state !== "ready");
+    const tone = wake.status === "unavailable" ? "error" : wake.status === "warming" ? "info" : "warn";
+    const title =
+      wake.status === "waking" ? "Waking up" : wake.status === "warming" ? "Warming up" : "Not answering";
+    const after =
+      wake.status === "waking"
+        ? `${formatDuration(wake.elapsed_seconds)} so far; a wake usually takes about ${formatDuration(
+            wake.typical_seconds,
+          )}. Requests that need it may fail until then.`
+        : wake.status === "warming"
+          ? "Everything answers; the first answers may be slower."
+          : "";
+    return (
+      <div className={`region-banner region-banner--${tone}`} role="status">
+        <span className={`region-banner__dot${wake.status === "unavailable" ? "" : " region-banner__dot--live"}`} />
+        <span>
+          <b>{title}</b> · {pending.map((part) => `${part.label}: ${part.detail}`).join(" · ")}. {after}
+        </span>
+      </div>
+    );
+  }
 
   if (readiness && readiness.status !== "ready") {
     const text =
