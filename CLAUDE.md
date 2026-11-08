@@ -2295,7 +2295,14 @@ Each of these cost real time. They are listed because the shape recurs.
   turns into each read's `statement_timeout` (504 when it runs out). It used
   to be sent only inside an answer's latency budget, which is off by
   default, so a walk the caller had abandoned ran on in Postgres to the end
-  -- once for over an hour.
+  -- once for over an hour. And a per-source limit is not a per-level one:
+  a page's first hop was 68 entities, each a hub, so the second hop asked
+  for ~18,000 edges to keep 200 and ran past a minute even warm (single
+  walks off narrower pages took 0.5 s, which is what hid it; Postgres
+  prewarm on the fleet changed nothing). A bounded walk now takes a level's
+  sources `FRONTIER_PAIRS_PER_FETCH // limit` at a time, in order, and stops
+  between fetches once full (`traversal._frontier_block`): same neighbours,
+  and a level of small sources is still one query.
 - **A lazy mapping is a cost to a reader that wants all of it.**
   `_LazyAttrs` exists because a traversal hop reads `type` and nothing else,
   and it is exactly wrong for the search arm, which reads every attribute of
