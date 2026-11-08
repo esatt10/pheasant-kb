@@ -192,7 +192,8 @@ def test_with_adapters_off_the_shell_is_indexed_and_said(
     [(path, text)] = _indexed(engine).items()
     assert path.endswith("ai_foundry.txt")
     assert "enable Javascript" in text
-    assert requests == [PAGE]
+    # One page request, after the one robots.txt read that sets the site's pace.
+    assert requests == ["https://registry.terraform.io/robots.txt", PAGE]
     assert "JavaScript application shell" in caplog.text
     checkpoint = engine.state.get_source_checkpoint("tf")
     assert checkpoint is not None

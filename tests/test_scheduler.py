@@ -34,7 +34,9 @@ class _SpyEngine:
         self.calls = 0
         self.modes: list[str] = []
 
-    def sync_all(self, mode: str = "incremental") -> list:
+    def sync_all(self, mode: str = "incremental", *, scheduled: bool = False) -> list:
+        # The beat says it is the beat, so paused and manual pipelines sit it out.
+        assert scheduled, "the scheduler must call sync_all(scheduled=True)"
         with self._lock:
             self.calls += 1
             self.modes.append(mode)

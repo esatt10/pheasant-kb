@@ -476,6 +476,7 @@ class WorkerBackedEngine:
         max_depth: int | None = None,
         full_scan: bool = False,
         on_progress: Any = None,
+        scheduled: bool = False,
     ) -> list[Any]:
         if not self._can_delegate():
             return self._engine.sync_all(
@@ -483,7 +484,18 @@ class WorkerBackedEngine:
                 max_depth=max_depth,
                 full_scan=full_scan,
                 on_progress=_as_engine_hook(on_progress),
+                scheduled=scheduled,
             )
+        if scheduled:
+            # The beat syncs only pipelines that run by themselves. A sync-all
+            # child does not know it was the beat, so when any enabled source
+            # is paused or manual, each of the others gets its own child.
+            from pheasant.sync.pipeline import runs_automatically
+
+            enabled = self._engine.enabled_sources()
+            names = [s.name for s in enabled if runs_automatically(s)]
+            if len(names) != len(enabled):
+                return [self.sync_source(name, mode, max_depth=max_depth) for name in names]
         report = run_sync(
             self._config_path,
             None,

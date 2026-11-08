@@ -405,3 +405,29 @@ def test_a_stopped_pipeline_reads_as_stopped_and_a_beat_run_keeps_its_stages(tmp
     ]
     job = {"sources": [{"phase_seconds": {"fetching": 9.0}}]}
     assert sync_pipelines._stages(job, event) == [{"phase": "fetching", "seconds": 9.0}]
+
+
+def test_a_served_beat_skips_paused_pipelines_in_the_child_processes_too(monkeypatch) -> None:
+    """The serving scheduler syncs through WorkerBackedEngine, whose children
+    do not know they are the beat: with a paused source among the enabled ones
+    each other source gets its own child, and the paused one none."""
+
+    from types import SimpleNamespace
+
+    from pheasant.config.schema import SourceSyncSettings
+    from pheasant.sync import worker
+
+    def source(name: str, **sync: Any) -> SimpleNamespace:
+        return SimpleNamespace(name=name, enabled=True, sync=SourceSyncSettings(**sync))
+
+    inner = SimpleNamespace(
+        enabled_sources=lambda: [source("a"), source("b", paused=True), source("c")]
+    )
+    engine = worker.WorkerBackedEngine(inner, "pheasant.yaml")
+    synced: list[str] = []
+    monkeypatch.setattr(engine, "_can_delegate", lambda: True)
+    monkeypatch.setattr(engine, "sync_source", lambda name, mode, **_: synced.append(name))
+    monkeypatch.setattr(worker, "run_sync", lambda *a, **k: pytest.fail("one child for all"))
+
+    engine.sync_all("incremental", scheduled=True)
+    assert synced == ["a", "c"]
