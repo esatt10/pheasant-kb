@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   OPEN_JOBS_EVENT,
   outstanding,
@@ -20,10 +21,27 @@ import { formatDuration } from "./SyncProgress";
  * louder, and are said here for the same reason: a page that silently stops
  * updating is worse than one that says why.
  */
+/** Minutes and seconds: a wake is about a minute and a half, which "1m" undersells. */
+function wakeDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const rest = total % 60;
+  return rest ? `${Math.floor(total / 60)}m ${rest}s` : `${Math.floor(total / 60)}m`;
+}
+
 export function RegionBanner() {
   const ready = useReady();
   const queue = useIndexQueue();
   const region = useRegionStatus();
+  // `/ready` notices a wake first (it is polled every 15 s, the status every
+  // 30 s while all is well), so ask what is waking the moment it goes not
+  // ready -- otherwise a wake showed as "Region not ready" for up to half a
+  // minute before the banner could say what was starting.
+  const notReady = ready.data?.status === "not_ready";
+  const refetchRegion = region.refetch;
+  useEffect(() => {
+    if (notReady) void refetchRegion();
+  }, [notReady, ready.data?.reason, refetchRegion]);
 
   const readiness = ready.data;
   const tasks = outstanding(queue.data);
@@ -44,7 +62,7 @@ export function RegionBanner() {
       wake.status === "waking" ? "Waking up" : wake.status === "warming" ? "Warming up" : "Not answering";
     const after =
       wake.status === "waking"
-        ? `${formatDuration(wake.elapsed_seconds)} so far; a wake usually takes about ${formatDuration(
+        ? `${wakeDuration(wake.elapsed_seconds)} so far; a wake usually takes about ${wakeDuration(
             wake.typical_seconds,
           )}. Requests that need it may fail until then.`
         : wake.status === "warming"
