@@ -7,8 +7,21 @@ sees first, and how much of a hub the database reads to say so.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from typing import Any
+
+#: What a walk reads of an edge it keeps: the key, which the primary key
+#: index already holds. ``source_id`` and the attribute blob live in the heap,
+#: and a hub's edges are spread across it by the order pages were indexed,
+#: so reading them cost one random page per kept edge -- ~9,000 of the 13,465
+#: pages one 7-hub fetch touched. A walk looks at nothing but ``type``.
+_KEY_COLUMNS = "e.kb_id, e.source, e.target, e.type, e.seq, NULL AS source_id, NULL AS attrs"
+
+#: An edge type spelled into the statement rather than bound: a partial index
+#: (`derived_indexes._graph_edges_hierarchy`) is only used when the query's
+#: predicate visibly implies the index's, which a parameter never does.
+_LITERAL_TYPE = re.compile(r"^[a-z_]+$")
 
 
 def ranked_frontier(where: str, priority_types: Sequence[str], limited: bool) -> str:
@@ -66,6 +79,7 @@ def bounded_rows(
     sources: list[str],
     priority_types: Sequence[str],
     limit: int,
+    keys_only: bool = False,
 ) -> Iterator[Any]:
     """The edges of each source's first ``limit`` pairs, read in index order.
 
@@ -92,13 +106,18 @@ def bounded_rows(
     One statement per frontier batch on Postgres (``LATERAL``); SQLite has
     no ``LATERAL``, so it runs the same per-source statement once per source,
     in process, where a statement costs microseconds rather than a round trip.
+
+    ``keys_only`` returns each kept edge's key and ``type`` without its
+    ``source_id`` or attributes (see :data:`_KEY_COLUMNS`), for a caller that
+    reads nothing else -- the bounded walk.
     """
 
     dialect = state.dialect
+    columns = _KEY_COLUMNS if keys_only else "e.*"
     if dialect.is_postgres:
-        yield from _postgres_rows(state, kb_id, sources, priority_types, limit)
+        yield from _postgres_rows(state, kb_id, sources, priority_types, limit, columns)
         return
-    statement, extra = _source_statement(dialect, "?", priority_types)
+    statement, extra = _source_statement(dialect, "?", priority_types, columns)
     for source in sources:
         params = [*_arm_params(kb_id, priority_types, limit, source, extra), limit, kb_id, source]
         yield from state.rows(statement, tuple(params))
@@ -113,13 +132,24 @@ def _arms(dialect: Any, source_ref: str, priority_types: Sequence[str]) -> tuple
     )
     if not priority_types:
         return every.format(rank=0), []
-    clause, values = dialect.in_clause("type", list(priority_types))
+    clause, values = _type_clause(dialect, priority_types)
     first = (
         "SELECT * FROM (SELECT DISTINCT target, 0 AS rank_group FROM graph_edges"
         f" WHERE kb_id = ? AND source = {source_ref} AND {clause}"
         " ORDER BY target LIMIT ?) AS priority_target"
     )
     return f"{first} UNION ALL {every.format(rank=1)}", values
+
+
+def _type_clause(dialect: Any, priority_types: Sequence[str]) -> tuple[str, list[Any]]:
+    """The priority-type predicate, literal when it safely can be."""
+
+    types = list(priority_types)
+    if not all(_LITERAL_TYPE.match(str(value)) for value in types):
+        return dialect.in_clause("type", types)
+    if len(types) == 1:
+        return f"type = '{types[0]}'", []
+    return "type IN (" + ",".join(f"'{value}'" for value in types) + ")", []
 
 
 def _arm_params(
@@ -140,11 +170,11 @@ def _arm_params(
 
 
 def _source_statement(
-    dialect: Any, source_ref: str, priority_types: Sequence[str]
+    dialect: Any, source_ref: str, priority_types: Sequence[str], columns: str
 ) -> tuple[str, list[Any]]:
     arms, values = _arms(dialect, source_ref, priority_types)
     statement = (
-        "SELECT e.*, p.rank_group FROM ("
+        f"SELECT {columns}, p.rank_group FROM ("
         " SELECT c.target, MIN(c.rank_group) AS rank_group"
         f" FROM ({arms}) AS c GROUP BY c.target"
         " ORDER BY MIN(c.rank_group), c.target LIMIT ?"
@@ -161,6 +191,7 @@ def _postgres_rows(
     sources: list[str],
     priority_types: Sequence[str],
     limit: int,
+    columns: str,
 ) -> Iterator[Any]:
     # The edge join lives *inside* the lateral subquery. Beside it, the planner
     # was free to join a source to all of its edges first and re-run the pair
@@ -171,7 +202,7 @@ def _postgres_rows(
     statement = (
         "SELECT x.* FROM unnest(CAST(? AS text[])) AS s(source)"
         " CROSS JOIN LATERAL ("
-        " SELECT e.*, p.rank_group FROM ("
+        f" SELECT {columns}, p.rank_group FROM ("
         " SELECT c.target, MIN(c.rank_group) AS rank_group"
         f" FROM ({arms}) AS c GROUP BY c.target"
         " ORDER BY MIN(c.rank_group), c.target LIMIT ?"

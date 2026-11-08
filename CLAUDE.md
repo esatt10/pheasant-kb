@@ -154,7 +154,9 @@ pheasant-kb/
 │   │                            (file|rows), graph_rows
 │   │                            (the delta write), graph_frontier (a
 │   │                            walk's out-edges, bounded ones read in
-│   │                            key order), graph_codec (rows to
+│   │                            key order), derived_indexes (indexes
+│   │                            added after their tables, once per
+│   │                            region), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
 │   │                            receipts (what happened to what a caller
 │   │                            submitted), manifest, migrate, paths
@@ -2302,7 +2304,15 @@ Each of these cost real time. They are listed because the shape recurs.
   prewarm on the fleet changed nothing). A bounded walk now takes a level's
   sources `FRONTIER_PAIRS_PER_FETCH // limit` at a time, in order, and stops
   between fetches once full (`traversal._frontier_block`): same neighbours,
-  and a level of small sources is still one query.
+  and a level of small sources is still one query. What a cold fetch still
+  paid was pages: of 13,465 one 7-hub fetch touched, 4,396 were the
+  hierarchy scan reading each hub's whole key range for `contains` edges it
+  has none of, and ~9,000 were a heap page per kept edge for attributes a
+  walk never reads. A partial index over `contains` edges
+  (`derived_indexes`, created once per region behind a marker, because
+  index DDL in `CORE_SCHEMA` never reaches an upgraded Postgres) and
+  `keys_only` reads for bounded walks make it 7 pages and an index-only
+  join: 38.9 -> 16.6 ms warm, and a few hundred distinct pages cold.
 - **A lazy mapping is a cost to a reader that wants all of it.**
   `_LazyAttrs` exists because a traversal hop reads `type` and nothing else,
   and it is exactly wrong for the search arm, which reads every attribute of

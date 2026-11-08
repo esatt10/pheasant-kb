@@ -336,6 +336,10 @@ def _out_edges_for(
 
     batch = getattr(graph, "out_edges_batch", None)
     if callable(batch):
+        if limit_per_source is not None:
+            # A bounded walk reads an edge's type and nothing else, and on a
+            # stored graph the rest is a random heap page per kept edge.
+            return batch(node_ids, targets, priority_types, limit_per_source, keys_only=True)
         return batch(node_ids, targets, priority_types, limit_per_source)
     # A graph-shaped object implementing only the single-node primitive. It
     # cannot promise the priority order, so the sort happens here and no limit

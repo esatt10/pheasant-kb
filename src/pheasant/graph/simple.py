@@ -314,7 +314,9 @@ class SimpleMultiDiGraph:
                 edges.append((node, target, {key: dict(data) for key, data in edge_map.items()}))
             return edges
 
-    def out_edges_batch(self, node_ids, targets=None, priority_types=(), limit_per_source=None):
+    def out_edges_batch(
+        self, node_ids, targets=None, priority_types=(), limit_per_source=None, keys_only=False
+    ):
         """``out_edges`` for a whole BFS frontier, under one lock hold.
 
         Exists so :mod:`pheasant.graph.traversal` can expand a level at a time
@@ -332,7 +334,8 @@ class SimpleMultiDiGraph:
         because the traversal stops re-sorting once it has asked for the
         order, so a graph that took the arguments and ignored them would hand
         back an unordered frontier and quietly change which neighbours a
-        bounded walk returns.
+        bounded walk returns. ``keys_only`` is accepted and ignored: here the
+        attributes are already in memory, so leaving them out saves nothing.
         """
 
         keep = None if targets is None else set(targets)
