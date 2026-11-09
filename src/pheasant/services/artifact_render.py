@@ -51,7 +51,9 @@ _MARKDOWN = (
     .enable("table")
     .enable("strikethrough")
 )
-_CITATION = re.compile(r"\[(\d{1,3})\](?![(\[])")
+#: ``[n]``, not already a link's text. Adjacent ones ("[11][7]") are each a
+#: citation: answers cite in runs, and a lookahead for ``[`` left the first unlinked.
+_CITATION = re.compile(r"\[(\d{1,3})\](?!\()")
 _KNOWLEDGE_VIEW = (
     Path(__file__).resolve().parents[1] / "mcp_server" / "apps" / "knowledge_view.html"
 )

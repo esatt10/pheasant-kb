@@ -320,3 +320,14 @@ def test_both_kept_tables_round_trip_on_a_real_postgres(loaded_config) -> None:
         assert read["status"] == "done" and read["steps"] == [{"name": "plan"}]
     finally:
         engine.close()
+
+
+def test_citations_in_a_run_are_each_linked() -> None:
+    """Answers cite in runs ("[11][7]"); the first of a pair was left as text."""
+
+    rendered = artifact_render.markdown_html(
+        "Deployments run on a schedule [11][7] [3].", {3, 7, 11}
+    )
+    for index in (11, 7, 3):
+        assert f'href="#source-{index}"' in rendered, index
+    assert artifact_render.markdown_html("[9] is not a source", {3}).startswith("<p>[9]")
