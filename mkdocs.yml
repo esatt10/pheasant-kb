@@ -71,6 +71,7 @@ nav:
   - Use it:
       - Ask your knowledge base (web UI): how-to/chat-and-ui.md
       - Answer length, conversations & visuals: how-to/conversations-and-visuals.md
+      - Keep what pheasant generates (artifacts): how-to/artifacts.md
       - Customize the answering workflow: how-to/agent-workflows.md
       - Attach to a coding agent (MCP): how-to/attach-to-coding-agent.md
       - MCP for agents: mcp_client.md
@@ -83,6 +84,7 @@ nav:
       - Chunk each file the way it is written: how-to/dynamic-chunking.md
       - Multi-modal ingest: how-to/multimodal-ingest.md
       - Vector self-search: how-to/vector-search.md
+      - Sync schedules & removing content: how-to/sync-schedules.md
       - Monitor indexing: how-to/monitor-indexing.md
       - Export a corpus as Parquet: how-to/parquet-exports.md
   - Other deployments:

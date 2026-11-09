@@ -17,6 +17,9 @@ Per-source progress (phase, rate, ETA, stalled) is in the UI's jobs tray and at
 [Monitor indexing](../how-to/monitor-indexing.md) explains what to watch, and
 [Scale up or down](scale.md) which number to move when one of them is high.
 
+The **Syncs** page shows each source's schedule, last and next run, and
+where to change them ([Sync schedules](../how-to/sync-schedules.md)).
+
 ## Where the images come from
 
 pheasant-kb runs three images, from two registries:

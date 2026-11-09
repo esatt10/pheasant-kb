@@ -72,6 +72,24 @@ claim that no model is connected.
   drawn layout, and **Collapse** or Esc goes back with your layout kept. See
   [expand a visual, and move things around](conversations-and-visuals.md#expand-a-visual-and-move-things-around).
 
+### Keep, save and leave out
+
+Under the composer:
+
+- **use memory** (off by default) lets remembered assertions from agent memory
+  inform the answer.
+- **use artifacts** (on) lets what people have saved -- composed files,
+  reports, threads -- be evidence too. Untick it for an answer from the
+  sources alone.
+- **Save thread** keeps the conversation since the last **New topic** as one
+  artifact: every question, answer, source and trace, with its evidence
+  numbered once across the whole thread.
+
+Under an answer, **Save as report** (or **Save files** for a `@compose`
+answer) keeps it; a diagram's **Save** keeps it as drawn, redraws included.
+Kept answers open in the **Artifacts** tab, survive a reload, and are filed by
+day, person and conversation. See [Keep what pheasant generates](artifacts.md).
+
 ### Dictation
 
 With an OpenAI key on the server (or pasted for the session), a microphone
