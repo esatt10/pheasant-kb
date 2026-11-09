@@ -29,3 +29,9 @@ sources:
     exclude:
       - "**/.git/**"
       - "**/node_modules/**"
+artifacts:
+  # A save starts no background sync in the suite: each one is a child
+  # process that outlives its test (one stalled CI for 30 minutes), and a
+  # test that wants artifacts indexed syncs them itself.
+  # tests/test_artifact_lifecycle.py drives index_on_save through a stub.
+  index_on_save: false

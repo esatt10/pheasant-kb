@@ -336,6 +336,7 @@ class PheasantRetriever:
         path_prefix: str | None = None,
         exclusion: Any = None,
         source_names: list[str] | None = None,
+        exclude_sources: list[str] | None = None,
     ) -> None:
         self.search_engine = search
         self.knowledge_base = knowledge_base
@@ -360,6 +361,9 @@ class PheasantRetriever:
         # graph or document read re-checks (`_artifact_allowed`), like the
         # source-type scope above.
         self.source_names = set(source_names) if source_names else None
+        # Sources to leave out (the artifacts toggle's `exclude`), held and
+        # re-checked like `source_names`.
+        self.exclude_sources = set(exclude_sources) if exclude_sources else None
         # One file or folder of the source (the taxonomy view's "search only
         # here"), held for the same reason: every search and every graph or
         # document read in this answer must stay inside it.
@@ -390,7 +394,11 @@ class PheasantRetriever:
     ) -> bool:
         """Reapply caller scope before graph or cached content becomes evidence."""
         if self.state is not None and (
-            self.source_name or self.source_names or self.source_types or self.exclude_source_types
+            self.source_name
+            or self.source_names
+            or self.exclude_sources
+            or self.source_types
+            or self.exclude_source_types
         ):
             self._load_source_mappings()
         raw_source = str(source_id or "")
@@ -398,6 +406,8 @@ class PheasantRetriever:
         if self.source_name and self.source_name not in {raw_source, canonical_source}:
             return False
         if self.source_names and not self.source_names & {raw_source, canonical_source}:
+            return False
+        if self.exclude_sources and self.exclude_sources & {raw_source, canonical_source}:
             return False
         if self.path_prefix and not path_within(relative_path, self.path_prefix):
             return False
@@ -526,6 +536,7 @@ class PheasantRetriever:
             tuple(self.source_types or ()),
             tuple(self.exclude_source_types or ()),
             tuple(sorted(self.source_names or ())),
+            tuple(sorted(self.exclude_sources or ())),
             self.path_prefix,
             id(self.exclusion),
         )
@@ -542,7 +553,12 @@ class PheasantRetriever:
         # a grounded answer built on a type-filtered corpus silently had fewer
         # passages to work from than the caller asked for — the failure mode
         # is a thinner answer, which reads as the corpus being thin.
-        filtering = bool(self.source_types or self.exclude_source_types or self.source_names)
+        filtering = bool(
+            self.source_types
+            or self.exclude_source_types
+            or self.source_names
+            or self.exclude_sources
+        )
         resolve = getattr(self.search_engine, "ranking_parameters", None)
         fetch = resolve().overfetch(limit, filtering=filtering) if callable(resolve) else limit
         payload = self.search_engine.search_context(
@@ -577,6 +593,7 @@ class PheasantRetriever:
                 source_types=self.source_types,
                 exclude_source_types=self.exclude_source_types,
                 source_names=sorted(self.source_names) if self.source_names else None,
+                exclude_sources=sorted(self.exclude_sources) if self.exclude_sources else None,
             )[:limit]
         passages = [self._passage(item, mode) for item in hits]
         self._cache[cache_key] = passages

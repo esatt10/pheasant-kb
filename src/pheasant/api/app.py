@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel
 
 from pheasant.api.archive_routes import register_archive_routes
+from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
@@ -52,7 +53,6 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
-from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
 from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServiceError, JobRegistry
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
@@ -686,6 +686,7 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # submission — also per call, so also live. Nothing here is a service
     # started at boot, which is the question this table actually asks.
     "readiness": True,
+    "artifacts": True,  # read per save and per beat (`services/artifact_settings.py`)
     "storage": False,
     "server": False,
     "pheasant": False,
@@ -1077,7 +1078,7 @@ def create_app(
     # manager: the SDK's streamable-http app is useless without its own
     # lifespan running ("Task group is not initialized"), and a plain
     # app.mount() does not run a sub-app's lifespan.
-    mcp_asgi_app = _mcp_asgi_app(config) if role_policy.serves_ui else None
+    mcp_asgi_app = _mcp_asgi_app(config, search.vector) if role_policy.serves_ui else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1157,8 +1158,13 @@ def create_app(
                 # requests this server exists to answer.
                 sync_lock = getattr(app.state, "sync_lock", None)
                 lock_context = sync_lock if sync_lock is not None else nullcontext()
+                from pheasant.sync.background_jobs import run_sync_job
+
                 with lock_context:
-                    results = WorkerBackedEngine(engine, app.state.config_path).startup()
+                    worker = WorkerBackedEngine(engine, app.state.config_path)
+                    results = run_sync_job(
+                        app.state.jobs, "Startup sync", startup_sources, worker.startup
+                    )
                 app.state.startup_sync_results = results
                 indexed = sum(result.indexed_artifacts for result in results)
                 skipped = sum(result.skipped_artifacts for result in results)
@@ -2036,6 +2042,7 @@ def create_app(
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
     register_region_routes(app, services=services)
+    register_artifact_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2387,20 +2394,10 @@ def create_app(
         success, sync failure, or an unexpected exception — so a source can
         never get stuck showing "syncing" forever.
         """
+        from pheasant.sync.background_jobs import finish_sync_job, forward_progress
         from pheasant.sync.worker import WorkerBackedEngine
 
-        def forward(event: dict) -> None:
-            meta = event.get("meta") or {}
-            jobs.progress(
-                job_id,
-                phase=event.get("phase"),
-                current=event.get("current"),
-                total=event.get("total"),
-                detail=event.get("detail"),
-                source=meta.get("source") or None,
-                stats=meta,
-            )
-
+        forward = forward_progress(jobs, job_id)
         try:
             jobs.progress(
                 job_id,
@@ -2416,23 +2413,7 @@ def create_app(
             logger.exception("background sync failed")
             jobs.finish(job_id, "failed", error=str(exc))
             return
-        failed = [r for r in results if r.status in FAILED_SYNC_STATUSES]
-        jobs.finish(
-            job_id,
-            sync_job_status([r.status for r in results]),
-            error=(failed[0].details.get("error") or failed[0].status) if failed else None,
-            result={
-                "results": [
-                    {
-                        "source_id": r.source_id,
-                        "indexed_artifacts": r.indexed_artifacts,
-                        "skipped_artifacts": r.skipped_artifacts,
-                        "status": r.status,
-                    }
-                    for r in results
-                ]
-            },
-        )
+        finish_sync_job(jobs, job_id, results)
 
     def _background_status(job_id: str | None, queued: list[str]) -> str:
         """Three outcomes, three words — `syncing` used to cover all of them.
@@ -4279,8 +4260,10 @@ def create_app(
         # `force_local` above already guarantees this cannot proxy to itself.
         graph_obj = serving_graph
         operation = req.operation.strip().lower()
-
-        if operation == "stats":
+        if operation == "ping":
+            # Readiness: the service and its store answer. Not `stats`, which counts every node.
+            result = {"ok": bool(state.rows("SELECT 1 AS ok", ()))}
+        elif operation == "stats":
             with graph_obj.reading():
                 result = {
                     "total_nodes": graph_obj.number_of_nodes(),
@@ -5355,7 +5338,7 @@ def _mcp_tool_summaries() -> list[dict]:
     return summaries
 
 
-def _mcp_asgi_app(config: PheasantConfig):
+def _mcp_asgi_app(config: PheasantConfig, vector: Any = None):
     """The MCP streamable-HTTP ASGI app to mount at ``/mcp``, or None.
 
     ``GET /mcp/info`` has always advertised ``streamable_http_url:
@@ -5371,7 +5354,7 @@ def _mcp_asgi_app(config: PheasantConfig):
     try:
         from pheasant.mcp_server.server import streamable_http_app
 
-        return streamable_http_app(config)
+        return streamable_http_app(config, vector)
     except Exception:  # pragma: no cover - depends on the optional [mcp] extra
         logger.warning("MCP streamable-http app unavailable; /mcp not mounted", exc_info=True)
         return None

@@ -56,6 +56,9 @@ class SearchCriteria(BaseModel):
     # How this region's agent memory takes part: "auto" (default), "off",
     # "only", "prefer", or an object with scopes/subject/current_only/as_of.
     memory: dict | str | None = None
+    # Saved artifacts (the "artifacts" source): "include" (default),
+    # "exclude" or "only"; true/false read as include/exclude.
+    artifacts: str | bool | None = None
     # Pin this search to a sealed snapshot. The region verifies it still
     # stands there and refuses with SNAPSHOT_DRIFTED if it does not — it holds
     # one version of its corpus, so the guarantee is that two runs naming one
@@ -90,6 +93,7 @@ class SearchCriteria(BaseModel):
             principal=self.principal,
             principal_groups=self.principal_groups,
             memory=self.memory,
+            artifacts=self.artifacts,
             exclude_sources=self.exclude_sources,
             source_names=self.source_names,
             node_types=self.node_types,

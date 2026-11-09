@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
@@ -75,15 +75,18 @@ class Indexing:
 
 @dataclass(frozen=True)
 class ArchiveRequest:
-    """Documents to remove (or reinstate), by id, ``source/path``, path or a tail."""
+    """Documents to remove (or reinstate), by id, ``source/path``, path or a tail --
+    and whole folders, as ``source/path`` (every document beneath it)."""
 
-    documents: list[str]
+    documents: list[str] = field(default_factory=list)
     knowledge_base: str | None = None
     source_name: str | None = None
     principal: str | None = None
     principal_groups: list[str] | None = None
     #: Recorded on the archive row: who asked.
     actor: str | None = None
+    #: Folders, as ``source/path`` (``path`` alone with ``source_name``).
+    folders: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -103,10 +106,10 @@ def archive_documents(context: ServiceContext, request: ArchiveRequest) -> dict[
     """Remove each named document from the index and hold it out of every sync."""
 
     kb_id = context.knowledge_base(request.knowledge_base)
-    names = _requested(request.documents)
+    names = _requested(request.documents, request.folders)
     from pheasant.services import scope
 
-    chosen: dict[str, Any] = {}
+    chosen: dict[str, Any] = _folder_rows(context, request)
     for name in names:
         rows = scope.named(
             context,
@@ -139,10 +142,17 @@ def archive_documents(context: ServiceContext, request: ArchiveRequest) -> dict[
         documents.append(_document(source_name, str(row["relative_path"]), artifact_id, kind))
         by_source.setdefault(source_name, []).append(str(row["relative_path"]))
     sources = {name: _apply_removal(context, name) for name in sorted(by_source)}
+    # A kept artifact's files are documents like any other; removing its index
+    # page retires the artifact (`services/artifacts.py`).
+    from pheasant.services import artifacts
+
+    for name, paths in by_source.items():
+        artifacts.forget_removed(context, name, paths)
     return {
         "knowledge_base": kb_id,
         "status": _overall(sources.values(), "removed"),
-        "documents": documents,
+        "documents": documents[:MAX_LISTED],
+        "documents_total": len(documents),
         "sources": sources,
     }
 
@@ -151,9 +161,24 @@ def reinstate_documents(context: ServiceContext, request: ArchiveRequest) -> dic
     """Let archived documents back in, and sync their sources to read them again."""
 
     kb_id = context.knowledge_base(request.knowledge_base)
-    names = _requested(request.documents)
+    names = _requested(request.documents, request.folders)
     held = _readable(context, _held(context, request.source_name), request)
     chosen: dict[tuple[str, str], dict[str, Any]] = {}
+    for folder in _folder_names(request.folders):
+        source_name, prefix = _split_folder(context, folder, request.source_name)
+        inside = [
+            row
+            for row in held
+            if row["source_id"] == source_name
+            and (
+                row["relative_path"] == prefix or str(row["relative_path"]).startswith(f"{prefix}/")
+            )
+            # An upload's bytes are gone; the rest of the folder comes back.
+            and row["kind"] != "removed"
+        ]
+        if not inside:
+            raise DocumentNotFound(f"{folder} (nothing archived under that folder)")
+        chosen.update({(str(r["source_id"]), str(r["relative_path"])): r for r in inside})
     for name in names:
         rows = [row for row in held if _names_row(row, name)]
         if not rows:
@@ -250,12 +275,74 @@ def _indexing(context: ServiceContext) -> Indexing:
     return Indexing(local=True, start_sync=sync_here)
 
 
-def _requested(raw: list[str] | str | None) -> list[str]:
+#: Documents one folder removal may take, and how many a reply lists.
+MAX_FOLDER_DOCUMENTS = 5000
+MAX_LISTED = 200
+
+
+def _folder_names(raw: list[str] | str | None) -> list[str]:
+    from pheasant.services import scope
+
+    return scope.names(raw)
+
+
+def _split_folder(context: ServiceContext, folder: str, source_name: str | None) -> tuple[str, str]:
+    """``(source, path)`` for a folder named ``source/path`` (or ``path`` beside a source)."""
+
+    text = folder.strip().strip("/")
+    if source_name:
+        path = text[len(source_name) + 1 :] if text.startswith(f"{source_name}/") else text
+        source = source_name
+    else:
+        source, _, path = text.partition("/")
+        known = any(s.name == source for s in context.config.sources) or context.state.get_source(
+            source
+        )
+        if not known:
+            raise InvalidRequest(f"name the folder as <source>/<path>; {source!r} is not a source")
+    path = path.strip("/")
+    if not path or path == source:
+        raise InvalidRequest(
+            f"{source} is a whole source: remove the source instead (remove_source), "
+            "or name a folder inside it"
+        )
+    return source, path
+
+
+def _folder_rows(context: ServiceContext, request: ArchiveRequest) -> dict[str, Any]:
+    """Every document in the folders a request names, by id."""
+
+    from pheasant.services import scope
+
+    chosen: dict[str, Any] = {}
+    for folder in _folder_names(request.folders):
+        source_name, prefix = _split_folder(context, folder, request.source_name)
+        rows = scope.under(
+            context,
+            source_name,
+            prefix,
+            principal=request.principal,
+            principal_groups=request.principal_groups,
+        )
+        if not rows:
+            raise DocumentNotFound(f"{folder} (no documents under that folder)")
+        chosen.update({str(row["id"]): row for row in rows})
+        if len(chosen) > MAX_FOLDER_DOCUMENTS:
+            raise InvalidRequest(
+                f"these folders hold more than {MAX_FOLDER_DOCUMENTS} documents; remove them "
+                "a folder at a time, or remove the source"
+            )
+    return chosen
+
+
+def _requested(raw: list[str] | str | None, folders: list[str] | str | None = None) -> list[str]:
     from pheasant.services import scope
 
     names = scope.names(raw)
-    if not names:
-        raise InvalidRequest("name at least one document, by id, source/path or path")
+    if not names and not scope.names(folders):
+        raise InvalidRequest(
+            "name at least one document (id, source/path or path) or folder (source/path)"
+        )
     if len(names) > MAX_DOCUMENTS:
         raise InvalidRequest(f"{len(names)} documents named; at most {MAX_DOCUMENTS} per call")
     return names

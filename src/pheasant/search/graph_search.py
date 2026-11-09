@@ -320,6 +320,10 @@ def _scan_edges(
                         "target": target,
                         "source_label": source_label,
                         "target_label": target_label,
+                        # The edge's own source, which `source_name` filters on
+                        # above: without it `exclude_sources` read the edge's
+                        # *endpoint* id as its source and never matched.
+                        "source_id": data.get("source_id"),
                         "title": f"{source_label} —{etype}→ {target_label}",
                         "label": etype,
                         "score": round(score, 3),

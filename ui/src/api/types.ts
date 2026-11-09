@@ -573,9 +573,70 @@ export interface EmbeddingsStatus {
   artifacts_scanned?: number;
 }
 
+/** A kept artifact as listed: composed files or a saved report, no contents. */
+export interface ArtifactSettings {
+  enabled: boolean;
+  auto_save: boolean;
+  index_on_save: boolean;
+  index_interval_seconds: number;
+  yield_to_content: boolean;
+  retention_days: number;
+  retention_kinds: string[];
+}
+
+/** `GET /artifacts/settings`: in force, the config's defaults, and who changed what. */
+export interface ArtifactSettingsView {
+  settings: ArtifactSettings;
+  defaults: ArtifactSettings;
+  changed: string[];
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+export interface ArtifactSummary {
+  id: string;
+  kind: "files" | "report" | "thread";
+  title: string;
+  created_at: string;
+  /** Who kept it: the first level of its folder. */
+  owner: string | null;
+  /** The source it lives in as knowledge (`artifacts`), and its folder there. */
+  source: string | null;
+  folder: string | null;
+  files: { name: string; language: string | null; previewable: boolean }[];
+  has_visual: boolean;
+  conversation_id?: string | null;
+  /** ui, api or mcp: where it was kept from. */
+  channel?: string | null;
+  archived_at?: string | null;
+  /** Whether the scheduled artifacts sync has indexed it yet. */
+  index_status?: "indexed" | "pending" | "archived" | null;
+  trace?: { intent?: string | null; accepted?: boolean | null; degraded?: boolean | null; trace_id?: string | null } | null;
+}
+
+export interface ArtifactFile {
+  name: string;
+  language: string | null;
+  content: string;
+}
+
+/** `GET /artifacts/{id}`: the listing entry plus its contents. */
+export interface Artifact extends ArtifactSummary {
+  knowledge_base: string;
+  payload: {
+    question?: string;
+    summary?: string | null;
+    answer?: string;
+    files: ArtifactFile[];
+    not_covered?: string | null;
+  };
+}
+
 export interface ChatAnswer {
   question: string;
   answer: string;
+  /** A composed answer, kept by the region as an artifact (`/artifacts`). */
+  artifact?: ArtifactSummary | null;
   /** `inventory`: a question about the knowledge base itself, answered from
    * the index (`describe_knowledge_base` / `list_documents`), not a search. */
   mode: "llm" | "extractive" | "inventory" | "search" | "remove";
@@ -663,6 +724,8 @@ export interface ArchiveResult {
   /** `removed` / `reinstated` here; `queued` for an indexer; `pending` behind a running sync. */
   status: string;
   documents: ArchivedDocument[];
+  /** How many were removed; `documents` lists the first 200. */
+  documents_total?: number;
   sources: Record<string, { status: string; job_id?: string | null; queued_tasks?: string[] }>;
 }
 
@@ -1876,6 +1939,18 @@ export interface PipelineSettings {
   on_startup: boolean;
   on_file_change: string | boolean;
   on_git_commit: boolean;
+  /** How often the scheduler syncs this source; null follows the region default. */
+  min_interval_seconds: number | null;
+  /** Wait while other sources sync. */
+  yield_to_content: boolean;
+}
+
+/** The region's default cadence, and the choices the Syncs page offers. */
+export interface PipelineDefaults {
+  default_source_interval_seconds: number | null;
+  configured_seconds: number | null;
+  beat_seconds: number;
+  choices: number[];
 }
 
 export interface PipelineRow {
@@ -1884,7 +1959,16 @@ export interface PipelineRow {
   description?: string | null;
   state: PipelineState;
   documents?: number | null;
-  schedule: { mode: string; label: string; min_interval_seconds?: number; max_interval_seconds?: number };
+  schedule: {
+    mode: string;
+    label: string;
+    min_interval_seconds?: number;
+    max_interval_seconds?: number;
+    beat_seconds?: number;
+    /** How often the scheduler syncs it, and whose setting that is. */
+    interval_seconds?: number;
+    interval_from?: "source" | "region default" | "every beat";
+  };
   settings: Partial<PipelineSettings>;
   last_run: PipelineRun | null;
   running: { since?: string | null; heartbeat_at?: string | null; phase?: string | null; progress?: { current?: number; total?: number } | null } | null;
@@ -1901,6 +1985,7 @@ export interface PipelineList {
   pipelines: PipelineRow[];
   totals: Record<string, number>;
   beat_seconds: number;
+  defaults?: PipelineDefaults;
 }
 
 export interface PipelineDetail extends PipelineRow {

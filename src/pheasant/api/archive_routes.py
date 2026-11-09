@@ -21,6 +21,8 @@ from pheasant.services import archive
 class ArchiveDocumentsRequest(BaseModel):
     #: Ids, ``source/path``, paths, or a unique path tail. One document each.
     documents: list[str] = Field(default_factory=list)
+    #: Whole folders, ``source/path``: every document beneath each one.
+    folders: list[str] = Field(default_factory=list)
     source_name: str | None = None
     principal: str | None = None
     principal_groups: list[str] | None = None
@@ -70,6 +72,7 @@ def register_archive_routes(app: FastAPI, *, services: Any) -> None:
 def _request(req: ArchiveDocumentsRequest, actor: str) -> archive.ArchiveRequest:
     return archive.ArchiveRequest(
         documents=list(req.documents),
+        folders=list(req.folders),
         source_name=req.source_name,
         principal=req.principal,
         principal_groups=req.principal_groups,

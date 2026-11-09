@@ -108,6 +108,16 @@ class AnswerRequest:
     workflow: str | None = None
     options: dict[str, Any] | None = None
     memory: Any = None
+    #: ``include`` (default) / ``exclude`` / ``only``: whether saved
+    #: artifacts are evidence for this answer (`services.artifacts.scope`).
+    artifacts: Any = None
+    #: Keep this answer as an artifact (``True``), don't (``False``), or
+    #: follow the region's ``auto_save`` (``None``). Composed answers only.
+    save: bool | None = None
+    #: The conversation it belongs to, and the surface it came from: what an
+    #: artifact kept from it is filed and traced under.
+    conversation_id: str | None = None
+    channel: str | None = None
     #: Earlier turns of this conversation, oldest first, as the caller holds
     #: them. The region keeps no conversation state — the MCP transport is
     #: stateless by design and a browser tab is the only thing that knows
@@ -161,7 +171,10 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
     except HistoryError as exc:
         raise InvalidRequest(str(exc)) from exc
     from pheasant.assistant import chat
+    from pheasant.services import artifacts
 
+    # A malformed artifacts toggle is refused before a stream opens.
+    artifacts.scope(request.artifacts, request.source_name, request.source_names, None)
     if request.intent and str(request.intent).strip().lower() not in {"auto", *chat.INTENTS}:
         raise InvalidRequest(
             f"intent must be one of auto, {', '.join(chat.INTENTS)}; got {request.intent!r}"
@@ -201,6 +214,11 @@ def answer(
     from pheasant.request_budget import activate
 
     budget = request_budget or create_request_budget(context, request)
+    from pheasant.services import artifacts
+
+    source_name, source_names, exclude_sources = artifacts.scope(
+        request.artifacts, request.source_name, request.source_names, None
+    )
     try:
         from pheasant.search.vector_store import collect_query_embedding_metrics
 
@@ -217,7 +235,7 @@ def answer(
                 env=env if env is not None else dict(os.environ),
                 mode=request.mode,
                 max_results=request.max_results,
-                source_name=request.source_name,
+                source_name=source_name,
                 principal=request.principal,
                 principal_groups=request.principal_groups,
                 workflow=request.workflow,
@@ -237,10 +255,24 @@ def answer(
                 current_document=request.current_document,
                 current_directory=request.current_directory,
                 remove_documents=_remover(context, request),
-                source_names=request.source_names,
+                source_names=source_names,
+                exclude_sources=exclude_sources,
                 intent=request.intent,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
+            # A composed answer is kept as an artifact the moment it exists,
+            # for every surface: `services/artifacts.py`.
+            kept = artifacts.keep_composed(
+                context,
+                request.question,
+                request.principal,
+                payload,
+                save=request.save,
+                conversation_id=request.conversation_id,
+                channel=request.channel,
+            )
+            if kept is not None:
+                payload["artifact"] = kept
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000

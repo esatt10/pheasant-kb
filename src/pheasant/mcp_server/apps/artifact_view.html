@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pheasant artifact</title>
+<!--
+  pheasant's artifact view (MCP Apps extension, protocol 2026-01-26), for
+  `get_artifact`.
+
+  The chrome only: a title, a tab per file plus the whole artifact, and a
+  source/preview switch. Every document it shows is rendered by the region
+  (`tools/call view_artifact`, the renderer the web UI and the downloads use)
+  and goes into a nested frame sandboxed to scripts alone, under the policy
+  each rendered document carries: it can draw, and reach nothing. Nothing
+  from a result is ever parsed as markup here.
+-->
+<style>
+  :root { --bg: #ffffff; --sunken: #f7f5f0; --fg: #1f1c17; --muted: #8a8377; --line: #e3ded3;
+          --accent: #5f6b45; --accent-soft: #eef0e7; --accent-text: #46512f; }
+  :root[data-theme="dark"] { --bg: #191713; --sunken: #131110; --fg: #ece7dd; --muted: #8e8778;
+          --line: #302c26; --accent: #a9b485; --accent-soft: #23271a; --accent-text: #bfc99c; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { padding: 10px 12px 12px; }
+  h1 { font-size: 15px; margin: 0; }
+  .meta { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .tab, .btn { font: 12.5px system-ui, sans-serif; color: var(--fg); background: var(--sunken);
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent);
+    color: var(--accent-text); }
+  .tab code { font: 12px ui-monospace, Menlo, monospace; }
+  .spacer { flex: 1; }
+  iframe { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg); display: block; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main id="root"><p class="muted">Waiting for an artifact…</p></main>
+<script>
+(() => {
+  "use strict";
+  const PROTOCOL = "2026-01-26";
+  const root = document.getElementById("root");
+  let nextId = 1;
+  const pending = new Map();
+  let theme = null;
+  let artifact = null;
+  let selected = "";      // "" is the whole artifact; otherwise a file name
+  let mode = "preview";   // for a previewable file
+
+  function send(message) { window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*"); }
+  function request(method, params) {
+    const id = nextId++;
+    send({ id, method, params });
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      setTimeout(() => { if (pending.delete(id)) reject(new Error(method + " timed out")); }, 30000);
+    });
+  }
+  function notify(method, params) { send({ method, params }); }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && pending.has(message.id)) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message || "error"));
+      else waiter.resolve(message.result);
+      return;
+    }
+    if (message.method === "ui/notifications/tool-result") receive(message.params || {});
+    if (message.method === "ui/notifications/host-context-changed") applyContext(message.params);
+  });
+
+  function applyContext(context) {
+    if (context && (context.theme === "dark" || context.theme === "light")) {
+      theme = context.theme;
+      document.documentElement.dataset.theme = theme;
+      if (artifact) show();
+    }
+  }
+
+  function reportSize() {
+    const box = root.getBoundingClientRect();
+    notify("ui/notifications/size-changed", { width: Math.ceil(box.width), height: Math.ceil(box.bottom + 8) });
+  }
+  new ResizeObserver(reportSize).observe(root);
+
+  request("ui/initialize", {
+    protocolVersion: PROTOCOL,
+    clientInfo: { name: "pheasant-artifact-view", version: "1" },
+    appCapabilities: { availableDisplayModes: ["inline"] },
+  }).then((result) => {
+    applyContext(result && result.hostContext);
+    notify("ui/notifications/initialized", {});
+  }).catch(() => notify("ui/notifications/initialized", {}));
+
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (key === "class") node.className = value; else node.setAttribute(key, value);
+    }
+    for (const child of children) {
+      if (child === null || child === undefined) continue;
+      node.append(typeof child === "string" ? document.createTextNode(child) : child);
+    }
+    return node;
+  }
+
+  function payloadOf(result) {
+    if (result.structuredContent && typeof result.structuredContent === "object") {
+      return result.structuredContent.result && typeof result.structuredContent.result === "object"
+        ? result.structuredContent.result : result.structuredContent;
+    }
+    for (const block of result.content || []) {
+      if (block.type === "text") { try { return JSON.parse(block.text); } catch (_) { /* text */ } }
+    }
+    return {};
+  }
+
+  function receive(result) {
+    const payload = payloadOf(result);
+    if (!payload || !payload.id) {
+      root.replaceChildren(el("p", { class: "muted" }, "Nothing to show for this result."));
+      return;
+    }
+    artifact = payload;
+    selected = "";
+    show();
+  }
+
+  function fileOf(name) {
+    return ((artifact.payload || {}).files || []).find((f) => f.name === name) || null;
+  }
+
+  function copy(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    }
+    fallbackCopy(text);
+    return Promise.resolve();
+  }
+  function fallbackCopy(text) {
+    const area = el("textarea", {});
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    try { document.execCommand("copy"); } catch (_) { /* nothing more to try */ }
+    area.remove();
+  }
+
+  function show() {
+    const files = artifact.files || [];
+    const count = files.length ? ` · ${files.length} file${files.length === 1 ? "" : "s"}` : "";
+    const head = [el("h1", {}, artifact.title || "Artifact"),
+      el("p", { class: "meta" }, (artifact.kind === "files" ? "Composed files" : "Report") + count)];
+    const bar = el("div", { class: "bar", role: "tablist" });
+    const tab = (label, name, mono) => {
+      const button = el("button", { class: "tab", role: "tab", "aria-selected": String(selected === name) },
+        mono ? el("code", {}, label) : label);
+      button.addEventListener("click", () => { selected = name; show(); });
+      return button;
+    };
+    bar.append(tab("Whole artifact", "", false));
+    for (const file of files) bar.append(tab(file.name, file.name, true));
+    bar.append(el("span", { class: "spacer" }));
+    const current = selected ? files.find((f) => f.name === selected) : null;
+    if (current && current.previewable) {
+      const toggle = el("button", { class: "btn" }, mode === "preview" ? "Source" : "Preview");
+      toggle.addEventListener("click", () => { mode = mode === "preview" ? "code" : "preview"; show(); });
+      bar.append(toggle);
+    }
+    if (current) {
+      const button = el("button", { class: "btn" }, "Copy");
+      button.addEventListener("click", () => {
+        const file = fileOf(current.name);
+        copy((file && file.content) || "").then(() => { button.textContent = "Copied"; });
+      });
+      bar.append(button);
+    }
+    const frame = el("iframe", { sandbox: "allow-scripts", title: current ? current.name : "Artifact" });
+    root.replaceChildren(...head, bar, frame);
+    const args = { knowledge_base: artifact.knowledge_base, artifact_id: artifact.id };
+    if (current) { args.file = current.name; args.mode = current.previewable ? mode : "code"; }
+    if (theme) args.theme = theme;
+    request("tools/call", { name: "view_artifact", arguments: args })
+      .then((result) => {
+        const rendered = payloadOf(result || {});
+        frame.srcdoc = rendered.html || "";
+      })
+      .catch((error) => {
+        frame.replaceWith(el("p", { class: "muted" }, "Could not show it: " + error.message));
+      });
+    reportSize();
+  }
+})();
+</script>
+</body>
+</html>

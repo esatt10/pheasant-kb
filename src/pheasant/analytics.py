@@ -165,6 +165,10 @@ SQL_TABLES: dict[str, str] = {
     "memory_records": "Agent-memory records: scope, subject, validity window, supersedes.",
     "memory_compactions": "Compaction audit trail: each near-duplicate cluster's medoid promotion.",
     "sync_events": "Sync run history: what ran, when, and how it ended.",
+    "saved_artifacts": (
+        "Kept artifacts: who, when, which conversation and channel, archived or not; "
+        "payload_json holds the files, citations and trace (confidence, steps)."
+    ),
     "artifact_terms": "Legacy enrichment terms. Large, and mostly historical concept rows.",
 }
 
@@ -194,6 +198,7 @@ DEFAULT_TABLES: tuple[str, ...] = (
     "memory_records",
     "memory_compactions",
     "sync_events",
+    "saved_artifacts",
     "graph_nodes",
     "graph_edges",
 )

@@ -82,7 +82,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
 class PheasantTools(
     ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools, SyncControlTools
 ):
-    def __init__(self, config: PheasantConfig):
+    def __init__(self, config: PheasantConfig, *, vector: Any = None):
         self.config = config
         self.paths = StatePaths.from_config(config)
         self.paths.ensure()
@@ -104,7 +104,9 @@ class PheasantTools(
         self._job_lock = threading.Lock()
         self.searcher = HybridSearch(
             SearchStore(self.state, ranking=resolver_for(config, self.state)),
-            vector=self.engine.vector_searcher(),
+            # The serving app's own, when mounted in one: a second searcher
+            # held a second resident matrix, OOM-killing a 2 GiB api replica.
+            vector=vector if vector is not None else self.engine.vector_searcher(),
             node_index=self.engine.node_index,
             wasm_relationship_search=config.search.wasm_relationship_search,
             steering_enabled=config.memory.steering_enabled,
@@ -825,6 +827,7 @@ class PheasantTools(
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
         source_names: list[str] | None = None,
+        artifacts: Any = None,
     ) -> dict:
         """Retrieve passages for a query.
 
@@ -864,8 +867,8 @@ class PheasantTools(
         naming the sections that moved, if it does not — it holds one version
         of its corpus, so the guarantee is a refusal rather than time travel:
         two runs naming one snapshot cannot silently have seen different
-        corpora. ``seal_snapshot`` has told agents to do this since it
-        shipped; until now only the HTTP surface accepted it.
+        corpora. ``artifacts`` is ``memory``'s toggle for saved artifacts:
+        ``include`` (default), ``exclude`` or ``only``.
 
         ``as_of`` is the instant memory validity is evaluated at, carried here
         as well as inside ``memory`` so it reaches the lineage block even in a
@@ -873,13 +876,11 @@ class PheasantTools(
         needs to be told that ``as_of`` did nothing.
 
         ``expand`` walks the graph out from each hit and attaches the
-        neighbourhood under the hit's ``graph`` key — see
-        `services.retrieval.parse_expansion` for what it accepts.
+        neighbourhood under the hit's ``graph`` key (`parse_expansion`).
 
         ``include_chunks`` and ``include_graph_neighbors`` are accepted and
-        ignored, as they always have been: nothing ever read either, and
-        removing a parameter breaks callers that pass it (rule 8). ``expand``
-        is what the second one claimed to be.
+        ignored: nothing ever read either, and removing a parameter breaks
+        callers that pass it (rule 8). ``expand`` is what the second claimed.
         """
         self._require_knowledge_base(knowledge_base)
         # Transport adapter. The operation is `services.retrieval.search`:
@@ -907,6 +908,7 @@ class PheasantTools(
                 source_types=source_types,
                 exclude_source_types=exclude_source_types,
                 source_names=source_names,
+                artifacts=artifacts,
                 snapshot_id=snapshot_id,
                 as_of=as_of,
                 expand=expand,

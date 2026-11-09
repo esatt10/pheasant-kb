@@ -43,9 +43,14 @@ import type {
   LedgerPage,
   PipelineDetail,
   PipelineList,
+  PipelineDefaults,
   PipelineSettings,
 } from "./types";
 import type {
+  Artifact,
+  ArtifactSettings,
+  ArtifactSettingsView,
+  ArtifactSummary,
   ConfigSection,
   ConfigSectionResult,
   EvaluationCohortSummary,
@@ -174,6 +179,8 @@ function requestHeaders(initial?: HeadersInit, json = true): Headers {
   const headers = new Headers(initial);
   if (json && !headers.has("accept")) headers.set("accept", "application/json");
   if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
+  // Kept artifacts and the ledger record the channel: this is the web UI.
+  if (!headers.has("x-pheasant-modality")) headers.set("x-pheasant-modality", "ui");
   const token = getApiToken();
   if (token && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${token}`);
@@ -210,6 +217,78 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+  }
+}
+
+/** The region's own refusal, sent as a stream event: not a lost stream. */
+class AnswerRefused extends Error {}
+
+/** A page hidden this long has probably lost its stream; collect the answer. */
+const RESUME_AFTER_HIDDEN_MS = 3000;
+/** How often a kept answer is asked for, and for how long before giving up. */
+const COLLECT_EVERY_MS = 1500;
+const COLLECT_FOR_MS = 20 * 60 * 1000;
+
+interface KeptAnswer {
+  answer_id: string;
+  status: "running" | "answered" | "done" | "failed";
+  steps: WorkflowStep[];
+  answer: ChatAnswer | null;
+  error: string | null;
+}
+
+/**
+ * Collect an answer the region kept under `answerId` (`GET
+ * /assistant/chat/answers/{id}`), reporting the steps a reader has not seen
+ * and the text as soon as it exists, until the answer is done. A network
+ * error is retried — the phone that dropped the stream may still be
+ * reconnecting — and a 404 means the answer is gone.
+ */
+export async function collectAnswer(
+  answerId: string,
+  {
+    onStep,
+    onAnswer,
+    signal,
+    steps = 0,
+    answer = null,
+  }: {
+    onStep?: (step: WorkflowStep) => void;
+    onAnswer?: (answer: ChatAnswer) => void;
+    signal?: AbortSignal;
+    steps?: number;
+    answer?: ChatAnswer | null;
+  } = {},
+): Promise<ChatAnswer> {
+  const deadline = Date.now() + COLLECT_FOR_MS;
+  let seen = steps;
+  let given = answer;
+  for (;;) {
+    if (signal?.aborted) throw new DOMException("The question was cancelled", "AbortError");
+    let kept: KeptAnswer | null = null;
+    try {
+      kept = await request<KeptAnswer>(`/assistant/chat/answers/${encodeURIComponent(answerId)}`, { signal });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof ApiError && error.status === 404) {
+        throw new Error("The connection dropped and the region no longer holds this answer. Ask again.");
+      }
+      // A refusal about the request will not change; anything else is the
+      // network or a waking region, and is asked again.
+      if (error instanceof ApiError && error.status < 500 && error.status !== 429) throw error;
+    }
+    if (kept) {
+      for (const step of kept.steps.slice(seen)) onStep?.(step);
+      seen = Math.max(seen, kept.steps.length);
+      if (kept.status === "failed") throw new Error(kept.error || "The answer failed");
+      if (kept.answer && (kept.status === "done" || !given)) {
+        given = kept.answer;
+        onAnswer?.(kept.answer);
+      }
+      if (kept.status === "done" && kept.answer) return kept.answer;
+    }
+    if (Date.now() > deadline) throw new Error("The answer did not finish in time. Ask again.");
+    await new Promise((resolve) => setTimeout(resolve, COLLECT_EVERY_MS));
   }
 }
 
@@ -531,8 +610,11 @@ export const api = {
    *
    * The agent loop can run for a while over a large index, so `onStep` fires
    * per stage (plan, retrieve, grade, …) and the promise resolves with the
-   * finished answer. Falls back to nothing special on the client side: if the
-   * stream breaks, the error propagates like any other failed request.
+   * finished answer. With an `answer_id` the region keeps the answer as it
+   * forms, so a stream that breaks — a phone that slept, a page that sat in
+   * the background — is not a failure: the answer the server went on writing
+   * is collected instead (`collectAnswer`). Without one, a broken stream
+   * fails like any other request.
    */
   chatStream: async (
     body: {
@@ -558,10 +640,18 @@ export const api = {
       workflow?: string | null;
       options?: Record<string, unknown>;
       memory?: string | null;
+      /** Saved artifacts as evidence: include (default), exclude, only. */
+      artifacts?: string | null;
+      /** Keep a composed answer as an artifact; unset follows the region's auto-save. */
+      save?: boolean | null;
+      /** The conversation this question belongs to: what a kept artifact is filed under. */
+      conversation_id?: string | null;
       /** Earlier turns, oldest first: the region keeps no chat state. */
       history?: HistoryTurn[];
       depth?: AnswerDepth | null;
       visual?: "none" | "diagram" | "image" | null;
+      /** Keep the answer under this id for an hour (8-64 of `A-Za-z0-9_-`). */
+      answer_id?: string | null;
     },
     onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,
@@ -574,58 +664,86 @@ export const api = {
     /** Provisional answer text; the final answer event replaces this preview. */
     onDraft?: (delta: string) => void,
   ): Promise<ChatAnswer> => {
-    const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
-      method: "POST",
-      // This body is JSON, so keep its content type. `requestHeaders` also
-      // attaches the browser session's bearer token.
-      headers: requestHeaders(),
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (response.status === 401) signalApiAuthRequired();
-    if (!response.ok || !response.body) {
-      let detail = `${response.status} ${response.statusText}`;
-      try {
-        detail = errorDetail(await response.json(), detail);
-      } catch {
-        /* response had no JSON body */
-      }
-      throw new ApiError(detail, response.status);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    // The stream's own abort, separate from the caller's: coming back to a
+    // page that sat hidden ends a stream that may have silently died, and
+    // collects the kept answer instead.
+    const stream = new AbortController();
+    const cancel = () => stream.abort();
+    signal?.addEventListener("abort", cancel);
+    let hiddenAt: number | null = null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt !== null && Date.now() - hiddenAt >= RESUME_AFTER_HIDDEN_MS) stream.abort();
+    };
+    const answerId = body.answer_id ?? null;
+    if (answerId) document.addEventListener("visibilitychange", onVisibility);
     let answer: ChatAnswer | null = null;
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      // SSE frames are separated by a blank line; a frame may arrive split
-      // across chunks, so only complete ones are consumed.
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const line = frame.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) continue;
-        const event = JSON.parse(line.slice(5).trim());
-        if (event.type === "step") onStep(event);
-        else if (event.type === "draft" && typeof event.delta === "string") {
-          onDraft?.(event.delta);
+    let steps = 0;
+    try {
+      const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
+        method: "POST",
+        // This body is JSON, so keep its content type. `requestHeaders` also
+        // attaches the browser session's bearer token.
+        headers: requestHeaders(),
+        body: JSON.stringify(body),
+        signal: stream.signal,
+      });
+      if (response.status === 401) signalApiAuthRequired();
+      if (!response.ok || !response.body) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          detail = errorDetail(await response.json(), detail);
+        } catch {
+          /* response had no JSON body */
         }
-        else if (event.type === "answer") {
-          answer = event.answer as ChatAnswer;
-          onAnswer?.(answer);
-        } else if (event.type === "visual" && answer !== null) {
-          const current = answer as ChatAnswer;
-          answer = { ...current, visual: event.visual, steps: event.steps ?? current.steps };
-          onAnswer?.(answer);
-        } else if (event.type === "error") throw new Error(event.error);
+        throw new ApiError(detail, response.status);
       }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line; a frame may arrive split
+        // across chunks, so only complete ones are consumed.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(5).trim());
+          if (event.type === "step") {
+            steps += 1;
+            onStep(event);
+          } else if (event.type === "draft" && typeof event.delta === "string") {
+            onDraft?.(event.delta);
+          } else if (event.type === "answer") {
+            answer = event.answer as ChatAnswer;
+            onAnswer?.(answer);
+          } else if (event.type === "visual" && answer !== null) {
+            const current = answer as ChatAnswer;
+            answer = { ...current, visual: event.visual, steps: event.steps ?? current.steps };
+            onAnswer?.(answer);
+          } else if (event.type === "error") throw new AnswerRefused(event.error);
+        }
+      }
+      // A visual still pending when the stream closed was cut off with it.
+      const pending = answer !== null && (answer as ChatAnswer).visual?.status === "pending";
+      if (answer && !(pending && answerId)) return answer;
+      if (!answerId) throw new Error("the answer stream closed before an answer arrived");
+    } catch (error) {
+      // The caller's own cancel, a refusal the region sent, and a request the
+      // region turned away before streaming are answers, not lost streams.
+      if (signal?.aborted || error instanceof AnswerRefused || error instanceof ApiError || !answerId) {
+        throw error;
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      document.removeEventListener("visibilitychange", onVisibility);
     }
-    if (!answer) throw new Error("the answer stream closed before an answer arrived");
-    return answer;
+    return collectAnswer(answerId, { onStep, onAnswer, signal, steps, answer });
   },
 
   /** A grounded diagram of named passages, or the images they hold. */
@@ -652,6 +770,82 @@ export const api = {
     if (response.status === 401) signalApiAuthRequired();
     if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
     return URL.createObjectURL(await response.blob());
+  },
+  /** The artifacts the region keeps: newest day first, then person. */
+  artifacts: (params: { archived?: boolean; conversation_id?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.archived) query.set("archived", "true");
+    if (params.conversation_id) query.set("conversation_id", params.conversation_id);
+    const suffix = query.toString();
+    return request<{ artifacts: ArtifactSummary[] }>(`/artifacts${suffix ? `?${suffix}` : ""}`);
+  },
+  artifactSettings: () => request<ArtifactSettingsView>("/artifacts/settings"),
+  configureArtifacts: (changes: Partial<ArtifactSettings>) =>
+    request<ArtifactSettingsView>("/artifacts/settings", { method: "PUT", body: JSON.stringify(changes) }),
+  /** Delete, archive or restore several artifacts at once, by id. */
+  artifactsBulk: (action: "delete" | "archive" | "restore", ids: string[]) =>
+    request<Record<string, unknown>>(`/artifacts/${action}`, { method: "POST", body: JSON.stringify({ ids }) }),
+  artifact: (id: string) => request<Artifact>(`/artifacts/${encodeURIComponent(id)}`),
+  /** Keep an answer the stream kept (by its `answer_id`) as a report. */
+  saveArtifact: (body: {
+    answer_id?: string;
+    title?: string;
+    markdown?: string;
+    kind?: string;
+    conversation_id?: string;
+    turns?: { question: string; answer: unknown; answer_id?: string; visual?: unknown }[];
+    /** A diagram drawn after the answer, kept in its place, and its own citations. */
+    visual?: unknown;
+    citations?: unknown[];
+  }) =>
+    request<Artifact>("/artifacts", { method: "POST", body: JSON.stringify(body) }),
+  deleteArtifact: (id: string) =>
+    request<{ deleted: string }>(`/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /**
+   * A rendered, pheasant-styled document of the artifact or one file, as text
+   * for a sandboxed `srcdoc` frame: fetched rather than put in an `src`,
+   * because a frame cannot carry the API token.
+   */
+  artifactDocument: async (
+    id: string,
+    options: { file?: string | null; mode?: "code" | "preview"; theme?: "light" | "dark" } = {},
+  ): Promise<string> => {
+    const response = await fetch(
+      `${API_BASE}/artifacts/${encodeURIComponent(id)}/view${qs({
+        file: options.file ?? undefined,
+        mode: options.mode,
+        theme: options.theme,
+      })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    return response.text();
+  },
+  /** Save an export to disk: `zip`, `html`, `markdown`, or one `file` as written. */
+  downloadArtifact: async (
+    id: string,
+    options: { format?: "zip" | "html" | "markdown"; file?: string | null } = {},
+  ): Promise<void> => {
+    const response = await fetch(
+      `${API_BASE}/artifacts/${encodeURIComponent(id)}/export${qs({
+        format: options.format,
+        file: options.file ?? undefined,
+      })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "artifact";
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   },
   /** An indexed image as MCP image content (`{data, mimeType}`), for the app bridge. */
   mediaBase64: async (nodeId: string): Promise<{ data: string; mimeType: string }> => {
@@ -687,6 +881,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ ...settings, sync_now: syncNow }),
     }),
+  /** The region's default cadence for every source that sets none (null: every beat). */
+  setPipelineDefaults: (seconds: number | null) =>
+    request<PipelineDefaults>("/sync/pipelines/defaults", {
+      method: "PUT",
+      body: JSON.stringify({ default_source_interval_seconds: seconds }),
+    }),
   deletePipelineSchedule: (name: string) =>
     request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}/schedule`, { method: "DELETE" }),
   deletePipeline: (name: string) =>
@@ -718,6 +918,9 @@ export const api = {
   /** Remove documents from the index; they stay out of every sync until reinstated. */
   archiveDocuments: (documents: string[]) =>
     request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ documents }) }),
+  /** Remove whole folders (`source/path`): every document beneath each one. */
+  archiveFolders: (folders: string[]) =>
+    request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ folders }) }),
   /** Let archived documents back in; their sources sync to index them again. */
   reinstateDocuments: (documents: string[]) =>
     request<ArchiveResult>("/documents/reinstate", { method: "POST", body: JSON.stringify({ documents }) }),

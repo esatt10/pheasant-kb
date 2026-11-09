@@ -7,6 +7,7 @@ import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileDock, TileFold, TileGrip } from "../components/Tiles";
 import { ArchivedList } from "./ArchivedList";
 import { DragHandle } from "./DragHandle";
+import { RemoveButton } from "./RemoveButton";
 import { ScopeToggle } from "./ScopeToggle";
 import { FileViewer } from "./FileViewer";
 import { fileIcon, formatBytes } from "./fileIcons";
@@ -116,6 +117,15 @@ export function SourceBrowser({
         <div className="pane__actions">
           {browser.source && first?.source === browser.source ? (
             <ScopeToggle source={browser.source} path={first.path} kind="folder" />
+          ) : null}
+          {browser.source && first?.source === browser.source && first.path ? (
+            <RemoveButton
+              key={`${browser.source}/${first.path}`}
+              folder
+              source={browser.source}
+              path={first.path}
+              onRemoved={() => go(browser.source, first.path.split("/").slice(0, -1).join("/"))}
+            />
           ) : null}
           <button
             type="button"

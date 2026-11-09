@@ -47,6 +47,14 @@ class SyncPipelineTools:
             ),
         )
 
+    def configure_sync_defaults(
+        self, knowledge_base: str, default_source_interval_seconds: int | None
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import sync_pipelines
+
+        return sync_pipelines.set_defaults(self.services, default_source_interval_seconds, "mcp")
+
     def delete_sync_pipeline(self, knowledge_base: str, source_name: str, what: str) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import sync_pipelines
@@ -138,11 +146,28 @@ def register_sync_pipeline_tools(mcp: Any, tools: Any, anticipated: Any) -> None
         ``max_items_per_run`` (web: pages fetched per run at most),
         ``min_request_interval_seconds`` (web: seconds between requests to a
         site; null reads its robots.txt), ``respect_robots``, ``on_startup``,
-        ``on_file_change``, ``on_git_commit``. ``sync_now`` starts a sync after
+        ``on_file_change``, ``on_git_commit``, ``min_interval_seconds`` (how often
+        the scheduler syncs it, e.g. 3600 hourly or 86400 daily; null follows
+        the region default, configure_sync_defaults), ``yield_to_content``
+        (wait while other sources sync). ``sync_now`` starts a sync after
         saving. Returns the pipeline as describe_sync_pipeline does.
         """
 
         return tools.configure_sync_pipeline(knowledge_base, source_name, settings, sync_now)
+
+    @mcp.tool()
+    @anticipated
+    def configure_sync_defaults(
+        knowledge_base: str, default_source_interval_seconds: int | None
+    ) -> dict:
+        """Set how often every source syncs on the scheduler unless it sets its own.
+
+        Seconds (900, 1800, 3600, 7200, 21600, 43200, 86400, 604800 are the Syncs
+        page's choices), or null for every scheduler beat. Applies to every
+        replica at once. list_sync_pipelines reports it under defaults.
+        """
+
+        return tools.configure_sync_defaults(knowledge_base, default_source_interval_seconds)
 
     @mcp.tool()
     @anticipated

@@ -1,3 +1,4 @@
+import { ArtifactsPanel, SHOW_ARTIFACTS_EVENT } from "../artifacts/ArtifactsPanel";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DragHandle } from "../browser/DragHandle";
@@ -45,8 +46,13 @@ import {
 import type { BrowserState, PanelTab, TileColumn, TileId, TileLayout } from "../state/session";
 
 /** A phone's Notebook sections; "panel" is the tab group, shown as Graph. */
-type MobileTab = "chat" | "sources" | "taxonomy" | "panel";
-/** The panel's tabs on a phone, where the taxonomy view has a section of its own. */
+type MobileTab = "chat" | "sources" | "taxonomy" | "panel" | "artifacts";
+/**
+ * The panel's tabs on a phone, where the taxonomy view and the artifacts have
+ * sections of their own: an artifact read as the fourth tab inside "Graph"
+ * was one nobody found, and opening one from the chat changed a tab that was
+ * not on screen.
+ */
 const PHONE_PANEL_TABS: PanelTab[] = ["graph", "facts", "node"];
 
 /** Height of the first of two unfolded tiles stacked in a side column, before it is dragged. */
@@ -173,6 +179,14 @@ export function Notebook() {
     [dispatch, state.chatCollapsed],
   );
 
+  // Opening an artifact from the chat (its card, Save as report) shows it on
+  // a phone; on a wider screen it is already in the panel beside the chat.
+  useEffect(() => {
+    const show = () => setMobileTab("artifacts");
+    window.addEventListener(SHOW_ARTIFACTS_EVENT, show);
+    return () => window.removeEventListener(SHOW_ARTIFACTS_EVENT, show);
+  }, []);
+
   const showInGraph = useCallback(
     (nodeId: string) => {
       setMobileTab("panel");
@@ -248,7 +262,7 @@ export function Notebook() {
       : (groupTabs.find((tab) => tab !== "taxonomy" || browserOpen) ?? groupTabs[0]);
   const dock = (tab: PanelTab) => (compact || isDocked(tab) ? undefined : () => dispatch({ type: "dock-tab", tab }));
   /** A panel tab as a tile of its own: graph, facts or node. */
-  const tabSpec = (tab: "graph" | "facts" | "node"): TileSpec => ({
+  const tabSpec = (tab: "graph" | "facts" | "node" | "artifacts"): TileSpec => ({
     id: tab,
     title: tab === "facts" && state.answer?.facts.length ? `Facts (${state.answer.facts.length})` : PANEL_TAB_LABELS[tab],
     visible: true,
@@ -310,6 +324,7 @@ export function Notebook() {
     graph: tabSpec("graph"),
     facts: tabSpec("facts"),
     node: tabSpec("node"),
+    artifacts: tabSpec("artifacts"),
   };
   const visibleIds = (column: TileColumn) => layout[column].filter((id) => specs[id].visible);
   const columns = {
@@ -342,7 +357,16 @@ export function Notebook() {
   };
 
   /** What the graph, facts and node tabs show, in the panel or as tiles. */
-  const tabBody = (tab: "graph" | "facts" | "node") => {
+  const tabBody = (tab: "graph" | "facts" | "node" | "artifacts") => {
+    if (tab === "artifacts")
+      return (
+        <div className="pane__body">
+          <ArtifactsPanel
+            selectedId={state.artifactId}
+            onSelect={(id) => dispatch({ type: "open-artifact", id })}
+          />
+        </div>
+      );
     if (tab === "graph")
       return (
         <>
@@ -490,6 +514,7 @@ export function Notebook() {
               ["sources", "Sources"],
               ["taxonomy", "Taxonomy"],
               ["panel", "Graph"],
+              ["artifacts", "Artifacts"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -745,7 +770,7 @@ export function Notebook() {
           )
         : null}
 
-      {(["graph", "facts", "node"] as const).map((tab) =>
+      {(["graph", "facts", "node", "artifacts"] as const).map((tab) =>
         tabShown(tab)
           ? createPortal(
               <TileScope key={tab} spec={specs[tab]}>

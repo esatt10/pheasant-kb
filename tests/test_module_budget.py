@@ -50,7 +50,9 @@ THRESHOLD = 800
 #: the space the extraction freed is not left available for the next feature.
 CEILINGS: dict[str, int] = {
     "analytics.py": 1100,
-    "api/app.py": 5500,
+    # Lowered from 5500 when a background sync's job bookkeeping moved to
+    # `sync/background_jobs.py`, shared with the startup sync and the beat.
+    "api/app.py": 5480,
     "assistant/chat.py": 950,
     # The latency candidate adds evidence authorization, two-phase hydration,
     # request-bounded retrieval and combined evidence/answer handling. Keep
@@ -60,7 +62,9 @@ CEILINGS: dict[str, int] = {
     # Raised to 3206 for `backup`/`restore` refusing a Postgres region (whose
     # data is not under /state) with the refusal text `persistence/backup.py`
     # owns, instead of writing an archive that holds none of it.
-    "cli.py": 3206,
+    # Lowered from 3206 when the drainer's progress hook moved to
+    # `sync/background_jobs.py`.
+    "cli.py": 3204,
     # Typed query budgets, admission, and MCP request-size validation belong
     # with their dataclass settings; this explicit raise accounts for that field.
     # Raised by 14 for the vector store's resident/ANN settings (seven fields,
@@ -75,7 +79,7 @@ CEILINGS: dict[str, int] = {
     # Raised by 14 for the sync pipeline's six `sources[].sync` fields
     # (schedule, paused, pipeline, the pacing three) and their docstring: they
     # are per-source settings, so they live on `SourceSyncSettings`.
-    "config/schema.py": 2308,
+    "config/schema.py": 2356,  # + the artifacts section, the scheduler's default cadence
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -110,20 +114,26 @@ CEILINGS: dict[str, int] = {
     # `describe_source` and `wait_for_sync` make; DDL belongs here.
     # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
     # source, and the taxonomy reads a source's version on every level.
-    "persistence/schema.py": 1154,
+    # Raised to 1168 for `answer_streams`, a streamed answer kept for a
+    # reader who reconnects; DDL belongs here, its code in
+    # `services/answer_resume.py`.
+    # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
+    # kept until deleted) and its owner index; its code lives in
+    # `services/artifacts.py`.
+    "persistence/schema.py": 1195,  # + region_settings
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.
     "persistence/backends.py": 815,
     # Lowered from 1800 when the derived-index migrations moved to
     # `persistence/derived_indexes.py`.
-    "persistence/state_store.py": 1780,
+    "persistence/state_store.py": 1798,  # + saved_artifacts columns
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.
     # The OpenAI-spec HTTP client moved to `search/embedding_client.py`.
     "search/vector_store.py": 1300,
-    "setup_wizard.py": 2200,
+    "setup_wizard.py": 2225,  # + the artifacts section (rule 11)
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`. Raised from 2780 for the
     # removed-source tombstone guard in `_source`/the enabled-source walk.

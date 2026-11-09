@@ -103,7 +103,8 @@ pheasant-kb/
 │   │                            (stop a running sync from any process),
 │   │                            graph_history (the interval-gated
 │   │                            snapshot), watcher,
-│   │                            scheduler, locks,
+│   │                            scheduler, background_jobs (startup
+│   │                            syncs and beats as watchable jobs), locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
 │   │                            authority ceiling), preparation (what a
@@ -187,6 +188,11 @@ pheasant-kb/
 │   │                            sync_control (cancel a source's running
 │   │                            sync), voice (the composer's dictation:
 │   │                            a live transcription session, HTTP only),
+│   │                            artifacts + artifact_render (composed
+│   │                            files and saved reports, kept until
+│   │                            deleted; one pheasant-styled renderer),
+│   │                            answer_resume (a streamed answer kept an
+│   │                            hour for a reader whose stream dropped),
 │   │                            region_status (what is still waking or
 │   │                            warming after a scale-to-zero wake)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
@@ -226,7 +232,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 197 pytest modules, offline by design
+└── tests/                     ← 201 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1403,6 +1409,76 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   modes when hybrid is present, since hybrid already contains them. The stream
   carries provisional `draft` events that the verified `answer` replaces.
   `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
+- **Artifacts are kept as knowledge, and look like pheasant everywhere**
+  (`services/artifacts.py`, `services/artifact_render.py`, table
+  `saved_artifacts`; `/artifacts*`, MCP `list_/get_/save_/view_/export_/
+  delete_artifact`, `ui://pheasant/artifact-view.html`; the web UI's
+  Artifacts tab). Every composed answer is saved as a `files` artifact in
+  `services.assistant.answer`, so HTTP, the stream and MCP keep the same one;
+  any answer the stream kept, or any content, is saved as a `report`. Each
+  lands through `services.ingestion.submit` in the `artifacts` source (a
+  landing-zone `document_folder`, registered like the drop zone's) at
+  `<owner>/<yyyy>/<mm>/<title>--<id>/`: its files, a `README.md` whose Sources
+  link every cited document by path -- the Markdown pass and cross-source
+  resolution make those `references` edges, so the compose's evidence *is*
+  the graph -- and `report.html` for a report with a diagram. So it is
+  searched, browsed in the taxonomy view (artifact HTML runs its scripts
+  there, sandboxed), walked in the graph, and removed like any document
+  (`archive.forget_removed`: removing a `README.md` retires the artifact).
+  The rows keep what the viewers render, so it shows before an indexer
+  reaches it. Visible to everyone the region serves; the owner is the first
+  folder, not an access rule. A reload -- which empties the chat, since the
+  region keeps no chat state -- leaves them in the tab, the open one
+  included. One renderer: highlighted code in the UI's
+  syntax colours (pygments), Markdown with raw HTML off and `[n]` linked to
+  the sources, a saved diagram drawn by the knowledge view itself (hosted in
+  the page by a few lines of the MCP Apps host protocol), an HTML file run as
+  its author wrote it. Every document begins with `DOCUMENT_POLICY` (inline
+  scripts and styles, data: images, nothing fetched) and is shown in a
+  `sandbox="allow-scripts"` frame; exports are `.zip`, `.html`, `.md`.
+  **Keeping is opt-in and indexing is scheduled** (`services/artifact_settings.py`,
+  `artifact_lifecycle.py`, `artifact_trace.py`; table `region_settings`):
+  `auto_save` is off unless set from the panel, `PUT /artifacts/settings` or
+  MCP `configure_artifacts` -- one row in `/state` over `config.artifacts`, so
+  every replica reads it -- and a save lands files without a sync. The
+  source is held to `sync.min_interval_seconds` and `yield_to_content`
+  (`sync/pipeline.beat_sources`, general to any source): content first, four
+  intervals at most. Measured on Azure: each artifact sync spent 123-195 s in
+  `loading_graph` (the child reads the whole graph) to commit 1-7 files, so
+  indexing at save time cost every content sync behind it. Folders are
+  `<yyyy>/<mm>/<dd>/<owner>/<session>/`, listings day then person; older
+  layouts are re-filed once (`file_legacy`). Each kept answer carries a
+  `trace` (conversation, channel, ids, keywords, intent, `decisions`,
+  steps); `kind: thread` keeps a whole conversation; a diagram drawn after
+  the answer (the MCP App view's Save, Redraw as) is kept in its place.
+  `index_on_save` (default on) starts the artifacts sync at save time; the
+  schedule is the backstop. Every source has a cadence (`sync.min_interval_seconds`,
+  else `sync.scheduler.default_source_interval_seconds` or its `region_settings`
+  override) the Syncs page picks from a list. A whole folder is removable
+  (`folders` on `archive_documents`, the taxonomy view's Remove folder).
+  Retention archives (row kept, files out of the index, restorable) on the
+  beat; bulk delete takes ids or a filter with a dry run. Exported as
+  `saved_artifacts.parquet`.
+  Search and answers take `artifacts` (`include` | `exclude` | `only`), the
+  `memory` switch for this source, on both surfaces and the UI's **use
+  artifacts** box (`artifacts.scope`: an `exclude_sources` entry or the
+  single-source scope, so every arm and the answer retriever honour it).
+  An unnamed fenced block takes its language's extension (`block-1.html`),
+  because whether a file is drawn is read off its name.
+  `tests/test_artifacts.py`.
+- **A dropped stream is not a lost answer** (`services/answer_resume.py`,
+  table `answer_streams`; `GET /assistant/chat/answers/{id}`). The UI sends
+  a random `answer_id` with each question and the region keeps that answer's
+  steps, text, visual or refusal for an hour as it forms -- drafts excluded,
+  they are hundreds of writes the verified text replaces. When the stream
+  breaks, the page returns from the background (3 s hidden) or a discarded
+  tab reloads (the question and id alone are in `sessionStorage`), the UI
+  collects it instead of failing. Found by a phone that slept through a
+  two-minute compose: the worker finished it, nobody could read it, and it
+  was asked again. Read back only by the principal that asked; every write
+  best-effort, so a store that cannot keep it costs the resume, not the
+  answer. HTTP only. `tests/test_answer_resume.py` closes a real socket
+  mid-answer.
 - **Dictation is the browser's, the credential is the region's**
   (`services/voice.py`, `assistant.voice`, `ui/src/chat/dictation.ts`). The
   composer's microphone streams 24 kHz PCM16 straight to an OpenAI Realtime
@@ -2935,10 +3011,42 @@ Each of these cost real time. They are listed because the shape recurs.
   service still gets the scan. `tests/test_inventory_relations.py` drives
   both describes through a `RemoteGraph` and fails if `neighbors_many` is
   called. The offline suite could not see it: `role: all` holds the graph.
+- **A pass that drains a shared queue owes what it claims a job.** On the
+  Azure fleet "Run now" on the Syncs page published a task, the indexer had
+  just woken and was running its startup sync-all, and that pass drained the
+  same queue -- so the requested sync ran inside a pass with no job, and the
+  tray showed nothing for the four minutes it took (it was pressed twice).
+  Startup syncs and beats are jobs now (`sync/background_jobs.py`), with a
+  row per source. The in-process hook adapter had the same blind spot one
+  level down: it took four arguments, so the engine never passed which
+  source an update was about, and a several-source job filed everything
+  under one placeholder row. Found beside it, the same run: `/ready` pinged
+  the graph service with a fresh `stats`, whose type counts are a
+  `GROUP BY` over every node -- past 2 s on a cold store during that sync, so
+  a working graph service read as unreachable. A liveness question gets a
+  `SELECT 1` (`ping`), never an aggregate.
+- **A second facade over one process is a second copy of everything it holds.**
+  The MCP server's `PheasantTools` built its own engine and `HybridSearch`,
+  so on an api replica with `search.vector_store.resident` its first
+  `search_context` loaded a second 478 MB vector matrix and the 2 GiB
+  container was OOM-killed (exit 137): every agent's search took the region's
+  api down for the minute it took to restart, while `POST /search` -- the
+  app's own searcher -- worked hundreds of times beside it. Found taking MCP
+  screenshots on the Azure fleet. The app hands MCP its vector searcher now
+  (`create_mcp_tools(config, vector)`), and `tests/test_mcp_apps.py` holds the
+  identity.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is
   `tests/test_decisions_api.py`. Check for the file before creating it.
+- **A field named `source` is not always a source.** Graph *relationship*
+  hits carried no `source_id`, so `criteria.source_of` fell back to
+  `source` -- the edge's source *node* id -- and `exclude_sources` never
+  dropped a relationship; the artifacts toggle's `exclude` returned a
+  README's `references` edge. Both scans now report the edge's own
+  `source_id` (the one `source_name` already filtered on), and `source_of`
+  never reads `source` off a relationship. Found by the toggle's test, the
+  first one to exclude a source the graph arm matched by an edge.
 
 ---
 

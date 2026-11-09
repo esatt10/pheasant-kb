@@ -490,12 +490,17 @@ class WorkerBackedEngine:
             # The beat syncs only pipelines that run by themselves. A sync-all
             # child does not know it was the beat, so when any enabled source
             # is paused or manual, each of the others gets its own child.
-            from pheasant.sync.pipeline import runs_automatically
+            from pheasant.sync.pipeline import beat_sources, default_interval
 
             enabled = self._engine.enabled_sources()
-            names = [s.name for s in enabled if runs_automatically(s)]
-            if len(names) != len(enabled):
-                return [self.sync_source(name, mode, max_depth=max_depth) for name in names]
+            state = getattr(self._engine, "state", None)
+            default = default_interval(getattr(self._engine, "config", None), state)
+            names = [s.name for s in beat_sources(enabled, state, default_interval=default)]
+            if names != [s.name for s in enabled]:
+                return [
+                    self.sync_source(name, mode, max_depth=max_depth, on_progress=on_progress)
+                    for name in names
+                ]
         report = run_sync(
             self._config_path,
             None,
@@ -514,7 +519,7 @@ class WorkerBackedEngine:
             return [self._empty(None, report)]
         return results
 
-    def startup(self) -> list[Any]:
+    def startup(self, on_progress: Any = None) -> list[Any]:
         engine = self._engine
         engine.paths.ensure()
         engine.state.migrate()
@@ -532,10 +537,10 @@ class WorkerBackedEngine:
         # one sync-all child so the engine can apply its bounded source-level
         # parallelism and rebuild the shared graph index once at the end.
         if names and len(names) == len(enabled) and self._can_delegate():
-            return self.sync_all("incremental")
+            return self.sync_all("incremental", on_progress=on_progress)
         results = []
         for name in names:
-            results.append(self.sync_source(name, "incremental"))
+            results.append(self.sync_source(name, "incremental", on_progress=on_progress))
         return results
 
     def _adopt(self, report: dict[str, Any]) -> list[Any]:
@@ -590,8 +595,15 @@ def _as_engine_hook(on_progress: Callable[[dict[str, Any]], None] | None):
     if on_progress is None:
         return None
 
-    def hook(phase: str, current: int, total: int | None, detail: str) -> None:
-        on_progress({"phase": phase, "current": current, "total": total, "detail": detail})
+    # Five arguments, so the engine passes ``meta`` -- the source the update is
+    # about. With four, a several-source job in process filed every update
+    # under one placeholder row instead of each source's own.
+    def hook(
+        phase: str, current: int, total: int | None, detail: str, meta: dict | None = None
+    ) -> None:
+        on_progress(
+            {"phase": phase, "current": current, "total": total, "detail": detail, "meta": meta}
+        )
 
     return hook
 

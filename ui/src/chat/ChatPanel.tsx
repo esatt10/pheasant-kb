@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, collectAnswer } from "../api/client";
 import type {
   AnswerDepth,
   AssistantStatus,
@@ -21,7 +21,9 @@ import {
   keywordMatches,
   useKeywordReference,
 } from "./KeywordReference";
+import { ArtifactCard, showArtifacts } from "../artifacts/ArtifactsPanel";
 import { McpAppFrame } from "./McpAppFrame";
+import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pendingAnswer";
 import { MicButton, useDictation } from "./MicButton";
 import { dictationUnsupported, spliceAtCaret } from "./dictation";
 import { SourceStrip, openable } from "./SourceStrip";
@@ -97,6 +99,28 @@ export function ChatPanel({
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
+  const queryClient = useQueryClient();
+  // The answered turns of this topic: what Save thread keeps, as one artifact.
+  const topicTurns = state.turns.slice(state.contextFrom).filter((turn) => turn.answer);
+  const saveThread = useMutation({
+    mutationFn: () =>
+      api.saveArtifact({
+        kind: "thread",
+        conversation_id: state.conversationId,
+        turns: topicTurns.map((turn) => ({
+          question: turn.question,
+          answer: turn.answer,
+          answer_id: turn.answerId,
+          // A diagram drawn or redrawn for the turn is the one kept.
+          visual: turn.drawn?.visual?.status === "ok" ? turn.drawn.visual : undefined,
+        })),
+      }),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      dispatch({ type: "open-artifact", id: saved.id });
+      showArtifacts();
+    },
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   // The @-keyword quick reference: a floating card beside the chat column.
@@ -114,7 +138,12 @@ export function ChatPanel({
   // Whether this region's remembered assertions may inform the answer. The
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
-  const [useMemory, setUseMemory] = useState(true);
+  // Off by default: an answer is grounded in the sources unless somebody asks
+  // for remembered assertions too.
+  const [useMemory, setUseMemory] = useState(false);
+  // Whether saved artifacts (composed answers and reports) may be evidence;
+  // the `artifacts` field search and answers take on every surface.
+  const [useArtifacts, setUseArtifacts] = useState(true);
   // `@remove` changed the index: the taxonomy view's listings are stale.
   const refreshArchive = useArchiveRefresh();
 
@@ -162,12 +191,35 @@ export function ChatPanel({
     : "checking…";
 
   const ask = useMutation({
-    mutationFn: ({ id, question }: { id: string; question: string }) => {
+    mutationFn: ({
+      id,
+      question,
+      answerId,
+      resume = false,
+    }: {
+      id: string;
+      question: string;
+      answerId: string;
+      /** Collect an answer a previous page load asked for, rather than ask. */
+      resume?: boolean;
+    }) => {
       setProgress([]);
       setAnswerPreview("");
+      // The text lands as soon as it exists; a visual follows and replaces
+      // the pending placeholder in the same turn.
+      const onAnswer = (answer: ChatAnswer) => {
+        setProgress([]);
+        setAnswerPreview("");
+        dispatch({ type: "answered", id, answer });
+      };
+      const onStep = (step: WorkflowStep) => setProgress((prev) => [...prev, step]);
+      if (resume) return collectAnswer(answerId, { onStep, onAnswer });
       return api.chatStream(
         {
           question,
+          // The region keeps the answer under this, so a dropped stream (a
+          // phone that slept) collects it instead of failing.
+          answer_id: answerId,
           session_id: sessionId,
           // A folder or file scope names its own source.
           source_name: scopedSources ? null : (pathScope?.source ?? sourceFilter),
@@ -181,33 +233,45 @@ export function ChatPanel({
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
+          conversation_id: state.conversationId,
+          artifacts: useArtifacts ? null : "exclude",
           history,
           depth: answerDepth,
         },
-        (step) => setProgress((prev) => [...prev, step]),
+        onStep,
         undefined,
-        // The text lands as soon as it exists; a visual follows and replaces
-        // the pending placeholder in the same turn.
-        (answer) => {
-          setProgress([]);
-          setAnswerPreview("");
-          dispatch({ type: "answered", id, answer });
-        },
+        onAnswer,
         (delta) => setAnswerPreview((previous) => previous + delta),
       );
     },
     onSuccess: (answer, { id }) => {
+      forgetPending(id);
       setProgress([]);
       setAnswerPreview("");
       dispatch({ type: "answered", id, answer });
       if (answer.archive) refreshArchive();
     },
     onError: (error: Error, { id }) => {
+      forgetPending(id);
       setProgress([]);
       setAnswerPreview("");
       dispatch({ type: "ask-failed", id, error: error.message });
     },
   });
+
+  // A question the previous page load was still waiting on -- a phone
+  // browser reloads a tab it discarded in the background -- is shown again
+  // and its answer collected from the region, which went on writing it.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current) return;
+    resumed.current = true;
+    const pending = pendingAnswer();
+    if (!pending || turns.some((turn) => turn.id === pending.id)) return;
+    dispatch({ type: "ask", id: pending.id, question: pending.question, answerId: pending.answerId });
+    ask.mutate({ ...pending, resume: true });
+    // Once, on mount: `turns` and `ask` are read as they are then.
+  }, []);
 
   // Keep the newest turn's *question* pinned near the top of the viewport —
   // both when it's first asked and again once its answer lands. Scrolling to
@@ -233,9 +297,11 @@ export function ChatPanel({
     // A sent question ends a dictation; its last words must not start the next one.
     dictation.cancel();
     const id = `${Date.now()}-${turns.length}`;
-    dispatch({ type: "ask", id, question });
+    const answerId = newAnswerId();
+    rememberPending({ id, question, answerId, askedAt: Date.now() });
+    dispatch({ type: "ask", id, question, answerId });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    ask.mutate({ id, question });
+    ask.mutate({ id, question, answerId });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -314,6 +380,7 @@ export function ChatPanel({
                 onAsk={submit}
                 sessionId={sessionId}
                 sourceName={sourceFilter}
+                answerId={turn.answerId ?? null}
               />
             ) : (
               <div className="msg">
@@ -485,6 +552,18 @@ export function ChatPanel({
               </option>
             ))}
           </select>
+          {topicTurns.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() => saveThread.mutate()}
+              disabled={saveThread.isPending}
+              title="Keep this conversation -- every question, answer, source and trace -- as one artifact"
+            >
+              {saveThread.isPending ? "Saving…" : saveThread.isSuccess ? "Thread saved" : "Save thread"}
+            </button>
+          ) : null}
+          {saveThread.isError ? <span className="error small">{(saveThread.error as Error).message}</span> : null}
           {history.length > 0 ? (
             <span className="composer__context" title="Earlier turns sent with your next question">
               continuing from {history.length} earlier turn{history.length === 1 ? "" : "s"}
@@ -505,6 +584,14 @@ export function ChatPanel({
               onChange={(event) => setUseMemory(event.target.checked)}
             />
             use memory
+          </label>
+          <label className="composer__memory" title="Let saved artifacts (composed answers and reports) inform the answer">
+            <input
+              type="checkbox"
+              checked={useArtifacts}
+              onChange={(event) => setUseArtifacts(event.target.checked)}
+            />
+            use artifacts
           </label>
           {extractive ? (
             <>
@@ -600,6 +687,7 @@ function AnswerTurn({
   onAsk,
   sessionId,
   sourceName,
+  answerId,
 }: {
   answer: ChatAnswer;
   /** The visual drawn or redrawn for this turn, held in the session. */
@@ -609,8 +697,28 @@ function AnswerTurn({
   onAsk: (text: string) => void;
   sessionId: string | null;
   sourceName: string | null;
+  /** What the region keeps this answer under, so it can be saved as a report. */
+  answerId: string | null;
 }) {
   const byIndex = new Map(answer.citations.map((c) => [c.index, c]));
+  const queryClient = useQueryClient();
+  const composed = answer.route?.intent === "compose";
+  // An answer worth keeping becomes a report the region holds until deleted,
+  // saved from the copy it kept of this very answer (`answer_resume`).
+  const saveReport = useMutation({
+    mutationFn: () =>
+      api.saveArtifact({
+        answer_id: answerId ?? undefined,
+        conversation_id: state.conversationId,
+        // Redrawn after the answer: keep the diagram as it is shown now.
+        ...(drawn?.visual?.status === "ok" ? { visual: drawn.visual, citations: drawn.citations } : {}),
+      }),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      dispatch({ type: "open-artifact", id: saved.id });
+      showArtifacts();
+    },
+  });
   // A visual asked for after the fact — of the whole answer, or of one
   // passage — or redrawn in the view. Held on the turn in the session rather
   // than here, so it outlives this component: a re-render, a new question or
@@ -696,12 +804,23 @@ function AnswerTurn({
           />
         )}
       </div>
+      {answer.artifact ? (
+        <ArtifactCard
+          artifact={answer.artifact}
+          onOpen={() => dispatch({ type: "open-artifact", id: answer.artifact?.id ?? null })}
+        />
+      ) : null}
       {visual ? (
         <div className="msg__visual">
           <McpAppFrame
             result={frameResult}
             onRedrawn={onDrawn}
             onAsk={onAsk}
+            onSaved={(id) => {
+              queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+              dispatch({ type: "open-artifact", id });
+              showArtifacts();
+            }}
             title={visual.diagram?.title ?? "Visual"}
           />
         </div>
@@ -742,6 +861,24 @@ function AnswerTurn({
         </p>
       ) : null}
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
+      {!answer.artifact && answer.mode === "llm" && answerId ? (
+        <p className="msg__hint">
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => saveReport.mutate()}
+            disabled={saveReport.isPending || saveReport.isSuccess}
+            title={
+              composed
+                ? "Keep the files this answer wrote in the Artifacts tab, with their sources and trace"
+                : "Keep this answer as a report in the Artifacts tab, with its diagram and sources"
+            }
+          >
+            {saveReport.isSuccess ? "Saved" : saveReport.isPending ? "Saving…" : composed ? "Save files" : "Save as report"}
+          </button>
+          {saveReport.isError ? <span className="error small"> {(saveReport.error as Error).message}</span> : null}
+        </p>
+      ) : null}
       <div className="msg__meta">
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
         {(answer.keywords?.used ?? []).map((keyword) => (

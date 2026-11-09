@@ -23,7 +23,7 @@ from pheasant.version import __version__
 logger = logging.getLogger(__name__)
 
 
-def create_mcp_tools(config: PheasantConfig) -> PheasantTools:
+def create_mcp_tools(config: PheasantConfig, vector: Any = None) -> PheasantTools:
     """Return a tool facade usable by MCP adapters or direct tests.
 
     The optional official MCP SDK can wrap this facade at runtime; keeping the
@@ -31,10 +31,10 @@ def create_mcp_tools(config: PheasantConfig) -> PheasantTools:
     core-only install use the same tools over HTTP.
     """
 
-    return PheasantTools(config)
+    return PheasantTools(config, vector=vector)
 
 
-def create_mcp_server(config: PheasantConfig) -> Any:
+def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     """Create the official MCP SDK server around the pheasant tool facade."""
 
     server_class = _mcp_server_class()
@@ -43,7 +43,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     # handler is an `UnexpectedResourceError` with the message stripped.
     anticipated = _anticipated_failures("tool")
     anticipated_resource = _anticipated_failures("resource")
-    tools = create_mcp_tools(config)
+    tools = create_mcp_tools(config, vector)
     mcp = server_class(
         # Keep the name positional and everything else keyword: SDK 2.x
         # inserted `title` and `description` ahead of `instructions` in the
@@ -259,11 +259,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         (alias/preference/exclusion) instead of a fact. valid_until gives the
         record an expiry it declares itself.
 
-        session identifies the conversation this call belongs to. It is
-        recorded, never enforced -- pass a stable opaque string and the
-        region can keep one refined memory per session; omit it and nothing
-        changes. Like principal, it is asserted by you and verified by
-        nobody.
+        session names the conversation this call belongs to: recorded, never
+        enforced, asserted by you like principal. A stable opaque string lets
+        the region keep one refined memory per session.
         """
 
         return tools.memory_write(
@@ -378,6 +376,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         path_prefix: str | None = None,
         exclude_documents: list[str] | None = None,
         source_names: list[str] | None = None,
+        artifacts: str | bool | None = None,
     ) -> dict:
         """Search indexed context and return compact results with provenance.
 
@@ -406,11 +405,9 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         principal/principal_groups scope results to what that caller may see
         when security.acl_enforced is on (Step 32.2); ignored otherwise.
 
-        session identifies the conversation this call belongs to. It is
-        recorded, never enforced -- pass a stable opaque string and the
-        region can keep one refined memory per session; omit it and nothing
-        changes. Like principal, it is asserted by you and verified by
-        nobody.
+        session names the conversation this call belongs to: recorded, never
+        enforced, asserted by you like principal. A stable opaque string lets
+        the region keep one refined memory per session.
 
         section restricts results to one part of a document's extracted
         taxonomy, matched against the breadcrumb — "§ 12.3", "Article IV" or a
@@ -442,12 +439,12 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         Records a later record corrected are excluded by default; pass an
         as_of instant to ask what was believed at that time. Results that came
         from memory carry a "memory" block naming the record and its scope.
+        artifacts does the same for saved artifacts (the "artifacts" source):
+        "include" (default), "exclude" or "only"; true/false mean include/exclude.
 
-        snapshot_id pins this search to a sealed snapshot: the region answers
-        from that state or refuses with SNAPSHOT_DRIFTED, naming the sections
-        that moved. It holds one version of its corpus, so the guarantee is a
-        refusal rather than time travel — two runs naming one snapshot cannot
-        silently have seen different corpora.
+        snapshot_id pins this search to a sealed snapshot: answered from that
+        state or refused with SNAPSHOT_DRIFTED naming the sections that moved,
+        so two runs naming one snapshot cannot silently see different corpora.
 
         as_of is the instant memory validity is evaluated at, accepted here as
         well as inside memory so it reaches the lineage block even where the
@@ -477,6 +474,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             path_prefix=path_prefix,
             exclude_documents=exclude_documents,
             source_names=source_names,
+            artifacts=artifacts,
         )
 
     @mcp.tool()
@@ -502,6 +500,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
         as_of: str | None = None,
         expand: dict | int | bool | None = None,
         source_names: list[str] | None = None,
+        artifacts: str | bool | None = None,
     ) -> dict:
         """Search for many queries in one call and return one merged context.
 
@@ -543,6 +542,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
             as_of=as_of,
             expand=expand,
             source_names=source_names,
+            artifacts=artifacts,
         )
 
     @mcp.tool()
@@ -1235,7 +1235,7 @@ def _streamable_http_options(config: PheasantConfig) -> dict[str, Any]:
     }
 
 
-def streamable_http_app(config: PheasantConfig) -> Any:
+def streamable_http_app(config: PheasantConfig, vector: Any = None) -> Any:
     """The MCP streamable-HTTP ASGI app, for mounting inside the API server.
 
     ``pheasant serve`` advertises ``streamable_http_url: <base>/mcp`` from
@@ -1254,7 +1254,7 @@ def streamable_http_app(config: PheasantConfig) -> Any:
     if not config.server.mcp.transports.get("streamable_http", False):
         return None
     try:
-        mcp = create_mcp_server(config)
+        mcp = create_mcp_server(config, vector)
         # The route inside the SDK's app becomes the *mount* point's suffix,
         # so its internal path has to be "/" — leaving it at "/mcp" while
         # mounting at "/mcp" would serve "/mcp/mcp". Mounting the app at "/"

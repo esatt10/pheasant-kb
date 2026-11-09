@@ -6346,3 +6346,197 @@ select.text-input {
     max-height: none;
   }
 }
+
+/* ── Artifacts (`artifacts/ArtifactsPanel.tsx`) ───────────────────────────
+   Kept artifacts: the tab's list and viewer, and the card a composed answer
+   shows in the chat. The document itself is the region's rendering, in a
+   sandboxed frame. */
+.artifacts__empty {
+  padding: calc(16px * var(--sp));
+}
+.artifacts__empty p { margin: 0 0 calc(8px * var(--sp)); }
+.artifacts__list {
+  list-style: none;
+  margin: 0;
+  padding: calc(8px * var(--sp));
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--sp));
+}
+.artifacts__item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: calc(8px * var(--sp)) calc(10px * var(--sp));
+  cursor: pointer;
+}
+.artifacts__item:hover { border-color: var(--accent-border); background: var(--bg-hover); }
+.artifacts__item-title { font-weight: 600; font-size: calc(13px * var(--fs)); }
+.artifact {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: calc(8px * var(--sp));
+  gap: calc(8px * var(--sp));
+}
+.artifact__head { display: flex; align-items: center; gap: calc(8px * var(--sp)); }
+.artifact__title { display: flex; flex-direction: column; min-width: 0; }
+.artifact__title strong {
+  font-size: calc(14px * var(--fs));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact__tabs,
+.artifact__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--sp));
+  align-items: center;
+}
+.chip--mono { font-family: var(--font-mono); font-weight: 400; }
+.artifact__tabs .chip { cursor: pointer; font: inherit; font-size: calc(11.5px * var(--fs)); }
+.artifact__spacer { flex: 1; }
+.artifact__frame-wrap {
+  flex: 1;
+  min-height: 320px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+.artifact__frame {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+.artifact-card {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--sp));
+  margin: calc(8px * var(--sp)) 0;
+  padding: calc(6px * var(--sp)) calc(8px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  max-width: 560px;
+}
+.artifact-card__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(10px * var(--sp));
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.artifact-card__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: calc(34px * var(--sp));
+  height: calc(34px * var(--sp));
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.artifact-card__text { display: flex; flex-direction: column; min-width: 0; }
+.artifact-card__text strong,
+.artifact-card__text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-card__open:hover strong { color: var(--accent-text); }
+
+/* A code block in an answer: its language and a copy button above it. */
+.answer-code-block { position: relative; margin: 0 0 calc(12px * var(--sp)); }
+.answer-code-block .answer-code { margin: 0; }
+.answer-code-block__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8px * var(--sp));
+  padding: calc(2px * var(--sp)) calc(8px * var(--sp));
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-md, 8px) var(--radius-md, 8px) 0 0;
+  background: var(--bg-sunken);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--fs));
+  color: var(--muted);
+}
+.answer-code-block__bar + .answer-code { border-top-left-radius: 0; border-top-right-radius: 0; }
+
+/* The Artifacts list as its directory: owner, then month. */
+.artifacts__dir { padding: calc(8px * var(--sp)); display: flex; flex-direction: column; gap: calc(10px * var(--sp)); }
+.artifacts__dir-head { display: flex; align-items: center; justify-content: space-between; gap: calc(8px * var(--sp)); }
+.artifacts__group { display: flex; flex-direction: column; gap: calc(4px * var(--sp)); }
+.artifacts__group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8px * var(--sp));
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: calc(4px * var(--sp)) calc(2px * var(--sp));
+  font: inherit;
+  font-weight: 600;
+  font-size: calc(12px * var(--fs));
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.artifacts__group-head:hover { color: var(--accent-text); }
+.artifacts__group .artifacts__list { padding: 0; }
+
+/* The Artifacts list's settings, views and bulk actions. */
+.artifacts__settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(6px * var(--sp));
+  padding: calc(6px * var(--sp)) calc(8px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+.artifacts__switch { display: inline-flex; align-items: center; gap: calc(6px * var(--sp)); font-size: calc(12.5px * var(--fs)); font-weight: 500; }
+.artifacts__settings-detail { display: flex; flex-direction: column; gap: calc(6px * var(--sp)); width: 100%; }
+.artifacts__settings-detail input[type="number"] { width: 5em; }
+.artifacts__views { display: inline-flex; gap: calc(4px * var(--sp)); }
+.artifacts__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--sp));
+  padding: calc(4px * var(--sp)) calc(6px * var(--sp));
+  border-radius: var(--radius);
+  background: var(--bg-active);
+}
+.artifacts__row { display: flex; align-items: flex-start; gap: calc(6px * var(--sp)); }
+.artifacts__row > input { margin-top: calc(8px * var(--sp)); }
+.artifacts__row > .artifacts__item { flex: 1; min-width: 0; }
+.artifacts__badge { color: var(--warn, var(--muted)); }
+
+/* The Syncs page's region-wide default schedule. */
+.syncs__default { display: inline-flex; align-items: center; gap: calc(6px * var(--sp)); }

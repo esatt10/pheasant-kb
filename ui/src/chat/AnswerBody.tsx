@@ -1,3 +1,4 @@
+import { CodeBlock } from "./CodeBlock";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import type { Tokens } from "marked";
@@ -85,11 +86,7 @@ function renderBlocks(
       const newline = segment.indexOf("\n");
       const language = newline > 0 ? segment.slice(0, newline).trim() : "";
       const body = newline > 0 ? segment.slice(newline + 1) : segment;
-      out.push(
-        <pre className="answer-code" key={`code-${segmentIndex}`} data-language={language || undefined}>
-          <code>{body.replace(/\n$/, "")}</code>
-        </pre>,
-      );
+      out.push(<CodeBlock key={`code-${segmentIndex}`} language={language} code={body.replace(/\n$/, "")} />);
       return;
     }
 

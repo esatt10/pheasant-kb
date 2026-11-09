@@ -19,6 +19,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from pheasant.api.artifact_routes import channel as artifact_channel
+from pheasant.services import answer_resume
 from pheasant.services import assistant as assistant_service
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,8 @@ class ChatRequest(BaseModel):
     # How this region's agent memory takes part in the answer: "auto", "off",
     # "only", "prefer", or the full policy object (Step 33.10).
     memory: dict | str | None = None
+    # Saved artifacts as evidence: "include" (default), "exclude", "only".
+    artifacts: str | bool | None = None
     # Earlier turns of this conversation, oldest first: [{question, answer}].
     # The region keeps no chat state; continuity is what the caller sends.
     history: list[dict[str, Any]] = []
@@ -69,8 +73,16 @@ class ChatRequest(BaseModel):
     # Several sources at once — the sources rail's multi-select. One name
     # means what `source_name` means.
     source_names: list[str] | None = None
+    # The stream only: a caller-chosen id under which the answer is kept for
+    # an hour, so a reader whose connection dropped can collect it from
+    # `GET /assistant/chat/answers/{answer_id}` (`services/answer_resume.py`).
+    answer_id: str | None = None
+    # Keep a composed answer as an artifact: true / false, or unset to follow
+    # the region's auto_save. `conversation_id` files it under its thread.
+    save: bool | None = None
+    conversation_id: str | None = None
 
-    def service_request(self) -> assistant_service.AnswerRequest:
+    def service_request(self, channel: str = "api") -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
             question=self.question,
             mode=self.mode,
@@ -83,6 +95,7 @@ class ChatRequest(BaseModel):
             workflow=self.workflow,
             options=self.options,
             memory=self.memory,
+            artifacts=self.artifacts,
             history=list(self.history or []),
             depth=self.depth,
             visual=self.visual,
@@ -92,6 +105,9 @@ class ChatRequest(BaseModel):
             current_directory=self.current_directory,
             intent=self.intent,
             source_names=self.source_names,
+            save=self.save,
+            conversation_id=self.conversation_id,
+            channel=channel,
         )
 
 
@@ -151,7 +167,7 @@ def register_assistant_routes(
         from contextvars import copy_context
 
         handler_started = time.perf_counter()
-        answer_request = req.service_request()
+        answer_request = req.service_request(artifact_channel(request))
         assistant_service.admit(services, answer_request)
         permit = assistant_service.acquire(services)
         budget = assistant_service.create_request_budget(services, answer_request)
@@ -225,15 +241,25 @@ def register_assistant_routes(
 
         # Refuse with a status code while one can still be sent; once the
         # stream opens, a refusal can only be an event.
-        answer_request = req.service_request()
+        answer_request = req.service_request(artifact_channel(request))
+        answer_resume.check_answer_id(req.answer_id)
         assistant_service.admit(services, answer_request)
         permit = assistant_service.acquire(services)
         budget = assistant_service.create_request_budget(services, answer_request)
 
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        recorder: answer_resume.AnswerRecorder | None = None
 
         def emit(event: dict[str, Any] | None) -> None:
+            # Kept for a reader who reconnects, on this worker thread rather
+            # than the event loop; drafts are not (see `answer_resume`).
+            if recorder is not None:
+                _record(recorder, event)
+            if event is not None and event.get("type") == "visual":
+                # The whole answer rode along for the recorder; the stream's
+                # reader already has it and gets the visual alone, as before.
+                event = {key: value for key, value in event.items() if key != "answer"}
             # LangGraph nodes and the provider run in a worker thread. Wake
             # the SSE coroutine immediately when a node or answer completes.
             try:
@@ -258,7 +284,9 @@ def register_assistant_routes(
         )
 
         def run() -> None:
+            nonlocal recorder
             try:
+                recorder = answer_resume.start(services, req.answer_id, _principal(request))
                 worker_started = time.perf_counter()
                 answer = assistant_service.answer(
                     services,
@@ -299,7 +327,14 @@ def register_assistant_routes(
                     visual = assistant_service.render_visual(
                         services, answer, credential=credential, env=environ
                     )
-                    emit({"type": "visual", "visual": visual, "steps": answer["steps"]})
+                    emit(
+                        {
+                            "type": "visual",
+                            "visual": visual,
+                            "steps": answer["steps"],
+                            "answer": {**answer, "visual": visual},
+                        }
+                    )
             except Exception as exc:  # surfaced to the client, never a 500 mid-stream
                 logger.exception("streaming chat failed")
                 emit({"type": "error", "error": str(exc)})
@@ -337,6 +372,16 @@ def register_assistant_routes(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.get("/assistant/chat/answers/{answer_id}")
+    def assistant_chat_answer(answer_id: str, request: Request) -> dict:
+        """A streamed answer collected after its connection dropped.
+
+        Transport adapter over `services.answer_resume.read`, and HTTP only:
+        it is the stream's other half, and MCP has no stream to lose.
+        """
+
+        return answer_resume.read(services, answer_id, _principal(request))
 
     @app.post("/assistant/visual")
     def assistant_visual(req: VisualRequest) -> dict:
@@ -458,3 +503,24 @@ def register_assistant_routes(
                 "ETag": f'"{found["sha256"]}"',
             },
         )
+
+
+def _principal(request: Request) -> str | None:
+    """Who asked, as the auth middleware established it; ``None`` on an open region."""
+
+    return getattr(getattr(request.state, "identity", None), "principal", None)
+
+
+def _record(recorder: answer_resume.AnswerRecorder, event: dict[str, Any] | None) -> None:
+    """One stream event into the kept answer."""
+
+    if event is None:
+        recorder.finish()
+    elif event["type"] == "step":
+        recorder.step({key: value for key, value in event.items() if key != "type"})
+    elif event["type"] == "answer":
+        recorder.answered(event["answer"])
+    elif event["type"] == "visual":
+        recorder.visual(event["answer"])
+    elif event["type"] == "error":
+        recorder.failed(str(event.get("error")))

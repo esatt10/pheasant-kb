@@ -46,6 +46,20 @@ def test_the_view_is_self_contained_and_builds_no_markup_from_data() -> None:
     assert "ui/notifications/tool-result" in html
 
 
+def test_the_artifact_view_is_self_contained_and_frames_what_it_shows() -> None:
+    """Its only markup sink is a sandboxed frame's srcdoc, holding the region's rendering."""
+
+    from pheasant.mcp_server.artifact_tools import artifact_app_html
+
+    html = artifact_app_html()
+    assert html.lstrip().lower().startswith("<!doctype html>")
+    assert not re.search(r"<(script|link|img)[^>]+(src|href)\s*=\s*[\"']?(https?:)?//", html)
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+        assert sink not in html, f"the view must not use {sink}"
+    assert 'sandbox: "allow-scripts"' in html and "frame.srcdoc" in html
+    assert '"2026-01-26"' in html and "view_artifact" in html
+
+
 @pytest.mark.asyncio
 async def test_a_real_client_sees_the_app_the_tools_and_the_image(tmp_path: Path) -> None:
     pytest.importorskip("mcp")
@@ -74,6 +88,10 @@ sync:
     enabled: false
   scheduler:
     enabled: false
+# save_artifact below must not start a real sync child: it outlived the
+# test and held CI open for half an hour.
+artifacts:
+  index_on_save: false
 sources:
   - name: docs
     type: document_folder
@@ -110,6 +128,24 @@ sources:
                     assert read.contents[0].mime_type == APP_MIME
                     assert read.contents[0].text == app_html()
 
+                    # Kept artifacts have their own view, and the tool that reads one declares it.
+                    from pheasant.mcp_server.artifact_tools import ARTIFACT_APP_URI
+
+                    assert resources[ARTIFACT_APP_URI].mime_type == APP_MIME
+                    meta = tools["get_artifact"].meta or {}
+                    assert meta.get("ui", {}).get("resourceUri") == ARTIFACT_APP_URI
+                    saved = await client.call_tool(
+                        "save_artifact",
+                        {"knowledge_base": "mcp-apps", "title": "Notes", "markdown": "# Notes"},
+                    )
+                    assert not saved.is_error, saved
+                    artifact_id = json.loads(saved.content[0].text)["id"]
+                    viewed = await client.call_tool(
+                        "view_artifact", {"knowledge_base": "mcp-apps", "artifact_id": artifact_id}
+                    )
+                    page = json.loads(viewed.content[0].text)["html"]
+                    assert "Content-Security-Policy" in page and "<h1>Notes</h1>" in page
+
                     result = await client.call_tool(
                         "get_image",
                         {
@@ -140,5 +176,49 @@ sources:
                     )
                     assert payload["route"]["visual"] == "image"
                     assert payload["figures"][0]["relative_path"] == "images/diagram.png"
+    finally:
+        app.state.engine.close()
+
+
+def test_the_mounted_facade_shares_the_apps_vector_searcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One resident vector matrix per process, not one per surface.
+
+    The MCP facade built its own engine and searcher, so on an api replica
+    holding its vectors resident (478 MB on the Azure fleet) the first MCP
+    search loaded a second copy and the 2 GiB container was OOM-killed --
+    every agent's search_context took the region's api down.
+    """
+
+    import importlib
+
+    app_module = importlib.import_module("pheasant.api.app")
+    from pheasant.mcp_server import server
+    from tests.conftest import make_vector_engine
+
+    engine = make_vector_engine(tmp_path)
+    config = engine.config
+    engine.close()
+    handed: list[object] = []
+    built: list[object] = []
+    real_app, real_search = server.streamable_http_app, app_module.HybridSearch
+
+    def spy(config, vector=None):
+        handed.append(vector)
+        return real_app(config, vector)
+
+    def recording_search(*args, **kwargs):
+        built.append(real_search(*args, **kwargs))
+        return built[-1]
+
+    monkeypatch.setattr(server, "streamable_http_app", spy)
+    monkeypatch.setattr(app_module, "HybridSearch", recording_search)
+    sentinel = object()
+    assert server.create_mcp_tools(config, sentinel).searcher.vector is sentinel
+    app = app_module.create_app(config=config)
+    try:
+        assert handed and handed[0] is not None, "the app handed MCP no vector searcher"
+        assert handed[0] is built[0].vector, "MCP got a searcher of its own"
     finally:
         app.state.engine.close()

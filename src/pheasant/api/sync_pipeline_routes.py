@@ -25,6 +25,9 @@ class PipelineSettings(BaseModel):
     max_refresh_seconds: int | None = None
     max_items_per_run: int | None = None
     min_request_interval_seconds: float | None = None
+    #: How often the beat syncs this source; null: the region's default.
+    min_interval_seconds: int | None = None
+    yield_to_content: bool | None = None
     respect_robots: bool | None = None
     on_startup: bool | None = None
     on_file_change: str | bool | None = None
@@ -43,6 +46,16 @@ def register_sync_pipeline_routes(app: FastAPI, *, services: Any) -> None:
         """One row per source: schedule, last and next run, health, quality, pacing."""
 
         return sync_pipelines.pipelines(services)
+
+    @app.put("/sync/pipelines/defaults")
+    def set_pipeline_defaults(body: dict[str, Any], principal: str | None = None) -> dict:
+        """The region's default cadence (``default_source_interval_seconds``; null: every beat).
+
+        Transport adapter. The operation is `services.sync_pipelines.set_defaults`."""
+
+        return sync_pipelines.set_defaults(
+            services, body.get("default_source_interval_seconds"), principal
+        )
 
     @app.get("/sync/pipelines/{source_name}")
     def describe_pipeline(source_name: str) -> dict:

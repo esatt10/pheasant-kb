@@ -25,12 +25,13 @@ import { NOISY_NODE_TYPES } from "../graph/graphStyles";
  * The tabs of the Notebook's right-hand panel. Each is docked in the panel by
  * default and can be pulled out into a tile of its own (`docked` below).
  */
-export type PanelTab = "graph" | "facts" | "node" | "taxonomy";
-export const PANEL_TABS: PanelTab[] = ["graph", "facts", "node", "taxonomy"];
+export type PanelTab = "graph" | "facts" | "node" | "artifacts" | "taxonomy";
+export const PANEL_TABS: PanelTab[] = ["graph", "facts", "node", "artifacts", "taxonomy"];
 export const PANEL_TAB_LABELS: Record<PanelTab, string> = {
   graph: "Graph",
   facts: "Facts",
   node: "Node",
+  artifacts: "Artifacts",
   taxonomy: "Taxonomy",
 };
 
@@ -95,11 +96,19 @@ export const DEFAULT_TILE_LAYOUT: TileLayout = {
   right: ["panel"],
 };
 
-export const DEFAULT_DOCKED: PanelTab[] = ["graph", "facts", "node", "taxonomy"];
+export const DEFAULT_DOCKED: PanelTab[] = ["graph", "facts", "node", "artifacts", "taxonomy"];
+
+/** An opaque id for one conversation (a topic of the chat). */
+export function newConversationId(): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `conv-${random.replace(/-/g, "").slice(0, 16)}`;
+}
 
 export interface ChatTurn {
   id: string;
   question: string;
+  /** What the region keeps this turn's answer under (`answer_resume`), to save it. */
+  answerId?: string;
   answer?: ChatAnswer;
   error?: string;
   /**
@@ -132,6 +141,11 @@ export interface SessionState {
   sourceTypeFilter: string | null;
   hiddenTypes: string[];
   panelTab: PanelTab;
+  /**
+   * The artifact open in the Artifacts tab. Kept across a reload with the
+   * view preferences: the artifact itself is the region's, so it is still there.
+   */
+  artifactId: string | null;
   selectedId: string | null;
   /** Node the depth horizon is measured from. */
   centerId: string | null;
@@ -158,6 +172,12 @@ export interface SessionState {
    * without wiping the thread the reader may still want to scroll.
    */
   contextFrom: number;
+  /**
+   * The conversation the turns since `contextFrom` belong to: sent with each
+   * question, so whatever is kept from it is filed and traced under it. A new
+   * topic is a new conversation.
+   */
+  conversationId: string;
   /** A pinned answer length, or null to let each question decide. */
   answerDepth: AnswerDepth | null;
   /** Pane widths in px. The graph pane in particular needs to be growable. */
@@ -213,6 +233,7 @@ const INITIAL: SessionState = {
   sourceTypeFilter: null,
   hiddenTypes: NOISY_NODE_TYPES,
   panelTab: "graph",
+  artifactId: null,
   selectedId: null,
   centerId: null,
   depth: DEFAULT_DEPTH,
@@ -230,6 +251,7 @@ const INITIAL: SessionState = {
   turns: [],
   draft: "",
   contextFrom: 0,
+  conversationId: newConversationId(),
   answerDepth: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
@@ -265,7 +287,8 @@ export type SessionAction =
   | { type: "clear-answer-filter" }
   | { type: "set-workflow"; workflow: string | null }
   | { type: "set-draft"; text: string }
-  | { type: "ask"; id: string; question: string }
+  | { type: "ask"; id: string; question: string; answerId?: string }
+  | { type: "open-artifact"; id: string | null }
   | { type: "answered"; id: string; answer: ChatAnswer }
   | { type: "ask-failed"; id: string; error: string }
   | { type: "visual-drawn"; id: string; drawn: VisualResponse }
@@ -389,6 +412,10 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           ? state.hiddenTypes.filter((t) => t !== action.nodeType)
           : [...state.hiddenTypes, action.nodeType],
       };
+    case "open-artifact":
+      return action.id
+        ? { ...state, artifactId: action.id, panelTab: "artifacts", panelCollapsed: false, ...unfoldTab(state, "artifacts") }
+        : { ...state, artifactId: null };
     case "open-tab":
       // Showing a tab unfolds wherever it is: the panel, or its own tile.
       return { ...state, panelTab: action.tab, ...unfoldTab(state, action.tab) };
@@ -429,7 +456,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return {
         ...state,
         draft: "",
-        turns: [...state.turns, { id: action.id, question: action.question }],
+        turns: [...state.turns, { id: action.id, question: action.question, answerId: action.answerId }],
       };
     case "answered": {
       const surfaced = surfacedFrom(action.answer);
@@ -467,7 +494,15 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         centerId: surfaced[0] ?? state.centerId,
         focusIds: surfaced,
         showAll: false,
-        panelTab: action.answer.facts.length > 0 ? "facts" : "graph",
+        // A kept artifact opens beside the chat, as an artifact does -- on every
+        // dispatch of its answer: the stream sends the answer when its text
+        // exists and again when it ends, and the second one, read as "not the
+        // first answer", used to put the panel back on the graph.
+        ...(action.answer.artifact
+          ? firstAnswer || state.artifactId === action.answer.artifact.id
+            ? { panelTab: "artifacts" as PanelTab, artifactId: action.answer.artifact.id, ...unfoldTab(state, "artifacts") }
+            : {}
+          : { panelTab: (action.answer.facts.length > 0 ? "facts" : "graph") as PanelTab }),
       };
     }
     case "visual-drawn":
@@ -586,7 +621,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         showAll: false,
       };
     case "new-topic":
-      return { ...state, contextFrom: state.turns.length };
+      return { ...state, contextFrom: state.turns.length, conversationId: newConversationId() };
     case "set-answer-depth":
       return { ...state, answerDepth: action.depth };
     case "new-conversation":
@@ -597,6 +632,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         ...state,
         turns: [],
         contextFrom: 0,
+        conversationId: newConversationId(),
         draft: "",
         answer: null,
         surfacedIds: [],
@@ -715,6 +751,7 @@ const STORAGE_KEY = "pheasant.workspace.v1";
  * the browser's disk cache.
  */
 const PERSISTED_KEYS = [
+  "artifactId",
   "sourceFilter",
   "alsoSources",
   "pathScope",
@@ -754,6 +791,7 @@ function hydrate(): SessionState {
       hiddenTypes: Array.isArray(saved.hiddenTypes) ? saved.hiddenTypes : INITIAL.hiddenTypes,
       depth: clampDepth(saved.depth ?? DEFAULT_DEPTH),
       panelTab: isPanelTab(saved.panelTab) ? saved.panelTab : INITIAL.panelTab,
+      artifactId: typeof saved.artifactId === "string" ? saved.artifactId : null,
       railCollapsed: saved.railCollapsed === true,
       panelCollapsed: saved.panelCollapsed === true,
       workflow: saved.workflow ?? INITIAL.workflow,

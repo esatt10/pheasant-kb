@@ -63,6 +63,16 @@ export function outstanding(status: IndexQueueStatus | undefined): QueueTask[] {
   return status?.enabled ? status.tasks : [];
 }
 
+/**
+ * Tasks waiting for an indexer that the queue can count but not list (NATS).
+ * `tasks` is empty there, and reading it alone hid a requested sync for as
+ * long as it waited behind another source's long one.
+ */
+export function unlistedWaiting(status: IndexQueueStatus | undefined): number {
+  if (!status?.enabled || status.listing !== "unavailable") return 0;
+  return Math.max(0, Number(status.depth?.pending ?? 0));
+}
+
 export const QUEUE_STATE_LABEL: Record<QueueTask["state"], string> = {
   awaiting_claim: "awaiting an indexer",
   retry_scheduled: "retry scheduled",

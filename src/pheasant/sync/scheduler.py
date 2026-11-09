@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pheasant.config.schema import PheasantConfig
 
@@ -37,8 +37,13 @@ class SchedulerService:
         enabled: bool | None = None,
         sync_lock: threading.Lock | None = None,
         log_upkeep: bool = True,
+        jobs: Any = None,
     ) -> None:
         self.engine = engine
+        #: Where each beat is reported as a job (`sync/background_jobs.py`).
+        #: Only with a worker-backed engine, whose progress hook takes the
+        #: worker's event dict; ``None`` runs the beat unreported, as before.
+        self.jobs = jobs
         resolved = config if config is not None else getattr(engine, "config", None)
         settings = getattr(getattr(resolved, "sync", None), "scheduler", None)
         if interval_seconds is None:
@@ -54,6 +59,9 @@ class SchedulerService:
         self.log_upkeep = bool(log_upkeep)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: Work a composition root adds to every beat, outside ``sync_lock``
+        #: (artifact retention): best-effort, so one failing never stops the beat.
+        self.upkeep: list[Any] = []
         #: Monotonic clock of the last evaluation run this process started, so
         #: ``evaluation.minimum_interval_seconds`` is enforced here rather than
         #: leaving a corpus under active indexing -- which changes materially
@@ -193,6 +201,27 @@ class SchedulerService:
         except Exception:  # noqa: BLE001 - measurement must never break the beat
             logger.debug("Evaluation upkeep failed", exc_info=True)
 
+    def _scheduled_sync(self) -> list[Any]:
+        """One beat's ``sync_all``, as a job over the pipelines that run by themselves."""
+
+        if self.jobs is None:
+            return self.engine.sync_all("incremental", scheduled=True)
+        from pheasant.sync.background_jobs import run_sync_job
+        from pheasant.sync.pipeline import beat_sources, default_interval
+
+        state = getattr(self.engine, "state", None)
+        default = default_interval(getattr(self.engine, "config", None), state)
+        sources = self.engine.enabled_sources()
+        names = [s.name for s in beat_sources(sources, state, default_interval=default)]
+        return run_sync_job(
+            self.jobs,
+            "Scheduled sync",
+            names,
+            lambda progress: self.engine.sync_all(
+                "incremental", scheduled=True, on_progress=progress
+            ),
+        )
+
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -221,7 +250,7 @@ class SchedulerService:
         while not self._stop.wait(self.interval_seconds):
             try:
                 with self._sync_lock:
-                    results = self.engine.sync_all("incremental", scheduled=True)
+                    results = self._scheduled_sync()
                     # Step 33.2: memory consolidation rides the same beat —
                     # archive superseded/expired records, then a full re-sync
                     # of the (small) memory source drops them from the index.
@@ -253,6 +282,11 @@ class SchedulerService:
             # `max_rows_per_pass` on top, so a backlog costs several beats
             # rather than one long one. No-ops fast when observation is off.
             self._log_upkeep()
+            for task in list(self.upkeep):
+                try:
+                    task()
+                except Exception:  # noqa: BLE001 - upkeep must never break the beat
+                    logger.warning("Scheduler upkeep failed", exc_info=True)
             # Same posture, same reason: outside `sync_lock`, bounded by its
             # own interval, and a no-op unless the region has materially
             # changed. See `_evaluation_upkeep`.

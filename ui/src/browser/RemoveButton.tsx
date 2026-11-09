@@ -4,19 +4,33 @@ import { api } from "../api/client";
 import { useArchiveRefresh } from "./archive";
 
 /**
- * "Remove from the index", for the open file: `POST /documents/archive`, the
- * operation `archive_documents` and `@remove` call.
+ * "Remove from the index", for the open file or the folder shown:
+ * `POST /documents/archive` (`documents`, or `folders` for every document
+ * beneath one), the operation `archive_documents` and `@remove` call. An
+ * artifacts folder retires the artifacts in it.
  *
  * Two clicks, because removing is not a view setting: the first arms the
  * button, the second removes. A folder or connector file is archived and
  * listed under **Removed** in the taxonomy view, where it can be reinstated;
  * an uploaded file is deleted.
  */
-export function RemoveButton({ source, path, onRemoved }: { source: string; path: string; onRemoved: () => void }) {
+export function RemoveButton({
+  source,
+  path,
+  onRemoved,
+  folder = false,
+}: {
+  source: string;
+  path: string;
+  onRemoved: () => void;
+  /** Remove every document beneath this folder. */
+  folder?: boolean;
+}) {
   const [armed, setArmed] = useState(false);
   const refresh = useArchiveRefresh();
   const remove = useMutation({
-    mutationFn: () => api.archiveDocuments([`${source}/${path}`]),
+    mutationFn: () =>
+      folder ? api.archiveFolders([`${source}/${path}`]) : api.archiveDocuments([`${source}/${path}`]),
     onSuccess: () => {
       refresh();
       onRemoved();
@@ -37,15 +51,17 @@ export function RemoveButton({ source, path, onRemoved }: { source: string; path
         onClick={() => (armed ? remove.mutate() : setArmed(true))}
         title={
           armed
-            ? "Click again to remove it from the index"
-            : `Remove ${source}/${path} from the index and keep it out of later syncs. ` +
+            ? folder
+              ? "Click again to remove every document in this folder from the index"
+              : "Click again to remove it from the index"
+            : `Remove ${folder ? "every document in " : ""}${source}/${path} from the index and keep it out of later syncs. ` +
               "Files from a folder can be reinstated from the Removed list; uploaded files are deleted."
         }
       >
         <span className="scope-toggle__icon" aria-hidden>
           🗑
         </span>
-        {remove.isPending ? "Removing…" : armed ? "Confirm remove" : "Remove"}
+        {remove.isPending ? "Removing…" : armed ? "Confirm remove" : folder ? "Remove folder" : "Remove"}
       </button>
       {remove.isError ? (
         <span className="error small" role="alert">

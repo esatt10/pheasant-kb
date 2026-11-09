@@ -259,12 +259,16 @@
   }
 
   // ---------------------------------------------------------------- render
+  // The answer text this view shows, kept with a diagram saved from it.
+  let shownAnswer = null;
+
   function render(result) {
     // A new result replaces the visual that was expanded; leave the mode
     // (and tell the host) rather than strand it in fullscreen on nothing.
     if (expanded) collapse();
     visuals.clear();
     root.replaceChildren();
+    shownAnswer = null;
     const image = (result.content || []).find((block) => block.type === "image");
     const payload = payloadOf(result);
     if (image) { renderImageResult(image, payload); reportSize(); return; }
@@ -284,6 +288,7 @@
   }
 
   function renderAnswer(payload) {
+    shownAnswer = payload.answer;
     const citations = payload.citations || [];
     const figures = payload.figures || [];
     const route = payload.route || {};
@@ -423,6 +428,8 @@
 
   function drawVisual(holder, visual, citations) {
     holder.replaceChildren();
+    // What "Save" keeps: the diagram as drawn now, redraws included.
+    holder.drawn = { visual, citations };
     if (visual.status === "pending") {
       holder.append(el("p", { class: "muted" }, "Drawing the visual…"));
       return;
@@ -885,6 +892,28 @@
       });
       bar.append(button);
     }
+    // Keep the diagram as it is drawn now -- a redraw included -- as an
+    // artifact, through the host like every other call this view makes.
+    const save = el("button", { class: "pill", type: "button",
+      title: "Keep this diagram, and the answer it belongs to, as an artifact" }, "Save");
+    save.addEventListener("click", () => {
+      const current = holder.drawn || { visual, citations };
+      save.disabled = true;
+      save.textContent = "Saving…";
+      request("tools/call", { name: "save_artifact", arguments: {
+        knowledge_base: redraw.knowledge_base, title: redraw.request, kind: "report",
+        markdown: shownAnswer || undefined, visual: current.visual, citations: current.citations,
+      } }).then((result) => {
+        if (result && result.isError) throw new Error((result.content && result.content[0]
+          && result.content[0].text) || "could not save");
+        save.textContent = "Saved";
+      }).catch((error) => {
+        save.disabled = false;
+        save.textContent = "Save";
+        bar.append(el("span", { class: "declined" }, " " + (error.message || "could not save")));
+      });
+    });
+    bar.append(save);
     return bar;
   }
 
