@@ -224,7 +224,7 @@ def source_files(record: dict[str, Any]) -> list[tuple[str, str]]:
     return files
 
 
-def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
+def _publish(context: ServiceContext, record: dict[str, Any], *, sync: bool = True) -> None:
     """Land the artifact in its source and ask for that source to be indexed.
 
     Best-effort past the row: a region that cannot land it (a read-only
@@ -254,7 +254,7 @@ def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
             ),
         )
         _ensure_source(context, str(landed["directory"]))
-        if getattr(context, "indexing", None) is not None:
+        if sync and getattr(context, "indexing", None) is not None:
             context.indexing.start_sync(ARTIFACTS_SOURCE)
     except (ServiceError, OSError):
         logger.warning("could not land artifact %s in its source", record["id"], exc_info=True)
@@ -437,11 +437,48 @@ def list_artifacts(
         f"WHERE kb_id=? {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
         (context.config.knowledge_base_id, *params, limit),
     )
+    records = [_record(row) for row in rows]
+    _file_unfiled(context, records)
     return {
-        "artifacts": [summary_of(_record(row)) for row in rows],
+        "artifacts": [summary_of(record) for record in records],
         "limit": limit,
         "source": ARTIFACTS_SOURCE,
     }
+
+
+#: Artifacts filed into the source per listing, for those kept before they were knowledge.
+FILE_PER_LISTING = 20
+
+
+def _file_unfiled(context: ServiceContext, records: list[dict[str, Any]]) -> None:
+    """Give an artifact kept before artifacts were knowledge its folder, and land it.
+
+    Done once per artifact, the first time a listing shows it: its folder is
+    written to the row, so the next listing finds it filed. One sync for all
+    of them, not one per artifact.
+    """
+
+    unfiled = [r for r in records if not (r.get("payload") or {}).get("folder")]
+    for record in unfiled[:FILE_PER_LISTING]:
+        folder = folder_for(
+            record.get("owner"), record["created_at"], record["title"], record["id"]
+        )
+        record["payload"]["folder"] = folder
+        context.state.execute(
+            "UPDATE saved_artifacts SET payload_json=?, updated_at=? WHERE id=? AND kb_id=?",
+            (
+                json.dumps(record["payload"], default=str),
+                _now(),
+                record["id"],
+                context.config.knowledge_base_id,
+            ),
+        )
+        _publish(context, record, sync=False)
+    if unfiled and getattr(context, "indexing", None) is not None:
+        try:
+            context.indexing.start_sync(ARTIFACTS_SOURCE)
+        except Exception:  # noqa: BLE001 - the next sync files them anyway
+            logger.warning("could not start the artifacts sync", exc_info=True)
 
 
 def delete(

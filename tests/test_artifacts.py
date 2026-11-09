@@ -412,3 +412,41 @@ def test_citations_in_a_run_are_each_linked() -> None:
     for index in (11, 7, 3):
         assert f'href="#source-{index}"' in rendered, index
     assert artifact_render.markdown_html("[9] is not a source", {3}).startswith("<p>[9]")
+
+
+def test_an_artifact_kept_before_artifacts_were_knowledge_is_filed_once(loaded_config) -> None:
+    """A row with no folder (kept by an earlier build) lands in the source when listed."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        context = ServiceContext(
+            config=loaded_config, state=engine.state, searcher=None, engine=engine
+        )
+        payload = {"answer": "# Old\n\nkept before", "files": [], "citations": []}
+        engine.state.execute(
+            "INSERT INTO saved_artifacts(id, kb_id, owner, kind, title, payload_json, created_at, "
+            "updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                "a" * 24,
+                loaded_config.knowledge_base_id,
+                "ada@example.com",
+                "report",
+                "Old report",
+                json.dumps(payload),
+                "2026-11-08T21:00:00+00:00",
+                "2026-11-08T21:00:00+00:00",
+            ),
+        )
+        [listed] = artifacts.list_artifacts(context)["artifacts"]
+        assert listed["folder"] == "ada@example.com/2026/11/old-report--" + "a" * 24
+        engine.sync_source("artifacts", "incremental")
+        indexed = engine.state.rows(
+            "SELECT relative_path FROM artifacts WHERE source_id='artifacts'"
+        )
+        assert [row["relative_path"] for row in indexed] == [f"{listed['folder']}/README.md"]
+        # Once: the row now holds its folder.
+        assert artifacts.get(context, "a" * 24)["folder"] == listed["folder"]
+    finally:
+        engine.close()
