@@ -41,12 +41,16 @@ class ArtifactTools:
         raise NotImplementedError
 
     def list_artifacts(
-        self, knowledge_base: str, limit: int = 50, principal: str | None = None
+        self,
+        knowledge_base: str,
+        limit: int = 50,
+        owner: str | None = None,
+        principal: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import artifacts
 
-        return artifacts.list_artifacts(self.services, principal, limit=limit)
+        return artifacts.list_artifacts(self.services, principal, limit=limit, owner_name=owner)
 
     def get_artifact(
         self, knowledge_base: str, artifact_id: str, principal: str | None = None
@@ -150,17 +154,24 @@ def register_artifact_tools(
 
     @mcp.tool()
     @anticipated
-    def list_artifacts(knowledge_base: str, limit: int = 50, principal: str | None = None) -> dict:
-        """List the artifacts this region keeps for you, newest first.
+    def list_artifacts(
+        knowledge_base: str, limit: int = 50, owner: str | None = None, principal: str | None = None
+    ) -> dict:
+        """List the artifacts this region keeps, newest first (``owner`` for one person's).
 
         Every answer composed with compose_artifact (or ask_knowledge_base with
-        intent "compose") is kept, and save_artifact keeps a report. Each entry
-        is {id, kind ("files" or "report"), title, created_at, files: [{name,
-        language, previewable}], has_visual}, without file contents: call
-        get_artifact for those. They are kept until deleted.
+        intent "compose") is kept, and save_artifact keeps a report. They are
+        knowledge like any other: each lands in the "artifacts" source at
+        folder <owner>/<yyyy>/<mm>/<title>--<id>/ (its files, a README.md
+        whose Sources link the documents it cites, and report.html for a
+        report with a diagram), so search_context finds them, browse_source
+        lists them, the graph links each to its sources, and archive_documents
+        removes them. Each entry is {id, kind ("files" or "report"), title,
+        created_at, owner, source, folder, files: [{name, language,
+        previewable}], has_visual}, without contents: get_artifact has those.
         """
 
-        return tools.list_artifacts(knowledge_base, limit=limit, principal=principal)
+        return tools.list_artifacts(knowledge_base, limit=limit, owner=owner, principal=principal)
 
     @mcp.tool(meta={"ui": {"resourceUri": ARTIFACT_APP_URI}, "ui/resourceUri": ARTIFACT_APP_URI})
     @anticipated
@@ -256,6 +267,6 @@ def register_artifact_tools(
     def delete_artifact(
         knowledge_base: str, artifact_id: str, principal: str | None = None
     ) -> dict:
-        """Delete a kept artifact. It cannot be undone."""
+        """Delete a kept artifact and remove its files from the index. It cannot be undone."""
 
         return tools.delete_artifact(knowledge_base, artifact_id, principal=principal)

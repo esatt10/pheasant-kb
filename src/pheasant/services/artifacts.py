@@ -1,41 +1,70 @@
-"""Artifacts the region keeps: composed files and saved reports, until deleted.
+"""Artifacts the region keeps: composed files and saved reports, as knowledge.
 
 A composed SuiteScript or Terraform module, or an answer worth keeping as a
 report, used to live only in the browser tab that asked for it -- the region
-keeps no chat state, so a refresh took it away, where an MCP host keeps its
-tool results in the conversation and shows them again. Now the region keeps
-it: every composed answer is saved as a ``files`` artifact the moment it is
-written, and any answer the stream kept (`services/answer_resume.py`) or any
-content a caller sends can be saved as a ``report``. They are listed, read,
-rendered (`services/artifact_render.py`), exported and deleted through one
-operation each, behind ``/artifacts`` and the MCP artifact tools.
+keeps no chat state, so a refresh took it away. Now every composed answer is
+kept the moment it is written, and any answer the stream kept
+(`services/answer_resume.py`) or any content a caller sends can be kept as a
+report. And kept means *knowledge*, not a sidecar:
 
-Owned by the principal that made them, as `effective_principal` names it --
-a signed-in person is the same owner over HTTP and MCP -- and read back by
-that principal only: an id held for someone else is the same 404 as one never
-held. Stored as rows (``saved_artifacts``), so a replica, a restart or a
-backend migration keeps them: they are user data (rule 2).
+* **A source.** Each artifact lands, through the ordinary submission path
+  (`services/ingestion.py`: receipts, idempotent placement, forwarded to the
+  writing tier on a fleet), in the ``artifacts`` source -- a landing-zone
+  ``document_folder`` like the drop zone's -- and the normal pipeline indexes
+  it. Its files are searchable from the overall index, browsable in the
+  taxonomy view, and removable like any other document (`services/archive.py`;
+  an upload is removed outright, its bytes deleted by the indexer).
+* **A directory by identity, then time.** ``<owner>/<yyyy>/<mm>/<title>--<id>/``:
+  a person's artifacts stay together however many there are, a month keeps any
+  one folder small, and the id makes every artifact's folder its own.
+* **Its evidence as edges.** Every artifact holds a ``README.md`` whose Sources
+  list links each cited passage's document by its path. The Markdown pass turns
+  each link into a ``references`` edge and cross-source resolution lands it on
+  the cited document -- deterministically, at indexing time (rule 1) -- so a
+  graph walk goes from the artifact to what it was built from. The citations a
+  compose made are those relationships.
+
+The rows (``saved_artifacts``) keep what the viewers render, so an artifact is
+there the moment it is written rather than once an indexer reaches it; the
+source is what search, the graph and the taxonomy read. Visible to everyone
+the region serves, as the rest of its knowledge is; the owner is the first
+level of the directory and a field, not an access rule. User data (rule 2).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 from pheasant.assistant.artifact_files import artifact_payload
 from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services import artifact_render as render
-from pheasant.services.errors import ArtifactNotFound, InvalidRequest
+from pheasant.services.errors import ArtifactNotFound, InvalidRequest, ServiceError
 
+logger = logging.getLogger(__name__)
+
+#: The source every artifact lands in.
+ARTIFACTS_SOURCE = "artifacts"
+#: Each artifact's index page: what it is, and the documents it cites.
+INDEX_FILE = "README.md"
+#: The rendered report, for a report that draws a diagram.
+REPORT_FILE = "report.html"
 KINDS = ("files", "report")
 #: What one saved artifact may hold. A composed module of forty files is a few
 #: hundred kilobytes; this refuses a payload that is not an artifact at all.
 MAX_BYTES = 2_000_000
 EXPORT_FORMATS = ("html", "markdown", "zip")
+#: How long saving a report waits for the diagram its answer is still drawing.
+VISUAL_WAIT_SECONDS = 60
+_FOLDER_ID = re.compile(r"--([0-9a-f]{24})$")
 
 
 @dataclass(frozen=True)
@@ -71,15 +100,28 @@ def _title(question: str, files: list[dict[str, Any]]) -> str:
     return files[0]["name"] if files else "Untitled artifact"
 
 
+def folder_for(who: str | None, created_at: str, title: str, artifact_id: str) -> str:
+    """``<owner>/<yyyy>/<mm>/<title>--<id>``: identity, then time, then the artifact."""
+
+    from pheasant.ingestion.landing import safe_filename
+
+    person = safe_filename(who or "shared", fallback="shared")
+    return f"{person}/{created_at[:4]}/{created_at[5:7]}/{render.slug(title)[:48]}--{artifact_id}"
+
+
 def summary_of(record: dict[str, Any]) -> dict[str, Any]:
     """What a listing shows: no file contents."""
 
     payload = record.get("payload") or {}
+    folder = payload.get("folder")
     return {
         "id": record["id"],
         "kind": record["kind"],
         "title": record["title"],
         "created_at": record["created_at"],
+        "owner": record.get("owner"),
+        "source": ARTIFACTS_SOURCE if folder else None,
+        "folder": folder,
         "files": [
             {
                 "name": f.get("name"),
@@ -95,37 +137,166 @@ def summary_of(record: dict[str, Any]) -> dict[str, Any]:
 def _store(
     context: ServiceContext, kind: str, title: str, payload: dict[str, Any], who: str | None
 ) -> dict[str, Any]:
+    artifact_id = secrets.token_hex(12)
+    created = _now()
+    payload = {**payload, "folder": folder_for(who, created, title, artifact_id)}
     encoded = json.dumps(payload, default=str)
     if len(encoded.encode("utf-8")) > MAX_BYTES:
         raise InvalidRequest(f"an artifact holds at most {MAX_BYTES // 1_000_000} MB")
     record = {
-        "id": secrets.token_hex(12),
+        "id": artifact_id,
         "kind": kind,
         "title": title,
-        "created_at": _now(),
+        "created_at": created,
+        "owner": who,
         "payload": payload,
     }
     context.state.execute(
         "INSERT INTO saved_artifacts(id, kb_id, owner, kind, title, payload_json, created_at, "
         "updated_at) VALUES(?,?,?,?,?,?,?,?)",
         (
-            record["id"],
+            artifact_id,
             context.config.knowledge_base_id,
             who,
             kind,
             title,
             encoded,
-            record["created_at"],
-            record["created_at"],
+            created,
+            created,
         ),
     )
+    _publish(context, record)
     return record
+
+
+def index_page(record: dict[str, Any]) -> str:
+    """The artifact's ``README.md``: what it is, its content's gist, and its sources.
+
+    Each source is a Markdown link to the cited document's path, which is
+    what makes it an edge: the Markdown pass reads the link as a reference
+    and cross-source resolution resolves the path to that document.
+    """
+
+    payload = record.get("payload") or {}
+    kind = render.KIND_LABELS.get(str(record.get("kind")), "Artifact")
+    lines = [f"# {record.get('title')}", ""]
+    if payload.get("question"):
+        lines += [f"> {payload['question']}", ""]
+    lines += [
+        f"- Artifact: `{record.get('id')}`",
+        f"- Kind: {kind}",
+        f"- Saved by: {record.get('owner') or 'shared'}",
+        f"- Saved: {str(record.get('created_at') or '')[:16].replace('T', ' ')} UTC",
+    ]
+    files = [str(f.get("name")) for f in payload.get("files") or []]
+    if files:
+        lines.append(f"- Files: {', '.join(f'`{name}`' for name in files)}")
+    lines.append("")
+    body = payload.get("answer") if record.get("kind") == "report" else payload.get("summary")
+    if body:
+        lines += [str(body).strip(), ""]
+    if payload.get("not_covered"):
+        lines += ["## Not covered by the sources", "", str(payload["not_covered"]).strip(), ""]
+    cited = [c for c in payload.get("citations") or [] if c.get("path")]
+    if cited:
+        lines += ["## Sources", ""]
+        for citation in cited:
+            label = f"{citation.get('source')} · {citation.get('path')}"
+            if citation.get("section"):
+                label += f" — {citation['section']}"
+            target = str(citation["path"]).replace(" ", "%20").replace(")", "%29")
+            lines.append(f"{citation.get('index')}. [{label.replace(']', '')}]({target})")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def source_files(record: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(name, text)`` for every file of the artifact's folder, the index page first."""
+
+    payload = record.get("payload") or {}
+    files = [(INDEX_FILE, index_page(record))]
+    files += [
+        (render.safe_name(str(f.get("name") or ""), "file.txt"), str(f.get("content") or ""))
+        for f in payload.get("files") or []
+    ]
+    if record.get("kind") == "report" and render.has_visual(payload):
+        files.append((REPORT_FILE, render.overview(record)))
+    return files
+
+
+def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
+    """Land the artifact in its source and ask for that source to be indexed.
+
+    Best-effort past the row: a region that cannot land it (a read-only
+    replica with no landing service) still has the artifact, just not yet as
+    knowledge, and says so in the log.
+    """
+
+    from pheasant.services import ingestion
+
+    folder = record["payload"]["folder"]
+    items = [
+        ingestion.SubmissionItem(
+            relative_path=f"{folder}/{name}",
+            content=text.encode("utf-8"),
+            idempotency_key=f"artifact:{record['id']}:{name}",
+        )
+        for name, text in source_files(record)
+    ]
+    try:
+        landed = ingestion.submit(
+            context,
+            ingestion.SubmissionRequest(
+                items=items,
+                source_name=ARTIFACTS_SOURCE,
+                submission_id=f"artifact-{record['id']}",
+                agent_id=record.get("owner"),
+            ),
+        )
+        _ensure_source(context, str(landed["directory"]))
+        if getattr(context, "indexing", None) is not None:
+            context.indexing.start_sync(ARTIFACTS_SOURCE)
+    except (ServiceError, OSError):
+        logger.warning("could not land artifact %s in its source", record["id"], exc_info=True)
+
+
+def _ensure_source(context: ServiceContext, directory: str) -> None:
+    """Register ``artifacts`` as a landing-zone ``document_folder``, once."""
+
+    config = context.config
+    known = any(s.name == ARTIFACTS_SOURCE for s in config.sources) or bool(
+        context.state.get_source(ARTIFACTS_SOURCE)
+    )
+    # Registered here or by another replica (a runtime source lives in the
+    # state store), and not removed since: nothing to do.
+    if known and not context.state.source_removed(ARTIFACTS_SOURCE):
+        return
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.registry.source_registry import SourceRegistry
+
+    source = PheasantConfig.model_validate(
+        {
+            "sources": [
+                {
+                    "name": ARTIFACTS_SOURCE,
+                    "type": "document_folder",
+                    "path": directory,
+                    "description": "Artifacts the region kept: composed files and saved reports",
+                    # Every file an artifact holds: the default include list is
+                    # code-shaped and would drop a report's HTML.
+                    "include": ["**/*"],
+                }
+            ]
+        }
+    ).sources[0]
+    SourceRegistry(config, context.state).register_source(source)
+    config.sources = [s for s in config.sources if s.name != ARTIFACTS_SOURCE] + [source]
 
 
 def keep_composed(
     context: ServiceContext, question: str, principal: str | None, result: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """Save a composed answer's files, if it wrote any; its listing summary.
+    """Keep a composed answer's files, if it wrote any; its listing summary.
 
     Called by `services.assistant.answer` for every compose answer, so HTTP,
     the stream and MCP keep the same artifact. A store that cannot keep it
@@ -149,9 +320,7 @@ def keep_composed(
             context, "files", _title(question, parsed["files"]), payload, owner(principal)
         )
     except Exception:  # noqa: BLE001 - the answer stands without its copy
-        import logging
-
-        logging.getLogger(__name__).warning("could not keep a composed artifact", exc_info=True)
+        logger.warning("could not keep a composed artifact", exc_info=True)
         return None
     return summary_of(record)
 
@@ -180,6 +349,13 @@ def save(context: ServiceContext, request: SaveRequest) -> dict[str, Any]:
         from pheasant.services import answer_resume
 
         kept = answer_resume.read(context, request.answer_id, who)
+        # Its text exists and its diagram is still being drawn: a report saved
+        # now would keep the answer without the picture it was asked with.
+        waited = 0.0
+        while kept.get("status") == "answered" and waited < VISUAL_WAIT_SECONDS:
+            time.sleep(1.0)
+            waited += 1.0
+            kept = answer_resume.read(context, request.answer_id, who)
         if not kept.get("answer"):
             raise InvalidRequest("that answer is not finished yet; save it once it is done")
         answer = kept["answer"]
@@ -216,56 +392,128 @@ def _with_payload(context: ServiceContext, record: dict[str, Any]) -> dict[str, 
     }
 
 
-def _load(context: ServiceContext, artifact_id: str, principal: str | None) -> dict[str, Any]:
-    rows = context.state.rows(
-        "SELECT id, owner, kind, title, payload_json, created_at FROM saved_artifacts "
-        "WHERE id=? AND kb_id=?",
-        (str(artifact_id), context.config.knowledge_base_id),
-    )
-    row = dict(rows[0]) if rows else None
-    if row is None or (row.get("owner") or None) != owner(principal):
-        raise ArtifactNotFound(artifact_id)
+def _record(row: Any) -> dict[str, Any]:
+    row = dict(row)
     return {
         "id": row["id"],
         "kind": row["kind"],
         "title": row["title"],
         "created_at": row["created_at"],
-        "payload": json.loads(row["payload_json"] or "{}"),
+        "owner": row.get("owner"),
+        "payload": json.loads(row.get("payload_json") or "{}"),
     }
+
+
+def _load(context: ServiceContext, artifact_id: str) -> dict[str, Any]:
+    rows = context.state.rows(
+        "SELECT id, owner, kind, title, payload_json, created_at FROM saved_artifacts "
+        "WHERE id=? AND kb_id=?",
+        (str(artifact_id), context.config.knowledge_base_id),
+    )
+    if not rows:
+        raise ArtifactNotFound(artifact_id)
+    return _record(rows[0])
 
 
 def get(context: ServiceContext, artifact_id: str, principal: str | None = None) -> dict[str, Any]:
     """One artifact, its files' contents included."""
 
-    return _with_payload(context, _load(context, artifact_id, principal))
+    return _with_payload(context, _load(context, artifact_id))
 
 
 def list_artifacts(
-    context: ServiceContext, principal: str | None = None, *, limit: int = 50
+    context: ServiceContext,
+    principal: str | None = None,
+    *,
+    limit: int = 50,
+    owner_name: str | None = None,
 ) -> dict[str, Any]:
-    """The caller's artifacts, newest first, without file contents."""
+    """The region's artifacts, newest first, without contents; ``owner_name`` for one person's."""
 
-    who = owner(principal)
     limit = max(1, min(int(limit or 50), 200))
-    clause, params = ("owner=?", (who,)) if who else ("owner IS NULL", ())
+    clause, params = ("AND owner=?", (owner_name,)) if owner_name else ("", ())
     rows = context.state.rows(
-        "SELECT id, kind, title, payload_json, created_at FROM saved_artifacts "
-        f"WHERE kb_id=? AND {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
+        "SELECT id, owner, kind, title, payload_json, created_at FROM saved_artifacts "
+        f"WHERE kb_id=? {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
         (context.config.knowledge_base_id, *params, limit),
     )
-    records = [{**dict(row), "payload": json.loads(row["payload_json"] or "{}")} for row in rows]
-    return {"artifacts": [summary_of(record) for record in records], "limit": limit}
+    return {
+        "artifacts": [summary_of(_record(row)) for row in rows],
+        "limit": limit,
+        "source": ARTIFACTS_SOURCE,
+    }
 
 
 def delete(
     context: ServiceContext, artifact_id: str, principal: str | None = None
 ) -> dict[str, Any]:
-    record = _load(context, artifact_id, principal)
+    """Remove the artifact: its row, and its files from the index like any document's."""
+
+    record = _load(context, artifact_id)
+    removed: list[str] = []
+    folder = (record.get("payload") or {}).get("folder")
+    if folder:
+        from pheasant.services import archive
+
+        for name, _text in source_files(record):
+            path = f"{ARTIFACTS_SOURCE}/{folder}/{name}"
+            try:
+                archive.archive_documents(
+                    context,
+                    archive.ArchiveRequest(documents=[path], actor=owner(principal) or "artifacts"),
+                )
+                removed.append(name)
+            except ServiceError:
+                # Not indexed yet (an indexer has not reached it): nothing in
+                # the index to take out, and nothing is lost by moving on.
+                continue
+    _forget(context, artifact_id)
+    return {"deleted": record["id"], "title": record["title"], "removed_files": removed}
+
+
+def _forget(context: ServiceContext, artifact_id: str) -> None:
     context.state.execute(
         "DELETE FROM saved_artifacts WHERE id=? AND kb_id=?",
-        (record["id"], context.config.knowledge_base_id),
+        (artifact_id, context.config.knowledge_base_id),
     )
-    return {"deleted": record["id"], "title": record["title"]}
+
+
+def forget_removed(context: ServiceContext, source_name: str, paths: list[str]) -> None:
+    """Documents removed from the ``artifacts`` source, as the artifacts they were.
+
+    Removing an artifact's ``README.md`` (its index page) retires the artifact;
+    removing one of its files drops that file. Called by `services/archive.py`,
+    so the taxonomy view's Remove, ``@remove`` and MCP ``archive_documents``
+    remove an artifact exactly as they remove anything else.
+    """
+
+    if source_name != ARTIFACTS_SOURCE:
+        return
+    by_artifact: dict[str, list[str]] = {}
+    for path in paths:
+        parent = PurePosixPath(path).parent
+        match = _FOLDER_ID.search(parent.name)
+        if match:
+            by_artifact.setdefault(match.group(1), []).append(PurePosixPath(path).name)
+    for artifact_id, names in by_artifact.items():
+        try:
+            record = _load(context, artifact_id)
+        except ArtifactNotFound:
+            continue
+        if INDEX_FILE in names:
+            _forget(context, artifact_id)
+            continue
+        payload = record["payload"]
+        payload["files"] = [f for f in payload.get("files") or [] if f.get("name") not in names]
+        context.state.execute(
+            "UPDATE saved_artifacts SET payload_json=?, updated_at=? WHERE id=? AND kb_id=?",
+            (
+                json.dumps(payload, default=str),
+                _now(),
+                artifact_id,
+                context.config.knowledge_base_id,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -288,7 +536,7 @@ def view(
 ) -> Rendered:
     """The artifact, or one file of it, as a pheasant-styled HTML document."""
 
-    record = _load(context, artifact_id, principal)
+    record = _load(context, artifact_id)
     if file:
         chosen = render.find_file(record, file)
         if chosen is None:
@@ -310,7 +558,7 @@ def export(
 ) -> Rendered:
     """Something to save: the HTML report, the Markdown, a .zip, or one file as written."""
 
-    record = _load(context, artifact_id, principal)
+    record = _load(context, artifact_id)
     name = render.slug(record["title"])
     if file:
         chosen = render.find_file(record, file)

@@ -125,12 +125,23 @@ export function AudioView({
  * empty `sandbox` (no scripts, no forms, an opaque origin) and a CSP that
  * admits only inline styles and data images.
  */
-export function HtmlView({ html }: { html: string }) {
-  const guarded =
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">` +
-    `<base target="_blank">` +
-    html;
-  return <iframe className="html-view" sandbox="" srcDoc={guarded} title="HTML preview" referrerPolicy="no-referrer" />;
+export function HtmlView({ html, scripts = false }: { html: string; scripts?: boolean }) {
+  // `scripts` runs the page's own inline scripts -- a kept artifact's report
+  // drawing its charts or diagram -- in the same opaque-origin sandbox, under
+  // a policy that still fetches nothing.
+  const policy = scripts
+    ? "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-src 'self' data: blob:"
+    : "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:";
+  const guarded = `<meta http-equiv="Content-Security-Policy" content="${policy}">` + `<base target="_blank">` + html;
+  return (
+    <iframe
+      className="html-view"
+      sandbox={scripts ? "allow-scripts" : ""}
+      srcDoc={guarded}
+      title="HTML preview"
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 /**

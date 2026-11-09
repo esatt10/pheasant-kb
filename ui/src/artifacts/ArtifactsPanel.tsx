@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { ArtifactSummary } from "../api/types";
+import { useSession } from "../state/session";
+
+/** The source every kept artifact lives in (`services/artifacts.py`). */
+export const ARTIFACTS_SOURCE = "artifacts";
 
 /**
  * The Artifacts tab: what the region keeps for this reader, and a viewer.
@@ -28,8 +32,14 @@ export function ArtifactsPanel({
   return <ArtifactList onSelect={onSelect} />;
 }
 
+/**
+ * The list as the directory it is: by who kept each artifact, then by month --
+ * the same folders the `artifacts` source holds them in, which the taxonomy
+ * view browses.
+ */
 function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
   const list = useQuery({ queryKey: ["artifacts"], queryFn: api.artifacts, staleTime: 10_000 });
+  const { dispatch } = useSession();
   if (list.isLoading) return <div className="artifacts__empty"><span className="spinner" /></div>;
   if (list.isError) return <p className="error small artifacts__empty">{(list.error as Error).message}</p>;
   const items = list.data?.artifacts ?? [];
@@ -44,17 +54,52 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
       </div>
     );
   }
+  const groups = new Map<string, ArtifactSummary[]>();
+  for (const item of items) {
+    const [who, year, month] = (item.folder ?? "").split("/");
+    const key = item.folder ? `${who}/${year}/${month}` : "unfiled";
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
   return (
-    <ul className="artifacts__list">
-      {items.map((item) => (
-        <li key={item.id}>
-          <button type="button" className="artifacts__item" onClick={() => onSelect(item.id)}>
-            <span className="artifacts__item-title">{item.title}</span>
-            <span className="muted small">{describe(item)}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <div className="artifacts__dir">
+      <div className="artifacts__dir-head">
+        <span className="muted small">Kept as knowledge in the {ARTIFACTS_SOURCE} source</span>
+        <button
+          type="button"
+          className="btn btn--small"
+          onClick={() => dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: "" })}
+          title="Browse every artifact's files in the taxonomy view"
+        >
+          Browse all
+        </button>
+      </div>
+      {[...groups.entries()].map(([key, members]) => {
+        const [who, year, month] = key.split("/");
+        return (
+          <section key={key} className="artifacts__group">
+            <button
+              type="button"
+              className="artifacts__group-head"
+              onClick={() => dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: key === "unfiled" ? "" : key })}
+              title="Open this folder in the taxonomy view"
+            >
+              <span>{who === "shared" ? "Shared" : who}</span>
+              {year ? <span className="muted small">{year}-{month}</span> : null}
+            </button>
+            <ul className="artifacts__list">
+              {members.map((item) => (
+                <li key={item.id}>
+                  <button type="button" className="artifacts__item" onClick={() => onSelect(item.id)}>
+                    <span className="artifacts__item-title">{item.title}</span>
+                    <span className="muted small">{describe(item)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -87,6 +132,7 @@ function useTheme(): "light" | "dark" {
 
 function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
   const queryClient = useQueryClient();
+  const { dispatch } = useSession();
   const theme = useTheme();
   const [file, setFile] = useState<string | null>(null);
   const [mode, setMode] = useState<"preview" | "code">("preview");
@@ -108,6 +154,9 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
     mutationFn: () => api.deleteArtifact(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      // Its files left the index too: the taxonomy and the overview are stale.
+      queryClient.invalidateQueries({ queryKey: ["browse"] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
       onBack();
     },
   });
@@ -121,7 +170,7 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
     return (
       <div className="artifacts__empty">
         <p className="muted small">
-          {gone ? "This artifact is no longer kept: it was deleted, or belongs to someone else." : (artifact.error as Error).message}
+          {gone ? "This artifact is no longer kept: it was deleted or removed from the index." : (artifact.error as Error).message}
         </p>
         <button type="button" className="btn btn--small" onClick={onBack}>
           All artifacts
@@ -152,8 +201,21 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
         </button>
         <div className="artifact__title">
           <strong>{data.title}</strong>
-          <span className="muted small">{describe(data)}</span>
+          <span className="muted small">
+            {describe(data)}
+            {data.owner ? ` · ${data.owner}` : ""}
+          </span>
         </div>
+        {data.folder ? (
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => dispatch({ type: "open-browser", source: data.source ?? ARTIFACTS_SOURCE, path: data.folder ?? "" })}
+            title={`Its files in the taxonomy view: ${data.source}/${data.folder}`}
+          >
+            Folder
+          </button>
+        ) : null}
       </div>
       <div className="artifact__tabs" role="tablist" aria-label="Files">
         <button
@@ -215,7 +277,8 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
           type="button"
           className="btn btn--small btn--ghost"
           onClick={() => {
-            if (window.confirm(`Delete "${data.title}"? It cannot be undone.`)) remove.mutate();
+            if (window.confirm(`Delete "${data.title}" and remove its files from the index? It cannot be undone.`))
+              remove.mutate();
           }}
           title="Delete this artifact"
         >

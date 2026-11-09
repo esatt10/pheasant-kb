@@ -139,6 +139,12 @@ def archive_documents(context: ServiceContext, request: ArchiveRequest) -> dict[
         documents.append(_document(source_name, str(row["relative_path"]), artifact_id, kind))
         by_source.setdefault(source_name, []).append(str(row["relative_path"]))
     sources = {name: _apply_removal(context, name) for name in sorted(by_source)}
+    # A kept artifact's files are documents like any other; removing its index
+    # page retires the artifact (`services/artifacts.py`).
+    from pheasant.services import artifacts
+
+    for name, paths in by_source.items():
+        artifacts.forget_removed(context, name, paths)
     return {
         "knowledge_base": kb_id,
         "status": _overall(sources.values(), "removed"),

@@ -141,6 +141,9 @@ sup a,.cite{{text-decoration:none;font-size:.75em;color:var(--accent-text);
 .visual-frame{{width:100%;height:420px;border:1px solid var(--border);border-radius:10px;
   background:var(--bg);margin:1rem 0}}
 .svg-preview{{max-width:100%;height:auto;display:block;margin:0 auto}}
+.html-frame{{width:100%;height:520px;border:1px solid var(--border);border-radius:10px;
+  background:#fff;display:block}}
+details{{margin:.4rem 0}}summary{{cursor:pointer;color:var(--muted);font-size:.85rem}}
 footer{{margin-top:3rem;color:var(--muted);font-size:.8rem}}
 {_SYNTAX_CSS}
 """
@@ -293,6 +296,41 @@ def has_visual(payload: dict[str, Any]) -> bool:
     return isinstance(visual, dict) and visual.get("status") == "ok" and bool(visual.get("diagram"))
 
 
+def _file_section(file: dict[str, Any]) -> str:
+    """One file in the whole-artifact page: drawn when it is a picture or a page.
+
+    An HTML file is its page, running in a frame sandboxed to scripts alone
+    under :data:`DOCUMENT_POLICY` (its charts draw; it reaches nothing), and an
+    SVG is a picture. Either keeps its source one click away; everything else
+    is its source.
+    """
+
+    name = str(file.get("name") or "file")
+    content = str(file.get("content") or "")
+    suffix = PurePosixPath(name).suffix.lower()
+    head = (
+        f'<section class="file"><p class="file__name"><strong>{_esc(name)}</strong>'
+        f'<span class="file__lang">{_esc(file.get("language"))}</span></p>'
+    )
+    source = highlighted(content, name, file.get("language"))
+    if suffix in (".html", ".htm"):
+        drawn = (
+            f'<iframe class="html-frame" sandbox="allow-scripts" title="{_esc(name)}" '
+            f'srcdoc="{_esc(with_policy(content))}"></iframe>'
+        )
+    elif suffix == ".svg":
+        import base64
+
+        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        drawn = (
+            f'<img class="svg-preview" alt="{_esc(name)}" '
+            f'src="data:image/svg+xml;base64,{encoded}">'
+        )
+    else:
+        return head + source + "</section>"
+    return head + drawn + f"<details><summary>Source</summary>{source}</details></section>"
+
+
 def overview(artifact: dict[str, Any], *, theme: str | None = None) -> str:
     """The whole artifact as one document: the report, or every file in order."""
 
@@ -307,12 +345,7 @@ def overview(artifact: dict[str, Any], *, theme: str | None = None) -> str:
     visual, script = _visual(payload)
     parts.append(visual)
     for file in payload.get("files") or []:
-        parts.append(
-            f'<section class="file"><p class="file__name"><strong>{_esc(file.get("name"))}</strong>'
-            f'<span class="file__lang">{_esc(file.get("language"))}</span></p>'
-            + highlighted(file.get("content") or "", file.get("name") or "", file.get("language"))
-            + "</section>"
-        )
+        parts.append(_file_section(file))
     if payload.get("not_covered"):
         parts.append(
             '<section class="gaps"><h2>Not covered by the sources</h2>'

@@ -42,10 +42,12 @@ def _send(rendered: artifact_service.Rendered, *, attachment: bool) -> Response:
 
 def register_artifact_routes(app: FastAPI, *, services: Any) -> None:
     @app.get("/artifacts")
-    def list_artifacts(limit: int = 50, principal: str | None = None) -> dict:
+    def list_artifacts(
+        limit: int = 50, owner: str | None = None, principal: str | None = None
+    ) -> dict:
         """Transport adapter. The operation is `services.artifacts.list_artifacts`."""
 
-        return artifact_service.list_artifacts(services, principal, limit=limit)
+        return artifact_service.list_artifacts(services, principal, limit=limit, owner_name=owner)
 
     @app.post("/artifacts")
     def save_artifact(body: SaveArtifactBody) -> dict:

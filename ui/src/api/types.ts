@@ -579,6 +579,11 @@ export interface ArtifactSummary {
   kind: "files" | "report";
   title: string;
   created_at: string;
+  /** Who kept it: the first level of its folder. */
+  owner: string | null;
+  /** The source it lives in as knowledge (`artifacts`), and its folder there. */
+  source: string | null;
+  folder: string | null;
   files: { name: string; language: string | null; previewable: boolean }[];
   has_visual: boolean;
 }

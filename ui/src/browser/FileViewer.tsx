@@ -1,3 +1,4 @@
+import { ARTIFACTS_SOURCE } from "../artifacts/ArtifactsPanel";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -508,7 +509,9 @@ function renderView({
     case "notebook":
       return parseNotebook(text) ? <NotebookView text={text} /> : source();
     case "html":
-      return <HtmlView html={text} />;
+      // A kept artifact's HTML is a report or a visual: drawn with its own
+      // scripts, still sandboxed and still unable to fetch anything.
+      return <HtmlView html={text} scripts={doc.source === ARTIFACTS_SOURCE} />;
     case "page":
       return data.page ? <PageView source={doc.source} path={doc.path} url={data.page.url} /> : source();
     case "svg":

@@ -1409,16 +1409,27 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   modes when hybrid is present, since hybrid already contains them. The stream
   carries provisional `draft` events that the verified `answer` replaces.
   `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
-- **Artifacts are kept, and look like pheasant everywhere they are shown**
+- **Artifacts are kept as knowledge, and look like pheasant everywhere**
   (`services/artifacts.py`, `services/artifact_render.py`, table
   `saved_artifacts`; `/artifacts*`, MCP `list_/get_/save_/view_/export_/
   delete_artifact`, `ui://pheasant/artifact-view.html`; the web UI's
   Artifacts tab). Every composed answer is saved as a `files` artifact in
   `services.assistant.answer`, so HTTP, the stream and MCP keep the same one;
-  any answer the stream kept, or any content, is saved as a `report`. Kept
-  until deleted and owned by `effective_principal`, so a reload -- which
-  empties the chat, since the region keeps no chat state -- leaves them in
-  the tab, the open one included. One renderer: highlighted code in the UI's
+  any answer the stream kept, or any content, is saved as a `report`. Each
+  lands through `services.ingestion.submit` in the `artifacts` source (a
+  landing-zone `document_folder`, registered like the drop zone's) at
+  `<owner>/<yyyy>/<mm>/<title>--<id>/`: its files, a `README.md` whose Sources
+  link every cited document by path -- the Markdown pass and cross-source
+  resolution make those `references` edges, so the compose's evidence *is*
+  the graph -- and `report.html` for a report with a diagram. So it is
+  searched, browsed in the taxonomy view (artifact HTML runs its scripts
+  there, sandboxed), walked in the graph, and removed like any document
+  (`archive.forget_removed`: removing a `README.md` retires the artifact).
+  The rows keep what the viewers render, so it shows before an indexer
+  reaches it. Visible to everyone the region serves; the owner is the first
+  folder, not an access rule. A reload -- which empties the chat, since the
+  region keeps no chat state -- leaves them in the tab, the open one
+  included. One renderer: highlighted code in the UI's
   syntax colours (pygments), Markdown with raw HTML off and `[n]` linked to
   the sources, a saved diagram drawn by the knowledge view itself (hosted in
   the page by a few lines of the MCP Apps host protocol), an HTML file run as

@@ -208,28 +208,108 @@ def test_an_answer_the_stream_kept_is_saved_as_a_report_with_its_diagram(
     assert unfinished.status_code == 404 and unfinished.json()["code"] == "UNKNOWN_ANSWER"
 
 
-def test_an_artifact_is_read_back_by_its_owner_only_and_deleted_by_them(loaded_config) -> None:
+def test_every_session_sees_an_artifact_filed_under_whoever_kept_it(loaded_config) -> None:
+    """Kept is knowledge: visible to everyone the region serves, organized by owner, then time."""
+
     app = create_app(config=loaded_config)
     context = _context(app)
     saved = artifacts.save(
         context, artifacts.SaveRequest(title="Mine", markdown="text", principal="ada@example.com")
     )
-    assert artifacts.get(context, saved["id"], "ada@example.com")["title"] == "Mine"
-    with pytest.raises(ArtifactNotFound):
-        artifacts.get(context, saved["id"], "grace@example.com")
-    assert artifacts.list_artifacts(context, "grace@example.com")["artifacts"] == []
+    assert re.fullmatch(r"ada@example\.com/\d{4}/\d{2}/mine--[0-9a-f]{24}", saved["folder"])
+    assert saved["owner"] == "ada@example.com" and saved["source"] == "artifacts"
+    # Another person, another session: the same artifact.
+    assert artifacts.get(context, saved["id"], "grace@example.com")["title"] == "Mine"
+    listed = artifacts.list_artifacts(context, "grace@example.com")["artifacts"]
+    assert [item["id"] for item in listed] == [saved["id"]]
+    assert artifacts.list_artifacts(context, owner_name="grace@example.com")["artifacts"] == []
 
     client = TestClient(app)
-    refused = client.delete(f"/artifacts/{saved['id']}", params={"principal": "grace@example.com"})
-    assert refused.status_code == 404 and refused.json()["code"] == "UNKNOWN_ARTIFACT"
-    assert (
-        client.delete(f"/artifacts/{saved['id']}", params={"principal": "ada@example.com"}).json()[
-            "deleted"
+    assert client.delete(f"/artifacts/{saved['id']}").json()["deleted"] == saved["id"]
+    gone = client.get(f"/artifacts/{saved['id']}")
+    assert gone.status_code == 404 and gone.json()["code"] == "UNKNOWN_ARTIFACT"
+
+
+def test_a_kept_artifact_is_knowledge_searchable_linked_to_its_evidence_and_removable(
+    loaded_config,
+) -> None:
+    """The source, the index, the graph and removal: what makes it knowledge."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        engine.sync_source("architecture-notes", "full")
+        context = ServiceContext(
+            config=loaded_config, state=engine.state, searcher=None, engine=engine
+        )
+        result = _composed("@compose account counts")
+        result["citations"] = [
+            {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
         ]
-        == saved["id"]
-    )
-    with pytest.raises(ArtifactNotFound):
-        artifacts.get(context, saved["id"], "ada@example.com")
+        result["answer"] = ANSWER.replace("[1]", "[1] zephyrine")
+        kept = artifacts.keep_composed(context, "@compose account counts", None, result)
+        folder = kept["folder"]
+        assert folder.startswith("shared/") and kept["source"] == "artifacts"
+
+        # A landing-zone source, registered like the drop zone's.
+        source = next(s for s in loaded_config.sources if s.name == "artifacts")
+        assert source.type.value == "document_folder"
+        assert engine.sync_source("artifacts", "incremental").indexed_artifacts == 3
+        paths = {
+            row["relative_path"]
+            for row in engine.state.rows(
+                "SELECT relative_path FROM artifacts WHERE source_id='artifacts'"
+            )
+        }
+        assert paths == {
+            f"{folder}/{name}" for name in ("README.md", "account_counts.js", "report.html")
+        }
+
+        # Searchable from the overall index, with no source named.
+        client = TestClient(create_app(config=loaded_config))
+        hits = client.post("/search", json={"query": "zephyrine", "max_results": 5}).json()
+        assert any(":artifacts:" in str(hit.get("node_id")) for hit in hits["results"]), hits
+
+        # The evidence is an edge: README -> the document it cites.
+        graph = engine.serving_graph()
+        readme = f"file:artifacts:{folder}/README.md:branch=none"
+        targets = {target for _s, target, _e in graph.out_edges(readme)}
+        cited = next(t for t in targets if t.startswith("file:architecture-notes:sync-engine.md"))
+        assert cited
+        walked = client.get(
+            "/graph/neighbors", params={"node_id": readme, "depth": 1, "max_nodes": 50}
+        ).json()
+        assert any(n.get("node_id", n.get("id")) == cited for n in walked["neighbors"]), walked
+
+        # Removable like any other document: deleting takes its files out of the index.
+        assert artifacts.delete(context, kept["id"])["removed_files"]
+        left = engine.state.rows("SELECT id FROM artifacts WHERE source_id='artifacts'")
+        assert left == []
+    finally:
+        engine.close()
+
+
+def test_removing_an_artifacts_index_page_retires_the_artifact(loaded_config) -> None:
+    """The taxonomy view's Remove, @remove and archive_documents act on artifacts too."""
+
+    from pheasant.services import archive
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        context = ServiceContext(
+            config=loaded_config, state=engine.state, searcher=None, engine=engine
+        )
+        saved = artifacts.save(context, artifacts.SaveRequest(title="Notes", markdown="# Notes"))
+        engine.sync_source("artifacts", "incremental")
+        archive.archive_documents(
+            context, archive.ArchiveRequest(documents=[f"artifacts/{saved['folder']}/README.md"])
+        )
+        with pytest.raises(ArtifactNotFound):
+            artifacts.get(context, saved["id"])
+    finally:
+        engine.close()
 
 
 def test_mcp_exports_and_views_through_the_same_renderer(loaded_config, composing: None) -> None:
@@ -307,10 +387,11 @@ def test_both_kept_tables_round_trip_on_a_real_postgres(loaded_config) -> None:
         listed = artifacts.list_artifacts(context, "ada@example.com")["artifacts"]
         assert kept["id"] in [item["id"] for item in listed]
         assert artifacts.get(context, kept["id"], "ada@example.com")["payload"]["files"]
-        assert artifacts.list_artifacts(context, None)["artifacts"] == [] or all(
-            item["id"] != kept["id"]
-            for item in artifacts.list_artifacts(context, None)["artifacts"]
-        )
+        # Everyone sees it; filtering by owner narrows to one person's.
+        assert kept["id"] in [i["id"] for i in artifacts.list_artifacts(context)["artifacts"]]
+        assert kept["id"] not in [
+            i["id"] for i in artifacts.list_artifacts(context, owner_name="nobody")["artifacts"]
+        ]
         artifacts.delete(context, kept["id"], "ada@example.com")
 
         recorder = answer_resume.start(context, "pg-answer-000001", "ada@example.com")

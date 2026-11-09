@@ -6484,3 +6484,26 @@ select.text-input {
   color: var(--muted);
 }
 .answer-code-block__bar + .answer-code { border-top-left-radius: 0; border-top-right-radius: 0; }
+
+/* The Artifacts list as its directory: owner, then month. */
+.artifacts__dir { padding: calc(8px * var(--sp)); display: flex; flex-direction: column; gap: calc(10px * var(--sp)); }
+.artifacts__dir-head { display: flex; align-items: center; justify-content: space-between; gap: calc(8px * var(--sp)); }
+.artifacts__group { display: flex; flex-direction: column; gap: calc(4px * var(--sp)); }
+.artifacts__group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8px * var(--sp));
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: calc(4px * var(--sp)) calc(2px * var(--sp));
+  font: inherit;
+  font-weight: 600;
+  font-size: calc(12px * var(--fs));
+  color: var(--text-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.artifacts__group-head:hover { color: var(--accent-text); }
+.artifacts__group .artifacts__list { padding: 0; }
