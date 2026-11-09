@@ -209,7 +209,8 @@ class SchedulerService:
         from pheasant.sync.background_jobs import run_sync_job
         from pheasant.sync.pipeline import beat_sources
 
-        names = [s.name for s in beat_sources(self.engine.enabled_sources(), self.engine.state)]
+        state = getattr(self.engine, "state", None)
+        names = [s.name for s in beat_sources(self.engine.enabled_sources(), state)]
         return run_sync_job(
             self.jobs,
             "Scheduled sync",
