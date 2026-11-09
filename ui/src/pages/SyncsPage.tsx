@@ -7,6 +7,7 @@ import type {
   PipelineDetail,
   PipelineRow,
   PipelineRun,
+  PipelineDefaults,
   PipelineSettings,
 } from "../api/types";
 
@@ -87,6 +88,7 @@ export function SyncsPage() {
           </p>
         </div>
         <div className="button-row">
+          {list.data?.defaults ? <DefaultCadence defaults={list.data.defaults} /> : null}
           <button type="button" className="btn btn--primary" onClick={() => runDue.mutate()} disabled={runDue.isPending}>
             {runDue.isPending ? "Starting…" : "Run all now"}
           </button>
@@ -414,18 +416,26 @@ function SettingsForm({
   const [pace, setPace] = useState(s.min_request_interval_seconds == null ? "" : String(s.min_request_interval_seconds));
   const [budget, setBudget] = useState(s.max_items_per_run == null ? "" : String(s.max_items_per_run));
   const [robots, setRobots] = useState(s.respect_robots ?? true);
+  const [cadence, setCadence] = useState(cadenceValue(s));
+  const [yieldTo, setYieldTo] = useState(Boolean(s.yield_to_content));
+  const defaults = useQuery({ queryKey: ["pipelines"], queryFn: api.pipelines, staleTime: 15_000 }).data?.defaults;
   useEffect(() => {
+    setCadence(cadenceValue(s));
+    setYieldTo(Boolean(s.yield_to_content));
     setSchedule(s.schedule ?? "auto");
     setMinInterval(seconds(s.interval_seconds));
     setMaxInterval(seconds(s.max_refresh_seconds));
     setPace(s.min_request_interval_seconds == null ? "" : String(s.min_request_interval_seconds));
     setBudget(s.max_items_per_run == null ? "" : String(s.max_items_per_run));
     setRobots(s.respect_robots ?? true);
-  }, [detail.name, s.schedule, s.interval_seconds, s.max_refresh_seconds, s.min_request_interval_seconds, s.max_items_per_run, s.respect_robots]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.name, s.schedule, s.interval_seconds, s.max_refresh_seconds, s.min_request_interval_seconds, s.max_items_per_run, s.respect_robots, s.min_interval_seconds, s.yield_to_content]);
 
   const save = () =>
     onSave({
-      schedule: schedule as PipelineSettings["schedule"],
+      schedule: cadence === "manual" ? "manual" : "auto",
+      min_interval_seconds: cadence === "manual" || cadence === "default" ? null : Number(cadence),
+      yield_to_content: yieldTo,
       ...(isWeb
         ? {
             interval_seconds: toSeconds(minInterval),
@@ -447,11 +457,31 @@ function SettingsForm({
     >
       <h3>Settings</h3>
       <label className="syncs__field syncs__field--wide">
-        <span>Schedule</span>
-        <select className="text-input text-input--small" value={schedule} onChange={(e) => setSchedule(e.target.value as PipelineSettings["schedule"])}>
-          <option value="auto">{isWeb ? "Adaptive — check each page when due" : "Automatic — on change and every beat"}</option>
+        <span>Runs</span>
+        <select className="text-input text-input--small" value={cadence} onChange={(e) => setCadence(e.target.value)}>
+          <option value="default">
+            Region default ({defaults?.default_source_interval_seconds ? `every ${duration(defaults.default_source_interval_seconds)}` : "every scheduler beat"})
+          </option>
+          {(defaults?.choices ?? CADENCE_FALLBACK).map((value) => (
+            <option key={value} value={String(value)}>
+              Every {duration(value)}
+            </option>
+          ))}
           <option value="manual">Manual — only when asked</option>
         </select>
+        <span className="muted small">
+          {schedule === "manual" && cadence !== "manual"
+            ? "Saving turns the automatic schedule back on. "
+            : ""}
+          {isWeb
+            ? "How often the collection is re-listed; each page is still rechecked when it is due (below)."
+            : "File changes and commits still sync it at once where watched."}{" "}
+          The scheduler checks every {duration(defaults?.beat_seconds ?? detail.schedule.beat_seconds ?? 900)}.
+        </span>
+      </label>
+      <label className="syncs__check syncs__field--wide">
+        <input type="checkbox" checked={yieldTo} onChange={(e) => setYieldTo(e.target.checked)} /> Wait while other sources
+        sync
       </label>
       {isWeb ? (
         <>
@@ -823,4 +853,47 @@ function shortUrl(url: string): string {
 function folderOf(path: string): string {
   const parts = path.split("/");
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+}
+
+/** The choices if the region did not say (an older server). */
+const CADENCE_FALLBACK = [900, 1800, 3600, 7200, 21600, 43200, 86400, 604800];
+
+/** The Runs picker's value for a pipeline's settings. */
+function cadenceValue(s: Partial<PipelineSettings>): string {
+  if (s.schedule === "manual") return "manual";
+  return s.min_interval_seconds == null ? "default" : String(s.min_interval_seconds);
+}
+
+/**
+ * How often every source runs unless it sets its own: the region's default,
+ * changed here for every replica (`PUT /sync/pipelines/defaults`).
+ */
+function DefaultCadence({ defaults }: { defaults: PipelineDefaults }) {
+  const queryClient = useQueryClient();
+  const change = useMutation({
+    mutationFn: (seconds: number | null) => api.setPipelineDefaults(seconds),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pipelines"] }),
+  });
+  const value = defaults.default_source_interval_seconds;
+  return (
+    <label className="syncs__default" title="How often every source syncs unless it sets its own schedule">
+      <span className="muted small">Default schedule</span>
+      <select
+        className="text-input text-input--small"
+        value={value == null ? "beat" : String(value)}
+        disabled={change.isPending}
+        onChange={(e) => change.mutate(e.target.value === "beat" ? null : Number(e.target.value))}
+      >
+        <option value="beat">Every scheduler beat ({duration(defaults.beat_seconds)})</option>
+        {defaults.choices
+          .filter((choice) => choice > defaults.beat_seconds)
+          .map((choice) => (
+            <option key={choice} value={String(choice)}>
+              Every {duration(choice)}
+            </option>
+          ))}
+      </select>
+      {change.isError ? <span className="error small">{(change.error as Error).message}</span> : null}
+    </label>
+  );
 }

@@ -577,6 +577,7 @@ export interface EmbeddingsStatus {
 export interface ArtifactSettings {
   enabled: boolean;
   auto_save: boolean;
+  index_on_save: boolean;
   index_interval_seconds: number;
   yield_to_content: boolean;
   retention_days: number;
@@ -723,6 +724,8 @@ export interface ArchiveResult {
   /** `removed` / `reinstated` here; `queued` for an indexer; `pending` behind a running sync. */
   status: string;
   documents: ArchivedDocument[];
+  /** How many were removed; `documents` lists the first 200. */
+  documents_total?: number;
   sources: Record<string, { status: string; job_id?: string | null; queued_tasks?: string[] }>;
 }
 
@@ -1936,6 +1939,18 @@ export interface PipelineSettings {
   on_startup: boolean;
   on_file_change: string | boolean;
   on_git_commit: boolean;
+  /** How often the scheduler syncs this source; null follows the region default. */
+  min_interval_seconds: number | null;
+  /** Wait while other sources sync. */
+  yield_to_content: boolean;
+}
+
+/** The region's default cadence, and the choices the Syncs page offers. */
+export interface PipelineDefaults {
+  default_source_interval_seconds: number | null;
+  configured_seconds: number | null;
+  beat_seconds: number;
+  choices: number[];
 }
 
 export interface PipelineRow {
@@ -1944,7 +1959,16 @@ export interface PipelineRow {
   description?: string | null;
   state: PipelineState;
   documents?: number | null;
-  schedule: { mode: string; label: string; min_interval_seconds?: number; max_interval_seconds?: number };
+  schedule: {
+    mode: string;
+    label: string;
+    min_interval_seconds?: number;
+    max_interval_seconds?: number;
+    beat_seconds?: number;
+    /** How often the scheduler syncs it, and whose setting that is. */
+    interval_seconds?: number;
+    interval_from?: "source" | "region default" | "every beat";
+  };
   settings: Partial<PipelineSettings>;
   last_run: PipelineRun | null;
   running: { since?: string | null; heartbeat_at?: string | null; phase?: string | null; progress?: { current?: number; total?: number } | null } | null;
@@ -1961,6 +1985,7 @@ export interface PipelineList {
   pipelines: PipelineRow[];
   totals: Record<string, number>;
   beat_seconds: number;
+  defaults?: PipelineDefaults;
 }
 
 export interface PipelineDetail extends PipelineRow {

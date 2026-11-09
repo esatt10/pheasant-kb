@@ -68,8 +68,16 @@ function ArtifactSettingsBar() {
       </button>
       {open ? (
         <div className="artifacts__settings-detail small">
+          <label title="Start the artifacts sync as soon as something is saved">
+            <input
+              type="checkbox"
+              checked={current.index_on_save}
+              onChange={(event) => change.mutate({ index_on_save: event.target.checked })}
+            />{" "}
+            Index right after saving
+          </label>
           <label>
-            Index every{" "}
+            Also index every{" "}
             <input
               type="number"
               min={0}

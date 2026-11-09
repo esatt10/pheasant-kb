@@ -43,6 +43,7 @@ import type {
   LedgerPage,
   PipelineDetail,
   PipelineList,
+  PipelineDefaults,
   PipelineSettings,
 } from "./types";
 import type {
@@ -880,6 +881,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ ...settings, sync_now: syncNow }),
     }),
+  /** The region's default cadence for every source that sets none (null: every beat). */
+  setPipelineDefaults: (seconds: number | null) =>
+    request<PipelineDefaults>("/sync/pipelines/defaults", {
+      method: "PUT",
+      body: JSON.stringify({ default_source_interval_seconds: seconds }),
+    }),
   deletePipelineSchedule: (name: string) =>
     request<PipelineDetail>(`/sync/pipelines/${encodeURIComponent(name)}/schedule`, { method: "DELETE" }),
   deletePipeline: (name: string) =>
@@ -911,6 +918,9 @@ export const api = {
   /** Remove documents from the index; they stay out of every sync until reinstated. */
   archiveDocuments: (documents: string[]) =>
     request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ documents }) }),
+  /** Remove whole folders (`source/path`): every document beneath each one. */
+  archiveFolders: (folders: string[]) =>
+    request<ArchiveResult>("/documents/archive", { method: "POST", body: JSON.stringify({ folders }) }),
   /** Let archived documents back in; their sources sync to index them again. */
   reinstateDocuments: (documents: string[]) =>
     request<ArchiveResult>("/documents/reinstate", { method: "POST", body: JSON.stringify({ documents }) }),

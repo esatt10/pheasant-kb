@@ -18,6 +18,7 @@ a paused or manual pipeline cannot be started by a path that forgot.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -25,6 +26,10 @@ SCHEDULES = ("auto", "manual")
 #: A source that gives way to content runs anyway after this many intervals,
 #: so a region that is never idle cannot starve it.
 MAX_DEFERRAL_INTERVALS = 4
+#: The cadences the Syncs page offers, in seconds: 15 min to a week.
+CADENCES = (900, 1800, 3600, 7200, 21600, 43200, 86400, 604800)
+#: The ``region_settings`` section holding the runtime default cadence.
+SCHEDULE_SECTION = "sync_schedule"
 
 
 class PipelineDeleted(ValueError):
@@ -53,7 +58,40 @@ def runs_automatically(source: Any) -> bool:
     )
 
 
-def beat_sources(sources: Any, state: Any, *, queue: Any = None, now: Any = None) -> list[Any]:
+def default_interval(config: Any, state: Any) -> int | None:
+    """The region's default cadence: the Syncs page's runtime value over the config's."""
+
+    scheduler = getattr(getattr(config, "sync", None), "scheduler", None)
+    configured = getattr(scheduler, "default_source_interval_seconds", None)
+    try:
+        rows = state.rows(
+            "SELECT data_json FROM region_settings WHERE kb_id=? AND section=?",
+            (config.knowledge_base_id, SCHEDULE_SECTION),
+        )
+    except Exception:  # noqa: BLE001 - a store without the table has no override
+        rows = []
+    if rows:
+        data = json.loads(rows[0]["data_json"] or "{}")
+        if "default_source_interval_seconds" in data:
+            return data["default_source_interval_seconds"] or None
+    return configured or None
+
+
+def interval_of(source: Any, default: int | None) -> int:
+    """A source's cadence on the beat: its own (0 is every beat), else the region's."""
+
+    own = getattr(source.sync, "min_interval_seconds", None)
+    return int(own if own is not None else (default or 0))
+
+
+def beat_sources(
+    sources: Any,
+    state: Any,
+    *,
+    queue: Any = None,
+    now: Any = None,
+    default_interval: int | None = None,
+) -> list[Any]:
     """The sources a scheduler beat syncs: running by themselves, due, and not giving way.
 
     A paced source (``sync.min_interval_seconds``) runs at most that often; one
@@ -65,17 +103,17 @@ def beat_sources(sources: Any, state: Any, *, queue: Any = None, now: Any = None
     """
 
     candidates = [s for s in sources if runs_automatically(s)]
-    if not any(_paced(s) for s in candidates):
+    paced = {s.name for s in candidates if _paced(s, default_interval)}
+    if not paced:
         return candidates
     now = now or datetime.now(UTC)
-    paced = {s.name for s in candidates if _paced(s)}
     busy: bool | None = None
     due = []
     for source in candidates:
         if source.name not in paced:
             due.append(source)
             continue
-        interval = int(getattr(source.sync, "min_interval_seconds", None) or 0)
+        interval = interval_of(source, default_interval)
         waited = _seconds_since_indexed(state, source.name, now)
         if waited is not None and waited < interval:
             continue
@@ -86,14 +124,12 @@ def beat_sources(sources: Any, state: Any, *, queue: Any = None, now: Any = None
             if busy and not overdue:
                 continue
         due.append(source)
-    return sorted(due, key=lambda s: s.name in paced)
+    # What gives way goes last, so a beat's content is published first.
+    return sorted(due, key=lambda s: bool(getattr(s.sync, "yield_to_content", False)))
 
 
-def _paced(source: Any) -> bool:
-    sync = source.sync
-    return bool(
-        getattr(sync, "min_interval_seconds", None) or getattr(sync, "yield_to_content", False)
-    )
+def _paced(source: Any, default: int | None = None) -> bool:
+    return bool(interval_of(source, default) or getattr(source.sync, "yield_to_content", False))
 
 
 def _seconds_since_indexed(state: Any, name: str, now: datetime) -> float | None:

@@ -6537,3 +6537,6 @@ select.text-input {
 .artifacts__row > input { margin-top: calc(8px * var(--sp)); }
 .artifacts__row > .artifacts__item { flex: 1; min-width: 0; }
 .artifacts__badge { color: var(--warn, var(--muted)); }
+
+/* The Syncs page's region-wide default schedule. */
+.syncs__default { display: inline-flex; align-items: center; gap: calc(6px * var(--sp)); }

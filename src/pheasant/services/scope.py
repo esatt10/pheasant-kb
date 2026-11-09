@@ -262,6 +262,28 @@ def named(
     return _matches(context, name, source_name, None, reader(context, principal, principal_groups))
 
 
+def under(
+    context: ServiceContext,
+    source_name: str,
+    prefix: str,
+    *,
+    principal: str | None = None,
+    principal_groups: list[str] | None = None,
+) -> list[Any]:
+    """Every document in one folder of a source (or the one file ``prefix`` is), path order,
+    under the inventory ACL rule -- what a folder removal acts on."""
+
+    admit = reader(context, principal, principal_groups)
+    acl = ", a.acl" if admit is not None else ""
+    where, scoped = path_scope_sql(prefix, column="a.relative_path")
+    rows = context.state.rows(
+        f"SELECT a.id, a.source_id, a.relative_path{acl} FROM artifacts a "
+        f"WHERE {ARTIFACT_SCOPE} AND a.source_id = ?{where} ORDER BY a.relative_path",
+        (MEMORY_ARTIFACT_TYPE, source_name, *scoped),
+    )
+    return list(admit(rows) if admit is not None else rows)
+
+
 def names(raw: Any) -> list[str]:
     """A list of document names from a list, or one comma-separated string."""
 

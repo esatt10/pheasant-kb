@@ -23,11 +23,12 @@ whole conversation can be kept too, as a ``thread``. And kept means
   folder small however many people work in the region, a conversation's
   artifacts stay together, and the id makes every artifact's folder its own.
   Listings read the same way: newest day first, then person.
-* **Indexed on a schedule, not at save time.** Saving lands the files; the
-  ``artifacts`` source syncs on the beat at most every
-  ``index_interval_seconds`` and gives way while content sources sync
-  (`sync/pipeline.beat_sources`). Until then an artifact is readable from its
-  row and listed ``pending``; *Run now* on the Syncs page indexes it at once.
+* **Indexed when saved, with a schedule behind it.** Saving lands the files
+  and, with ``index_on_save`` (the default), starts the ``artifacts`` sync --
+  on a fleet a queued task for the indexer. The beat also syncs the source at
+  most every ``index_interval_seconds``, giving way while content sources sync
+  (`sync/pipeline.beat_sources`). Until the sync lands an artifact is readable
+  from its row and listed ``pending``.
 * **Traceable.** Each kept answer carries its trace (`services/artifact_trace.py`):
   conversation, channel, ids, keywords, intent, the judgements behind it and
   the steps it took.
@@ -252,13 +253,11 @@ def _store(
 
 
 def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
-    """Land the artifact in its source; the beat indexes it (``index_interval_seconds``).
+    """Land the artifact in its source, and start its sync when ``index_on_save`` says so.
 
-    Never a sync at save time: indexing is the scheduled, yielding job that
-    keeps generated work from delaying the content around it. Best-effort past
-    the row: a region that cannot land it (a read-only replica with no landing
-    service) still has the artifact, just not yet as knowledge, and says so in
-    the log.
+    Best-effort past the row: a region that cannot land it (a read-only
+    replica with no landing service) still has the artifact, just not yet as
+    knowledge, and says so in the log.
     """
 
     from pheasant.services import ingestion
@@ -283,6 +282,10 @@ def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
             ),
         )
         _ensure_source(context, str(landed["directory"]))
+        from pheasant.services import artifact_settings
+
+        if artifact_settings.current(context).index_on_save and context.indexing is not None:
+            context.indexing.start_sync(ARTIFACTS_SOURCE)
     except (ServiceError, OSError):
         logger.warning("could not land artifact %s in its source", record["id"], exc_info=True)
 

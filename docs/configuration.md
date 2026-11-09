@@ -715,7 +715,10 @@ See [Multi-modal ingest](how-to/multimodal-ingest.md).
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `true` | Enable periodic fallback sync job. |
-| `interval_seconds` | integer | `900` | Scheduler interval. |
+| `interval_seconds` | integer | `900` | How often the beat ticks: the finest cadence a source can have. |
+| `default_source_interval_seconds` | integer\|null | `null` | How often each source syncs on the beat unless it sets `sources[].sync.min_interval_seconds` (`null`: every beat). The Syncs page's **Default schedule** changes it at runtime for every replica (`PUT /sync/pipelines/defaults`, MCP `configure_sync_defaults`). |
+
+Each source picks its own cadence on the Syncs page (**Runs**: region default, every 15 min to weekly, or manual), saved as `sources[].sync.min_interval_seconds`; `sources[].sync.yield_to_content` makes it wait while other sources sync. File changes and commits still sync a watched source at once.
 
 ### Size guardrails (`sync.limits`)
 
@@ -1703,6 +1706,7 @@ from the Artifacts panel, `GET`/`PUT /artifacts/settings` or MCP
 artifacts:
   enabled: true
   auto_save: false
+  index_on_save: true
   index_interval_seconds: 1800
   yield_to_content: true
   retention_days: 0
@@ -1713,6 +1717,7 @@ artifacts:
 |---|---|---|
 | `enabled` | `true` | Whether anything can be saved (the Save buttons, `save_artifact`). |
 | `auto_save` | `false` | Keep every composed answer the moment it is written. Off, an answer is kept only when somebody saves it (`save: true` on a question does the same for one answer). |
+| `index_on_save` | `true` | Start the artifacts sync as soon as something is saved (on a fleet, a queued task for the indexer). Off, saving only lands the files and the schedule below indexes them. |
 | `index_interval_seconds` | `1800` | The artifacts source is indexed on the scheduler beat at most this often, never at save time; until then an artifact is readable and `pending`. *Run now* on the Syncs page indexes it at once. |
 | `yield_to_content` | `true` | Give way on the beat while content sources are syncing or queued (four intervals at most). |
 | `retention_days` | `0` | Archive artifacts older than this (`0` keeps them). Archived artifacts leave the index and can be restored. |

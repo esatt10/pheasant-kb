@@ -88,8 +88,8 @@ def test_keeping_is_opt_in_and_the_switch_reaches_every_surface(
     assert off.status_code == 422 and "turned off" in off.text
 
 
-def test_saving_lands_the_files_and_never_starts_a_sync(loaded_config) -> None:
-    """Indexing is the scheduled job; a save only lands its files."""
+def test_saving_starts_the_sync_unless_told_to_wait_for_the_schedule(loaded_config) -> None:
+    """``index_on_save`` (the default) starts the artifacts sync; off, the schedule indexes it."""
 
     app = create_app(config=loaded_config)
     started: list[str] = []
@@ -100,7 +100,12 @@ def test_saving_lands_the_files_and_never_starts_a_sync(loaded_config) -> None:
         indexing=Indexing(local=True, start_sync=lambda name: started.append(name) or {}),
     )
     saved = artifacts.save(context, artifacts.SaveRequest(markdown="# Kept"))
-    assert started == [] and saved["index_status"] == "pending"
+    assert started == ["artifacts"] and saved["index_status"] == "pending"
+    from pheasant.services import artifact_settings as settings_service
+
+    settings_service.update(context, {"index_on_save": False}, "ops")
+    artifacts.save(context, artifacts.SaveRequest(markdown="# Later"))
+    assert started == ["artifacts"]
     source = next(s for s in loaded_config.sources if s.name == "artifacts")
     assert source.sync.yield_to_content and source.sync.min_interval_seconds == 1800
     assert source.sync.on_startup is False
@@ -386,3 +391,121 @@ def test_the_app_view_saves_its_diagram_through_the_host() -> None:
     assert 'name: "save_artifact"' in view and "holder.drawn" in view
     host = Path("ui/src/chat/McpAppFrame.tsx").read_text(encoding="utf-8")
     assert 'name === "save_artifact"' in host
+
+
+def test_a_folder_is_removed_and_reinstated_on_both_surfaces(loaded_config) -> None:
+    """Every document beneath a folder, by one name; an artifacts folder retires its artifacts."""
+
+    from pheasant.services import archive
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        context = ServiceContext(
+            config=loaded_config,
+            state=engine.state,
+            searcher=None,
+            engine=engine,
+            indexing=Indexing(local=True, start_sync=lambda name: {}),
+        )
+        kept = [
+            artifacts.save(
+                context,
+                artifacts.SaveRequest(
+                    title=f"t{n}", markdown="# x", principal="ada", conversation_id="c1"
+                ),
+            )
+            for n in range(2)
+        ]
+        other = artifacts.save(
+            context, artifacts.SaveRequest(title="g", markdown="# y", principal="grace")
+        )
+        engine.sync_source("artifacts", "incremental")
+        day_person = kept[0]["folder"].rsplit("/", 2)[0]  # <yyyy>/<mm>/<dd>/ada
+
+        refused = archive.ArchiveRequest(folders=["artifacts"])
+        with pytest.raises(ValueError, match="whole source"):
+            archive.archive_documents(context, refused)
+        with pytest.raises(ValueError, match="not a source"):
+            archive.archive_documents(context, archive.ArchiveRequest(folders=["nowhere/x"]))
+
+        removed = archive.archive_documents(
+            context, archive.ArchiveRequest(folders=[f"artifacts/{day_person}"])
+        )
+        assert removed["documents_total"] == 2  # two README.md files
+        remaining = [a["id"] for a in artifacts.list_artifacts(context)["artifacts"]]
+        assert remaining == [other["id"]]
+    finally:
+        engine.close()
+
+    # The same folder removal over HTTP and MCP, on an ordinary source.
+    from pheasant.mcp_server.tools import PheasantTools
+
+    app = create_app(config=loaded_config)
+    client = TestClient(app)
+    source = next(s for s in loaded_config.sources if s.name == "architecture-notes")
+    engine = SyncEngine(loaded_config)
+    engine.sync_source(source.name, "full")
+    engine.close()
+    files = [
+        str(r["relative_path"])
+        for r in app.state.state.rows(
+            "SELECT relative_path FROM artifacts WHERE source_id=?", (source.name,)
+        )
+    ]
+    assert files
+    first = files[0]
+    gone = client.post("/documents/archive", json={"folders": [f"{source.name}/{first}"]}).json()
+    assert gone["documents_total"] == 1
+    back = PheasantTools(loaded_config).reinstate_documents(
+        loaded_config.pheasant.name, folders=[f"{source.name}/{first}"]
+    )
+    assert back["documents"][0]["path"] == first
+
+
+def test_each_source_runs_on_its_own_cadence_or_the_regions(loaded_config) -> None:
+    from pheasant.services import sync_pipelines
+
+    now = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
+    ago = lambda seconds: (now - timedelta(seconds=seconds)).isoformat()  # noqa: E731
+    hourly_by_default = _source("docs")
+    daily = _source("wiki", min_interval_seconds=86400)
+    state = _State({"docs": ago(1200), "wiki": ago(7200)}, [])
+    due = lambda default: [  # noqa: E731
+        s.name
+        for s in pipeline.beat_sources(
+            [hourly_by_default, daily], state, now=now, default_interval=default
+        )
+    ]
+    assert due(None) == ["docs"]  # every beat for docs; wiki waits for its day
+    assert due(3600) == []  # docs ran 20 minutes ago: not due hourly
+    assert pipeline.interval_of(daily, 3600) == 86400
+
+    app = create_app(config=loaded_config)
+    client = TestClient(app)
+    tools = PheasantTools(loaded_config)
+    kb = loaded_config.pheasant.name
+    listed = client.get("/sync/pipelines").json()
+    assert listed["defaults"]["default_source_interval_seconds"] is None
+    assert 3600 in listed["defaults"]["choices"]
+    assert (
+        client.put(
+            "/sync/pipelines/defaults", json={"default_source_interval_seconds": 3600}
+        ).json()["default_source_interval_seconds"]
+        == 3600
+    )
+    name = listed["pipelines"][0]["name"]
+    row = sync_pipelines.pipeline(_context(app), name)
+    assert (
+        row["schedule"]["interval_seconds"] == 3600
+        and row["schedule"]["interval_from"] == "region default"
+    )
+    changed = client.patch(f"/sync/pipelines/{name}", json={"min_interval_seconds": 86400}).json()
+    assert changed["settings"]["min_interval_seconds"] == 86400
+    assert changed["schedule"]["interval_from"] == "source"
+    tools.configure_sync_defaults(kb, None)
+    assert (
+        client.get("/sync/pipelines").json()["defaults"]["default_source_interval_seconds"] is None
+    )
+    bad = client.put("/sync/pipelines/defaults", json={"default_source_interval_seconds": -5})
+    assert bad.status_code == 422

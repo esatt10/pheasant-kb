@@ -207,10 +207,12 @@ class SchedulerService:
         if self.jobs is None:
             return self.engine.sync_all("incremental", scheduled=True)
         from pheasant.sync.background_jobs import run_sync_job
-        from pheasant.sync.pipeline import beat_sources
+        from pheasant.sync.pipeline import beat_sources, default_interval
 
         state = getattr(self.engine, "state", None)
-        names = [s.name for s in beat_sources(self.engine.enabled_sources(), state)]
+        default = default_interval(getattr(self.engine, "config", None), state)
+        sources = self.engine.enabled_sources()
+        names = [s.name for s in beat_sources(sources, state, default_interval=default)]
         return run_sync_job(
             self.jobs,
             "Scheduled sync",

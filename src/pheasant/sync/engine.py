@@ -83,7 +83,7 @@ from pheasant.sync.graph_history import snapshot_after_sync
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
-from pheasant.sync.pipeline import beat_sources, runs_automatically
+from pheasant.sync.pipeline import beat_sources, default_interval, runs_automatically
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
     ReadFailures,
     _media_bytes,
@@ -762,7 +762,8 @@ class SyncEngine:
         queue = queue_from_config(self.config, self.state)
         # A beat syncs what runs by itself and is due; a deleted pipeline never runs.
         if scheduled:
-            sources = beat_sources(sources, self.state, queue=queue)
+            default = default_interval(self.config, self.state)
+            sources = beat_sources(sources, self.state, queue=queue, default_interval=default)
         sources = [s for s in sources if s.sync.pipeline]
         if not sources:
             return [] if queue is None else queue.close() or []

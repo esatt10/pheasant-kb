@@ -31,10 +31,11 @@ class ArchiveTools:
     def archive_documents(  # noqa: PLR0913 - one argument per field
         self,
         knowledge_base: str,
-        documents: list[str],
+        documents: list[str] | None = None,
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        folders: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import archive
@@ -42,7 +43,8 @@ class ArchiveTools:
         return archive.archive_documents(
             self.services,
             archive.ArchiveRequest(
-                documents=documents,
+                documents=list(documents or []),
+                folders=folders,
                 knowledge_base=knowledge_base,
                 source_name=source_name,
                 principal=principal,
@@ -54,10 +56,11 @@ class ArchiveTools:
     def reinstate_documents(  # noqa: PLR0913 - one argument per field
         self,
         knowledge_base: str,
-        documents: list[str],
+        documents: list[str] | None = None,
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        folders: list[str] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import archive
@@ -65,7 +68,8 @@ class ArchiveTools:
         return archive.reinstate_documents(
             self.services,
             archive.ArchiveRequest(
-                documents=documents,
+                documents=list(documents or []),
+                folders=folders,
                 knowledge_base=knowledge_base,
                 source_name=source_name,
                 principal=principal,
@@ -109,10 +113,11 @@ def register_archive_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
     @anticipated
     def archive_documents(  # noqa: PLR0913 - one argument per field
         knowledge_base: str,
-        documents: list[str],
+        documents: list[str] | None = None,
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        folders: list[str] | None = None,
     ) -> dict:
         """Remove documents from the index and keep them out of every later sync.
 
@@ -126,20 +131,25 @@ def register_archive_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         Where the region publishes to an indexer, status is "queued" and the
         removal lands with that sync. With security.acl_enforced on, only
         documents the principal may read.
+
+        folders removes every document beneath each "<source>/<path>" folder
+        (up to 5000 a call; a source's root is refused -- remove_source does
+        that). An artifacts folder retires the artifacts in it.
         """
 
         return tools.archive_documents(
-            knowledge_base, documents, source_name, principal, principal_groups
+            knowledge_base, documents, source_name, principal, principal_groups, folders
         )
 
     @mcp.tool()
     @anticipated
     def reinstate_documents(  # noqa: PLR0913 - one argument per field
         knowledge_base: str,
-        documents: list[str],
+        documents: list[str] | None = None,
         source_name: str | None = None,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        folders: list[str] | None = None,
     ) -> dict:
         """Let archived documents back into the index.
 
@@ -148,11 +158,13 @@ def register_archive_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         then runs an incremental sync, which reads the file again and rebuilds
         its chunks, embeddings and graph nodes; "sources" reports the sync (a
         job id, or the queued task where an indexer does the work). An upload
-        that was removed is refused: its bytes were deleted.
+        that was removed is refused: its bytes were deleted. folders lets back
+        everything archived beneath each "<source>/<path>" (removed uploads
+        are skipped).
         """
 
         return tools.reinstate_documents(
-            knowledge_base, documents, source_name, principal, principal_groups
+            knowledge_base, documents, source_name, principal, principal_groups, folders
         )
 
     @mcp.tool()

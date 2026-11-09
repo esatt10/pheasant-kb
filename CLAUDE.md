@@ -1451,6 +1451,11 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `trace` (conversation, channel, ids, keywords, intent, `decisions`,
   steps); `kind: thread` keeps a whole conversation; a diagram drawn after
   the answer (the MCP App view's Save, Redraw as) is kept in its place.
+  `index_on_save` (default on) starts the artifacts sync at save time; the
+  schedule is the backstop. Every source has a cadence (`sync.min_interval_seconds`,
+  else `sync.scheduler.default_source_interval_seconds` or its `region_settings`
+  override) the Syncs page picks from a list. A whole folder is removable
+  (`folders` on `archive_documents`, the taxonomy view's Remove folder).
   Retention archives (row kept, files out of the index, restorable) on the
   beat; bulk delete takes ids or a filter with a dry run. Exported as
   `saved_artifacts.parquet`.

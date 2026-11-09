@@ -55,6 +55,8 @@ SYNC_FIELDS = (
     "on_startup",
     "on_file_change",
     "on_git_commit",
+    "min_interval_seconds",
+    "yield_to_content",
 )
 CONNECTOR_FIELDS = ("max_refresh_seconds",)
 
@@ -99,7 +101,49 @@ def pipelines(context: ServiceContext, knowledge_base: str | None = None) -> dic
             },
         },
         "beat_seconds": _beat(context),
+        "defaults": defaults(context),
     }
+
+
+def defaults(context: ServiceContext) -> dict[str, Any]:
+    """The region's default cadence, what the config says, and the choices offered."""
+
+    from pheasant.sync.pipeline import CADENCES, default_interval
+
+    scheduler = context.config.sync.scheduler
+    return {
+        "default_source_interval_seconds": default_interval(context.config, context.state),
+        "configured_seconds": getattr(scheduler, "default_source_interval_seconds", None),
+        "beat_seconds": _beat(context),
+        "choices": list(CADENCES),
+    }
+
+
+def set_defaults(
+    context: ServiceContext, seconds: int | None, actor: str | None = None
+) -> dict[str, Any]:
+    """Set the region's default cadence for every replica (``None``: every beat)."""
+
+    from pheasant.sync.pipeline import SCHEDULE_SECTION
+
+    if seconds is not None and (
+        not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 0
+    ):
+        raise InvalidRequest("default_source_interval_seconds must be a whole number of seconds")
+    context.state.execute(
+        "INSERT INTO region_settings(kb_id, section, data_json, updated_at, updated_by) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(kb_id, section) DO UPDATE SET "
+        "data_json=excluded.data_json, updated_at=excluded.updated_at, "
+        "updated_by=excluded.updated_by",
+        (
+            context.config.knowledge_base_id,
+            SCHEDULE_SECTION,
+            json.dumps({"default_source_interval_seconds": seconds}),
+            _iso(time.time()),
+            actor,
+        ),
+    )
+    return defaults(context)
 
 
 def pipeline(
@@ -169,6 +213,8 @@ def configure(context: ServiceContext, change: PipelineChange) -> dict[str, Any]
             "interval_seconds",
             "max_items_per_run",
             "min_request_interval_seconds",
+            # None: back to the region's default cadence.
+            "min_interval_seconds",
         ):
             continue
         _check(key, value)
@@ -209,11 +255,19 @@ def restore(
 def _check(key: str, value: Any) -> None:
     if key == "schedule" and value not in SCHEDULES:
         raise InvalidRequest(f"schedule must be one of {', '.join(SCHEDULES)}; got {value!r}")
-    if key in ("paused", "pipeline", "respect_robots", "on_startup", "on_git_commit"):
+    if key in (
+        "paused",
+        "pipeline",
+        "respect_robots",
+        "on_startup",
+        "on_git_commit",
+        "yield_to_content",
+    ):
         if not isinstance(value, bool):
             raise InvalidRequest(f"{key} must be true or false")
     if (
-        key in ("interval_seconds", "max_items_per_run", "max_refresh_seconds")
+        key
+        in ("interval_seconds", "max_items_per_run", "max_refresh_seconds", "min_interval_seconds")
         and value is not None
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -267,7 +321,7 @@ def _row(context: ServiceContext, source: dict[str, Any], queue: dict[str, Any])
             for t in queue.get("tasks") or []
             if t.get("source") == name and t.get("state") != "dead"
         ],
-        "next_run": _next_run(context, state, run, upcoming, events, kind),
+        "next_run": _next_run(context, state, run, upcoming, events, kind, config),
         "due_next_hour": due_next_hour,
         "health": health,
         "quality": source_quality(context, source),
@@ -287,20 +341,45 @@ def _schedule(context: ServiceContext, config: Any, kind: str) -> dict[str, Any]
     if kind in WEB_TYPES:
         low = sync.interval_seconds if sync.interval_seconds is not None else DEFAULT_MIN_REFRESH
         high = max(int(config.connector.max_refresh_seconds), int(low))
+        cadence = _cadence(context, config)
         return {
             "mode": "adaptive",
-            "label": f"Adaptive · {_span(low)} → {_span(high)}",
+            "label": f"Every {_span(cadence['seconds'])} · pages {_span(low)} → {_span(high)}",
             "min_interval_seconds": low,
             "max_interval_seconds": high,
             "beat_seconds": beat,
+            "interval_seconds": cadence["seconds"],
+            "interval_from": cadence["from"],
         }
+    cadence = _cadence(context, config)
     triggers = []
     if kind == "repository" and sync.on_git_commit:
         triggers.append("on commit")
     if kind in WATCHED_TYPES and sync.on_file_change:
         triggers.append("on change")
-    triggers.append(f"every {_span(beat)}")
-    return {"mode": "triggers", "label": " · ".join(triggers).capitalize(), "beat_seconds": beat}
+    triggers.append(f"every {_span(cadence['seconds'])}")
+    return {
+        "mode": "triggers",
+        "label": " · ".join(triggers).capitalize(),
+        "beat_seconds": beat,
+        "interval_seconds": cadence["seconds"],
+        "interval_from": cadence["from"],
+    }
+
+
+def _cadence(context: ServiceContext, config: Any) -> dict[str, Any]:
+    """How often the beat syncs this source, and whose setting that is."""
+
+    from pheasant.sync.pipeline import default_interval
+
+    beat = _beat(context)
+    own = getattr(config.sync, "min_interval_seconds", None)
+    region = default_interval(context.config, context.state)
+    if own is not None:
+        return {"seconds": max(int(own), beat), "from": "source"}
+    if region:
+        return {"seconds": max(int(region), beat), "from": "region default"}
+    return {"seconds": beat, "from": "every beat"}
 
 
 def _settings(config: Any) -> dict[str, Any]:
@@ -346,12 +425,13 @@ def _next_run(
     upcoming: list[float],
     events: list[dict[str, Any]],
     kind: str,
+    config: Any = None,
 ) -> dict[str, Any] | None:
     if state in ("deleted", "manual", "paused"):
         return None
     if run:
         return {"label": "after this run", "at": None}
-    beat = _beat(context)
+    beat = _cadence(context, config)["seconds"] if config is not None else _beat(context)
     last = _epoch(events[0].get("finished_at")) if events else None
     next_beat = (last or time.time()) + beat
     if kind in WEB_TYPES and upcoming:

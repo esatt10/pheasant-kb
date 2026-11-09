@@ -79,7 +79,7 @@ CEILINGS: dict[str, int] = {
     # Raised by 14 for the sync pipeline's six `sources[].sync` fields
     # (schedule, paused, pipeline, the pacing three) and their docstring: they
     # are per-source settings, so they live on `SourceSyncSettings`.
-    "config/schema.py": 2348,  # + the artifacts section
+    "config/schema.py": 2356,  # + the artifacts section, the scheduler's default cadence
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,

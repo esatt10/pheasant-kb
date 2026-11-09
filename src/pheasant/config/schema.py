@@ -707,7 +707,12 @@ class GitSettings(ModelMixin):
 @dataclass
 class SchedulerSettings(ModelMixin):
     enabled: bool = True
+    #: How often the beat ticks: the finest cadence any source can have.
     interval_seconds: int = 900
+    #: How often each source syncs on the beat unless its own
+    #: ``sync.min_interval_seconds`` says otherwise (``None``: every beat).
+    #: The Syncs page changes it at runtime for every replica.
+    default_source_interval_seconds: int | None = None
 
 
 @dataclass
@@ -2171,6 +2176,9 @@ class ArtifactsSettings(ModelMixin):
     #: Keep every composed answer the moment it is written. Off: an answer is
     #: kept only when somebody saves it.
     auto_save: bool = False
+    #: Start the artifacts sync the moment something is saved, so it is
+    #: searchable within a sync; the schedule below is then the backstop.
+    index_on_save: bool = True
     #: The ``artifacts`` source is indexed on the scheduler beat at most this
     #: often, never at save time: until then an artifact is readable from its
     #: row and marked ``pending``.
