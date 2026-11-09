@@ -88,6 +88,7 @@ class AssistantTools(ComposeTools):
         current_directory: str | None = None,
         intent: str | None = None,
         source_names: list[str] | None = None,
+        artifacts: Any = None,
         on_step: Any = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
@@ -132,6 +133,7 @@ class AssistantTools(ComposeTools):
                 current_directory=current_directory,
                 intent=intent,
                 source_names=source_names,
+                artifacts=artifacts,
             ),
             # A progress sink, for a caller that follows the answer as a job
             # (compose_artifact); the MCP tool itself passes none.
@@ -284,6 +286,7 @@ def register_assistant_tools(
         current_directory: str | None = None,
         intent: str | None = None,
         source_names: list[str] | None = None,
+        artifacts: str | bool | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -341,6 +344,11 @@ def register_assistant_tools(
         (["tf-foundry-core", "tf-security-network"]); one name means what
         source_name means.
 
+        artifacts says whether saved artifacts (composed answers and saved
+        reports, the "artifacts" source) take part, like memory does for memory
+        records: "include" (default), "exclude" (leave them out) or "only"
+        (search only them). true/false read as include/exclude.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -370,6 +378,7 @@ def register_assistant_tools(
             current_directory=current_directory,
             intent=intent,
             source_names=source_names,
+            artifacts=artifacts,
         )
 
     @mcp.tool(meta=app_meta())

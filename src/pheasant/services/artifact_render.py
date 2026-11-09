@@ -307,7 +307,7 @@ def _file_section(file: dict[str, Any]) -> str:
 
     name = str(file.get("name") or "file")
     content = str(file.get("content") or "")
-    suffix = PurePosixPath(name).suffix.lower()
+    suffix = suffix_of(name, file.get("language"))
     head = (
         f'<section class="file"><p class="file__name"><strong>{_esc(name)}</strong>'
         f'<span class="file__lang">{_esc(file.get("language"))}</span></p>'
@@ -365,8 +365,16 @@ def find_file(artifact: dict[str, Any], name: str) -> dict[str, Any] | None:
     return None
 
 
-def previewable(name: str) -> bool:
-    return PurePosixPath(name).suffix.lower() in PREVIEWABLE
+def suffix_of(name: str, language: str | None = None) -> str:
+    """A file's kind: its extension, or for one with none, what its language implies."""
+
+    from pheasant.assistant.artifact_files import extension_for
+
+    return PurePosixPath(name).suffix.lower() or extension_for(language)
+
+
+def previewable(name: str, language: str | None = None) -> bool:
+    return suffix_of(name, language) in PREVIEWABLE
 
 
 def with_policy(document: str) -> str:
@@ -386,7 +394,7 @@ def file_document(
 
     name = str(file.get("name") or "file")
     content = str(file.get("content") or "")
-    suffix = PurePosixPath(name).suffix.lower()
+    suffix = suffix_of(name, file.get("language"))
     if mode == "preview" and suffix in (".html", ".htm"):
         return with_policy(content)
     if mode == "preview" and suffix in (".md", ".markdown"):

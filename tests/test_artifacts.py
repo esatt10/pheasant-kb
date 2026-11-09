@@ -450,3 +450,104 @@ def test_an_artifact_kept_before_artifacts_were_knowledge_is_filed_once(loaded_c
         assert artifacts.get(context, "a" * 24)["folder"] == listed["folder"]
     finally:
         engine.close()
+
+
+def test_an_unnamed_html_block_is_drawn_not_shown_as_code() -> None:
+    """A compose that writes its report as an unnamed html block gets a page, not source."""
+
+    from pheasant.assistant.artifact_files import artifact_payload
+
+    page = "<html><body><h1>Advantage</h1><script>document.title='x'</script></body></html>"
+    answer = f"Here it is.\n\n```html\n{page}\n```"
+    parsed = artifact_payload({"answer": answer, "answer_mode": "llm"})
+    assert [f["name"] for f in parsed["files"]] == ["block-1.html"]
+    assert artifact_render.previewable("block-1.html")
+
+    # One kept before this, named with no extension, draws by its language.
+    legacy = {"name": "block-1", "language": "html", "content": page}
+    record = {"title": "t", "kind": "files", "payload": {"files": [legacy]}}
+    assert artifact_render.previewable("block-1", "html")
+    assert '<iframe class="html-frame" sandbox="allow-scripts"' in artifact_render.overview(record)
+    drawn = artifact_render.file_document(record, legacy, mode="preview")
+    assert drawn.index("Content-Security-Policy") < drawn.index("<h1>Advantage</h1>")
+
+
+def test_search_and_answers_take_artifacts_in_out_or_alone_on_both_surfaces(
+    loaded_config,
+) -> None:
+    """The `artifacts` toggle, like `memory`: include (default), exclude, only."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        engine.sync_source("architecture-notes", "full")
+        context = ServiceContext(
+            config=loaded_config, state=engine.state, searcher=None, engine=engine
+        )
+        result = _composed("@compose account counts")
+        result["citations"] = [
+            {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
+        ]
+        result["answer"] = ANSWER.replace("[1]", "[1] zephyrine sync engine")
+        artifacts.keep_composed(context, "@compose account counts", None, result)
+        engine.sync_source("artifacts", "incremental")
+    finally:
+        engine.close()
+
+    kb = loaded_config.pheasant.name
+    client = TestClient(create_app(config=loaded_config))
+    tools = PheasantTools(loaded_config)
+
+    def sources(payload: dict) -> set[str]:
+        from pheasant.search.criteria import source_of
+
+        return {source_of(hit) for hit in payload["results"]} - {""}
+
+    def http(**criteria: Any) -> dict:
+        response = client.post("/search", json={"query": "zephyrine sync engine", **criteria})
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def mcp(**criteria: Any) -> dict:
+        return tools.search_context(kb, "zephyrine sync engine", **criteria)
+
+    for search in (http, mcp):
+        assert sources(search()) == {"artifacts", "architecture-notes"}
+        excluded = search(artifacts="exclude")
+        assert sources(excluded) == {"architecture-notes"}
+        assert excluded["criteria"]["exclude_sources"] == ["artifacts"]
+        assert sources(search(artifacts=False)) == {"architecture-notes"}
+        assert sources(search(artifacts="only")) == {"artifacts"}
+
+    batch = client.post(
+        "/search/batch", json={"queries": ["zephyrine", "sync engine"], "artifacts": "exclude"}
+    ).json()
+    assert "artifacts" not in sources(batch)
+    assert "artifacts" not in sources(
+        tools.search_context_batch(kb, ["zephyrine", "sync engine"], artifacts="exclude")
+    )
+
+    # One refusal, spelled once, on both surfaces.
+    for bad in (
+        {"artifacts": "sometimes"},
+        {"artifacts": "only", "source_name": "architecture-notes"},
+    ):
+        refused = client.post("/search", json={"query": "sync", **bad})
+        assert refused.status_code == 422, refused.text
+        with pytest.raises(ValueError) as raised:
+            tools.search_context(kb, "sync", **bad)
+        assert str(raised.value) in refused.text
+
+    # Every retrieval an answer runs honours it, the extractive one included.
+    def cited(**criteria: Any) -> set[str]:
+        answer = client.post(
+            "/assistant/chat", json={"question": "zephyrine sync engine", **criteria}
+        ).json()
+        return {str(c.get("source_id")) for c in answer["citations"]}
+
+    assert "artifacts" in cited()
+    assert "artifacts" not in cited(artifacts="exclude")
+    assert cited(artifacts="only") == {"artifacts"}
+    asked = tools.ask_knowledge_base(kb, "zephyrine sync engine", artifacts="exclude")
+    assert "artifacts" not in {str(c.get("source_id")) for c in asked["citations"]}

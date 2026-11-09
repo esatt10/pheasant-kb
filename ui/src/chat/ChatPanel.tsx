@@ -117,6 +117,9 @@ export function ChatPanel({
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
   const [useMemory, setUseMemory] = useState(true);
+  // Whether saved artifacts (composed answers and reports) may be evidence;
+  // the `artifacts` field search and answers take on every surface.
+  const [useArtifacts, setUseArtifacts] = useState(true);
   // `@remove` changed the index: the taxonomy view's listings are stale.
   const refreshArchive = useArchiveRefresh();
 
@@ -206,6 +209,7 @@ export function ChatPanel({
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
+          artifacts: useArtifacts ? null : "exclude",
           history,
           depth: answerDepth,
         },
@@ -543,6 +547,14 @@ export function ChatPanel({
               onChange={(event) => setUseMemory(event.target.checked)}
             />
             use memory
+          </label>
+          <label className="composer__memory" title="Let saved artifacts (composed answers and reports) inform the answer">
+            <input
+              type="checkbox"
+              checked={useArtifacts}
+              onChange={(event) => setUseArtifacts(event.target.checked)}
+            />
+            use artifacts
           </label>
           {extractive ? (
             <>

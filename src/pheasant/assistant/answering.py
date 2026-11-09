@@ -233,6 +233,7 @@ def answer_question(
     remove_documents: Any = None,
     source_names: list[str] | None = None,
     intent: str | None = None,
+    exclude_sources: list[str] | None = None,
 ) -> dict:
     """Answer ``question`` from the knowledge base, with citations and facts.
 
@@ -330,6 +331,7 @@ def answer_question(
         exclude_source_types=exclude_source_types,
         source_name=source_name,
         source_names=source_names,
+        exclude_sources=exclude_sources,
         principal=principal,
         principal_groups=principal_groups,
         path_prefix=path_prefix,

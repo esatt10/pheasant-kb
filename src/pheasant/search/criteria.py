@@ -231,6 +231,9 @@ def source_of(item: dict) -> str:
     provenance = item.get("provenance")
     if isinstance(provenance, dict) and provenance.get("source_id"):
         return str(provenance["source_id"])
+    if item.get("kind") == "relationship":
+        # A relationship's `source` is the edge's source *node*, not a source.
+        return str(item.get("source_id") or "")
     return str(item.get("source_id") or item.get("source") or "")
 
 

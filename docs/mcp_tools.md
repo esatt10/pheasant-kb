@@ -198,6 +198,17 @@ later record corrected are excluded automatically — pass an `as_of` instant to
 ask what was believed then. Hits that came from memory carry a `memory` block
 naming the record, its scope, when it was asserted, and its tier.
 
+### Saved artifacts in retrieval
+
+`search_context`, `search_context_batch` and `ask_knowledge_base` take an
+`artifacts` argument, the same kind of switch for the `artifacts` source
+(composed answers and saved reports): `"include"` (default — they are
+knowledge like any other document), `"exclude"` (the corpus as it was before
+anything was composed from it) or `"only"` (search what has been composed).
+`true`/`false` mean include/exclude. `exclude` is an ordinary
+`exclude_sources` entry and shows in the response's `criteria`; `only` beside
+a scope naming another source is refused.
+
 `memory_write` takes `kind` (`fact` by default; `alias` / `preference` /
 `exclusion` are retrieval rules), `principal` (who asserted it — part of the
 record id, and what scopes it under `security.acl_enforced`) and `valid_until`.

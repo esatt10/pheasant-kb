@@ -46,6 +46,8 @@ class ChatRequest(BaseModel):
     # How this region's agent memory takes part in the answer: "auto", "off",
     # "only", "prefer", or the full policy object (Step 33.10).
     memory: dict | str | None = None
+    # Saved artifacts as evidence: "include" (default), "exclude", "only".
+    artifacts: str | bool | None = None
     # Earlier turns of this conversation, oldest first: [{question, answer}].
     # The region keeps no chat state; continuity is what the caller sends.
     history: list[dict[str, Any]] = []
@@ -88,6 +90,7 @@ class ChatRequest(BaseModel):
             workflow=self.workflow,
             options=self.options,
             memory=self.memory,
+            artifacts=self.artifacts,
             history=list(self.history or []),
             depth=self.depth,
             visual=self.visual,

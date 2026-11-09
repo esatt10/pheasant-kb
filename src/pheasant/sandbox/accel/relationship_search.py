@@ -138,6 +138,7 @@ def scan_edges_wasm(
                     "target": target,
                     "source_label": source_label,
                     "target_label": target_label,
+                    "source_id": data.get("source_id"),
                     "title": f"{source_label} —{etype}→ {target_label}",
                     "label": etype,
                     "score": round(score, 3),

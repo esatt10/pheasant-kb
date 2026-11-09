@@ -186,6 +186,9 @@ class SearchRequest:
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
+    #: ``include`` (default) / ``exclude`` / ``only``: saved artifacts in
+    #: the results, like ``memory`` for memory records (`services.artifacts.scope`).
+    artifacts: Any = None
     #: Post-filters applied after the merge. Every one of these is a reason to
     #: over-fetch, which is why they travel together.
     exclude_sources: list[str] | None = None
@@ -268,19 +271,31 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
 
     kb_id = context.knowledge_base(request.knowledge_base)
     # A malformed expansion is refused before anything is retrieved.
-    source_name, source_names = scoped_sources(request.source_name, request.source_names)
-    request = replace(
-        request,
-        expand=parse_expansion(request.expand),
-        source_name=source_name,
-        source_names=source_names,
-    )
+    request = replace(_scoped(request), expand=parse_expansion(request.expand))
     # Before the arms run, not after. A pinned search whose corpus has moved
     # must not spend the retrieval and then discard it: the caller is going to
     # attribute whatever comes back to the snapshot it named, so the only safe
     # order is to establish that the name is still true first.
     snapshot = _require_snapshot(context, request.snapshot_id)
     return _search(context, request, kb_id, snapshot)
+
+
+def _scoped(request: SearchRequest) -> SearchRequest:
+    """The request with its source scope in one spelling, artifacts toggle applied."""
+
+    from pheasant.services import artifacts
+
+    source_name, source_names, exclude_sources = artifacts.scope(
+        request.artifacts, request.source_name, request.source_names, request.exclude_sources
+    )
+    source_name, source_names = scoped_sources(source_name, source_names)
+    return replace(
+        request,
+        source_name=source_name,
+        source_names=source_names,
+        exclude_sources=exclude_sources,
+        artifacts=None,
+    )
 
 
 def _require_snapshot(context: ServiceContext, snapshot_id: str | None) -> Any:
@@ -535,12 +550,7 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
     # of a batch overlap, and a walk per query would repeat the same
     # neighbourhoods up to 25 times over.
     expansion = parse_expansion(request.criteria.expand)
-    source_name, source_names = scoped_sources(
-        request.criteria.source_name, request.criteria.source_names
-    )
-    criteria = replace(
-        request.criteria, expand=None, source_name=source_name, source_names=source_names
-    )
+    criteria = replace(_scoped(request.criteria), expand=None)
     snapshot = _require_snapshot(context, request.criteria.snapshot_id)
 
     started = time.perf_counter()
@@ -573,8 +583,8 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
         "graph_generation": getattr(context.engine, "loaded_graph_generation", None),
         "elapsed_ms": (time.perf_counter() - started) * 1000.0,
     }
-    if request.criteria.filtering:
-        payload["criteria"] = request.criteria.criteria_block()
+    if criteria.filtering:
+        payload["criteria"] = criteria.criteria_block()
     if expansion_block is not None:
         payload["expansion"] = expansion_block
     if request.per_query:

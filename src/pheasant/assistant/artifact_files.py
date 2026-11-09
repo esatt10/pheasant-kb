@@ -20,6 +20,48 @@ _CITED = re.compile(r"\[(\d+)\]")
 _TRACE_STEPS = {"classify", "plan", "retrieve", "decide", "read", "synthesize", "review", "revise"}
 
 
+#: The extension a block's language implies, for a block whose heading names
+#: no file. An HTML report written as an unnamed ```html block was "block-1"
+#: and every viewer showed its source: whether a file is drawn is read from
+#: its extension.
+EXTENSIONS = {
+    "html": ".html",
+    "htm": ".html",
+    "svg": ".svg",
+    "xml": ".xml",
+    "markdown": ".md",
+    "md": ".md",
+    "javascript": ".js",
+    "js": ".js",
+    "typescript": ".ts",
+    "ts": ".ts",
+    "python": ".py",
+    "py": ".py",
+    "json": ".json",
+    "yaml": ".yaml",
+    "yml": ".yaml",
+    "css": ".css",
+    "sql": ".sql",
+    "bash": ".sh",
+    "sh": ".sh",
+    "shell": ".sh",
+    "powershell": ".ps1",
+    "hcl": ".tf",
+    "terraform": ".tf",
+    "java": ".java",
+    "csharp": ".cs",
+    "go": ".go",
+    "csv": ".csv",
+    "text": ".txt",
+}
+
+
+def extension_for(language: str | None) -> str:
+    """``.html`` for ``html``; empty for a language this does not know."""
+
+    return EXTENSIONS.get(str(language or "").strip().lower().split()[0] if language else "", "")
+
+
 def artifact_payload(result: dict) -> dict:
     """The compose answer as an artifact: files by name, gaps, compact evidence."""
 
@@ -35,7 +77,9 @@ def artifact_payload(result: dict) -> dict:
         named = _FILE_NAME.search(heading)
         files.append(
             {
-                "name": named.group(1) if named else f"block-{number}",
+                "name": named.group(1)
+                if named
+                else f"block-{number}{extension_for(match.group(1).strip())}",
                 "language": match.group(1).strip() or None,
                 "content": match.group(2),
             }

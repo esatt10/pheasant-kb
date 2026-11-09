@@ -1436,6 +1436,12 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   its author wrote it. Every document begins with `DOCUMENT_POLICY` (inline
   scripts and styles, data: images, nothing fetched) and is shown in a
   `sandbox="allow-scripts"` frame; exports are `.zip`, `.html`, `.md`.
+  Search and answers take `artifacts` (`include` | `exclude` | `only`), the
+  `memory` switch for this source, on both surfaces and the UI's **use
+  artifacts** box (`artifacts.scope`: an `exclude_sources` entry or the
+  single-source scope, so every arm and the answer retriever honour it).
+  An unnamed fenced block takes its language's extension (`block-1.html`),
+  because whether a file is drawn is read off its name.
   `tests/test_artifacts.py`.
 - **A dropped stream is not a lost answer** (`services/answer_resume.py`,
   table `answer_streams`; `GET /assistant/chat/answers/{id}`). The UI sends
@@ -3010,6 +3016,14 @@ Each of these cost real time. They are listed because the shape recurs.
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is
   `tests/test_decisions_api.py`. Check for the file before creating it.
+- **A field named `source` is not always a source.** Graph *relationship*
+  hits carried no `source_id`, so `criteria.source_of` fell back to
+  `source` -- the edge's source *node* id -- and `exclude_sources` never
+  dropped a relationship; the artifacts toggle's `exclude` returned a
+  README's `references` edge. Both scans now report the edge's own
+  `source_id` (the one `source_name` already filtered on), and `source_of`
+  never reads `source` off a relationship. Found by the toggle's test, the
+  first one to exclude a source the graph arm matched by an edge.
 
 ---
 

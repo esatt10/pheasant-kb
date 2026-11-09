@@ -142,6 +142,14 @@ actually behind. See [Monitor indexing](../how-to/monitor-indexing.md).
 | GET | `/nodes/content` | Fetch a node's content. |
 | GET | `/nodes/explain` | Explain why a node matched / its provenance. |
 
+### The `artifacts` argument
+
+`POST /search`, `/search/batch` and `/assistant/chat` accept `artifacts`, the
+`memory` switch for saved artifacts (the `artifacts` source): `"include"`
+(default), `"exclude"` or `"only"`; `true`/`false` mean include/exclude. An
+unknown value, or `only` beside a scope naming another source, is a 422
+`INVALID_REQUEST`. The web UI's **use artifacts** checkbox sends `exclude`.
+
 ### The `memory` argument
 
 `POST /search`, `/relevant-files` and `/assistant/chat` all accept `memory`:

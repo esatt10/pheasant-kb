@@ -635,6 +635,8 @@ export const api = {
       workflow?: string | null;
       options?: Record<string, unknown>;
       memory?: string | null;
+      /** Saved artifacts as evidence: include (default), exclude, only. */
+      artifacts?: string | null;
       /** Earlier turns, oldest first: the region keeps no chat state. */
       history?: HistoryTurn[];
       depth?: AnswerDepth | null;
