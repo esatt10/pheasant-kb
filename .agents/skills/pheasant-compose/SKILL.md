@@ -57,6 +57,16 @@ checking in one call, inside its own context budget rather than yours.
    pass `history=[{"question": <the request>, "answer": <the files>}]` instead;
    an artifact in the last turn is used as the draft to edit, whole.
 
+9. **Keep it, if it should outlive the job.** Jobs are temporary; artifacts
+   are not. Pass `save=true` to `compose_artifact` (and `session=` to file it
+   under your conversation), or call `save_artifact` with the files afterwards.
+   The kept artifact lands in the `artifacts` source: searchable once indexed
+   (a save starts its sync), linked in the graph to the documents it cites, and
+   listed by `list_artifacts`. It is not kept unless you ask, unless the region
+   auto-saves (`get_artifact_settings`). To keep a whole conversation,
+   `save_artifact(kind="thread", turns=[{question, answer}, ...])`: its evidence
+   is numbered once across all turns.
+
 ## Writing the request
 
 What the region writes is only as specific as what it is asked. Measured on a

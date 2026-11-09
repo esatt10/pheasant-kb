@@ -148,6 +148,25 @@ measures, gates and records each change. See
 A change to a processing setting causes a full pass over each affected source
 on its next sync.
 
+## Schedules and artifacts
+
+Each source syncs on the scheduler's beat (every 15 minutes) unless it sets a
+cadence of its own. Pick a source's cadence, and the region's default, on the
+**Syncs** page; both apply to every replica at once. To sync hourly by default
+and not at startup -- what a deployment that scales to zero wants:
+
+```yaml
+sync:
+  scheduler:
+    default_source_interval_seconds: 3600
+    startup_sync: false
+```
+
+What people keep of generated answers lives in the `artifacts` source: saving
+is opt-in (auto-save off), and a save starts its sync. Those settings are in
+the Artifacts panel. See [Sync schedules](../how-to/sync-schedules.md) and
+[Artifacts](../how-to/artifacts.md).
+
 ## Features you can turn off
 
 pheasant-kb runs everything. These are the parts that cost something when idle

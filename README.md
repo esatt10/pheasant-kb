@@ -146,6 +146,18 @@ arrow keys on it) to any column, fold it to its header, or double-click a grip
 to put everything back. A moved tile is never reloaded, so an answer that is
 still streaming keeps streaming.
 
+### Keep what it writes
+
+A `@compose` answer's files, an answer worth keeping as a report, a diagram you
+redrew, or a whole conversation can be saved as an **artifact** -- by choice,
+or automatically for every composed answer. Artifacts are knowledge, not
+attachments: they land in an `artifacts` source filed by day, person and
+conversation, are searchable (or left out, with **use artifacts**), link in
+the graph to the documents they cite, carry the trace of how they were made
+(intent, judgements, steps), and are removed or archived like any document.
+A saved thread numbers its evidence once across every turn, so `[3]` names one
+source wherever it appears. See [Keep what pheasant generates](docs/how-to/artifacts.md).
+
 ### Draw it, then rearrange it
 
 <p align="center">
@@ -326,10 +338,11 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 | **Connectors** | Google Drive ships first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
 | **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. With an OpenAI key, evidence sufficiency, the next search and answer acceptance are typed judgements through the Decisions API (beta): the lab's median answer went from 8.7 s to 5.7 s at the same fact coverage. Agents doing their own retrieval can ask the same judgements with `assess_evidence`. |
+| **Artifacts** | Composed files, reports, diagrams and whole threads kept by choice (or auto-saved), filed by day, person and conversation, traced, searchable, linked to their evidence, archived by retention, exported to Parquet. |
 | **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
 | **Measurement** | Effectiveness evaluation and per-stage retrieval tuning, both off by default and read-only when on. |
 | **Readiness** | A machine-readable capability contract and executable go/no-go gates for using this region as an experiment's substrate: ingestion receipts, sealed snapshots, per-result lineage, isolation proofs and structured refusal codes. |
-| **Operations** | Idempotent, incremental sync; SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
+| **Operations** | Idempotent, incremental sync on a per-source schedule (15 minutes to weekly, set on the Syncs page); SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
 | **Scale** | Optional NATS queue, gRPC preparation workers, split API/indexer/worker roles and corpus sharding—each a selectable backend, never a prerequisite. |
 
 pheasant-kb turns all of this on, and its configuration is pheasant's default:

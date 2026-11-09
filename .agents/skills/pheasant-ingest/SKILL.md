@@ -75,6 +75,15 @@ seconds until `source.last_indexed_at` is later than step 1;
 that cannot list tasks answers `listing: "unavailable"` -- read its `depth`,
 and do not read an empty `tasks` as "done").
 
+## Taking content out
+
+`archive_documents(documents=["<source>/<path>"])` removes one document;
+`archive_documents(folders=["<source>/<path>"])` removes everything beneath a
+folder (up to 5,000 at a time; a source's root is refused -- `remove_source`
+does that). Either keeps it out of every later sync, and `reinstate_documents`
+(with `documents` or `folders`) lets it back. An uploaded file, an artifact
+included, is deleted rather than archived.
+
 ## Timing
 
 - A region that scales to zero (the Azure deployment) takes about 90 seconds
