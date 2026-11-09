@@ -112,7 +112,7 @@ def _print_evaluation_projection(report: dict) -> None:
         print(f"  ! {warning}")
 
 
-def _sync_services(engine, cfg, config_path=None, policy=None):
+def _sync_services(engine, cfg, config_path=None, policy=None, jobs=None):
     """Build the watcher + scheduler pair sharing one sync serialization lock.
 
     SyncEngine is not safe for concurrent syncs within a process, so both
@@ -133,7 +133,12 @@ def _sync_services(engine, cfg, config_path=None, policy=None):
     return (
         WatcherService(engine, cfg, sync_lock=sync_lock),
         SchedulerService(
-            engine, cfg, sync_lock=sync_lock, log_upkeep=_owns_log_upkeep(cfg, policy)
+            engine,
+            cfg,
+            sync_lock=sync_lock,
+            log_upkeep=_owns_log_upkeep(cfg, policy),
+            # A beat is a job only where its hook takes the worker's events.
+            jobs=jobs if config_path is not None else None,
         ),
         sync_lock,
     )
@@ -192,7 +197,7 @@ def _serve_app(cfg, config_path: str, *, report_ui: bool = True, role: str | Non
     if report_ui and policy.serves_ui:
         _report_ui(app_obj, cfg)
     watcher, scheduler, sync_lock = _sync_services(
-        app_obj.state.engine, cfg, config_path=config_path, policy=policy
+        app_obj.state.engine, cfg, config_path=config_path, policy=policy, jobs=app_obj.state.jobs
     )
     # Standalone startup syncs and every background producer share this gate.
     # Postgres indexers additionally hand it to the leader supervisor below.
@@ -454,6 +459,7 @@ def _orchestration_supervisor(
     def reconcile_on_promotion() -> None:
         import logging
 
+        from pheasant.sync.background_jobs import run_sync_job
         from pheasant.sync.worker import WorkerBackedEngine
 
         # Explicit durable work outranks opportunistic on-startup freshness.
@@ -476,7 +482,8 @@ def _orchestration_supervisor(
             return
         log = logging.getLogger("pheasant.cli")
         log.info("Leader startup sync for sources: %s", ", ".join(sources))
-        results = WorkerBackedEngine(app_obj.state.engine, config_path).startup()
+        worker = WorkerBackedEngine(app_obj.state.engine, config_path)
+        results = run_sync_job(app_obj.state.jobs, "Startup sync", sources, worker.startup)
         app_obj.state.startup_sync_results = results
         log.info(
             "Leader startup sync complete: sources=%s indexed=%s skipped=%s",
@@ -539,6 +546,7 @@ class _QueueDrainer:
 
         from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
         from pheasant.jobs import JobRegistry
+        from pheasant.sync.background_jobs import forward_progress
         from pheasant.sync.queue import drain, owner_id, queue_from_config
 
         log = logging.getLogger("pheasant.cli")
@@ -582,18 +590,7 @@ class _QueueDrainer:
                         source=task.source_id,
                     )
 
-                    def forward(event: dict) -> None:
-                        meta = event.get("meta") or {}
-                        jobs.progress(
-                            job.id,
-                            phase=event.get("phase"),
-                            current=event.get("current"),
-                            total=event.get("total"),
-                            detail=event.get("detail"),
-                            source=meta.get("source") or task.source_id,
-                            stats=meta,
-                        )
-
+                    forward = forward_progress(jobs, job.id, task.source_id)
                     try:
                         result = worker.apply_index_task(task, on_progress=forward)
                     except Exception as exc:

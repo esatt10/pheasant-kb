@@ -853,7 +853,7 @@ def test_background_services_start_only_for_their_roles(tmp_path: Path, monkeypa
         monkeypatch.setattr(
             cli,
             "_sync_services",
-            lambda engine, cfg, config_path=None, policy=None: (
+            lambda engine, cfg, config_path=None, policy=None, jobs=None: (
                 Recorder("watcher", bucket),
                 Recorder("scheduler", bucket),
                 threading.Lock(),

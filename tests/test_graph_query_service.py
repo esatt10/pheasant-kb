@@ -580,3 +580,70 @@ def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path
             assert engine.state.rows("SELECT 1 AS one")[0]["one"] == 1
     finally:
         engine.close()
+
+
+def test_readiness_pings_the_graph_service_without_counting_the_graph(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """`/ready` asks "do you answer", not "how many nodes of each type do you hold".
+
+    The probe was a fresh ``stats``, whose type counts are a ``GROUP BY`` over
+    every graph node; on the Azure fleet that ran past readiness's 2 s while
+    a sync wrote, and the api reported a working graph service unreachable.
+    """
+
+    from pheasant.graph.query_service import GraphQueryError
+    from pheasant.graph.sql import SqlGraph
+
+    config = _config(tmp_path)
+    writer = SyncEngine(config)
+    try:
+        writer.sync_source("docs", "full")
+    finally:
+        writer.close()
+    config.graph.query_service_token_env = "TEST_GRAPH_TOKEN"
+    monkeypatch.setenv("TEST_GRAPH_TOKEN", "secret")
+    counted: list[str] = []
+    real_type_counts = SqlGraph.type_counts
+
+    def type_counts(self: Any) -> dict[str, int]:
+        counted.append("type_counts")
+        return real_type_counts(self)
+
+    monkeypatch.setattr(SqlGraph, "type_counts", type_counts)
+    client = TestClient(create_app(config, role="graph"))
+    answer = client.post(
+        "/internal/graph/query",
+        headers={"Authorization": "Bearer secret"},
+        json={"operation": "ping", "parameters": {}},
+    )
+    assert answer.status_code == 200 and answer.json()["result"] == {"ok": True}
+    assert counted == [], "a ping counted the graph"
+    # And the counter is live: `stats` on the same service does count.
+    client.post(
+        "/internal/graph/query",
+        headers={"Authorization": "Bearer secret"},
+        json={"operation": "stats", "parameters": {}},
+    )
+    assert counted == ["type_counts"]
+
+    class Client:
+        def __init__(self, old: bool) -> None:
+            self.old = old
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        def query(self, operation: str, **parameters: Any) -> Any:
+            self.calls.append((operation, parameters))
+            if operation == "ping" and self.old:
+                raise GraphQueryError(
+                    "graph service rejected 'ping': unknown graph operation: ping"
+                )
+            return {"ok": True} if operation == "ping" else {"total_nodes": 3}
+
+    current = Client(old=False)
+    assert RemoteGraph(current).ping() == {"ok": True}  # type: ignore[arg-type]
+    assert current.calls == [("ping", {"timeout_seconds": 2.0, "retries": 0})]
+    # A graph service from before `ping` still answers readiness, the old way.
+    older = Client(old=True)
+    assert RemoteGraph(older).ping() == {"total_nodes": 3}  # type: ignore[arg-type]
+    assert [name for name, _ in older.calls] == ["ping", "stats"]

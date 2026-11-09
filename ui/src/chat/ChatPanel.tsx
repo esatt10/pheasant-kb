@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, collectAnswer } from "../api/client";
 import type {
   AnswerDepth,
   AssistantStatus,
@@ -22,6 +22,7 @@ import {
   useKeywordReference,
 } from "./KeywordReference";
 import { McpAppFrame } from "./McpAppFrame";
+import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pendingAnswer";
 import { MicButton, useDictation } from "./MicButton";
 import { dictationUnsupported, spliceAtCaret } from "./dictation";
 import { SourceStrip, openable } from "./SourceStrip";
@@ -162,12 +163,35 @@ export function ChatPanel({
     : "checking…";
 
   const ask = useMutation({
-    mutationFn: ({ id, question }: { id: string; question: string }) => {
+    mutationFn: ({
+      id,
+      question,
+      answerId,
+      resume = false,
+    }: {
+      id: string;
+      question: string;
+      answerId: string;
+      /** Collect an answer a previous page load asked for, rather than ask. */
+      resume?: boolean;
+    }) => {
       setProgress([]);
       setAnswerPreview("");
+      // The text lands as soon as it exists; a visual follows and replaces
+      // the pending placeholder in the same turn.
+      const onAnswer = (answer: ChatAnswer) => {
+        setProgress([]);
+        setAnswerPreview("");
+        dispatch({ type: "answered", id, answer });
+      };
+      const onStep = (step: WorkflowStep) => setProgress((prev) => [...prev, step]);
+      if (resume) return collectAnswer(answerId, { onStep, onAnswer });
       return api.chatStream(
         {
           question,
+          // The region keeps the answer under this, so a dropped stream (a
+          // phone that slept) collects it instead of failing.
+          answer_id: answerId,
           session_id: sessionId,
           // A folder or file scope names its own source.
           source_name: scopedSources ? null : (pathScope?.source ?? sourceFilter),
@@ -184,30 +208,40 @@ export function ChatPanel({
           history,
           depth: answerDepth,
         },
-        (step) => setProgress((prev) => [...prev, step]),
+        onStep,
         undefined,
-        // The text lands as soon as it exists; a visual follows and replaces
-        // the pending placeholder in the same turn.
-        (answer) => {
-          setProgress([]);
-          setAnswerPreview("");
-          dispatch({ type: "answered", id, answer });
-        },
+        onAnswer,
         (delta) => setAnswerPreview((previous) => previous + delta),
       );
     },
     onSuccess: (answer, { id }) => {
+      forgetPending(id);
       setProgress([]);
       setAnswerPreview("");
       dispatch({ type: "answered", id, answer });
       if (answer.archive) refreshArchive();
     },
     onError: (error: Error, { id }) => {
+      forgetPending(id);
       setProgress([]);
       setAnswerPreview("");
       dispatch({ type: "ask-failed", id, error: error.message });
     },
   });
+
+  // A question the previous page load was still waiting on -- a phone
+  // browser reloads a tab it discarded in the background -- is shown again
+  // and its answer collected from the region, which went on writing it.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current) return;
+    resumed.current = true;
+    const pending = pendingAnswer();
+    if (!pending || turns.some((turn) => turn.id === pending.id)) return;
+    dispatch({ type: "ask", id: pending.id, question: pending.question });
+    ask.mutate({ ...pending, resume: true });
+    // Once, on mount: `turns` and `ask` are read as they are then.
+  }, []);
 
   // Keep the newest turn's *question* pinned near the top of the viewport —
   // both when it's first asked and again once its answer lands. Scrolling to
@@ -233,9 +267,11 @@ export function ChatPanel({
     // A sent question ends a dictation; its last words must not start the next one.
     dictation.cancel();
     const id = `${Date.now()}-${turns.length}`;
+    const answerId = newAnswerId();
+    rememberPending({ id, question, answerId, askedAt: Date.now() });
     dispatch({ type: "ask", id, question });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    ask.mutate({ id, question });
+    ask.mutate({ id, question, answerId });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

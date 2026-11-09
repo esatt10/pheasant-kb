@@ -142,7 +142,7 @@ def test_startup_parallelizes_all_persisted_enabled_sources(monkeypatch) -> None
     monkeypatch.setattr(
         backed,
         "sync_all",
-        lambda mode: calls.append(mode) or ["yaml-source", "persisted-source"],
+        lambda mode, on_progress=None: calls.append(mode) or ["yaml-source", "persisted-source"],
     )
 
     assert backed.startup() == ["yaml-source", "persisted-source"]

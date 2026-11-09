@@ -213,6 +213,78 @@ export class ApiError extends Error {
   }
 }
 
+/** The region's own refusal, sent as a stream event: not a lost stream. */
+class AnswerRefused extends Error {}
+
+/** A page hidden this long has probably lost its stream; collect the answer. */
+const RESUME_AFTER_HIDDEN_MS = 3000;
+/** How often a kept answer is asked for, and for how long before giving up. */
+const COLLECT_EVERY_MS = 1500;
+const COLLECT_FOR_MS = 20 * 60 * 1000;
+
+interface KeptAnswer {
+  answer_id: string;
+  status: "running" | "answered" | "done" | "failed";
+  steps: WorkflowStep[];
+  answer: ChatAnswer | null;
+  error: string | null;
+}
+
+/**
+ * Collect an answer the region kept under `answerId` (`GET
+ * /assistant/chat/answers/{id}`), reporting the steps a reader has not seen
+ * and the text as soon as it exists, until the answer is done. A network
+ * error is retried — the phone that dropped the stream may still be
+ * reconnecting — and a 404 means the answer is gone.
+ */
+export async function collectAnswer(
+  answerId: string,
+  {
+    onStep,
+    onAnswer,
+    signal,
+    steps = 0,
+    answer = null,
+  }: {
+    onStep?: (step: WorkflowStep) => void;
+    onAnswer?: (answer: ChatAnswer) => void;
+    signal?: AbortSignal;
+    steps?: number;
+    answer?: ChatAnswer | null;
+  } = {},
+): Promise<ChatAnswer> {
+  const deadline = Date.now() + COLLECT_FOR_MS;
+  let seen = steps;
+  let given = answer;
+  for (;;) {
+    if (signal?.aborted) throw new DOMException("The question was cancelled", "AbortError");
+    let kept: KeptAnswer | null = null;
+    try {
+      kept = await request<KeptAnswer>(`/assistant/chat/answers/${encodeURIComponent(answerId)}`, { signal });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof ApiError && error.status === 404) {
+        throw new Error("The connection dropped and the region no longer holds this answer. Ask again.");
+      }
+      // A refusal about the request will not change; anything else is the
+      // network or a waking region, and is asked again.
+      if (error instanceof ApiError && error.status < 500 && error.status !== 429) throw error;
+    }
+    if (kept) {
+      for (const step of kept.steps.slice(seen)) onStep?.(step);
+      seen = Math.max(seen, kept.steps.length);
+      if (kept.status === "failed") throw new Error(kept.error || "The answer failed");
+      if (kept.answer && (kept.status === "done" || !given)) {
+        given = kept.answer;
+        onAnswer?.(kept.answer);
+      }
+      if (kept.status === "done" && kept.answer) return kept.answer;
+    }
+    if (Date.now() > deadline) throw new Error("The answer did not finish in time. Ask again.");
+    await new Promise((resolve) => setTimeout(resolve, COLLECT_EVERY_MS));
+  }
+}
+
 /** Turn FastAPI's structured validation detail into text a person can act on. */
 function errorDetail(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object") return fallback;
@@ -531,8 +603,11 @@ export const api = {
    *
    * The agent loop can run for a while over a large index, so `onStep` fires
    * per stage (plan, retrieve, grade, …) and the promise resolves with the
-   * finished answer. Falls back to nothing special on the client side: if the
-   * stream breaks, the error propagates like any other failed request.
+   * finished answer. With an `answer_id` the region keeps the answer as it
+   * forms, so a stream that breaks — a phone that slept, a page that sat in
+   * the background — is not a failure: the answer the server went on writing
+   * is collected instead (`collectAnswer`). Without one, a broken stream
+   * fails like any other request.
    */
   chatStream: async (
     body: {
@@ -562,6 +637,8 @@ export const api = {
       history?: HistoryTurn[];
       depth?: AnswerDepth | null;
       visual?: "none" | "diagram" | "image" | null;
+      /** Keep the answer under this id for an hour (8-64 of `A-Za-z0-9_-`). */
+      answer_id?: string | null;
     },
     onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,
@@ -574,58 +651,86 @@ export const api = {
     /** Provisional answer text; the final answer event replaces this preview. */
     onDraft?: (delta: string) => void,
   ): Promise<ChatAnswer> => {
-    const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
-      method: "POST",
-      // This body is JSON, so keep its content type. `requestHeaders` also
-      // attaches the browser session's bearer token.
-      headers: requestHeaders(),
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (response.status === 401) signalApiAuthRequired();
-    if (!response.ok || !response.body) {
-      let detail = `${response.status} ${response.statusText}`;
-      try {
-        detail = errorDetail(await response.json(), detail);
-      } catch {
-        /* response had no JSON body */
-      }
-      throw new ApiError(detail, response.status);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    // The stream's own abort, separate from the caller's: coming back to a
+    // page that sat hidden ends a stream that may have silently died, and
+    // collects the kept answer instead.
+    const stream = new AbortController();
+    const cancel = () => stream.abort();
+    signal?.addEventListener("abort", cancel);
+    let hiddenAt: number | null = null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt !== null && Date.now() - hiddenAt >= RESUME_AFTER_HIDDEN_MS) stream.abort();
+    };
+    const answerId = body.answer_id ?? null;
+    if (answerId) document.addEventListener("visibilitychange", onVisibility);
     let answer: ChatAnswer | null = null;
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      // SSE frames are separated by a blank line; a frame may arrive split
-      // across chunks, so only complete ones are consumed.
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const line = frame.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) continue;
-        const event = JSON.parse(line.slice(5).trim());
-        if (event.type === "step") onStep(event);
-        else if (event.type === "draft" && typeof event.delta === "string") {
-          onDraft?.(event.delta);
+    let steps = 0;
+    try {
+      const response = await fetch(`${API_BASE}/assistant/chat/stream`, {
+        method: "POST",
+        // This body is JSON, so keep its content type. `requestHeaders` also
+        // attaches the browser session's bearer token.
+        headers: requestHeaders(),
+        body: JSON.stringify(body),
+        signal: stream.signal,
+      });
+      if (response.status === 401) signalApiAuthRequired();
+      if (!response.ok || !response.body) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          detail = errorDetail(await response.json(), detail);
+        } catch {
+          /* response had no JSON body */
         }
-        else if (event.type === "answer") {
-          answer = event.answer as ChatAnswer;
-          onAnswer?.(answer);
-        } else if (event.type === "visual" && answer !== null) {
-          const current = answer as ChatAnswer;
-          answer = { ...current, visual: event.visual, steps: event.steps ?? current.steps };
-          onAnswer?.(answer);
-        } else if (event.type === "error") throw new Error(event.error);
+        throw new ApiError(detail, response.status);
       }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line; a frame may arrive split
+        // across chunks, so only complete ones are consumed.
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const event = JSON.parse(line.slice(5).trim());
+          if (event.type === "step") {
+            steps += 1;
+            onStep(event);
+          } else if (event.type === "draft" && typeof event.delta === "string") {
+            onDraft?.(event.delta);
+          } else if (event.type === "answer") {
+            answer = event.answer as ChatAnswer;
+            onAnswer?.(answer);
+          } else if (event.type === "visual" && answer !== null) {
+            const current = answer as ChatAnswer;
+            answer = { ...current, visual: event.visual, steps: event.steps ?? current.steps };
+            onAnswer?.(answer);
+          } else if (event.type === "error") throw new AnswerRefused(event.error);
+        }
+      }
+      // A visual still pending when the stream closed was cut off with it.
+      const pending = answer !== null && (answer as ChatAnswer).visual?.status === "pending";
+      if (answer && !(pending && answerId)) return answer;
+      if (!answerId) throw new Error("the answer stream closed before an answer arrived");
+    } catch (error) {
+      // The caller's own cancel, a refusal the region sent, and a request the
+      // region turned away before streaming are answers, not lost streams.
+      if (signal?.aborted || error instanceof AnswerRefused || error instanceof ApiError || !answerId) {
+        throw error;
+      }
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      document.removeEventListener("visibilitychange", onVisibility);
     }
-    if (!answer) throw new Error("the answer stream closed before an answer arrived");
-    return answer;
+    return collectAnswer(answerId, { onStep, onAnswer, signal, steps, answer });
   },
 
   /** A grounded diagram of named passages, or the images they hold. */

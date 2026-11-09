@@ -103,7 +103,8 @@ pheasant-kb/
 │   │                            (stop a running sync from any process),
 │   │                            graph_history (the interval-gated
 │   │                            snapshot), watcher,
-│   │                            scheduler, locks,
+│   │                            scheduler, background_jobs (startup
+│   │                            syncs and beats as watchable jobs), locks,
 │   │                            queue, log_queue, graph_events (commit
 │   │                            announcements), saturation (the commit-
 │   │                            authority ceiling), preparation (what a
@@ -187,6 +188,8 @@ pheasant-kb/
 │   │                            sync_control (cancel a source's running
 │   │                            sync), voice (the composer's dictation:
 │   │                            a live transcription session, HTTP only),
+│   │                            answer_resume (a streamed answer kept an
+│   │                            hour for a reader whose stream dropped),
 │   │                            region_status (what is still waking or
 │   │                            warming after a scale-to-zero wake)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
@@ -226,7 +229,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 197 pytest modules, offline by design
+└── tests/                     ← 199 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1403,6 +1406,19 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   modes when hybrid is present, since hybrid already contains them. The stream
   carries provisional `draft` events that the verified `answer` replaces.
   `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
+- **A dropped stream is not a lost answer** (`services/answer_resume.py`,
+  table `answer_streams`; `GET /assistant/chat/answers/{id}`). The UI sends
+  a random `answer_id` with each question and the region keeps that answer's
+  steps, text, visual or refusal for an hour as it forms -- drafts excluded,
+  they are hundreds of writes the verified text replaces. When the stream
+  breaks, the page returns from the background (3 s hidden) or a discarded
+  tab reloads (the question and id alone are in `sessionStorage`), the UI
+  collects it instead of failing. Found by a phone that slept through a
+  two-minute compose: the worker finished it, nobody could read it, and it
+  was asked again. Read back only by the principal that asked; every write
+  best-effort, so a store that cannot keep it costs the resume, not the
+  answer. HTTP only. `tests/test_answer_resume.py` closes a real socket
+  mid-answer.
 - **Dictation is the browser's, the credential is the region's**
   (`services/voice.py`, `assistant.voice`, `ui/src/chat/dictation.ts`). The
   composer's microphone streams 24 kHz PCM16 straight to an OpenAI Realtime
@@ -2935,6 +2951,20 @@ Each of these cost real time. They are listed because the shape recurs.
   service still gets the scan. `tests/test_inventory_relations.py` drives
   both describes through a `RemoteGraph` and fails if `neighbors_many` is
   called. The offline suite could not see it: `role: all` holds the graph.
+- **A pass that drains a shared queue owes what it claims a job.** On the
+  Azure fleet "Run now" on the Syncs page published a task, the indexer had
+  just woken and was running its startup sync-all, and that pass drained the
+  same queue -- so the requested sync ran inside a pass with no job, and the
+  tray showed nothing for the four minutes it took (it was pressed twice).
+  Startup syncs and beats are jobs now (`sync/background_jobs.py`), with a
+  row per source. The in-process hook adapter had the same blind spot one
+  level down: it took four arguments, so the engine never passed which
+  source an update was about, and a several-source job filed everything
+  under one placeholder row. Found beside it, the same run: `/ready` pinged
+  the graph service with a fresh `stats`, whose type counts are a
+  `GROUP BY` over every node -- past 2 s on a cold store during that sync, so
+  a working graph service read as unreachable. A liveness question gets a
+  `SELECT 1` (`ping`), never an aggregate.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

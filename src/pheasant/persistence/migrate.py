@@ -145,6 +145,7 @@ NOT_MIGRATED: dict[str, str] = {
     "log_tasks": "in-flight claim state, tied to the process that claimed it",
     "source_leases": "in-flight claim state, tied to the process that claimed it",
     "sync_runs": "the sync running now, tied to the process running it",
+    "answer_streams": "answers in flight, kept an hour for a browser to collect",
     # A replay checkpoint is a cached *retrieval result*, and the two backends
     # rank differently on purpose -- FTS5's bm25() and Postgres's ts_rank_cd
     # are different functions (`tests/test_backend_parity.py` says so, and

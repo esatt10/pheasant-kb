@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { OPEN_JOBS_EVENT } from "../hooks/useRegion";
 import type {
   LedgerDocument,
   PipelineDetail,
@@ -195,13 +196,31 @@ export function SyncsPage() {
   );
 }
 
+/** How long "Run now" waits for an indexer to claim the sync before it can be pressed again. */
+const CLAIM_WAIT_MS = 120_000;
+
 function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: () => void }) {
   const queryClient = useQueryClient();
+  // When "Run now" was answered. On a fleet the answer is `queued`: nothing
+  // runs until an indexer claims the task, and for that interval the button
+  // looked untouched -- so it was pressed again (two syncs, 3 s apart, found
+  // on the Azure fleet). It stays "Queued…" until the run shows, or a while.
+  const [requestedAt, setRequestedAt] = useState<number | null>(null);
   const detail = useQuery({
     queryKey: ["pipeline", name],
     queryFn: () => api.pipeline(name),
-    refetchInterval: (query) => (query.state.data?.running ? 3000 : 20000),
+    refetchInterval: (query) => (query.state.data?.running || requestedAt !== null ? 3000 : 20000),
   });
+  const started = !!detail.data?.running;
+  useEffect(() => {
+    if (requestedAt === null) return;
+    if (started) {
+      setRequestedAt(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setRequestedAt(null), CLAIM_WAIT_MS - (Date.now() - requestedAt));
+    return () => window.clearTimeout(timer);
+  }, [requestedAt, started]);
   const refresh = (data?: PipelineDetail) => {
     if (data) queryClient.setQueryData(["pipeline", name], data);
     queryClient.invalidateQueries({ queryKey: ["pipelines"] });
@@ -210,7 +229,15 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
     mutationFn: (settings: Partial<PipelineSettings>) => api.configurePipeline(name, settings),
     onSuccess: refresh,
   });
-  const run = useMutation({ mutationFn: () => api.syncSource(name, "incremental", false), onSuccess: () => refresh() });
+  const run = useMutation({
+    mutationFn: () => api.syncSource(name, "incremental", false),
+    onSuccess: () => {
+      setRequestedAt(Date.now());
+      // The jobs tray is where its progress shows, once an indexer has it.
+      window.dispatchEvent(new Event(OPEN_JOBS_EVENT));
+      refresh();
+    },
+  });
   const deleteSchedule = useMutation({ mutationFn: () => api.deletePipelineSchedule(name), onSuccess: refresh });
   const deletePipeline = useMutation({ mutationFn: () => api.deletePipeline(name), onSuccess: refresh });
   const restore = useMutation({ mutationFn: () => api.restorePipeline(name), onSuccess: refresh });
@@ -241,8 +268,14 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
             </button>
           ) : (
             <>
-              <button type="button" className="btn btn--small btn--primary" onClick={() => run.mutate()} disabled={!!d.running}>
-                {d.running ? "Running…" : "Run now"}
+              <button
+                type="button"
+                className="btn btn--small btn--primary"
+                onClick={() => run.mutate()}
+                disabled={!!d.running || run.isPending || requestedAt !== null}
+                title={requestedAt !== null && !d.running ? "Waiting for an indexer to start it; progress shows in the jobs tray" : undefined}
+              >
+                {d.running ? "Running…" : run.isPending ? "Starting…" : requestedAt !== null ? "Queued…" : "Run now"}
               </button>
               {d.state === "scheduled" ? (
                 <button type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: true })}>

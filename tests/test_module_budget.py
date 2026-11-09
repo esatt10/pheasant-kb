@@ -50,7 +50,9 @@ THRESHOLD = 800
 #: the space the extraction freed is not left available for the next feature.
 CEILINGS: dict[str, int] = {
     "analytics.py": 1100,
-    "api/app.py": 5500,
+    # Lowered from 5500 when a background sync's job bookkeeping moved to
+    # `sync/background_jobs.py`, shared with the startup sync and the beat.
+    "api/app.py": 5480,
     "assistant/chat.py": 950,
     # The latency candidate adds evidence authorization, two-phase hydration,
     # request-bounded retrieval and combined evidence/answer handling. Keep
@@ -60,7 +62,9 @@ CEILINGS: dict[str, int] = {
     # Raised to 3206 for `backup`/`restore` refusing a Postgres region (whose
     # data is not under /state) with the refusal text `persistence/backup.py`
     # owns, instead of writing an archive that holds none of it.
-    "cli.py": 3206,
+    # Lowered from 3206 when the drainer's progress hook moved to
+    # `sync/background_jobs.py`.
+    "cli.py": 3204,
     # Typed query budgets, admission, and MCP request-size validation belong
     # with their dataclass settings; this explicit raise accounts for that field.
     # Raised by 14 for the vector store's resident/ANN settings (seven fields,
@@ -110,7 +114,10 @@ CEILINGS: dict[str, int] = {
     # `describe_source` and `wait_for_sync` make; DDL belongs here.
     # Raised to 1154 for `idx_artifacts_source`: nothing indexed artifacts by
     # source, and the taxonomy reads a source's version on every level.
-    "persistence/schema.py": 1154,
+    # Raised to 1168 for `answer_streams`, a streamed answer kept for a
+    # reader who reconnects; DDL belongs here, its code in
+    # `services/answer_resume.py`.
+    "persistence/schema.py": 1168,
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.

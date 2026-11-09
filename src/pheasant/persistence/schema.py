@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
   data_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+-- A streamed chat answer, kept for an hour so a browser whose connection
+-- dropped mid-answer can collect it (`services/answer_resume.py`).
+CREATE TABLE IF NOT EXISTS answer_streams (
+  answer_id TEXT PRIMARY KEY,
+  kb_id TEXT NOT NULL,
+  owner TEXT,
+  status TEXT NOT NULL,
+  steps_json TEXT NOT NULL,
+  answer_json TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_answer_streams_created ON answer_streams(created_at);
 -- The same tombstone for one document (`persistence/archive.py`). Every sync
 -- skips a path held here before reading it, so the removal survives
 -- incremental and full syncs. `kind` is `archived` (reinstatable) or

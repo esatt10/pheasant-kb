@@ -353,6 +353,19 @@ class RemoteGraph:
             return dict(value)
 
     def ping(self) -> dict[str, Any]:
+        """Is the service answering? One ``SELECT 1`` on its side, within readiness's 2 s.
+
+        It used to be a fresh ``stats``, whose type counts are a ``GROUP BY``
+        over every graph node: past 2 s on a cold store while a sync wrote, so
+        `/ready` called a working graph service unreachable during every large
+        sync. An older service without ``ping`` still gets ``stats``.
+        """
+
+        try:
+            return dict(self.client.query("ping", timeout_seconds=2.0, retries=0) or {})
+        except GraphQueryError as exc:
+            if "unknown graph operation: ping" not in str(exc):
+                raise
         return self.stats(fresh=True)
 
     def number_of_nodes(self) -> int:

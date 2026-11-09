@@ -360,6 +360,7 @@ class StateStore:
                 "sync_runs": "cancel_reason",
                 "auth_tokens": "last_used_at",
                 "oauth_clients": "data_json",
+                "answer_streams": "updated_at",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()

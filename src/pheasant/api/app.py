@@ -52,7 +52,6 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.ingestion.landing_service import landing_zone_for_config
 from pheasant.ingestion.pipeline import read_text, utc_now
-from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
 from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServiceError, JobRegistry
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
@@ -1157,8 +1156,13 @@ def create_app(
                 # requests this server exists to answer.
                 sync_lock = getattr(app.state, "sync_lock", None)
                 lock_context = sync_lock if sync_lock is not None else nullcontext()
+                from pheasant.sync.background_jobs import run_sync_job
+
                 with lock_context:
-                    results = WorkerBackedEngine(engine, app.state.config_path).startup()
+                    worker = WorkerBackedEngine(engine, app.state.config_path)
+                    results = run_sync_job(
+                        app.state.jobs, "Startup sync", startup_sources, worker.startup
+                    )
                 app.state.startup_sync_results = results
                 indexed = sum(result.indexed_artifacts for result in results)
                 skipped = sum(result.skipped_artifacts for result in results)
@@ -2387,20 +2391,10 @@ def create_app(
         success, sync failure, or an unexpected exception — so a source can
         never get stuck showing "syncing" forever.
         """
+        from pheasant.sync.background_jobs import finish_sync_job, forward_progress
         from pheasant.sync.worker import WorkerBackedEngine
 
-        def forward(event: dict) -> None:
-            meta = event.get("meta") or {}
-            jobs.progress(
-                job_id,
-                phase=event.get("phase"),
-                current=event.get("current"),
-                total=event.get("total"),
-                detail=event.get("detail"),
-                source=meta.get("source") or None,
-                stats=meta,
-            )
-
+        forward = forward_progress(jobs, job_id)
         try:
             jobs.progress(
                 job_id,
@@ -2416,23 +2410,7 @@ def create_app(
             logger.exception("background sync failed")
             jobs.finish(job_id, "failed", error=str(exc))
             return
-        failed = [r for r in results if r.status in FAILED_SYNC_STATUSES]
-        jobs.finish(
-            job_id,
-            sync_job_status([r.status for r in results]),
-            error=(failed[0].details.get("error") or failed[0].status) if failed else None,
-            result={
-                "results": [
-                    {
-                        "source_id": r.source_id,
-                        "indexed_artifacts": r.indexed_artifacts,
-                        "skipped_artifacts": r.skipped_artifacts,
-                        "status": r.status,
-                    }
-                    for r in results
-                ]
-            },
-        )
+        finish_sync_job(jobs, job_id, results)
 
     def _background_status(job_id: str | None, queued: list[str]) -> str:
         """Three outcomes, three words — `syncing` used to cover all of them.
@@ -4279,8 +4257,10 @@ def create_app(
         # `force_local` above already guarantees this cannot proxy to itself.
         graph_obj = serving_graph
         operation = req.operation.strip().lower()
-
-        if operation == "stats":
+        if operation == "ping":
+            # Readiness: the service and its store answer. Not `stats`, which counts every node.
+            result = {"ok": bool(state.rows("SELECT 1 AS ok", ()))}
+        elif operation == "stats":
             with graph_obj.reading():
                 result = {
                     "total_nodes": graph_obj.number_of_nodes(),
