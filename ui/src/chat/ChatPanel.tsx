@@ -21,7 +21,7 @@ import {
   keywordMatches,
   useKeywordReference,
 } from "./KeywordReference";
-import { ArtifactCard } from "../artifacts/ArtifactsPanel";
+import { ArtifactCard, showArtifacts } from "../artifacts/ArtifactsPanel";
 import { McpAppFrame } from "./McpAppFrame";
 import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pendingAnswer";
 import { MicButton, useDictation } from "./MicButton";
@@ -660,6 +660,7 @@ function AnswerTurn({
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ["artifacts"] });
       dispatch({ type: "open-artifact", id: saved.id });
+      showArtifacts();
     },
   });
   // A visual asked for after the fact — of the whole answer, or of one

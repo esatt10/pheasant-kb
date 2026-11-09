@@ -241,12 +241,30 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
+/**
+ * Asks the Notebook to show the Artifacts section. On a phone the chat and the
+ * artifacts are separate sections, so opening one from the chat must move there.
+ */
+export const SHOW_ARTIFACTS_EVENT = "pheasant:show-artifacts";
+
+export function showArtifacts(): void {
+  window.dispatchEvent(new Event(SHOW_ARTIFACTS_EVENT));
+}
+
 /** A kept artifact in the chat, the way Claude shows one: open it, or take it. */
 export function ArtifactCard({ artifact, onOpen }: { artifact: ArtifactSummary; onOpen: () => void }) {
   const download = useMutation({ mutationFn: () => api.downloadArtifact(artifact.id, { format: "zip" }) });
   return (
     <div className="artifact-card">
-      <button type="button" className="artifact-card__open" onClick={onOpen} title="Open in the Artifacts tab">
+      <button
+        type="button"
+        className="artifact-card__open"
+        onClick={() => {
+          onOpen();
+          showArtifacts();
+        }}
+        title="Open in the Artifacts tab"
+      >
         <span className="artifact-card__icon" aria-hidden>
           {artifact.kind === "files" ? "{ }" : "≡"}
         </span>

@@ -1,4 +1,4 @@
-import { ArtifactsPanel } from "../artifacts/ArtifactsPanel";
+import { ArtifactsPanel, SHOW_ARTIFACTS_EVENT } from "../artifacts/ArtifactsPanel";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DragHandle } from "../browser/DragHandle";
@@ -46,9 +46,14 @@ import {
 import type { BrowserState, PanelTab, TileColumn, TileId, TileLayout } from "../state/session";
 
 /** A phone's Notebook sections; "panel" is the tab group, shown as Graph. */
-type MobileTab = "chat" | "sources" | "taxonomy" | "panel";
-/** The panel's tabs on a phone, where the taxonomy view has a section of its own. */
-const PHONE_PANEL_TABS: PanelTab[] = ["graph", "facts", "node", "artifacts"];
+type MobileTab = "chat" | "sources" | "taxonomy" | "panel" | "artifacts";
+/**
+ * The panel's tabs on a phone, where the taxonomy view and the artifacts have
+ * sections of their own: an artifact read as the fourth tab inside "Graph"
+ * was one nobody found, and opening one from the chat changed a tab that was
+ * not on screen.
+ */
+const PHONE_PANEL_TABS: PanelTab[] = ["graph", "facts", "node"];
 
 /** Height of the first of two unfolded tiles stacked in a side column, before it is dragged. */
 const DEFAULT_SIDE_STACK = 360;
@@ -173,6 +178,14 @@ export function Notebook() {
     },
     [dispatch, state.chatCollapsed],
   );
+
+  // Opening an artifact from the chat (its card, Save as report) shows it on
+  // a phone; on a wider screen it is already in the panel beside the chat.
+  useEffect(() => {
+    const show = () => setMobileTab("artifacts");
+    window.addEventListener(SHOW_ARTIFACTS_EVENT, show);
+    return () => window.removeEventListener(SHOW_ARTIFACTS_EVENT, show);
+  }, []);
 
   const showInGraph = useCallback(
     (nodeId: string) => {
@@ -501,6 +514,7 @@ export function Notebook() {
               ["sources", "Sources"],
               ["taxonomy", "Taxonomy"],
               ["panel", "Graph"],
+              ["artifacts", "Artifacts"],
             ] as const
           ).map(([id, label]) => (
             <button
