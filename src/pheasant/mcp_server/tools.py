@@ -82,7 +82,7 @@ def _preview_rows(results: list[dict]) -> list[dict]:
 class PheasantTools(
     ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools, SyncControlTools
 ):
-    def __init__(self, config: PheasantConfig):
+    def __init__(self, config: PheasantConfig, *, vector: Any = None):
         self.config = config
         self.paths = StatePaths.from_config(config)
         self.paths.ensure()
@@ -104,7 +104,9 @@ class PheasantTools(
         self._job_lock = threading.Lock()
         self.searcher = HybridSearch(
             SearchStore(self.state, ranking=resolver_for(config, self.state)),
-            vector=self.engine.vector_searcher(),
+            # The serving app's own, when mounted in one: a second searcher
+            # held a second resident matrix, OOM-killing a 2 GiB api replica.
+            vector=vector if vector is not None else self.engine.vector_searcher(),
             node_index=self.engine.node_index,
             wasm_relationship_search=config.search.wasm_relationship_search,
             steering_enabled=config.memory.steering_enabled,

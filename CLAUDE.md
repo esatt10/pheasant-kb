@@ -2996,6 +2996,16 @@ Each of these cost real time. They are listed because the shape recurs.
   `GROUP BY` over every node -- past 2 s on a cold store during that sync, so
   a working graph service read as unreachable. A liveness question gets a
   `SELECT 1` (`ping`), never an aggregate.
+- **A second facade over one process is a second copy of everything it holds.**
+  The MCP server's `PheasantTools` built its own engine and `HybridSearch`,
+  so on an api replica with `search.vector_store.resident` its first
+  `search_context` loaded a second 478 MB vector matrix and the 2 GiB
+  container was OOM-killed (exit 137): every agent's search took the region's
+  api down for the minute it took to restart, while `POST /search` -- the
+  app's own searcher -- worked hundreds of times beside it. Found taking MCP
+  screenshots on the Azure fleet. The app hands MCP its vector searcher now
+  (`create_mcp_tools(config, vector)`), and `tests/test_mcp_apps.py` holds the
+  identity.
 - **A test file name is a namespace too.** `tests/test_decision_gates.py`
   already held the `pheasant.decision` GateSet invariant, and writing the
   Decisions API tests to the same name replaced it; the new suite is

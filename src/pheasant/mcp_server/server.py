@@ -23,7 +23,7 @@ from pheasant.version import __version__
 logger = logging.getLogger(__name__)
 
 
-def create_mcp_tools(config: PheasantConfig) -> PheasantTools:
+def create_mcp_tools(config: PheasantConfig, vector: Any = None) -> PheasantTools:
     """Return a tool facade usable by MCP adapters or direct tests.
 
     The optional official MCP SDK can wrap this facade at runtime; keeping the
@@ -31,10 +31,10 @@ def create_mcp_tools(config: PheasantConfig) -> PheasantTools:
     core-only install use the same tools over HTTP.
     """
 
-    return PheasantTools(config)
+    return PheasantTools(config, vector=vector)
 
 
-def create_mcp_server(config: PheasantConfig) -> Any:
+def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     """Create the official MCP SDK server around the pheasant tool facade."""
 
     server_class = _mcp_server_class()
@@ -43,7 +43,7 @@ def create_mcp_server(config: PheasantConfig) -> Any:
     # handler is an `UnexpectedResourceError` with the message stripped.
     anticipated = _anticipated_failures("tool")
     anticipated_resource = _anticipated_failures("resource")
-    tools = create_mcp_tools(config)
+    tools = create_mcp_tools(config, vector)
     mcp = server_class(
         # Keep the name positional and everything else keyword: SDK 2.x
         # inserted `title` and `description` ahead of `instructions` in the
@@ -1235,7 +1235,7 @@ def _streamable_http_options(config: PheasantConfig) -> dict[str, Any]:
     }
 
 
-def streamable_http_app(config: PheasantConfig) -> Any:
+def streamable_http_app(config: PheasantConfig, vector: Any = None) -> Any:
     """The MCP streamable-HTTP ASGI app, for mounting inside the API server.
 
     ``pheasant serve`` advertises ``streamable_http_url: <base>/mcp`` from
@@ -1254,7 +1254,7 @@ def streamable_http_app(config: PheasantConfig) -> Any:
     if not config.server.mcp.transports.get("streamable_http", False):
         return None
     try:
-        mcp = create_mcp_server(config)
+        mcp = create_mcp_server(config, vector)
         # The route inside the SDK's app becomes the *mount* point's suffix,
         # so its internal path has to be "/" — leaving it at "/mcp" while
         # mounting at "/mcp" would serve "/mcp/mcp". Mounting the app at "/"

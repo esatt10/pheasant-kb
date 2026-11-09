@@ -1077,7 +1077,7 @@ def create_app(
     # manager: the SDK's streamable-http app is useless without its own
     # lifespan running ("Task group is not initialized"), and a plain
     # app.mount() does not run a sub-app's lifespan.
-    mcp_asgi_app = _mcp_asgi_app(config) if role_policy.serves_ui else None
+    mcp_asgi_app = _mcp_asgi_app(config, search.vector) if role_policy.serves_ui else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -5337,7 +5337,7 @@ def _mcp_tool_summaries() -> list[dict]:
     return summaries
 
 
-def _mcp_asgi_app(config: PheasantConfig):
+def _mcp_asgi_app(config: PheasantConfig, vector: Any = None):
     """The MCP streamable-HTTP ASGI app to mount at ``/mcp``, or None.
 
     ``GET /mcp/info`` has always advertised ``streamable_http_url:
@@ -5353,7 +5353,7 @@ def _mcp_asgi_app(config: PheasantConfig):
     try:
         from pheasant.mcp_server.server import streamable_http_app
 
-        return streamable_http_app(config)
+        return streamable_http_app(config, vector)
     except Exception:  # pragma: no cover - depends on the optional [mcp] extra
         logger.warning("MCP streamable-http app unavailable; /mcp not mounted", exc_info=True)
         return None

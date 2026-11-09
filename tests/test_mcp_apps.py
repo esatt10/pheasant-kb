@@ -174,3 +174,47 @@ sources:
                     assert payload["figures"][0]["relative_path"] == "images/diagram.png"
     finally:
         app.state.engine.close()
+
+
+def test_the_mounted_facade_shares_the_apps_vector_searcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One resident vector matrix per process, not one per surface.
+
+    The MCP facade built its own engine and searcher, so on an api replica
+    holding its vectors resident (478 MB on the Azure fleet) the first MCP
+    search loaded a second copy and the 2 GiB container was OOM-killed --
+    every agent's search_context took the region's api down.
+    """
+
+    import importlib
+
+    app_module = importlib.import_module("pheasant.api.app")
+    from pheasant.mcp_server import server
+    from tests.conftest import make_vector_engine
+
+    engine = make_vector_engine(tmp_path)
+    config = engine.config
+    engine.close()
+    handed: list[object] = []
+    built: list[object] = []
+    real_app, real_search = server.streamable_http_app, app_module.HybridSearch
+
+    def spy(config, vector=None):
+        handed.append(vector)
+        return real_app(config, vector)
+
+    def recording_search(*args, **kwargs):
+        built.append(real_search(*args, **kwargs))
+        return built[-1]
+
+    monkeypatch.setattr(server, "streamable_http_app", spy)
+    monkeypatch.setattr(app_module, "HybridSearch", recording_search)
+    sentinel = object()
+    assert server.create_mcp_tools(config, sentinel).searcher.vector is sentinel
+    app = app_module.create_app(config=config)
+    try:
+        assert handed and handed[0] is not None, "the app handed MCP no vector searcher"
+        assert handed[0] is built[0].vector, "MCP got a searcher of its own"
+    finally:
+        app.state.engine.close()
