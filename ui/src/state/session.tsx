@@ -481,9 +481,14 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         centerId: surfaced[0] ?? state.centerId,
         focusIds: surfaced,
         showAll: false,
-        // A newly kept artifact opens beside the chat, as an artifact does.
-        ...(firstAnswer && action.answer.artifact
-          ? { panelTab: "artifacts" as PanelTab, artifactId: action.answer.artifact.id, ...unfoldTab(state, "artifacts") }
+        // A kept artifact opens beside the chat, as an artifact does -- on every
+        // dispatch of its answer: the stream sends the answer when its text
+        // exists and again when it ends, and the second one, read as "not the
+        // first answer", used to put the panel back on the graph.
+        ...(action.answer.artifact
+          ? firstAnswer || state.artifactId === action.answer.artifact.id
+            ? { panelTab: "artifacts" as PanelTab, artifactId: action.answer.artifact.id, ...unfoldTab(state, "artifacts") }
+            : {}
           : { panelTab: (action.answer.facts.length > 0 ? "facts" : "graph") as PanelTab }),
       };
     }

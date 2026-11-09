@@ -101,11 +101,11 @@ _STYLE = f"""
 :root[data-theme="dark"]{{{_DARK}}}
 *{{box-sizing:border-box}}
 html,body{{margin:0;background:var(--bg);color:var(--text)}}
-body{{font:15px/1.6 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
-  padding:24px 16px 48px}}
+body{{font:14px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding:18px 16px 40px}}
 main{{max-width:880px;margin:0 auto}}
-h1{{font-size:1.5rem;line-height:1.25;margin:0 0 .25rem}}
-h2{{font-size:1.15rem;margin:2rem 0 .5rem}}
+h1{{font-size:1.3rem;line-height:1.25;margin:0 0 .25rem}}
+h2{{font-size:1.08rem;margin:1.6rem 0 .5rem}}
 h3{{font-size:1rem;margin:1.5rem 0 .4rem}}
 p,li{{color:var(--text)}}
 a{{color:var(--accent-text)}}
