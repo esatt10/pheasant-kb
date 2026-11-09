@@ -490,11 +490,11 @@ class WorkerBackedEngine:
             # The beat syncs only pipelines that run by themselves. A sync-all
             # child does not know it was the beat, so when any enabled source
             # is paused or manual, each of the others gets its own child.
-            from pheasant.sync.pipeline import runs_automatically
+            from pheasant.sync.pipeline import beat_sources
 
             enabled = self._engine.enabled_sources()
-            names = [s.name for s in enabled if runs_automatically(s)]
-            if len(names) != len(enabled):
+            names = [s.name for s in beat_sources(enabled, getattr(self._engine, "state", None))]
+            if names != [s.name for s in enabled]:
                 return [
                     self.sync_source(name, mode, max_depth=max_depth, on_progress=on_progress)
                     for name in names

@@ -1458,6 +1458,13 @@ class SourceSyncSettings(ModelMixin):
     #: Web: seconds between requests to one host; ``None`` reads robots.txt.
     min_request_interval_seconds: float | None = None
     respect_robots: bool = True
+    #: The scheduler beat syncs this source at most this often (``None``:
+    #: every beat). A save, a file change or *Run now* is not held to it.
+    min_interval_seconds: int | None = None
+    #: Give way on the beat while another source's sync is running or
+    #: queued, so this source never delays the content it sits beside;
+    #: after four intervals of giving way it runs anyway.
+    yield_to_content: bool = False
 
 
 @dataclass
@@ -2146,6 +2153,38 @@ class ReadinessSettings(ModelMixin):
     concurrency_probe_items: int = 5
 
 
+#: Artifact kinds: composed ``files``, a saved ``report``, a whole ``thread``.
+ARTIFACT_KINDS = ("files", "report", "thread")
+
+
+@dataclass
+class ArtifactsSettings(ModelMixin):
+    """What the region keeps of what it generates (`services/artifacts.py`).
+
+    The runtime values live in ``/state`` (`services/artifact_settings.py`),
+    laid over these, so a change made from the UI, HTTP or MCP reaches every
+    replica without a restart; these are the defaults it starts from.
+    """
+
+    #: Whether anything can be saved at all (the Save buttons, ``save_artifact``).
+    enabled: bool = True
+    #: Keep every composed answer the moment it is written. Off: an answer is
+    #: kept only when somebody saves it.
+    auto_save: bool = False
+    #: The ``artifacts`` source is indexed on the scheduler beat at most this
+    #: often, never at save time: until then an artifact is readable from its
+    #: row and marked ``pending``.
+    index_interval_seconds: int = 1800
+    #: Give way on the beat while content sources are syncing or queued.
+    yield_to_content: bool = True
+    #: Archive artifacts older than this many days (``0`` keeps them). Archived
+    #: is reversible: the row stays and its files leave the index, the way a
+    #: memory record's TTL archive works.
+    retention_days: int = 0
+    #: The kinds retention applies to; empty is every kind.
+    retention_kinds: list[str] = field(default_factory=list)
+
+
 @dataclass
 class PheasantConfig(ModelMixin):
     pheasant: PheasantSettings = field(default_factory=PheasantSettings)
@@ -2163,6 +2202,7 @@ class PheasantConfig(ModelMixin):
     evaluation: EvaluationSettings = field(default_factory=EvaluationSettings)
     tuning: TuningSettings = field(default_factory=TuningSettings)
     readiness: ReadinessSettings = field(default_factory=ReadinessSettings)
+    artifacts: ArtifactsSettings = field(default_factory=ArtifactsSettings)
     sources: list[SourceConfig] = field(default_factory=list)
 
     @classmethod

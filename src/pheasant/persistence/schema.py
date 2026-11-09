@@ -115,9 +115,22 @@ CREATE TABLE IF NOT EXISTS saved_artifacts (
   title TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  session_id TEXT,
+  channel TEXT,
+  archived_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_saved_artifacts_owner ON saved_artifacts(kb_id, owner, created_at);
+-- Settings a running region changes for every replica at once, laid over the
+-- config's defaults (`services/artifact_settings.py`): one row per section.
+CREATE TABLE IF NOT EXISTS region_settings (
+  kb_id TEXT NOT NULL,
+  section TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT,
+  PRIMARY KEY (kb_id, section)
+);
 -- The same tombstone for one document (`persistence/archive.py`). Every sync
 -- skips a path held here before reading it, so the removal survives
 -- incremental and full syncs. `kind` is `archived` (reinstatable) or

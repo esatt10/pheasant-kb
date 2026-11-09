@@ -98,6 +98,12 @@ export const DEFAULT_TILE_LAYOUT: TileLayout = {
 
 export const DEFAULT_DOCKED: PanelTab[] = ["graph", "facts", "node", "artifacts", "taxonomy"];
 
+/** An opaque id for one conversation (a topic of the chat). */
+export function newConversationId(): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `conv-${random.replace(/-/g, "").slice(0, 16)}`;
+}
+
 export interface ChatTurn {
   id: string;
   question: string;
@@ -166,6 +172,12 @@ export interface SessionState {
    * without wiping the thread the reader may still want to scroll.
    */
   contextFrom: number;
+  /**
+   * The conversation the turns since `contextFrom` belong to: sent with each
+   * question, so whatever is kept from it is filed and traced under it. A new
+   * topic is a new conversation.
+   */
+  conversationId: string;
   /** A pinned answer length, or null to let each question decide. */
   answerDepth: AnswerDepth | null;
   /** Pane widths in px. The graph pane in particular needs to be growable. */
@@ -239,6 +251,7 @@ const INITIAL: SessionState = {
   turns: [],
   draft: "",
   contextFrom: 0,
+  conversationId: newConversationId(),
   answerDepth: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
@@ -608,7 +621,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         showAll: false,
       };
     case "new-topic":
-      return { ...state, contextFrom: state.turns.length };
+      return { ...state, contextFrom: state.turns.length, conversationId: newConversationId() };
     case "set-answer-depth":
       return { ...state, answerDepth: action.depth };
     case "new-conversation":
@@ -619,6 +632,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         ...state,
         turns: [],
         contextFrom: 0,
+        conversationId: newConversationId(),
         draft: "",
         answer: null,
         surfacedIds: [],

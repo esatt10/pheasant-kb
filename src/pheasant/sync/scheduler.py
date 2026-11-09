@@ -59,6 +59,9 @@ class SchedulerService:
         self.log_upkeep = bool(log_upkeep)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        #: Work a composition root adds to every beat, outside ``sync_lock``
+        #: (artifact retention): best-effort, so one failing never stops the beat.
+        self.upkeep: list[Any] = []
         #: Monotonic clock of the last evaluation run this process started, so
         #: ``evaluation.minimum_interval_seconds`` is enforced here rather than
         #: leaving a corpus under active indexing -- which changes materially
@@ -204,9 +207,9 @@ class SchedulerService:
         if self.jobs is None:
             return self.engine.sync_all("incremental", scheduled=True)
         from pheasant.sync.background_jobs import run_sync_job
-        from pheasant.sync.pipeline import runs_automatically
+        from pheasant.sync.pipeline import beat_sources
 
-        names = [s.name for s in self.engine.enabled_sources() if runs_automatically(s)]
+        names = [s.name for s in beat_sources(self.engine.enabled_sources(), self.engine.state)]
         return run_sync_job(
             self.jobs,
             "Scheduled sync",
@@ -276,6 +279,11 @@ class SchedulerService:
             # `max_rows_per_pass` on top, so a backlog costs several beats
             # rather than one long one. No-ops fast when observation is off.
             self._log_upkeep()
+            for task in list(self.upkeep):
+                try:
+                    task()
+                except Exception:  # noqa: BLE001 - upkeep must never break the beat
+                    logger.warning("Scheduler upkeep failed", exc_info=True)
             # Same posture, same reason: outside `sync_lock`, bounded by its
             # own interval, and a no-op unless the region has materially
             # changed. See `_evaluation_upkeep`.

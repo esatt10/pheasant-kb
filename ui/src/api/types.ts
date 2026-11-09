@@ -574,9 +574,27 @@ export interface EmbeddingsStatus {
 }
 
 /** A kept artifact as listed: composed files or a saved report, no contents. */
+export interface ArtifactSettings {
+  enabled: boolean;
+  auto_save: boolean;
+  index_interval_seconds: number;
+  yield_to_content: boolean;
+  retention_days: number;
+  retention_kinds: string[];
+}
+
+/** `GET /artifacts/settings`: in force, the config's defaults, and who changed what. */
+export interface ArtifactSettingsView {
+  settings: ArtifactSettings;
+  defaults: ArtifactSettings;
+  changed: string[];
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
 export interface ArtifactSummary {
   id: string;
-  kind: "files" | "report";
+  kind: "files" | "report" | "thread";
   title: string;
   created_at: string;
   /** Who kept it: the first level of its folder. */
@@ -586,6 +604,13 @@ export interface ArtifactSummary {
   folder: string | null;
   files: { name: string; language: string | null; previewable: boolean }[];
   has_visual: boolean;
+  conversation_id?: string | null;
+  /** ui, api or mcp: where it was kept from. */
+  channel?: string | null;
+  archived_at?: string | null;
+  /** Whether the scheduled artifacts sync has indexed it yet. */
+  index_status?: "indexed" | "pending" | "archived" | null;
+  trace?: { intent?: string | null; accepted?: boolean | null; degraded?: boolean | null; trace_id?: string | null } | null;
 }
 
 export interface ArtifactFile {

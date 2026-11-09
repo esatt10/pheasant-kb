@@ -34,6 +34,7 @@ record set without calling pheasant — see
 ├── symbols.parquet
 ├── memory_records.parquet
 ├── sync_events.parquet
+├── saved_artifacts.parquet  ← kept artifacts: files, citations and trace in payload_json
 ├── graph_nodes.parquet
 ├── graph_edges.parquet
 └── artifact_terms.parquet   ← only when asked for with --table
@@ -267,6 +268,26 @@ Sync run history. Primary key `id`.
 | `started_at` / `finished_at` | VARCHAR | ISO-8601 UTC. |
 | `details_json` | VARCHAR | Run detail, as JSON text. |
 | `error_json` | VARCHAR | Failure detail, as JSON text. |
+
+### `saved_artifacts.parquet`
+
+What the region kept of what it generated: composed files, saved reports and
+whole conversation threads. Primary key `id`. Each artifact's files are also
+ordinary rows of `artifacts`/`chunks` under the `artifacts` source once it is
+indexed; this table is the record itself, with its trace.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR | Artifact ID (24 hex). Ends its folder name: `…--<id>`. |
+| `kb_id` | VARCHAR | The knowledge base. |
+| `owner` | VARCHAR | Who kept it; NULL is shared. |
+| `kind` | VARCHAR | `files`, `report` or `thread`. |
+| `title` | VARCHAR | Its title. |
+| `payload_json` | VARCHAR | JSON text: `files`, `citations` (its evidence), `folder`, and `trace` -- conversation, channel, keywords, intent, `confidence` (the answering loop's `decisions`, `accepted`, `degraded`) and `steps`. A thread's `turns` each carry their own. |
+| `created_at` / `updated_at` | VARCHAR | ISO-8601 UTC. |
+| `session_id` | VARCHAR | The conversation it was kept from; NULL if none. |
+| `channel` | VARCHAR | `ui`, `api` or `mcp`. |
+| `archived_at` | VARCHAR | When retention (or a person) archived it; NULL while live. |
 
 ### `graph_nodes.parquet`
 

@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from pheasant.api.artifact_routes import channel as artifact_channel
 from pheasant.services import answer_resume
 from pheasant.services import assistant as assistant_service
 
@@ -76,8 +77,12 @@ class ChatRequest(BaseModel):
     # an hour, so a reader whose connection dropped can collect it from
     # `GET /assistant/chat/answers/{answer_id}` (`services/answer_resume.py`).
     answer_id: str | None = None
+    # Keep a composed answer as an artifact: true / false, or unset to follow
+    # the region's auto_save. `conversation_id` files it under its thread.
+    save: bool | None = None
+    conversation_id: str | None = None
 
-    def service_request(self) -> assistant_service.AnswerRequest:
+    def service_request(self, channel: str = "api") -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
             question=self.question,
             mode=self.mode,
@@ -100,6 +105,9 @@ class ChatRequest(BaseModel):
             current_directory=self.current_directory,
             intent=self.intent,
             source_names=self.source_names,
+            save=self.save,
+            conversation_id=self.conversation_id,
+            channel=channel,
         )
 
 
@@ -159,7 +167,7 @@ def register_assistant_routes(
         from contextvars import copy_context
 
         handler_started = time.perf_counter()
-        answer_request = req.service_request()
+        answer_request = req.service_request(artifact_channel(request))
         assistant_service.admit(services, answer_request)
         permit = assistant_service.acquire(services)
         budget = assistant_service.create_request_budget(services, answer_request)
@@ -233,7 +241,7 @@ def register_assistant_routes(
 
         # Refuse with a status code while one can still be sent; once the
         # stream opens, a refusal can only be an event.
-        answer_request = req.service_request()
+        answer_request = req.service_request(artifact_channel(request))
         answer_resume.check_answer_id(req.answer_id)
         assistant_service.admit(services, answer_request)
         permit = assistant_service.acquire(services)

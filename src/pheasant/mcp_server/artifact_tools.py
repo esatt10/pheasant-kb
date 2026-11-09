@@ -1,9 +1,10 @@
 """Kept artifacts over MCP, and the view that shows one in an MCP host.
 
 A mixin plus a registration function, like ``region_tools.py``: adapters
-over `services.artifacts`, the operations behind ``/artifacts`` too. Every
-composed answer is kept as an artifact (``compose_artifact``'s result names
-it as ``artifact_id``), and any content can be saved as a report.
+over `services.artifacts`, the operations behind ``/artifacts`` too. Keeping
+is opt-in (``save_artifact``, or ``save`` on a question) unless the region's
+``auto_save`` is on (``configure_artifacts``); a whole conversation can be
+kept as a ``thread``. Every MCP call is recorded as channel ``mcp``.
 
 ``get_artifact`` declares ``ui://pheasant/artifact-view.html``, an MCP App
 view that shows the artifact as pheasant shows it -- file tabs, each file's
@@ -46,11 +47,22 @@ class ArtifactTools:
         limit: int = 50,
         owner: str | None = None,
         principal: str | None = None,
+        conversation_id: str | None = None,
+        kind: str | None = None,
+        archived: bool = False,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import artifacts
 
-        return artifacts.list_artifacts(self.services, principal, limit=limit, owner_name=owner)
+        return artifacts.list_artifacts(
+            self.services,
+            principal,
+            limit=limit,
+            owner_name=owner,
+            conversation_id=conversation_id,
+            kind=kind,
+            archived=archived,
+        )
 
     def get_artifact(
         self, knowledge_base: str, artifact_id: str, principal: str | None = None
@@ -67,8 +79,12 @@ class ArtifactTools:
         markdown: str | None = None,
         files: list[dict] | None = None,
         summary: str | None = None,
-        kind: str = "report",
+        kind: str | None = None,
         principal: str | None = None,
+        conversation_id: str | None = None,
+        turns: list[dict] | None = None,
+        visual: dict | None = None,
+        citations: list[dict] | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import artifacts
@@ -82,6 +98,11 @@ class ArtifactTools:
                 files=files,
                 summary=summary,
                 principal=principal,
+                conversation_id=conversation_id,
+                channel="mcp",
+                turns=turns,
+                visual=visual,
+                citations=citations,
             ),
         )
 
@@ -135,6 +156,34 @@ class ArtifactTools:
 
         return artifacts.delete(self.services, artifact_id, principal)
 
+    def artifacts_lifecycle(
+        self, knowledge_base: str, action: str, *, dry_run: bool = False, **selection: Any
+    ) -> dict:
+        """``delete`` / ``archive`` / ``restore`` the artifacts a selection names."""
+
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import artifact_lifecycle as lifecycle
+
+        principal = selection.pop("principal", None)
+        chosen = lifecycle.Selection(**selection)
+        if action == "delete":
+            return lifecycle.delete_many(
+                self.services, chosen, principal=principal, dry_run=dry_run
+            )
+        operation = lifecycle.archive if action == "archive" else lifecycle.restore
+        return operation(self.services, chosen, principal=principal)
+
+    def artifact_settings(
+        self, knowledge_base: str, changes: dict | None = None, principal: str | None = None
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import artifact_settings
+        from pheasant.services.artifacts import owner
+
+        if not changes:
+            return artifact_settings.describe(self.services)
+        return artifact_settings.update(self.services, changes, owner(principal))
+
 
 def register_artifact_tools(
     mcp: Any, tools: Any, anticipated: Any, anticipated_resource: Any
@@ -155,23 +204,37 @@ def register_artifact_tools(
     @mcp.tool()
     @anticipated
     def list_artifacts(
-        knowledge_base: str, limit: int = 50, owner: str | None = None, principal: str | None = None
+        knowledge_base: str,
+        limit: int = 50,
+        owner: str | None = None,
+        principal: str | None = None,
+        conversation_id: str | None = None,
+        kind: str | None = None,
+        archived: bool = False,
     ) -> dict:
-        """List the artifacts this region keeps, newest first (``owner`` for one person's).
+        """List kept artifacts: newest day first, then person, then time.
 
-        Every answer composed with compose_artifact (or ask_knowledge_base with
-        intent "compose") is kept, and save_artifact keeps a report. They are
-        knowledge like any other: each lands in the "artifacts" source at
-        folder <owner>/<yyyy>/<mm>/<title>--<id>/ (its files, a README.md
-        whose Sources link the documents it cites, and report.html for a
-        report with a diagram), so search_context finds them, browse_source
-        lists them, the graph links each to its sources, and archive_documents
-        removes them. Each entry is {id, kind ("files" or "report"), title,
-        created_at, owner, source, folder, files: [{name, language,
-        previewable}], has_visual}, without contents: get_artifact has those.
+        owner, conversation_id and kind narrow it; archived=true lists what
+        retention archived instead. Kept artifacts are knowledge: each lands in
+        the "artifacts" source at <yyyy>/<mm>/<dd>/<owner>/<session>/<title>--<id>/
+        (its files, a README.md whose Sources link the documents it cites, and
+        report.html for a report with a diagram), indexed on a schedule rather
+        than at save time -- index_status is "pending" until it is, then
+        "indexed". Each entry is {id, kind ("files", "report" or "thread"),
+        title, created_at, owner, conversation_id, channel, folder, files,
+        has_visual, index_status, trace: {intent, keywords, accepted,
+        degraded, trace_id}}, without contents: get_artifact has those.
         """
 
-        return tools.list_artifacts(knowledge_base, limit=limit, owner=owner, principal=principal)
+        return tools.list_artifacts(
+            knowledge_base,
+            limit=limit,
+            owner=owner,
+            principal=principal,
+            conversation_id=conversation_id,
+            kind=kind,
+            archived=archived,
+        )
 
     @mcp.tool(meta={"ui": {"resourceUri": ARTIFACT_APP_URI}, "ui/resourceUri": ARTIFACT_APP_URI})
     @anticipated
@@ -196,17 +259,25 @@ def register_artifact_tools(
         markdown: str | None = None,
         files: list[dict] | None = None,
         summary: str | None = None,
-        kind: str = "report",
+        kind: str | None = None,
         principal: str | None = None,
+        session: str | None = None,
+        turns: list[dict] | None = None,
+        visual: dict | None = None,
+        citations: list[dict] | None = None,
     ) -> dict:
-        """Keep a report or a set of files as an artifact, rendered in pheasant's style.
+        """Keep a report, a set of files or a whole conversation as an artifact.
 
         markdown is the report's text (raw HTML in it is not rendered); files
         are [{name, language, content}] -- an .html file is shown running, in
-        a sandbox that cannot reach the network. kind is "report" or "files".
-        Returns the artifact; view it with get_artifact, export it with
-        export_artifact. Composed answers are kept already: no need to save
-        those.
+        a sandbox that cannot reach the network. kind is "report", "files" or
+        "thread"; for a thread pass turns: [{question, answer: <the
+        ask_knowledge_base result>}], oldest first, and every turn keeps its
+        trace and citations. session files it under that conversation.
+        Composed answers are kept only if you save them, or ask with
+        save=true, unless the region auto-saves (get_artifact_settings).
+        visual keeps a diagram create_visual returned (pass its citations too),
+        drawn in the artifact's report.html; the artifact view's "Save" does this.
         """
 
         return tools.save_artifact(
@@ -217,6 +288,10 @@ def register_artifact_tools(
             summary=summary,
             kind=kind,
             principal=principal,
+            conversation_id=session,
+            turns=turns,
+            visual=visual,
+            citations=citations,
         )
 
     @mcp.tool()
@@ -270,3 +345,89 @@ def register_artifact_tools(
         """Delete a kept artifact and remove its files from the index. It cannot be undone."""
 
         return tools.delete_artifact(knowledge_base, artifact_id, principal=principal)
+
+    @mcp.tool()
+    @anticipated
+    def delete_artifacts(
+        knowledge_base: str,
+        ids: list[str] | None = None,
+        owner: str | None = None,
+        session: str | None = None,
+        kind: str | None = None,
+        before: str | None = None,
+        dry_run: bool = True,
+        principal: str | None = None,
+    ) -> dict:
+        """Delete many artifacts at once: by ids, or by owner / session / kind / before.
+
+        dry_run defaults to true and lists what would go; call again with
+        dry_run=false to delete. At most 500 per call. A selection naming
+        nothing is refused. Deleting cannot be undone; archive_artifacts can.
+        """
+
+        return tools.artifacts_lifecycle(
+            knowledge_base,
+            "delete",
+            dry_run=dry_run,
+            ids=ids,
+            owner=owner,
+            conversation_id=session,
+            kind=kind,
+            before=before,
+            principal=principal,
+        )
+
+    @mcp.tool()
+    @anticipated
+    def archive_artifacts(
+        knowledge_base: str,
+        ids: list[str] | None = None,
+        owner: str | None = None,
+        session: str | None = None,
+        kind: str | None = None,
+        before: str | None = None,
+        restore: bool = False,
+        principal: str | None = None,
+    ) -> dict:
+        """Archive artifacts (out of search, kept, restorable), or restore=true to bring them back.
+
+        The selection works as on delete_artifacts. Retention archives the same
+        way on its own (get_artifact_settings: retention_days).
+        """
+
+        return tools.artifacts_lifecycle(
+            knowledge_base,
+            "restore" if restore else "archive",
+            ids=ids,
+            owner=owner,
+            conversation_id=session,
+            kind=kind,
+            before=before,
+            principal=principal,
+        )
+
+    @mcp.tool()
+    @anticipated
+    def get_artifact_settings(knowledge_base: str) -> dict:
+        """How this region keeps artifacts: auto_save, indexing schedule, retention.
+
+        settings is what is in force, defaults what the config says, changed
+        the keys somebody changed (and updated_by, updated_at).
+        """
+
+        return tools.artifact_settings(knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def configure_artifacts(
+        knowledge_base: str, changes: dict, principal: str | None = None
+    ) -> dict:
+        """Change how this region keeps artifacts, for every replica at once.
+
+        changes is any of: enabled (bool), auto_save (bool: keep every composed
+        answer), index_interval_seconds (int: the artifacts source is indexed on
+        the beat at most this often), yield_to_content (bool), retention_days
+        (int, 0 keeps), retention_kinds (list of files/report/thread).
+        """
+
+        return tools.artifact_settings(knowledge_base, changes, principal=principal)

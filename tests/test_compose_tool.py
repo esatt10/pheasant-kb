@@ -110,6 +110,8 @@ def test_a_composition_runs_as_a_job_and_get_job_returns_the_artifact() -> None:
             "principal": None,
             "principal_groups": None,
             "options": None,
+            "save": None,
+            "conversation_id": None,
         }
     ]
 

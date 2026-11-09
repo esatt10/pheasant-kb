@@ -686,6 +686,7 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # submission — also per call, so also live. Nothing here is a service
     # started at boot, which is the question this table actually asks.
     "readiness": True,
+    "artifacts": True,  # read per save and per beat (`services/artifact_settings.py`)
     "storage": False,
     "server": False,
     "pheasant": False,

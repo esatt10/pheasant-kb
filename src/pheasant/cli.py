@@ -202,6 +202,7 @@ def _serve_app(cfg, config_path: str, *, report_ui: bool = True, role: str | Non
     # Standalone startup syncs and every background producer share this gate.
     # Postgres indexers additionally hand it to the leader supervisor below.
     app_obj.state.sync_lock = sync_lock
+    scheduler.upkeep += getattr(app_obj.state, "scheduler_upkeep", [])  # artifact retention
     drainer = _queue_drainer(cfg, config_path, policy, sync_lock=sync_lock)
     log_drainer = _log_drainer(cfg, app_obj.state.engine, policy)
     refresher = _graph_refresher(cfg, app_obj.state.engine, policy)

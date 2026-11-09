@@ -44,7 +44,7 @@ VIEW_HEADER_POLICY = "sandbox allow-scripts; " + DOCUMENT_POLICY
 #: Files a reader can see drawn rather than as source.
 PREVIEWABLE = {".html", ".htm", ".md", ".markdown", ".svg"}
 
-KIND_LABELS = {"files": "Composed files", "report": "Report"}
+KIND_LABELS = {"files": "Composed files", "report": "Report", "thread": "Conversation"}
 
 _MARKDOWN = (
     MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False})
@@ -279,7 +279,11 @@ def _visual(payload: dict[str, Any]) -> tuple[str, str]:
     except OSError:  # an install without the view's asset: the report stands without it
         return "", ""
     data = json.dumps(
-        {"visual": visual, "citations": payload.get("citations") or []}, default=str
+        {
+            "visual": visual,
+            "citations": payload.get("visual_citations") or payload.get("citations") or [],
+        },
+        default=str,
     ).replace("<", "\\u003c")
     frame = (
         f'<iframe id="visual" class="visual-frame" sandbox="allow-scripts" '
@@ -338,7 +342,7 @@ def overview(artifact: dict[str, Any], *, theme: str | None = None) -> str:
     citations = payload.get("citations") or []
     cited = {int(c["index"]) for c in citations if str(c.get("index", "")).isdigit()}
     parts = [_header(artifact)]
-    if artifact.get("kind") == "report":
+    if artifact.get("kind") in ("report", "thread"):
         parts.append(markdown_html(payload.get("answer") or "", cited))
     elif payload.get("summary"):
         parts.append(markdown_html(payload["summary"], cited))
@@ -425,7 +429,7 @@ def markdown_export(artifact: dict[str, Any]) -> str:
     parts = [f"# {artifact.get('title') or 'Artifact'}"]
     if payload.get("question"):
         parts.append(f"> {payload['question']}")
-    if artifact.get("kind") == "report":
+    if artifact.get("kind") in ("report", "thread"):
         parts.append(str(payload.get("answer") or ""))
     elif payload.get("summary"):
         parts.append(str(payload["summary"]))

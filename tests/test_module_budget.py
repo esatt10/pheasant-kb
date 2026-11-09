@@ -79,7 +79,7 @@ CEILINGS: dict[str, int] = {
     # Raised by 14 for the sync pipeline's six `sources[].sync` fields
     # (schedule, paused, pipeline, the pacing three) and their docstring: they
     # are per-source settings, so they live on `SourceSyncSettings`.
-    "config/schema.py": 2308,
+    "config/schema.py": 2348,  # + the artifacts section
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -120,20 +120,20 @@ CEILINGS: dict[str, int] = {
     # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
     # kept until deleted) and its owner index; its code lives in
     # `services/artifacts.py`.
-    "persistence/schema.py": 1183,
+    "persistence/schema.py": 1195,  # + region_settings
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.
     "persistence/backends.py": 815,
     # Lowered from 1800 when the derived-index migrations moved to
     # `persistence/derived_indexes.py`.
-    "persistence/state_store.py": 1780,
+    "persistence/state_store.py": 1798,  # + saved_artifacts columns
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.
     # The OpenAI-spec HTTP client moved to `search/embedding_client.py`.
     "search/vector_store.py": 1300,
-    "setup_wizard.py": 2200,
+    "setup_wizard.py": 2225,  # + the artifacts section (rule 11)
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`. Raised from 2780 for the
     # removed-source tombstone guard in `_source`/the enabled-source walk.

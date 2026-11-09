@@ -83,7 +83,7 @@ from pheasant.sync.graph_history import snapshot_after_sync
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
-from pheasant.sync.pipeline import runs_automatically
+from pheasant.sync.pipeline import beat_sources, runs_automatically
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
     ReadFailures,
     _media_bytes,
@@ -759,15 +759,17 @@ class SyncEngine:
         scheduled: bool = False,
     ) -> list[SyncResult]:
         sources = self.enabled_sources()
-        # A beat syncs only what runs by itself; a deleted pipeline never runs.
-        sources = [s for s in sources if (runs_automatically(s) if scheduled else s.sync.pipeline)]
+        queue = queue_from_config(self.config, self.state)
+        # A beat syncs what runs by itself and is due; a deleted pipeline never runs.
+        if scheduled:
+            sources = beat_sources(sources, self.state, queue=queue)
+        sources = [s for s in sources if s.sync.pipeline]
         if not sources:
-            return []
+            return [] if queue is None else queue.close() or []
         workers = min(
             len(sources),
             max(1, int(self.config.sync.concurrency.max_parallel_sources or 1)),
         )
-        queue = queue_from_config(self.config, self.state)
         if queue is not None:
             try:
                 return self._sync_all_queued(

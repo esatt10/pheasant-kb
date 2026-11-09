@@ -1105,6 +1105,36 @@ def build_sections() -> list[Section]:
             ],
         ),
         Section(
+            id="artifacts",
+            title="Artifacts",
+            blurb=(
+                "What the region keeps of what it generates: composed files, saved "
+                "reports and whole conversation threads, filed by date, person and "
+                "session, searchable as the artifacts source once it is indexed. "
+                "Saving is something you do after an answer unless auto-save is on."
+            ),
+            covers=("artifacts",),
+            questions=[
+                Question(
+                    key="artifacts.auto_save",
+                    prompt="Keep every composed answer automatically?",
+                    help=(
+                        "Off, an answer is kept only when somebody saves it. It can be "
+                        "turned on and off later from the UI, HTTP or MCP."
+                    ),
+                    kind="bool",
+                    advanced=True,
+                ),
+                Question(
+                    key="artifacts.retention_days",
+                    prompt="Archive artifacts older than how many days (0 keeps them)?",
+                    help="Archived artifacts leave the index and can be restored.",
+                    kind="int",
+                    advanced=True,
+                ),
+            ],
+        ),
+        Section(
             id="readiness",
             title="Stress-test readiness",
             blurb=(

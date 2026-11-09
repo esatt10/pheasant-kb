@@ -5,7 +5,11 @@ report, used to live only in the browser tab that asked for it -- the region
 keeps no chat state, so a refresh took it away. Now every composed answer is
 kept the moment it is written, and any answer the stream kept
 (`services/answer_resume.py`) or any content a caller sends can be kept as a
-report. And kept means *knowledge*, not a sidecar:
+report. Keeping is opt-in: an answer is kept when somebody saves it (the
+Save buttons, ``save_artifact``, ``save: true`` on a question), or every
+composed answer when ``auto_save`` is on (`services/artifact_settings.py`). A
+whole conversation can be kept too, as a ``thread``. And kept means
+*knowledge*, not a sidecar:
 
 * **A source.** Each artifact lands, through the ordinary submission path
   (`services/ingestion.py`: receipts, idempotent placement, forwarded to the
@@ -14,9 +18,19 @@ report. And kept means *knowledge*, not a sidecar:
   it. Its files are searchable from the overall index, browsable in the
   taxonomy view, and removable like any other document (`services/archive.py`;
   an upload is removed outright, its bytes deleted by the indexer).
-* **A directory by identity, then time.** ``<owner>/<yyyy>/<mm>/<title>--<id>/``:
-  a person's artifacts stay together however many there are, a month keeps any
-  one folder small, and the id makes every artifact's folder its own.
+* **A directory by date, person, then session.**
+  ``<yyyy>/<mm>/<dd>/<owner>/<session>/<title>--<id>/``: a day keeps any one
+  folder small however many people work in the region, a conversation's
+  artifacts stay together, and the id makes every artifact's folder its own.
+  Listings read the same way: newest day first, then person.
+* **Indexed on a schedule, not at save time.** Saving lands the files; the
+  ``artifacts`` source syncs on the beat at most every
+  ``index_interval_seconds`` and gives way while content sources sync
+  (`sync/pipeline.beat_sources`). Until then an artifact is readable from its
+  row and listed ``pending``; *Run now* on the Syncs page indexes it at once.
+* **Traceable.** Each kept answer carries its trace (`services/artifact_trace.py`):
+  conversation, channel, ids, keywords, intent, the judgements behind it and
+  the steps it took.
 * **Its evidence as edges.** Every artifact holds a ``README.md`` whose Sources
   list links each cited passage's document by its path. The Markdown pass turns
   each link into a ``references`` edge and cross-source resolution lands it on
@@ -44,20 +58,22 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from pheasant.assistant.artifact_files import artifact_payload
+from pheasant.config.schema import ARTIFACT_KINDS
 from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services import artifact_render as render
+from pheasant.services.artifact_files import INDEX_FILE, kept_visual, source_files
+from pheasant.services.artifact_scope import (  # noqa: F401 - the module's public names
+    ARTIFACT_MODES,
+    ARTIFACTS_SOURCE,
+    artifacts_mode,
+    scope,
+)
 from pheasant.services.errors import ArtifactNotFound, InvalidRequest, ServiceError
 
 logger = logging.getLogger(__name__)
 
-#: The source every artifact lands in.
-ARTIFACTS_SOURCE = "artifacts"
-#: Each artifact's index page: what it is, and the documents it cites.
-INDEX_FILE = "README.md"
-#: The rendered report, for a report that draws a diagram.
-REPORT_FILE = "report.html"
-KINDS = ("files", "report")
+KINDS = ARTIFACT_KINDS
 #: What one saved artifact may hold. A composed module of forty files is a few
 #: hundred kilobytes; this refuses a payload that is not an artifact at all.
 MAX_BYTES = 2_000_000
@@ -65,59 +81,6 @@ EXPORT_FORMATS = ("html", "markdown", "zip")
 #: How long saving a report waits for the diagram its answer is still drawing.
 VISUAL_WAIT_SECONDS = 60
 _FOLDER_ID = re.compile(r"--([0-9a-f]{24})$")
-#: How a search or an answer treats saved artifacts, like ``memory`` does for
-#: memory records: ``include`` (the default: they are knowledge like any other
-#: document), ``exclude`` (the corpus as it was before anything was composed
-#: from it) or ``only`` (search what has been composed).
-ARTIFACT_MODES = ("include", "exclude", "only")
-
-
-def artifacts_mode(value: Any) -> str:
-    """``include`` / ``exclude`` / ``only`` from what a caller sent, or a refusal.
-
-    A boolean reads as the memory toggle does: ``true`` includes, ``false``
-    leaves them out.
-    """
-
-    if value is None or value == "" or value is True:
-        return "include"
-    if value is False:
-        return "exclude"
-    mode = str(value).strip().lower()
-    if mode in ARTIFACT_MODES:
-        return mode
-    raise InvalidRequest(
-        f"artifacts must be one of {', '.join(ARTIFACT_MODES)} (or true/false); got {value!r}"
-    )
-
-
-def scope(
-    value: Any,
-    source_name: str | None,
-    source_names: list[str] | None,
-    exclude_sources: list[str] | None,
-) -> tuple[str | None, list[str] | None, list[str] | None]:
-    """``(source_name, source_names, exclude_sources)`` with the artifacts toggle applied.
-
-    ``exclude`` is an ordinary source exclusion and ``only`` the ordinary
-    single-source scope, so every arm, filter and over-fetch already honours
-    it. ``only`` beside a scope naming other sources is refused rather than
-    silently overriding it.
-    """
-
-    mode = artifacts_mode(value)
-    if mode == "exclude":
-        excluded = list(dict.fromkeys([*(exclude_sources or []), ARTIFACTS_SOURCE]))
-        return source_name, source_names, excluded
-    if mode == "only":
-        named = {n for n in [source_name, *(source_names or [])] if n} - {ARTIFACTS_SOURCE}
-        if named:
-            raise InvalidRequest(
-                "artifacts: only searches the artifacts source and cannot be combined "
-                f"with a scope naming {', '.join(sorted(named))}"
-            )
-        return ARTIFACTS_SOURCE, None, exclude_sources
-    return source_name, source_names, exclude_sources
 
 
 @dataclass(frozen=True)
@@ -129,13 +92,23 @@ class SaveRequest:
     """
 
     title: str | None = None
-    kind: str = "report"
+    #: ``None`` reads it off the content: a composed answer is ``files``.
+    kind: str | None = None
     answer_id: str | None = None
     markdown: str | None = None
     files: list[dict[str, Any]] | None = None
     summary: str | None = None
     principal: str | None = None
     knowledge_base: str | None = None
+    #: The conversation it belongs to, and the surface it was saved from.
+    conversation_id: str | None = None
+    channel: str | None = None
+    #: ``kind: thread``: the conversation's turns, ``[{question, answer}]``.
+    turns: list[dict[str, Any]] | None = None
+    #: A diagram drawn after the answer (``create_visual``, "Redraw as") to keep
+    #: in its place, and the passages it cites when they are not the answer's.
+    visual: dict[str, Any] | None = None
+    citations: list[dict[str, Any]] | None = None
 
 
 def _now() -> str:
@@ -153,13 +126,25 @@ def _title(question: str, files: list[dict[str, Any]]) -> str:
     return files[0]["name"] if files else "Untitled artifact"
 
 
-def folder_for(who: str | None, created_at: str, title: str, artifact_id: str) -> str:
-    """``<owner>/<yyyy>/<mm>/<title>--<id>``: identity, then time, then the artifact."""
+def folder_for(
+    who: str | None,
+    created_at: str,
+    title: str,
+    artifact_id: str,
+    conversation_id: str | None = None,
+) -> str:
+    """``<yyyy>/<mm>/<dd>/<owner>/<session>/<title>--<id>``: date, person, session."""
 
     from pheasant.ingestion.landing import safe_filename
 
     person = safe_filename(who or "shared", fallback="shared")
-    return f"{person}/{created_at[:4]}/{created_at[5:7]}/{render.slug(title)[:48]}--{artifact_id}"
+    session = safe_filename(str(conversation_id or ""), fallback="no-session")[:40]
+    day = f"{created_at[:4]}/{created_at[5:7]}/{created_at[8:10]}"
+    return f"{day}/{person}/{session}/{render.slug(title)[:48]}--{artifact_id}"
+
+
+def _current_grammar(folder: str | None) -> bool:
+    return bool(folder) and bool(re.match(r"\d{4}/\d{2}/\d{2}/", str(folder)))
 
 
 def summary_of(record: dict[str, Any]) -> dict[str, Any]:
@@ -184,15 +169,53 @@ def summary_of(record: dict[str, Any]) -> dict[str, Any]:
             for f in payload.get("files") or []
         ],
         "has_visual": render.has_visual(payload),
+        "conversation_id": record.get("conversation_id"),
+        "channel": record.get("channel"),
+        "archived_at": record.get("archived_at"),
+        # `indexed` once the artifacts source has it, `pending` until the beat
+        # reaches it; a record read without the check says nothing.
+        "index_status": record.get("index_status"),
+        "trace": _trace_summary(payload),
+    }
+
+
+def _trace_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
+    trace = payload.get("trace")
+    if not isinstance(trace, dict):
+        return None
+    confidence = trace.get("confidence") or {}
+    return {
+        "intent": trace.get("intent"),
+        "keywords": trace.get("keywords"),
+        "accepted": confidence.get("accepted"),
+        "degraded": confidence.get("degraded"),
+        "trace_id": trace.get("trace_id"),
     }
 
 
 def _store(
-    context: ServiceContext, kind: str, title: str, payload: dict[str, Any], who: str | None
+    context: ServiceContext,
+    kind: str,
+    title: str,
+    payload: dict[str, Any],
+    who: str | None,
+    *,
+    conversation_id: str | None = None,
+    channel: str | None = None,
 ) -> dict[str, Any]:
+    from pheasant.services import artifact_settings
+
+    if not artifact_settings.current(context).enabled:
+        raise InvalidRequest(
+            "saving artifacts is turned off in this region (artifacts.enabled); "
+            "turn it on from the Artifacts panel or configure_artifacts"
+        )
     artifact_id = secrets.token_hex(12)
     created = _now()
-    payload = {**payload, "folder": folder_for(who, created, title, artifact_id)}
+    payload = {
+        **payload,
+        "folder": folder_for(who, created, title, artifact_id, conversation_id),
+    }
     encoded = json.dumps(payload, default=str)
     if len(encoded.encode("utf-8")) > MAX_BYTES:
         raise InvalidRequest(f"an artifact holds at most {MAX_BYTES // 1_000_000} MB")
@@ -203,10 +226,14 @@ def _store(
         "created_at": created,
         "owner": who,
         "payload": payload,
+        "conversation_id": conversation_id,
+        "channel": channel,
+        "archived_at": None,
+        "index_status": "pending",
     }
     context.state.execute(
         "INSERT INTO saved_artifacts(id, kb_id, owner, kind, title, payload_json, created_at, "
-        "updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "updated_at, session_id, channel) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (
             artifact_id,
             context.config.knowledge_base_id,
@@ -216,73 +243,22 @@ def _store(
             encoded,
             created,
             created,
+            conversation_id,
+            channel,
         ),
     )
     _publish(context, record)
     return record
 
 
-def index_page(record: dict[str, Any]) -> str:
-    """The artifact's ``README.md``: what it is, its content's gist, and its sources.
+def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
+    """Land the artifact in its source; the beat indexes it (``index_interval_seconds``).
 
-    Each source is a Markdown link to the cited document's path, which is
-    what makes it an edge: the Markdown pass reads the link as a reference
-    and cross-source resolution resolves the path to that document.
-    """
-
-    payload = record.get("payload") or {}
-    kind = render.KIND_LABELS.get(str(record.get("kind")), "Artifact")
-    lines = [f"# {record.get('title')}", ""]
-    if payload.get("question"):
-        lines += [f"> {payload['question']}", ""]
-    lines += [
-        f"- Artifact: `{record.get('id')}`",
-        f"- Kind: {kind}",
-        f"- Saved by: {record.get('owner') or 'shared'}",
-        f"- Saved: {str(record.get('created_at') or '')[:16].replace('T', ' ')} UTC",
-    ]
-    files = [str(f.get("name")) for f in payload.get("files") or []]
-    if files:
-        lines.append(f"- Files: {', '.join(f'`{name}`' for name in files)}")
-    lines.append("")
-    body = payload.get("answer") if record.get("kind") == "report" else payload.get("summary")
-    if body:
-        lines += [str(body).strip(), ""]
-    if payload.get("not_covered"):
-        lines += ["## Not covered by the sources", "", str(payload["not_covered"]).strip(), ""]
-    cited = [c for c in payload.get("citations") or [] if c.get("path")]
-    if cited:
-        lines += ["## Sources", ""]
-        for citation in cited:
-            label = f"{citation.get('source')} · {citation.get('path')}"
-            if citation.get("section"):
-                label += f" — {citation['section']}"
-            target = str(citation["path"]).replace(" ", "%20").replace(")", "%29")
-            lines.append(f"{citation.get('index')}. [{label.replace(']', '')}]({target})")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def source_files(record: dict[str, Any]) -> list[tuple[str, str]]:
-    """``(name, text)`` for every file of the artifact's folder, the index page first."""
-
-    payload = record.get("payload") or {}
-    files = [(INDEX_FILE, index_page(record))]
-    files += [
-        (render.safe_name(str(f.get("name") or ""), "file.txt"), str(f.get("content") or ""))
-        for f in payload.get("files") or []
-    ]
-    if record.get("kind") == "report" and render.has_visual(payload):
-        files.append((REPORT_FILE, render.overview(record)))
-    return files
-
-
-def _publish(context: ServiceContext, record: dict[str, Any], *, sync: bool = True) -> None:
-    """Land the artifact in its source and ask for that source to be indexed.
-
-    Best-effort past the row: a region that cannot land it (a read-only
-    replica with no landing service) still has the artifact, just not yet as
-    knowledge, and says so in the log.
+    Never a sync at save time: indexing is the scheduled, yielding job that
+    keeps generated work from delaying the content around it. Best-effort past
+    the row: a region that cannot land it (a read-only replica with no landing
+    service) still has the artifact, just not yet as knowledge, and says so in
+    the log.
     """
 
     from pheasant.services import ingestion
@@ -307,8 +283,6 @@ def _publish(context: ServiceContext, record: dict[str, Any], *, sync: bool = Tr
             ),
         )
         _ensure_source(context, str(landed["directory"]))
-        if sync and getattr(context, "indexing", None) is not None:
-            context.indexing.start_sync(ARTIFACTS_SOURCE)
     except (ServiceError, OSError):
         logger.warning("could not land artifact %s in its source", record["id"], exc_info=True)
 
@@ -323,10 +297,13 @@ def _ensure_source(context: ServiceContext, directory: str) -> None:
     # Registered here or by another replica (a runtime source lives in the
     # state store), and not removed since: nothing to do.
     if known and not context.state.source_removed(ARTIFACTS_SOURCE):
+        apply_pacing(context)
         return
     from pheasant.config.schema import PheasantConfig
     from pheasant.registry.source_registry import SourceRegistry
+    from pheasant.services import artifact_settings
 
+    settings = artifact_settings.current(context)
     source = PheasantConfig.model_validate(
         {
             "sources": [
@@ -338,6 +315,7 @@ def _ensure_source(context: ServiceContext, directory: str) -> None:
                     # Every file an artifact holds: the default include list is
                     # code-shaped and would drop a report's HTML.
                     "include": ["**/*"],
+                    "sync": _pacing(settings),
                 }
             ]
         }
@@ -346,17 +324,66 @@ def _ensure_source(context: ServiceContext, directory: str) -> None:
     config.sources = [s for s in config.sources if s.name != ARTIFACTS_SOURCE] + [source]
 
 
-def keep_composed(
-    context: ServiceContext, question: str, principal: str | None, result: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Keep a composed answer's files, if it wrote any; its listing summary.
+def _pacing(settings: Any) -> dict[str, Any]:
+    return {
+        "min_interval_seconds": int(settings.index_interval_seconds or 0) or None,
+        "yield_to_content": bool(settings.yield_to_content),
+        # A boot is not a reason to index generated work ahead of content.
+        "on_startup": False,
+    }
 
-    Called by `services.assistant.answer` for every compose answer, so HTTP,
-    the stream and MCP keep the same artifact. A store that cannot keep it
-    costs the artifact, never the answer.
+
+def apply_pacing(context: ServiceContext) -> None:
+    """Hold the ``artifacts`` source to the settings' schedule, if it is registered."""
+
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.registry.source_registry import SourceRegistry
+    from pheasant.services import artifact_settings
+
+    config = context.config
+    source = next((s for s in config.sources if s.name == ARTIFACTS_SOURCE), None)
+    if source is None:
+        row = context.state.get_source(ARTIFACTS_SOURCE)
+        if not row or not row.get("config_json"):
+            return
+        source = PheasantConfig.model_validate(
+            {"sources": [json.loads(row["config_json"])]}
+        ).sources[0]
+    wanted = _pacing(artifact_settings.current(context))
+    if all(getattr(source.sync, key, None) == value for key, value in wanted.items()):
+        return
+    for key, value in wanted.items():
+        setattr(source.sync, key, value)
+    SourceRegistry(config, context.state).register_source(source)
+    config.sources = [s for s in config.sources if s.name != ARTIFACTS_SOURCE] + [source]
+
+
+def keep_composed(
+    context: ServiceContext,
+    question: str,
+    principal: str | None,
+    result: dict[str, Any],
+    *,
+    save: bool | None = None,
+    conversation_id: str | None = None,
+    channel: str | None = None,
+) -> dict[str, Any] | None:
+    """Keep a composed answer's files when asked to, or when auto-save is on.
+
+    Called by `services.assistant.answer` for every answer, so HTTP, the
+    stream and MCP decide alike. ``save`` is the caller's choice for this
+    answer; ``None`` follows ``auto_save``. A store that cannot keep it costs
+    the artifact, never the answer.
     """
 
+    from pheasant.services import artifact_settings
+    from pheasant.services.artifact_trace import trace_of
+
     if (result.get("route") or {}).get("intent") != "compose":
+        return None
+    settings = artifact_settings.current(context)
+    wanted = settings.auto_save if save is None else bool(save)
+    if not (wanted and settings.enabled):
         return None
     parsed = artifact_payload(result)
     if not parsed.get("files"):
@@ -367,10 +394,19 @@ def keep_composed(
         "files": parsed["files"],
         "not_covered": parsed.get("not_covered"),
         "citations": parsed.get("citations"),
+        "trace": trace_of(
+            result, question=question, conversation_id=conversation_id, channel=channel
+        ),
     }
     try:
         record = _store(
-            context, "files", _title(question, parsed["files"]), payload, owner(principal)
+            context,
+            "files",
+            _title(question, parsed["files"]),
+            payload,
+            owner(principal),
+            conversation_id=conversation_id,
+            channel=channel,
         )
     except Exception:  # noqa: BLE001 - the answer stands without its copy
         logger.warning("could not keep a composed artifact", exc_info=True)
@@ -380,6 +416,19 @@ def keep_composed(
 
 def _report_from_answer(answer: dict[str, Any], question: str) -> dict[str, Any]:
     compact = artifact_payload({**answer, "answer_mode": None})
+    if (answer.get("route") or {}).get("intent") == "compose":
+        # A composed answer saved afterwards is the files it wrote, exactly
+        # what auto-save would have kept.
+        parsed = artifact_payload(answer)
+        if parsed.get("files"):
+            return {
+                "question": question,
+                "summary": parsed.get("summary"),
+                "files": parsed["files"],
+                "not_covered": parsed.get("not_covered"),
+                "citations": parsed.get("citations"),
+                "kind": "files",
+            }
     return {
         "question": question,
         "answer": str(answer.get("answer") or ""),
@@ -394,10 +443,26 @@ def _report_from_answer(answer: dict[str, Any], question: str) -> dict[str, Any]
 def save(context: ServiceContext, request: SaveRequest) -> dict[str, Any]:
     """Keep an answer or given content as an artifact; the artifact."""
 
+    from pheasant.services.artifact_trace import channel_of, thread_payload, trace_of
+
     who = owner(request.principal)
-    kind = request.kind if request.kind in KINDS else None
-    if kind is None:
+    if request.kind is not None and request.kind not in KINDS:
         raise InvalidRequest(f"kind must be one of {', '.join(KINDS)}")
+    kind = request.kind
+    channel = channel_of(request.channel)
+    keep = {"conversation_id": request.conversation_id, "channel": channel}
+    drawn = kept_visual(request.visual)
+    drawn_citations = (
+        artifact_payload({"citations": request.citations, "answer_mode": None}).get("citations")
+        if request.citations
+        else None
+    )
+    if kind == "thread" or (kind is None and request.turns):
+        payload, title = thread_payload(
+            request.turns, conversation_id=request.conversation_id, channel=channel
+        )
+        record = _store(context, "thread", str(request.title or title)[:120], payload, who, **keep)
+        return _with_payload(context, record)
     if request.answer_id:
         from pheasant.services import answer_resume
 
@@ -414,6 +479,19 @@ def save(context: ServiceContext, request: SaveRequest) -> dict[str, Any]:
         answer = kept["answer"]
         question = str(answer.get("question") or "")
         payload = _report_from_answer(answer, question)
+        kind = kind or payload.pop("kind", None) or "report"
+        payload.pop("kind", None)
+        payload["trace"] = trace_of(
+            answer,
+            question=question,
+            conversation_id=request.conversation_id,
+            channel=channel,
+            answer_id=request.answer_id,
+        )
+        if drawn:
+            payload["visual"] = drawn
+            if drawn_citations:
+                payload["visual_citations"] = drawn_citations
         title = request.title or _title(question, payload["files"])
     else:
         files = [
@@ -425,16 +503,18 @@ def save(context: ServiceContext, request: SaveRequest) -> dict[str, Any]:
             for n, f in enumerate(request.files or [], 1)
             if isinstance(f, dict)
         ]
-        if not (request.markdown or files):
-            raise InvalidRequest("save_artifact needs answer_id, markdown or files")
+        if not (request.markdown or files or drawn):
+            raise InvalidRequest("save_artifact needs answer_id, markdown, files or a visual")
         payload = {
             "answer": request.markdown or "",
             "summary": request.summary,
             "files": files,
-            "citations": [],
+            "citations": drawn_citations or [],
+            "visual": drawn,
         }
         title = request.title or (_title("", files) if files else "Report")
-    return _with_payload(context, _store(context, kind, str(title), payload, who))
+        kind = kind or "report"
+    return _with_payload(context, _store(context, kind, str(title), payload, who, **keep))
 
 
 def _with_payload(context: ServiceContext, record: dict[str, Any]) -> dict[str, Any]:
@@ -454,18 +534,53 @@ def _record(row: Any) -> dict[str, Any]:
         "created_at": row["created_at"],
         "owner": row.get("owner"),
         "payload": json.loads(row.get("payload_json") or "{}"),
+        "conversation_id": row.get("session_id"),
+        "channel": row.get("channel"),
+        "archived_at": row.get("archived_at"),
     }
+
+
+#: Every column a record is read from.
+COLUMNS = "id, owner, kind, title, payload_json, created_at, session_id, channel, archived_at"
 
 
 def _load(context: ServiceContext, artifact_id: str) -> dict[str, Any]:
     rows = context.state.rows(
-        "SELECT id, owner, kind, title, payload_json, created_at FROM saved_artifacts "
-        "WHERE id=? AND kb_id=?",
+        f"SELECT {COLUMNS} FROM saved_artifacts WHERE id=? AND kb_id=?",
         (str(artifact_id), context.config.knowledge_base_id),
     )
     if not rows:
         raise ArtifactNotFound(artifact_id)
-    return _record(rows[0])
+    record = _record(rows[0])
+    _mark_indexed(context, [record])
+    return record
+
+
+def _mark_indexed(context: ServiceContext, records: list[dict[str, Any]]) -> None:
+    """``index_status`` for each record: whether the source holds its index page yet."""
+
+    paths = {
+        f"{r['payload']['folder']}/{INDEX_FILE}": r
+        for r in records
+        if (r.get("payload") or {}).get("folder")
+    }
+    held: set[str] = set()
+    names = list(paths)
+    for start in range(0, len(names), 200):
+        batch = names[start : start + 200]
+        marks = ",".join("?" for _ in batch)
+        held |= {
+            str(row["relative_path"])
+            for row in context.state.rows(
+                "SELECT relative_path FROM artifacts "
+                f"WHERE source_id=? AND relative_path IN ({marks})",
+                (ARTIFACTS_SOURCE, *batch),
+            )
+        }
+    for path, record in paths.items():
+        record["index_status"] = (
+            "archived" if record.get("archived_at") else "indexed" if path in held else "pending"
+        )
 
 
 def get(context: ServiceContext, artifact_id: str, principal: str | None = None) -> dict[str, Any]:
@@ -480,80 +595,40 @@ def list_artifacts(
     *,
     limit: int = 50,
     owner_name: str | None = None,
+    conversation_id: str | None = None,
+    kind: str | None = None,
+    archived: bool = False,
 ) -> dict[str, Any]:
-    """The region's artifacts, newest first, without contents; ``owner_name`` for one person's."""
+    """The region's artifacts without contents: newest day first, then person, then time.
+
+    ``owner_name``, ``conversation_id`` and ``kind`` narrow it; ``archived``
+    lists what retention (or a person) archived instead of what is live.
+    """
 
     limit = max(1, min(int(limit or 50), 200))
-    clause, params = ("AND owner=?", (owner_name,)) if owner_name else ("", ())
+    clauses = ["kb_id=?", "archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
+    params: list[Any] = [context.config.knowledge_base_id]
+    for column, value in (("owner", owner_name), ("session_id", conversation_id), ("kind", kind)):
+        if value:
+            clauses.append(f"{column}=?")
+            params.append(value)
     rows = context.state.rows(
-        "SELECT id, owner, kind, title, payload_json, created_at FROM saved_artifacts "
-        f"WHERE kb_id=? {clause} ORDER BY created_at DESC, id DESC LIMIT ?",
-        (context.config.knowledge_base_id, *params, limit),
+        f"SELECT {COLUMNS} FROM saved_artifacts WHERE {' AND '.join(clauses)} "
+        "ORDER BY substr(created_at, 1, 10) DESC, COALESCE(owner, '') ASC, "
+        "created_at DESC, id DESC LIMIT ?",
+        (*params, limit),
     )
     records = [_record(row) for row in rows]
-    _name_unnamed(context, records)
-    _file_unfiled(context, records)
+    from pheasant.services import artifact_lifecycle
+
+    artifact_lifecycle.file_legacy(context, records)
+    _mark_indexed(context, records)
     return {
         "artifacts": [summary_of(record) for record in records],
         "limit": limit,
         "source": ARTIFACTS_SOURCE,
+        "order": ["day desc", "owner", "time desc"],
     }
-
-
-#: Artifacts filed into the source per listing, for those kept before they were knowledge.
-FILE_PER_LISTING = 20
-
-
-def _file_unfiled(context: ServiceContext, records: list[dict[str, Any]]) -> None:
-    """Give an artifact kept before artifacts were knowledge its folder, and land it.
-
-    Done once per artifact, the first time a listing shows it: its folder is
-    written to the row, so the next listing finds it filed. One sync for all
-    of them, not one per artifact.
-    """
-
-    unfiled = [r for r in records if not (r.get("payload") or {}).get("folder")]
-    for record in unfiled[:FILE_PER_LISTING]:
-        folder = folder_for(
-            record.get("owner"), record["created_at"], record["title"], record["id"]
-        )
-        record["payload"]["folder"] = folder
-        _save_payload(context, record["id"], record["payload"])
-        _publish(context, record, sync=False)
-    if unfiled and getattr(context, "indexing", None) is not None:
-        try:
-            context.indexing.start_sync(ARTIFACTS_SOURCE)
-        except Exception:  # noqa: BLE001 - the next sync files them anyway
-            logger.warning("could not start the artifacts sync", exc_info=True)
-
-
-def _name_unnamed(context: ServiceContext, records: list[dict[str, Any]]) -> None:
-    """Give a file kept before unnamed blocks were named by language its extension.
-
-    An unnamed ```html block was kept as ``block-1``, and everything that
-    decides by name -- the taxonomy view, a download -- showed its source. It
-    becomes ``block-1.html``: the row is rewritten (so the next listing finds
-    nothing to do), the folder landed again, and the extensionless copy taken
-    out of the index. The artifact's evidence is untouched.
-    """
-
-    from pheasant.assistant.artifact_files import extension_for
-
-    for record in records:
-        payload = record.get("payload") or {}
-        renamed: list[str] = []
-        for file in payload.get("files") or []:
-            name = str(file.get("name") or "")
-            extension = extension_for(file.get("language"))
-            if extension and name and not PurePosixPath(name).suffix:
-                renamed.append(name)
-                file["name"] = name + extension
-        if not renamed:
-            continue
-        _save_payload(context, record["id"], payload)
-        if payload.get("folder"):  # an unfiled one lands under its new name
-            _publish(context, record)
-            _remove(context, payload["folder"], renamed, record.get("owner"))
 
 
 def _save_payload(context: ServiceContext, artifact_id: str, payload: dict[str, Any]) -> None:
@@ -615,15 +690,23 @@ def forget_removed(context: ServiceContext, source_name: str, paths: list[str]) 
     if source_name != ARTIFACTS_SOURCE:
         return
     by_artifact: dict[str, list[str]] = {}
+    folder_of: dict[str, str] = {}
     for path in paths:
         parent = PurePosixPath(path).parent
         match = _FOLDER_ID.search(parent.name)
         if match:
             by_artifact.setdefault(match.group(1), []).append(PurePosixPath(path).name)
+            folder_of[match.group(1)] = str(parent)
     for artifact_id, names in by_artifact.items():
         try:
             record = _load(context, artifact_id)
         except ArtifactNotFound:
+            continue
+        # A copy the artifact no longer lives at (re-filed), or an artifact
+        # retention archived: the row is what stays.
+        if record.get("archived_at") or (record["payload"] or {}).get("folder") != folder_of.get(
+            artifact_id
+        ):
             continue
         if INDEX_FILE in names:
             _forget(context, artifact_id)

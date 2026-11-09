@@ -46,6 +46,7 @@ export function McpAppFrame({
   result,
   onAsk,
   onRedrawn,
+  onSaved,
   title = "Visual",
 }: {
   /** The tool result's structured content: an answer, or `{visual, citations}`. */
@@ -58,6 +59,8 @@ export function McpAppFrame({
    * replaced it with the original.
    */
   onRedrawn?: (drawn: VisualResponse) => void;
+  /** The view kept its diagram as an artifact (its "Save"). */
+  onSaved?: (id: string) => void;
   title?: string;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -72,8 +75,8 @@ export function McpAppFrame({
   });
 
   // Latest values for the message handler, which is registered once.
-  const latest = useRef({ result, onAsk, onRedrawn, theme, mode });
-  latest.current = { result, onAsk, onRedrawn, theme, mode };
+  const latest = useRef({ result, onAsk, onRedrawn, onSaved, theme, mode });
+  latest.current = { result, onAsk, onRedrawn, onSaved, theme, mode };
   // The visual the view is showing, so the host does not send it back the
   // picture it just drew itself.
   const shown = useRef<unknown>(null);
@@ -169,6 +172,19 @@ export function McpAppFrame({
               reply(message.id, { content: [], structuredContent: drawn });
               shown.current = drawn.visual;
               latest.current.onRedrawn?.(drawn);
+              return;
+            }
+            if (name === "save_artifact") {
+              // The view's "Save": the diagram as drawn now, kept as a report.
+              const saved = await api.saveArtifact({
+                title: typeof args.title === "string" ? args.title : undefined,
+                kind: "report",
+                markdown: typeof args.markdown === "string" ? args.markdown : undefined,
+                visual: args.visual,
+                citations: Array.isArray(args.citations) ? args.citations : undefined,
+              });
+              reply(message.id, { content: [], structuredContent: saved });
+              latest.current.onSaved?.(saved.id);
               return;
             }
           } catch (error) {

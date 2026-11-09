@@ -127,6 +127,7 @@ TABLE_ORDER = (
     # Composed files and saved reports: what a person kept, and nothing on
     # the target could write them again.
     "saved_artifacts",
+    "region_settings",
 )
 
 #: Core tables deliberately left behind, and why.

@@ -60,10 +60,12 @@ def _composed(question: str) -> dict[str, Any]:
 
 
 @pytest.fixture()
-def composing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The answering workflow returns a composed answer, as a model would write it."""
+def composing(monkeypatch: pytest.MonkeyPatch, loaded_config) -> None:
+    """The answering workflow returns a composed answer, and the region auto-saves it."""
 
     from pheasant.assistant import chat
+
+    loaded_config.artifacts.auto_save = True
 
     monkeypatch.setattr(chat, "answer_question", lambda question, **_k: _composed(question))
 
@@ -216,7 +218,9 @@ def test_every_session_sees_an_artifact_filed_under_whoever_kept_it(loaded_confi
     saved = artifacts.save(
         context, artifacts.SaveRequest(title="Mine", markdown="text", principal="ada@example.com")
     )
-    assert re.fullmatch(r"ada@example\.com/\d{4}/\d{2}/mine--[0-9a-f]{24}", saved["folder"])
+    assert re.fullmatch(
+        r"\d{4}/\d{2}/\d{2}/ada@example\.com/no-session/mine--[0-9a-f]{24}", saved["folder"]
+    )
     assert saved["owner"] == "ada@example.com" and saved["source"] == "artifacts"
     # Another person, another session: the same artifact.
     assert artifacts.get(context, saved["id"], "grace@example.com")["title"] == "Mine"
@@ -248,9 +252,9 @@ def test_a_kept_artifact_is_knowledge_searchable_linked_to_its_evidence_and_remo
             {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
         ]
         result["answer"] = ANSWER.replace("[1]", "[1] zephyrine")
-        kept = artifacts.keep_composed(context, "@compose account counts", None, result)
+        kept = artifacts.keep_composed(context, "@compose account counts", None, result, save=True)
         folder = kept["folder"]
-        assert folder.startswith("shared/") and kept["source"] == "artifacts"
+        assert "/shared/no-session/" in folder and kept["source"] == "artifacts"
 
         # A landing-zone source, registered like the drop zone's.
         source = next(s for s in loaded_config.sources if s.name == "artifacts")
@@ -381,7 +385,7 @@ def test_both_kept_tables_round_trip_on_a_real_postgres(loaded_config) -> None:
     try:
         context = ServiceContext(config=loaded_config, state=engine.state, searcher=None)
         kept = artifacts.keep_composed(
-            context, "@compose counts", "ada@example.com", _composed("q")
+            context, "@compose counts", "ada@example.com", _composed("q"), save=True
         )
         assert kept is not None
         listed = artifacts.list_artifacts(context, "ada@example.com")["artifacts"]
@@ -440,7 +444,7 @@ def test_an_artifact_kept_before_artifacts_were_knowledge_is_filed_once(loaded_c
             ),
         )
         [listed] = artifacts.list_artifacts(context)["artifacts"]
-        assert listed["folder"] == "ada@example.com/2026/11/old-report--" + "a" * 24
+        assert listed["folder"] == "2026/11/08/ada@example.com/no-session/old-report--" + "a" * 24
         engine.sync_source("artifacts", "incremental")
         indexed = engine.state.rows(
             "SELECT relative_path FROM artifacts WHERE source_id='artifacts'"
@@ -490,7 +494,7 @@ def test_search_and_answers_take_artifacts_in_out_or_alone_on_both_surfaces(
             {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
         ]
         result["answer"] = ANSWER.replace("[1]", "[1] zephyrine sync engine")
-        artifacts.keep_composed(context, "@compose account counts", None, result)
+        artifacts.keep_composed(context, "@compose account counts", None, result, save=True)
         engine.sync_source("artifacts", "incremental")
     finally:
         engine.close()
@@ -571,12 +575,12 @@ def test_a_file_kept_with_no_extension_is_renamed_once_and_keeps_its_evidence(
             {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
         ]
         result["answer"] = "A report [1].\n\n```html\n<html><body>Advantage</body></html>\n```"
-        kept = artifacts.keep_composed(context, "@compose an html report", None, result)
+        kept = artifacts.keep_composed(context, "@compose an html report", None, result, save=True)
         # As one was kept before: the block's file has no extension.
         record = artifacts._load(context, kept["id"])
         record["payload"]["files"][0]["name"] = "block-1"
         artifacts._save_payload(context, kept["id"], record["payload"])
-        artifacts._publish(context, record, sync=False)
+        artifacts._publish(context, record)
         landed = next((loaded_config.pheasant.state_path / "uploads").rglob("block-1.html"))
         landed.unlink()
         engine.sync_source("artifacts", "incremental")

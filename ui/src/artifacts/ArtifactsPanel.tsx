@@ -8,12 +8,14 @@ import { useSession } from "../state/session";
 export const ARTIFACTS_SOURCE = "artifacts";
 
 /**
- * The Artifacts tab: what the region keeps for this reader, and a viewer.
+ * The Artifacts tab: what the region keeps, and a viewer.
  *
- * A composed answer is kept by the region as an artifact the moment it is
- * written, and any answer can be saved as a report, so neither depends on
- * the chat that produced it: a reload empties the conversation (the region
- * keeps no chat state) and leaves every artifact here, the open one included.
+ * Keeping is a choice made after an answer (Save on the answer, Save thread
+ * in the composer) unless auto-save is on -- a switch at the top of this
+ * list, held by the region for everyone (`services/artifact_settings.py`).
+ * Nothing kept depends on the chat that produced it: a reload empties the
+ * conversation (the region keeps no chat state) and leaves every artifact
+ * here, the open one included.
  *
  * Every document shown is rendered by the region in pheasant's style
  * (`services/artifact_render.py`, the same renderer MCP and the downloads
@@ -33,37 +35,133 @@ export function ArtifactsPanel({
 }
 
 /**
- * The list as the directory it is: by who kept each artifact, then by month --
+ * The region's artifact settings: auto-save, the indexing schedule and
+ * retention. A change here is a change for every replica and every reader.
+ */
+function ArtifactSettingsBar() {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["artifact-settings"], queryFn: api.artifactSettings, staleTime: 30_000 });
+  const [open, setOpen] = useState(false);
+  const change = useMutation({
+    mutationFn: api.configureArtifacts,
+    onSuccess: (data) => queryClient.setQueryData(["artifact-settings"], data),
+  });
+  const current = settings.data?.settings;
+  if (!current) return null;
+  const number = (key: "index_interval_seconds" | "retention_days", value: string) => {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed !== current[key]) change.mutate({ [key]: parsed });
+  };
+  return (
+    <div className="artifacts__settings">
+      <label className="artifacts__switch" title="Keep every composed answer the moment it is written">
+        <input
+          type="checkbox"
+          checked={current.auto_save}
+          disabled={change.isPending}
+          onChange={(event) => change.mutate({ auto_save: event.target.checked })}
+        />
+        Auto-save composed answers
+      </label>
+      <button type="button" className="btn btn--small" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? "Hide settings" : "Settings"}
+      </button>
+      {open ? (
+        <div className="artifacts__settings-detail small">
+          <label>
+            Index every{" "}
+            <input
+              type="number"
+              min={0}
+              defaultValue={Math.round(current.index_interval_seconds / 60)}
+              onBlur={(event) => number("index_interval_seconds", String(Number(event.target.value) * 60))}
+            />{" "}
+            min
+          </label>
+          <label title="Hold artifact indexing while content sources sync">
+            <input
+              type="checkbox"
+              checked={current.yield_to_content}
+              onChange={(event) => change.mutate({ yield_to_content: event.target.checked })}
+            />{" "}
+            Give way to content syncs
+          </label>
+          <label>
+            Archive after{" "}
+            <input
+              type="number"
+              min={0}
+              defaultValue={current.retention_days}
+              onBlur={(event) => number("retention_days", event.target.value)}
+            />{" "}
+            days (0 keeps)
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={current.enabled}
+              onChange={(event) => change.mutate({ enabled: event.target.checked })}
+            />{" "}
+            Saving enabled
+          </label>
+          {settings.data?.updated_by ? (
+            <span className="muted">Last changed by {settings.data.updated_by}</span>
+          ) : null}
+          {change.isError ? <span className="error">{(change.error as Error).message}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The list as the directory it is: by day, then by who kept each artifact --
  * the same folders the `artifacts` source holds them in, which the taxonomy
- * view browses.
+ * view browses. Select several to delete or archive them together.
  */
 function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
-  const list = useQuery({ queryKey: ["artifacts"], queryFn: api.artifacts, staleTime: 10_000 });
+  const [archived, setArchived] = useState(false);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
+  const list = useQuery({
+    queryKey: ["artifacts", archived],
+    queryFn: () => api.artifacts({ archived }),
+    staleTime: 10_000,
+  });
   const { dispatch } = useSession();
-  if (list.isLoading) return <div className="artifacts__empty"><span className="spinner" /></div>;
-  if (list.isError) return <p className="error small artifacts__empty">{(list.error as Error).message}</p>;
+  const bulk = useMutation({
+    mutationFn: async (action: "delete" | "archive" | "restore") => api.artifactsBulk(action, [...chosen]),
+    onSuccess: () => {
+      setChosen(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+    },
+  });
+  const toggle = (id: string) =>
+    setChosen((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const items = list.data?.artifacts ?? [];
-  if (items.length === 0) {
-    return (
-      <div className="artifacts__empty muted small">
-        <p>No artifacts yet.</p>
-        <p>
-          Ask with <code>@compose</code> and the files it writes are kept here. Any other answer can be saved
-          with <strong>Save as report</strong>. Artifacts stay until you delete them.
-        </p>
-      </div>
-    );
-  }
   const groups = new Map<string, ArtifactSummary[]>();
   for (const item of items) {
-    const [who, year, month] = (item.folder ?? "").split("/");
-    const key = item.folder ? `${who}/${year}/${month}` : "unfiled";
+    const [year, month, day, who] = (item.folder ?? "").split("/");
+    const key = item.folder ? `${year}/${month}/${day}/${who}` : "unfiled";
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
   return (
     <div className="artifacts__dir">
+      <ArtifactSettingsBar />
       <div className="artifacts__dir-head">
-        <span className="muted small">Kept as knowledge in the {ARTIFACTS_SOURCE} source</span>
+        <span className="artifacts__views">
+          <button type="button" className={`chip${archived ? "" : " chip--active"}`} onClick={() => setArchived(false)}>
+            Live
+          </button>
+          <button type="button" className={`chip${archived ? " chip--active" : ""}`} onClick={() => setArchived(true)}>
+            Archived
+          </button>
+        </span>
         <button
           type="button"
           className="btn btn--small"
@@ -73,8 +171,53 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
           Browse all
         </button>
       </div>
+      {chosen.size ? (
+        <div className="artifacts__bulk">
+          <span className="small">{chosen.size} selected</span>
+          {archived ? (
+            <button type="button" className="btn btn--small" onClick={() => bulk.mutate("restore")}>
+              Restore
+            </button>
+          ) : (
+            <button type="button" className="btn btn--small" onClick={() => bulk.mutate("archive")}>
+              Archive
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn--small btn--danger"
+            onClick={() => {
+              if (window.confirm(`Delete ${chosen.size} artifact(s)? This cannot be undone.`)) bulk.mutate("delete");
+            }}
+          >
+            Delete
+          </button>
+          <button type="button" className="btn btn--small" onClick={() => setChosen(new Set())}>
+            Clear
+          </button>
+          {bulk.isError ? <span className="error small">{(bulk.error as Error).message}</span> : null}
+          {bulk.data && "note" in bulk.data ? <span className="muted small">{String(bulk.data.note)}</span> : null}
+        </div>
+      ) : null}
+      {list.isLoading ? <div className="artifacts__empty"><span className="spinner" /></div> : null}
+      {list.isError ? <p className="error small artifacts__empty">{(list.error as Error).message}</p> : null}
+      {!list.isLoading && items.length === 0 ? (
+        <div className="artifacts__empty muted small">
+          {archived ? (
+            <p>Nothing archived.</p>
+          ) : (
+            <>
+              <p>No artifacts yet.</p>
+              <p>
+                Save an answer with <strong>Save</strong>, a whole conversation with <strong>Save thread</strong>, or
+                turn on auto-save above to keep every <code>@compose</code> answer.
+              </p>
+            </>
+          )}
+        </div>
+      ) : null}
       {[...groups.entries()].map(([key, members]) => {
-        const [who, year, month] = key.split("/");
+        const [year, month, day, who] = key.split("/");
         return (
           <section key={key} className="artifacts__group">
             <button
@@ -83,15 +226,28 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
               onClick={() => dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: key === "unfiled" ? "" : key })}
               title="Open this folder in the taxonomy view"
             >
-              <span>{who === "shared" ? "Shared" : who}</span>
-              {year ? <span className="muted small">{year}-{month}</span> : null}
+              <span>{day ? `${year}-${month}-${day}` : "Unfiled"}</span>
+              {who ? <span className="muted small">{who === "shared" ? "Shared" : who}</span> : null}
             </button>
             <ul className="artifacts__list">
               {members.map((item) => (
-                <li key={item.id}>
+                <li key={item.id} className="artifacts__row">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.title}`}
+                    checked={chosen.has(item.id)}
+                    onChange={() => toggle(item.id)}
+                  />
                   <button type="button" className="artifacts__item" onClick={() => onSelect(item.id)}>
                     <span className="artifacts__item-title">{item.title}</span>
-                    <span className="muted small">{describe(item)}</span>
+                    <span className="muted small">
+                      {describe(item)}
+                      {item.index_status === "pending" ? (
+                        <span className="artifacts__badge" title="Searchable once the scheduled artifacts sync runs">
+                          {" "}· not indexed yet
+                        </span>
+                      ) : null}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -103,15 +259,16 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
   );
 }
 
-/** "Composed files · 2 files · Nov 9, 01:12". */
+/** "Composed files · 2 files · ui · Nov 9, 01:12". */
 export function describe(item: ArtifactSummary): string {
-  const kind = item.kind === "files" ? "Composed files" : "Report";
+  const kind = item.kind === "files" ? "Composed files" : item.kind === "thread" ? "Conversation" : "Report";
   const files = item.files.length ? ` · ${item.files.length} file${item.files.length === 1 ? "" : "s"}` : "";
+  const channel = item.channel ? ` · ${item.channel}` : "";
   const when = new Date(item.created_at);
   const date = Number.isNaN(when.getTime())
     ? ""
     : ` · ${when.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
-  return `${kind}${files}${date}`;
+  return `${kind}${files}${channel}${date}`;
 }
 
 /** The theme the page is drawn in, which a rendered document follows. */

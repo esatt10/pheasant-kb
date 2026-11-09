@@ -249,6 +249,7 @@ class StateStore:
             self.conn.execute("ALTER TABLE interaction_events ADD COLUMN result_paths_json TEXT")
         self._migrate_evaluation_progress()
         self._migrate_tuning_control()
+        self._migrate_saved_artifacts()
         self.conn.commit()
         self._migrate_fts_titles()
 
@@ -284,6 +285,26 @@ class StateStore:
         ("cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
         ("cancel_requested_by", "TEXT"),
     )
+
+    #: Traceability and retention columns, added after the table shipped.
+    _SAVED_ARTIFACT_COLUMNS = (("session_id", "TEXT"), ("channel", "TEXT"), ("archived_at", "TEXT"))
+
+    def _migrate_saved_artifacts(self) -> None:
+        """Add the session, channel and archive columns to a pre-existing ``saved_artifacts``.
+
+        Both migration paths call it, for `_migrate_evaluation_progress`'s reason.
+        """
+
+        existing = self.backend.table_columns("saved_artifacts")
+        if not existing:
+            return
+        for column, declaration in self._SAVED_ARTIFACT_COLUMNS:
+            if column not in existing:
+                self.conn.execute(f"ALTER TABLE saved_artifacts ADD COLUMN {column} {declaration}")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_saved_artifacts_created "
+            "ON saved_artifacts(kb_id, created_at, owner)"
+        )
 
     def _migrate_tuning_control(self) -> None:
         """Add the control columns to a pre-existing ``tuning_experiments``."""
@@ -361,7 +382,8 @@ class StateStore:
                 "auth_tokens": "last_used_at",
                 "oauth_clients": "data_json",
                 "answer_streams": "updated_at",
-                "saved_artifacts": "updated_at",
+                "saved_artifacts": "archived_at",
+                "region_settings": "updated_by",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()
@@ -392,6 +414,7 @@ class StateStore:
             # Postgres returns early from `migrate`, so an additive column
             # named in only one place exists on exactly one backend.
             self._migrate_tuning_control()
+            self._migrate_saved_artifacts()
             migrate_derived_indexes(self)
             migrate_lexical_index(self)
             self.conn.execute(

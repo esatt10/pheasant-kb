@@ -1436,6 +1436,24 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   its author wrote it. Every document begins with `DOCUMENT_POLICY` (inline
   scripts and styles, data: images, nothing fetched) and is shown in a
   `sandbox="allow-scripts"` frame; exports are `.zip`, `.html`, `.md`.
+  **Keeping is opt-in and indexing is scheduled** (`services/artifact_settings.py`,
+  `artifact_lifecycle.py`, `artifact_trace.py`; table `region_settings`):
+  `auto_save` is off unless set from the panel, `PUT /artifacts/settings` or
+  MCP `configure_artifacts` -- one row in `/state` over `config.artifacts`, so
+  every replica reads it -- and a save lands files without a sync. The
+  source is held to `sync.min_interval_seconds` and `yield_to_content`
+  (`sync/pipeline.beat_sources`, general to any source): content first, four
+  intervals at most. Measured on Azure: each artifact sync spent 123-195 s in
+  `loading_graph` (the child reads the whole graph) to commit 1-7 files, so
+  indexing at save time cost every content sync behind it. Folders are
+  `<yyyy>/<mm>/<dd>/<owner>/<session>/`, listings day then person; older
+  layouts are re-filed once (`file_legacy`). Each kept answer carries a
+  `trace` (conversation, channel, ids, keywords, intent, `decisions`,
+  steps); `kind: thread` keeps a whole conversation; a diagram drawn after
+  the answer (the MCP App view's Save, Redraw as) is kept in its place.
+  Retention archives (row kept, files out of the index, restorable) on the
+  beat; bulk delete takes ids or a filter with a dry run. Exported as
+  `saved_artifacts.parquet`.
   Search and answers take `artifacts` (`include` | `exclude` | `only`), the
   `memory` switch for this source, on both surfaces and the UI's **use
   artifacts** box (`artifacts.scope`: an `exclude_sources` entry or the

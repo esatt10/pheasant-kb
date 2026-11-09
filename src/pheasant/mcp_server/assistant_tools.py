@@ -89,6 +89,8 @@ class AssistantTools(ComposeTools):
         intent: str | None = None,
         source_names: list[str] | None = None,
         artifacts: Any = None,
+        save: bool | None = None,
+        conversation_id: str | None = None,
         on_step: Any = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
@@ -134,6 +136,9 @@ class AssistantTools(ComposeTools):
                 intent=intent,
                 source_names=source_names,
                 artifacts=artifacts,
+                save=save,
+                conversation_id=conversation_id,
+                channel="mcp",
             ),
             # A progress sink, for a caller that follows the answer as a job
             # (compose_artifact); the MCP tool itself passes none.
@@ -287,6 +292,7 @@ def register_assistant_tools(
         intent: str | None = None,
         source_names: list[str] | None = None,
         artifacts: str | bool | None = None,
+        save: bool | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -349,6 +355,9 @@ def register_assistant_tools(
         records: "include" (default), "exclude" (leave them out) or "only"
         (search only them). true/false read as include/exclude.
 
+        save keeps a composed answer as an artifact (true), or not (false);
+        unset follows the region's auto_save. It is filed under session.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -379,6 +388,8 @@ def register_assistant_tools(
             intent=intent,
             source_names=source_names,
             artifacts=artifacts,
+            save=save,
+            conversation_id=session,
         )
 
     @mcp.tool(meta=app_meta())

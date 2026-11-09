@@ -50,6 +50,8 @@ class ComposeTools(ArtifactTools):
         principal_groups: list[str] | None = None,
         options: dict | None = None,
         previous_job: str | None = None,
+        save: bool | None = None,
+        session: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services.errors import InvalidRequest
@@ -92,6 +94,8 @@ class ComposeTools(ArtifactTools):
                     principal=principal,
                     principal_groups=principal_groups,
                     options=settings or None,
+                    save=save,
+                    conversation_id=session,
                     on_step=on_step,
                 )
             )
@@ -158,6 +162,8 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         principal_groups: list[str] | None = None,
         options: dict | None = None,
         previous_job: str | None = None,
+        save: bool | None = None,
+        session: str | None = None,
     ) -> dict:
         """Offload building a NEW artifact to the region: a configuration, a
         script, a module or a set of files assembled from parts the sources
@@ -208,6 +214,10 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         While a job runs, get_job's progress.phase names the last workflow step
         it finished (plan, retrieve, decide, synthesize, review, revise) and its
         log lists every step so far.
+
+        save=true keeps the result as an artifact (the job's result then names
+        artifact_id); unset follows the region's auto_save. session files it
+        under that conversation.
         """
 
         return tools.compose_artifact(
@@ -221,4 +231,6 @@ def register_compose_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             principal_groups=principal_groups,
             options=options,
             previous_job=previous_job,
+            save=save,
+            session=session,
         )

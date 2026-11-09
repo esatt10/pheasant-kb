@@ -99,6 +99,28 @@ export function ChatPanel({
   // The earlier turns a question is sent with. The region keeps no chat
   // state, so this is what makes "and what about the second one?" answerable.
   const history = historyFor(state);
+  const queryClient = useQueryClient();
+  // The answered turns of this topic: what Save thread keeps, as one artifact.
+  const topicTurns = state.turns.slice(state.contextFrom).filter((turn) => turn.answer);
+  const saveThread = useMutation({
+    mutationFn: () =>
+      api.saveArtifact({
+        kind: "thread",
+        conversation_id: state.conversationId,
+        turns: topicTurns.map((turn) => ({
+          question: turn.question,
+          answer: turn.answer,
+          answer_id: turn.answerId,
+          // A diagram drawn or redrawn for the turn is the one kept.
+          visual: turn.drawn?.visual?.status === "ok" ? turn.drawn.visual : undefined,
+        })),
+      }),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      dispatch({ type: "open-artifact", id: saved.id });
+      showArtifacts();
+    },
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   // The @-keyword quick reference: a floating card beside the chat column.
@@ -116,7 +138,9 @@ export function ChatPanel({
   // Whether this region's remembered assertions may inform the answer. The
   // same `memory` field MCP and the router send, so the three surfaces cannot
   // disagree about what "off" means.
-  const [useMemory, setUseMemory] = useState(true);
+  // Off by default: an answer is grounded in the sources unless somebody asks
+  // for remembered assertions too.
+  const [useMemory, setUseMemory] = useState(false);
   // Whether saved artifacts (composed answers and reports) may be evidence;
   // the `artifacts` field search and answers take on every surface.
   const [useArtifacts, setUseArtifacts] = useState(true);
@@ -209,6 +233,7 @@ export function ChatPanel({
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
           memory: useMemory ? null : "off",
+          conversation_id: state.conversationId,
           artifacts: useArtifacts ? null : "exclude",
           history,
           depth: answerDepth,
@@ -527,6 +552,18 @@ export function ChatPanel({
               </option>
             ))}
           </select>
+          {topicTurns.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn--small"
+              onClick={() => saveThread.mutate()}
+              disabled={saveThread.isPending}
+              title="Keep this conversation -- every question, answer, source and trace -- as one artifact"
+            >
+              {saveThread.isPending ? "Saving…" : saveThread.isSuccess ? "Thread saved" : "Save thread"}
+            </button>
+          ) : null}
+          {saveThread.isError ? <span className="error small">{(saveThread.error as Error).message}</span> : null}
           {history.length > 0 ? (
             <span className="composer__context" title="Earlier turns sent with your next question">
               continuing from {history.length} earlier turn{history.length === 1 ? "" : "s"}
@@ -665,10 +702,17 @@ function AnswerTurn({
 }) {
   const byIndex = new Map(answer.citations.map((c) => [c.index, c]));
   const queryClient = useQueryClient();
+  const composed = answer.route?.intent === "compose";
   // An answer worth keeping becomes a report the region holds until deleted,
   // saved from the copy it kept of this very answer (`answer_resume`).
   const saveReport = useMutation({
-    mutationFn: () => api.saveArtifact({ answer_id: answerId ?? undefined }),
+    mutationFn: () =>
+      api.saveArtifact({
+        answer_id: answerId ?? undefined,
+        conversation_id: state.conversationId,
+        // Redrawn after the answer: keep the diagram as it is shown now.
+        ...(drawn?.visual?.status === "ok" ? { visual: drawn.visual, citations: drawn.citations } : {}),
+      }),
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ["artifacts"] });
       dispatch({ type: "open-artifact", id: saved.id });
@@ -772,6 +816,11 @@ function AnswerTurn({
             result={frameResult}
             onRedrawn={onDrawn}
             onAsk={onAsk}
+            onSaved={(id) => {
+              queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+              dispatch({ type: "open-artifact", id });
+              showArtifacts();
+            }}
             title={visual.diagram?.title ?? "Visual"}
           />
         </div>
@@ -819,9 +868,13 @@ function AnswerTurn({
             className="btn btn--small"
             onClick={() => saveReport.mutate()}
             disabled={saveReport.isPending || saveReport.isSuccess}
-            title="Keep this answer as a report in the Artifacts tab, with its diagram and sources"
+            title={
+              composed
+                ? "Keep the files this answer wrote in the Artifacts tab, with their sources and trace"
+                : "Keep this answer as a report in the Artifacts tab, with its diagram and sources"
+            }
           >
-            {saveReport.isSuccess ? "Saved as report" : saveReport.isPending ? "Saving…" : "Save as report"}
+            {saveReport.isSuccess ? "Saved" : saveReport.isPending ? "Saving…" : composed ? "Save files" : "Save as report"}
           </button>
           {saveReport.isError ? <span className="error small"> {(saveReport.error as Error).message}</span> : null}
         </p>

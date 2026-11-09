@@ -18,9 +18,13 @@ a paused or manual pipeline cannot be started by a path that forgot.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 SCHEDULES = ("auto", "manual")
+#: A source that gives way to content runs anyway after this many intervals,
+#: so a region that is never idle cannot starve it.
+MAX_DEFERRAL_INTERVALS = 4
 
 
 class PipelineDeleted(ValueError):
@@ -47,6 +51,97 @@ def runs_automatically(source: Any) -> bool:
         and getattr(sync, "schedule", "auto") == "auto"
         and not getattr(sync, "paused", False)
     )
+
+
+def beat_sources(sources: Any, state: Any, *, queue: Any = None, now: Any = None) -> list[Any]:
+    """The sources a scheduler beat syncs: running by themselves, due, and not giving way.
+
+    A paced source (``sync.min_interval_seconds``) runs at most that often; one
+    that yields (``sync.yield_to_content``) is held while another source's sync
+    is running or queued, until it has waited ``MAX_DEFERRAL_INTERVALS``
+    intervals. Paced sources come last, so a beat's content syncs are published
+    -- and claimed -- first. Decided before this beat publishes anything, so a
+    beat never yields to its own work.
+    """
+
+    candidates = [s for s in sources if runs_automatically(s)]
+    if not any(_paced(s) for s in candidates):
+        return candidates
+    now = now or datetime.now(UTC)
+    paced = {s.name for s in candidates if _paced(s)}
+    busy: bool | None = None
+    due = []
+    for source in candidates:
+        if source.name not in paced:
+            due.append(source)
+            continue
+        interval = int(getattr(source.sync, "min_interval_seconds", None) or 0)
+        waited = _seconds_since_indexed(state, source.name, now)
+        if waited is not None and waited < interval:
+            continue
+        if getattr(source.sync, "yield_to_content", False):
+            overdue = waited is None or waited >= interval * MAX_DEFERRAL_INTERVALS
+            if busy is None:
+                busy = content_busy(state, queue, paced)
+            if busy and not overdue:
+                continue
+        due.append(source)
+    return sorted(due, key=lambda s: s.name in paced)
+
+
+def _paced(source: Any) -> bool:
+    sync = source.sync
+    return bool(
+        getattr(sync, "min_interval_seconds", None) or getattr(sync, "yield_to_content", False)
+    )
+
+
+def _seconds_since_indexed(state: Any, name: str, now: datetime) -> float | None:
+    try:
+        rows = state.rows("SELECT last_indexed_at FROM sources WHERE name=?", (name,))
+        stamp = next((r["last_indexed_at"] for r in rows if r["last_indexed_at"]), None)
+        if not stamp:
+            return None
+        then = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=UTC)
+        return (now - then).total_seconds()
+    except Exception:  # noqa: BLE001 - unknown is "due", never "skip forever"
+        return None
+
+
+def content_busy(state: Any, queue: Any, exclude: set[str]) -> bool:
+    """Whether a source outside ``exclude`` is syncing, or anything is queued to.
+
+    Read from what every process shares (``sync_runs`` heartbeats, the queue),
+    so it holds on a fleet. Unknown reads as idle: a yielding source waiting on
+    a broker that cannot answer would otherwise wait forever.
+    """
+
+    from pheasant.sync.locks import SOURCE_STALE_SECONDS
+    from pheasant.sync.queue import INFLIGHT, PENDING
+
+    fresh = (datetime.now(UTC) - timedelta(seconds=SOURCE_STALE_SECONDS)).isoformat()
+    try:
+        for row in state.rows("SELECT source_id FROM sync_runs WHERE heartbeat_at >= ?", (fresh,)):
+            if str(row["source_id"]) not in exclude:
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    if queue is None:
+        return False
+    try:
+        listed = queue.outstanding(200)
+        if listed is not None:
+            return any(
+                task.get("status") in (PENDING, INFLIGHT)
+                and str(task.get("source_id")) not in exclude
+                for task in listed
+            )
+        depth = queue.depth()
+        return bool(depth.get("pending") or depth.get("inflight"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def startup_sources(sources: Any) -> list[str]:

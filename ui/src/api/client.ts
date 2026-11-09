@@ -47,6 +47,8 @@ import type {
 } from "./types";
 import type {
   Artifact,
+  ArtifactSettings,
+  ArtifactSettingsView,
   ArtifactSummary,
   ConfigSection,
   ConfigSectionResult,
@@ -176,6 +178,8 @@ function requestHeaders(initial?: HeadersInit, json = true): Headers {
   const headers = new Headers(initial);
   if (json && !headers.has("accept")) headers.set("accept", "application/json");
   if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
+  // Kept artifacts and the ledger record the channel: this is the web UI.
+  if (!headers.has("x-pheasant-modality")) headers.set("x-pheasant-modality", "ui");
   const token = getApiToken();
   if (token && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${token}`);
@@ -637,6 +641,10 @@ export const api = {
       memory?: string | null;
       /** Saved artifacts as evidence: include (default), exclude, only. */
       artifacts?: string | null;
+      /** Keep a composed answer as an artifact; unset follows the region's auto-save. */
+      save?: boolean | null;
+      /** The conversation this question belongs to: what a kept artifact is filed under. */
+      conversation_id?: string | null;
       /** Earlier turns, oldest first: the region keeps no chat state. */
       history?: HistoryTurn[];
       depth?: AnswerDepth | null;
@@ -762,11 +770,33 @@ export const api = {
     if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
     return URL.createObjectURL(await response.blob());
   },
-  /** The artifacts the region keeps for this reader, newest first. */
-  artifacts: () => request<{ artifacts: ArtifactSummary[] }>("/artifacts"),
+  /** The artifacts the region keeps: newest day first, then person. */
+  artifacts: (params: { archived?: boolean; conversation_id?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.archived) query.set("archived", "true");
+    if (params.conversation_id) query.set("conversation_id", params.conversation_id);
+    const suffix = query.toString();
+    return request<{ artifacts: ArtifactSummary[] }>(`/artifacts${suffix ? `?${suffix}` : ""}`);
+  },
+  artifactSettings: () => request<ArtifactSettingsView>("/artifacts/settings"),
+  configureArtifacts: (changes: Partial<ArtifactSettings>) =>
+    request<ArtifactSettingsView>("/artifacts/settings", { method: "PUT", body: JSON.stringify(changes) }),
+  /** Delete, archive or restore several artifacts at once, by id. */
+  artifactsBulk: (action: "delete" | "archive" | "restore", ids: string[]) =>
+    request<Record<string, unknown>>(`/artifacts/${action}`, { method: "POST", body: JSON.stringify({ ids }) }),
   artifact: (id: string) => request<Artifact>(`/artifacts/${encodeURIComponent(id)}`),
   /** Keep an answer the stream kept (by its `answer_id`) as a report. */
-  saveArtifact: (body: { answer_id?: string; title?: string; markdown?: string; kind?: string }) =>
+  saveArtifact: (body: {
+    answer_id?: string;
+    title?: string;
+    markdown?: string;
+    kind?: string;
+    conversation_id?: string;
+    turns?: { question: string; answer: unknown; answer_id?: string; visual?: unknown }[];
+    /** A diagram drawn after the answer, kept in its place, and its own citations. */
+    visual?: unknown;
+    citations?: unknown[];
+  }) =>
     request<Artifact>("/artifacts", { method: "POST", body: JSON.stringify(body) }),
   deleteArtifact: (id: string) =>
     request<{ deleted: string }>(`/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" }),

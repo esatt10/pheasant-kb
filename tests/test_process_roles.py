@@ -828,6 +828,7 @@ def test_background_services_start_only_for_their_roles(tmp_path: Path, monkeypa
         def __init__(self, label: str, bucket: list[str]) -> None:
             self.label = label
             self.bucket = bucket
+            self.upkeep: list = []  # as SchedulerService has
 
         def start(self) -> None:
             self.bucket.append(self.label)
