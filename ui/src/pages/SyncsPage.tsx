@@ -460,11 +460,11 @@ function SettingsForm({
         <span>Runs</span>
         <select className="text-input text-input--small" value={cadence} onChange={(e) => setCadence(e.target.value)}>
           <option value="default">
-            Region default ({defaults?.default_source_interval_seconds ? `every ${duration(defaults.default_source_interval_seconds)}` : "every scheduler beat"})
+            Region default ({defaults?.default_source_interval_seconds ? `every ${cadenceLabel(defaults.default_source_interval_seconds)}` : "every scheduler beat"})
           </option>
           {(defaults?.choices ?? CADENCE_FALLBACK).map((value) => (
             <option key={value} value={String(value)}>
-              Every {duration(value)}
+              Every {cadenceLabel(value)}
             </option>
           ))}
           <option value="manual">Manual — only when asked</option>
@@ -476,7 +476,7 @@ function SettingsForm({
           {isWeb
             ? "How often the collection is re-listed; each page is still rechecked when it is due (below)."
             : "File changes and commits still sync it at once where watched."}{" "}
-          The scheduler checks every {duration(defaults?.beat_seconds ?? detail.schedule.beat_seconds ?? 900)}.
+          The scheduler checks every {cadenceLabel(defaults?.beat_seconds ?? detail.schedule.beat_seconds ?? 900)}.
         </span>
       </label>
       <label className="syncs__check syncs__field--wide">
@@ -884,16 +884,32 @@ function DefaultCadence({ defaults }: { defaults: PipelineDefaults }) {
         disabled={change.isPending}
         onChange={(e) => change.mutate(e.target.value === "beat" ? null : Number(e.target.value))}
       >
-        <option value="beat">Every scheduler beat ({duration(defaults.beat_seconds)})</option>
+        <option value="beat">Every scheduler beat ({cadenceLabel(defaults.beat_seconds)})</option>
         {defaults.choices
           .filter((choice) => choice > defaults.beat_seconds)
           .map((choice) => (
             <option key={choice} value={String(choice)}>
-              Every {duration(choice)}
+              Every {cadenceLabel(choice)}
             </option>
           ))}
       </select>
       {change.isError ? <span className="error small">{(change.error as Error).message}</span> : null}
     </label>
   );
+}
+
+/** "15 minutes", "hour", "2 hours", "day", "week": a cadence as people say it. */
+function cadenceLabel(seconds: number): string {
+  for (const [size, one, many] of [
+    [604800, "week", "weeks"],
+    [86400, "day", "days"],
+    [3600, "hour", "hours"],
+    [60, "minute", "minutes"],
+  ] as const) {
+    if (seconds >= size && seconds % size === 0) {
+      const count = seconds / size;
+      return count === 1 ? one : `${count} ${many}`;
+    }
+  }
+  return `${seconds} seconds`;
 }
