@@ -478,7 +478,7 @@ def _orchestration_supervisor(
 
         from pheasant.sync.pipeline import startup_sources
 
-        sources = startup_sources(app_obj.state.engine.enabled_sources())
+        sources = startup_sources(app_obj.state.engine.enabled_sources(), cfg)
         if not sources:
             return
         log = logging.getLogger("pheasant.cli")

@@ -57,6 +57,8 @@ def index_page(record: dict[str, Any]) -> str:
             label = f"{citation.get('source')} · {citation.get('path')}"
             if citation.get("section"):
                 label += f" — {citation['section']}"
+            if citation.get("turns"):  # a thread: which turns cited it
+                label += f" (turn {', '.join(str(t) for t in citation['turns'])})"
             target = str(citation["path"]).replace(" ", "%20").replace(")", "%29")
             lines.append(f"{citation.get('index')}. [{label.replace(']', '')}]({target})")
         lines.append("")

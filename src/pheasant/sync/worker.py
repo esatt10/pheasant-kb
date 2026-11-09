@@ -532,7 +532,7 @@ class WorkerBackedEngine:
         from pheasant.sync.pipeline import startup_sources
 
         enabled = engine.enabled_sources()
-        names = startup_sources(enabled)
+        names = startup_sources(enabled, getattr(engine, "config", None))
         # The normal deployment starts every enabled source. Delegate that as
         # one sync-all child so the engine can apply its bounded source-level
         # parallelism and rebuild the shared graph index once at the end.
