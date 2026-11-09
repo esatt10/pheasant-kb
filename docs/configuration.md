@@ -717,6 +717,7 @@ See [Multi-modal ingest](how-to/multimodal-ingest.md).
 | `enabled` | bool | `true` | Enable periodic fallback sync job. |
 | `interval_seconds` | integer | `900` | How often the beat ticks: the finest cadence a source can have. |
 | `default_source_interval_seconds` | integer\|null | `null` | How often each source syncs on the beat unless it sets `sources[].sync.min_interval_seconds` (`null`: every beat). The Syncs page's **Default schedule** changes it at runtime for every replica (`PUT /sync/pipelines/defaults`, MCP `configure_sync_defaults`). |
+| `startup_sync` | bool | `true` | Sync each source (with `on_startup`) when a process starts. Off, a boot syncs nothing and every source waits for its schedule -- for a region that scales to zero, where every wake would otherwise re-sync all of it. |
 
 Each source picks its own cadence on the Syncs page (**Runs**: region default, every 15 min to weekly, or manual), saved as `sources[].sync.min_interval_seconds`; `sources[].sync.yield_to_content` makes it wait while other sources sync. File changes and commits still sync a watched source at once.
 

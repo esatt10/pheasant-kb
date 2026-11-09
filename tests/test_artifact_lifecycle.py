@@ -139,7 +139,7 @@ def test_a_thread_keeps_every_turn_with_its_trace_and_a_composes_files(loaded_co
     assert [t["question"] for t in payload["turns"]] == [t["question"] for t in turns]
     assert payload["turns"][1]["trace"]["intent"] == "compose"
     assert [f["name"] for f in payload["files"]] == ["turn-2-counts.js"]
-    assert {c["turn"] for c in payload["citations"]} == {1, 2, 3}
+    assert {t for c in payload["citations"] for t in c["turns"]} == {1, 2, 3}
     page = client.get(f"/artifacts/{saved['id']}/view").text
     assert "How does sync work?" in page and "Explain the file" in page
     listed = client.get("/artifacts", params={"conversation_id": "conv-9"}).json()["artifacts"]
@@ -515,3 +515,102 @@ def test_each_source_runs_on_its_own_cadence_or_the_regions(loaded_config) -> No
     )
     bad = client.put("/sync/pipelines/defaults", json={"default_source_interval_seconds": -5})
     assert bad.status_code == 422
+
+
+def _turn(question: str, answer: str, cites: list[tuple[int, str]], **extra: Any) -> dict:
+    return {
+        "question": question,
+        "answer": {
+            "question": question,
+            "answer": answer,
+            "answer_mode": "llm",
+            "route": {"intent": extra.pop("intent", "knowledge")},
+            "citations": [
+                {"index": n, "source_id": "docs", "relative_path": path} for n, path in cites
+            ],
+            **extra,
+        },
+    }
+
+
+def test_a_thread_numbers_its_evidence_once_so_every_marker_names_one_source(
+    loaded_config,
+) -> None:
+    """Each answer numbers from [1]; the thread gives each source one number."""
+
+    app = create_app(config=loaded_config)
+    client = TestClient(app)
+    turns = [
+        _turn("first", "Sync reads files [1] and hashes them [2].", [(1, "a.md"), (2, "b.md")]),
+        # Its [1] is c.md and its [2] is a.md: overlapping numbers, one shared source.
+        _turn(
+            "second",
+            "Chunks are cut [1]; reads are skipped when unchanged [2]. `x[1]` is code.",
+            [(1, "c.md"), (2, "a.md")],
+        ),
+    ]
+    saved = client.post("/artifacts", json={"kind": "thread", "turns": turns}).json()
+    payload = saved["payload"]
+    assert [(c["index"], c["path"], c["turns"]) for c in payload["citations"]] == [
+        (1, "a.md", [1, 2]),
+        (2, "b.md", [1]),
+        (3, "c.md", [2]),
+    ]
+    second = payload["turns"][1]
+    assert second["citation_map"] == {"1": 3, "2": 1}
+    assert [(c["turn_index"], c["index"]) for c in second["citations"]] == [(1, 3), (2, 1)]
+    # The transcript speaks the thread's numbers; code keeps its own brackets.
+    assert (
+        "Chunks are cut [3]; reads are skipped when unchanged [1]. `x[1]` is code."
+        in (payload["answer"])
+    )
+    assert "Sync reads files [1] and hashes them [2]." in payload["answer"]
+    # As written, kept: a turn's own text and numbers stay recoverable.
+    assert second["answer"].startswith("Chunks are cut [1]")
+    record = artifacts._load(_context(app), saved["id"])
+    from pheasant.services import artifact_files
+
+    readme = artifact_files.index_page(record)
+    sources = readme.split("## Sources", 1)[1].strip().splitlines()
+    assert sources == [
+        "1. [docs · a.md (turn 1, 2)](a.md)",
+        "2. [docs · b.md (turn 1)](b.md)",
+        "3. [docs · c.md (turn 2)](c.md)",
+    ]
+    page = client.get(f"/artifacts/{saved['id']}/view").text
+    assert 'id="source-3"' in page and "turns 1, 2" in page
+
+
+def test_a_thread_saved_before_one_numbering_is_renumbered_once(loaded_config) -> None:
+    from pheasant.services.artifact_trace import THREAD_NUMBERING
+
+    app = create_app(config=loaded_config)
+    client = TestClient(app)
+    turns = [
+        _turn("first", "One [1].", [(1, "a.md")]),
+        _turn("second", "Other [1].", [(1, "b.md")]),
+    ]
+    saved = client.post("/artifacts", json={"kind": "thread", "turns": turns}).json()
+    # As it was kept before: each turn's own numbers, listed side by side.
+    record = artifacts._load(_context(app), saved["id"])
+    old = record["payload"]
+    for turn in old["turns"]:
+        for c in turn["citations"]:
+            c["index"] = c.pop("turn_index")
+        turn.pop("citation_map")
+    old["citations"] = [c for t in old["turns"] for c in t["citations"]]
+    old.pop("citation_numbering")
+    artifacts._save_payload(_context(app), saved["id"], old)
+
+    artifacts.list_artifacts(_context(app))
+    fixed = artifacts.get(_context(app), saved["id"])["payload"]
+    assert fixed["citation_numbering"] == THREAD_NUMBERING
+    assert [c["index"] for c in fixed["citations"]] == [1, 2]
+    assert "Other [2]." in fixed["answer"]
+
+
+def test_startup_sync_can_be_turned_off_for_the_region(loaded_config) -> None:
+    sources = [_source("docs", on_startup=True), _source("wiki", on_startup=True)]
+    assert pipeline.startup_sources(sources, loaded_config) == ["docs", "wiki"]
+    loaded_config.sync.scheduler.startup_sync = False
+    assert pipeline.startup_sources(sources, loaded_config) == []

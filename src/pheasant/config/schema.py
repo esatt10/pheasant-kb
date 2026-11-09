@@ -713,6 +713,9 @@ class SchedulerSettings(ModelMixin):
     #: ``sync.min_interval_seconds`` says otherwise (``None``: every beat).
     #: The Syncs page changes it at runtime for every replica.
     default_source_interval_seconds: int | None = None
+    #: Sync sources when a process starts. Off: only the schedule (and file
+    #: changes, commits, Run now) syncs them -- for a region that scales to zero.
+    startup_sync: bool = True
 
 
 @dataclass

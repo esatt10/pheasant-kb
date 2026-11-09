@@ -1140,7 +1140,7 @@ def create_app(
 
         from pheasant.sync import pipeline
 
-        startup_sources = pipeline.startup_sources(engine.enabled_sources())
+        startup_sources = pipeline.startup_sources(engine.enabled_sources(), config)
         # A Postgres indexer runs this from its elected leader's promotion
         # callback. Doing it here would let every hot standby index before it
         # has won the orchestration lease.
