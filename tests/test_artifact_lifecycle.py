@@ -91,6 +91,12 @@ def test_keeping_is_opt_in_and_the_switch_reaches_every_surface(
 def test_saving_starts_the_sync_unless_told_to_wait_for_the_schedule(loaded_config) -> None:
     """``index_on_save`` (the default) starts the artifacts sync; off, the schedule indexes it."""
 
+    from pheasant.config.schema import ArtifactsSettings
+
+    assert ArtifactsSettings().index_on_save is True
+    # The suite's config turns it off (no real background syncs); this test
+    # turns it back on, with a stub that records the sync instead of running it.
+    loaded_config.artifacts.index_on_save = True
     app = create_app(config=loaded_config)
     started: list[str] = []
     context = ServiceContext(
