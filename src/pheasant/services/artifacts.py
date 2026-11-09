@@ -491,6 +491,7 @@ def list_artifacts(
         (context.config.knowledge_base_id, *params, limit),
     )
     records = [_record(row) for row in rows]
+    _name_unnamed(context, records)
     _file_unfiled(context, records)
     return {
         "artifacts": [summary_of(record) for record in records],
@@ -517,15 +518,7 @@ def _file_unfiled(context: ServiceContext, records: list[dict[str, Any]]) -> Non
             record.get("owner"), record["created_at"], record["title"], record["id"]
         )
         record["payload"]["folder"] = folder
-        context.state.execute(
-            "UPDATE saved_artifacts SET payload_json=?, updated_at=? WHERE id=? AND kb_id=?",
-            (
-                json.dumps(record["payload"], default=str),
-                _now(),
-                record["id"],
-                context.config.knowledge_base_id,
-            ),
-        )
+        _save_payload(context, record["id"], record["payload"])
         _publish(context, record, sync=False)
     if unfiled and getattr(context, "indexing", None) is not None:
         try:
@@ -534,29 +527,71 @@ def _file_unfiled(context: ServiceContext, records: list[dict[str, Any]]) -> Non
             logger.warning("could not start the artifacts sync", exc_info=True)
 
 
+def _name_unnamed(context: ServiceContext, records: list[dict[str, Any]]) -> None:
+    """Give a file kept before unnamed blocks were named by language its extension.
+
+    An unnamed ```html block was kept as ``block-1``, and everything that
+    decides by name -- the taxonomy view, a download -- showed its source. It
+    becomes ``block-1.html``: the row is rewritten (so the next listing finds
+    nothing to do), the folder landed again, and the extensionless copy taken
+    out of the index. The artifact's evidence is untouched.
+    """
+
+    from pheasant.assistant.artifact_files import extension_for
+
+    for record in records:
+        payload = record.get("payload") or {}
+        renamed: list[str] = []
+        for file in payload.get("files") or []:
+            name = str(file.get("name") or "")
+            extension = extension_for(file.get("language"))
+            if extension and name and not PurePosixPath(name).suffix:
+                renamed.append(name)
+                file["name"] = name + extension
+        if not renamed:
+            continue
+        _save_payload(context, record["id"], payload)
+        if payload.get("folder"):  # an unfiled one lands under its new name
+            _publish(context, record)
+            _remove(context, payload["folder"], renamed, record.get("owner"))
+
+
+def _save_payload(context: ServiceContext, artifact_id: str, payload: dict[str, Any]) -> None:
+    context.state.execute(
+        "UPDATE saved_artifacts SET payload_json=?, updated_at=? WHERE id=? AND kb_id=?",
+        (json.dumps(payload, default=str), _now(), artifact_id, context.config.knowledge_base_id),
+    )
+
+
+def _remove(context: ServiceContext, folder: str, names: list[str], actor: str | None) -> list[str]:
+    """Take an artifact's files out of the index like any document's; the names it removed."""
+
+    from pheasant.services import archive
+
+    removed: list[str] = []
+    for name in names:
+        path = f"{ARTIFACTS_SOURCE}/{folder}/{name}"
+        try:
+            archive.archive_documents(
+                context, archive.ArchiveRequest(documents=[path], actor=actor or "artifacts")
+            )
+            removed.append(name)
+        except ServiceError:
+            # Not indexed yet (an indexer has not reached it): nothing in the
+            # index to take out, and nothing is lost by moving on.
+            continue
+    return removed
+
+
 def delete(
     context: ServiceContext, artifact_id: str, principal: str | None = None
 ) -> dict[str, Any]:
     """Remove the artifact: its row, and its files from the index like any document's."""
 
     record = _load(context, artifact_id)
-    removed: list[str] = []
     folder = (record.get("payload") or {}).get("folder")
-    if folder:
-        from pheasant.services import archive
-
-        for name, _text in source_files(record):
-            path = f"{ARTIFACTS_SOURCE}/{folder}/{name}"
-            try:
-                archive.archive_documents(
-                    context,
-                    archive.ArchiveRequest(documents=[path], actor=owner(principal) or "artifacts"),
-                )
-                removed.append(name)
-            except ServiceError:
-                # Not indexed yet (an indexer has not reached it): nothing in
-                # the index to take out, and nothing is lost by moving on.
-                continue
+    names = [name for name, _text in source_files(record)]
+    removed = _remove(context, folder, names, owner(principal)) if folder else []
     _forget(context, artifact_id)
     return {"deleted": record["id"], "title": record["title"], "removed_files": removed}
 
@@ -595,15 +630,7 @@ def forget_removed(context: ServiceContext, source_name: str, paths: list[str]) 
             continue
         payload = record["payload"]
         payload["files"] = [f for f in payload.get("files") or [] if f.get("name") not in names]
-        context.state.execute(
-            "UPDATE saved_artifacts SET payload_json=?, updated_at=? WHERE id=? AND kb_id=?",
-            (
-                json.dumps(payload, default=str),
-                _now(),
-                artifact_id,
-                context.config.knowledge_base_id,
-            ),
-        )
+        _save_payload(context, artifact_id, payload)
 
 
 @dataclass(frozen=True)

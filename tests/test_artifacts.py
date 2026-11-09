@@ -551,3 +551,57 @@ def test_search_and_answers_take_artifacts_in_out_or_alone_on_both_surfaces(
     assert cited(artifacts="only") == {"artifacts"}
     asked = tools.ask_knowledge_base(kb, "zephyrine sync engine", artifacts="exclude")
     assert "artifacts" not in {str(c.get("source_id")) for c in asked["citations"]}
+
+
+def test_a_file_kept_with_no_extension_is_renamed_once_and_keeps_its_evidence(
+    loaded_config,
+) -> None:
+    """``block-1`` kept before blocks were named becomes ``block-1.html``, in the index too."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    engine = SyncEngine(loaded_config)
+    try:
+        engine.sync_source("architecture-notes", "full")
+        context = ServiceContext(
+            config=loaded_config, state=engine.state, searcher=None, engine=engine
+        )
+        result = _composed("@compose an html report")
+        result["citations"] = [
+            {"index": 1, "source_id": "architecture-notes", "relative_path": "sync-engine.md"}
+        ]
+        result["answer"] = "A report [1].\n\n```html\n<html><body>Advantage</body></html>\n```"
+        kept = artifacts.keep_composed(context, "@compose an html report", None, result)
+        # As one was kept before: the block's file has no extension.
+        record = artifacts._load(context, kept["id"])
+        record["payload"]["files"][0]["name"] = "block-1"
+        artifacts._save_payload(context, kept["id"], record["payload"])
+        artifacts._publish(context, record, sync=False)
+        landed = next((loaded_config.pheasant.state_path / "uploads").rglob("block-1.html"))
+        landed.unlink()
+        engine.sync_source("artifacts", "incremental")
+
+        def indexed() -> set[str]:
+            return {
+                row["relative_path"].rsplit("/", 1)[-1]
+                for row in engine.state.rows(
+                    "SELECT relative_path FROM artifacts WHERE source_id='artifacts'"
+                )
+            }
+
+        # A file with no extension is not indexed at all: the folder showed no report.
+        assert indexed() == {"README.md"}
+
+        listed = artifacts.list_artifacts(context)["artifacts"]
+        assert [f["name"] for f in listed[0]["files"]] == ["block-1.html"]
+        assert listed[0]["files"][0]["previewable"]
+        engine.sync_source("artifacts", "incremental")
+        assert indexed() == {"README.md", "block-1.html"}
+        # Its evidence is the artifact's own, untouched.
+        again = artifacts._load(context, kept["id"])
+        assert again["payload"]["citations"] == record["payload"]["citations"]
+        assert artifacts.list_artifacts(context)["artifacts"][0]["files"][0]["name"] == (
+            "block-1.html"
+        )
+    finally:
+        engine.close()
