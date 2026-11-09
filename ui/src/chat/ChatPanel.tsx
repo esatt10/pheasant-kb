@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, collectAnswer } from "../api/client";
 import type {
   AnswerDepth,
@@ -21,6 +21,7 @@ import {
   keywordMatches,
   useKeywordReference,
 } from "./KeywordReference";
+import { ArtifactCard } from "../artifacts/ArtifactsPanel";
 import { McpAppFrame } from "./McpAppFrame";
 import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pendingAnswer";
 import { MicButton, useDictation } from "./MicButton";
@@ -238,7 +239,7 @@ export function ChatPanel({
     resumed.current = true;
     const pending = pendingAnswer();
     if (!pending || turns.some((turn) => turn.id === pending.id)) return;
-    dispatch({ type: "ask", id: pending.id, question: pending.question });
+    dispatch({ type: "ask", id: pending.id, question: pending.question, answerId: pending.answerId });
     ask.mutate({ ...pending, resume: true });
     // Once, on mount: `turns` and `ask` are read as they are then.
   }, []);
@@ -269,7 +270,7 @@ export function ChatPanel({
     const id = `${Date.now()}-${turns.length}`;
     const answerId = newAnswerId();
     rememberPending({ id, question, answerId, askedAt: Date.now() });
-    dispatch({ type: "ask", id, question });
+    dispatch({ type: "ask", id, question, answerId });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     ask.mutate({ id, question, answerId });
   };
@@ -350,6 +351,7 @@ export function ChatPanel({
                 onAsk={submit}
                 sessionId={sessionId}
                 sourceName={sourceFilter}
+                answerId={turn.answerId ?? null}
               />
             ) : (
               <div className="msg">
@@ -636,6 +638,7 @@ function AnswerTurn({
   onAsk,
   sessionId,
   sourceName,
+  answerId,
 }: {
   answer: ChatAnswer;
   /** The visual drawn or redrawn for this turn, held in the session. */
@@ -645,8 +648,20 @@ function AnswerTurn({
   onAsk: (text: string) => void;
   sessionId: string | null;
   sourceName: string | null;
+  /** What the region keeps this answer under, so it can be saved as a report. */
+  answerId: string | null;
 }) {
   const byIndex = new Map(answer.citations.map((c) => [c.index, c]));
+  const queryClient = useQueryClient();
+  // An answer worth keeping becomes a report the region holds until deleted,
+  // saved from the copy it kept of this very answer (`answer_resume`).
+  const saveReport = useMutation({
+    mutationFn: () => api.saveArtifact({ answer_id: answerId ?? undefined }),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      dispatch({ type: "open-artifact", id: saved.id });
+    },
+  });
   // A visual asked for after the fact — of the whole answer, or of one
   // passage — or redrawn in the view. Held on the turn in the session rather
   // than here, so it outlives this component: a re-render, a new question or
@@ -732,6 +747,12 @@ function AnswerTurn({
           />
         )}
       </div>
+      {answer.artifact ? (
+        <ArtifactCard
+          artifact={answer.artifact}
+          onOpen={() => dispatch({ type: "open-artifact", id: answer.artifact?.id ?? null })}
+        />
+      ) : null}
       {visual ? (
         <div className="msg__visual">
           <McpAppFrame
@@ -778,6 +799,20 @@ function AnswerTurn({
         </p>
       ) : null}
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
+      {!answer.artifact && answer.mode === "llm" && answerId ? (
+        <p className="msg__hint">
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={() => saveReport.mutate()}
+            disabled={saveReport.isPending || saveReport.isSuccess}
+            title="Keep this answer as a report in the Artifacts tab, with its diagram and sources"
+          >
+            {saveReport.isSuccess ? "Saved as report" : saveReport.isPending ? "Saving…" : "Save as report"}
+          </button>
+          {saveReport.isError ? <span className="error small"> {(saveReport.error as Error).message}</span> : null}
+        </p>
+      ) : null}
       <div className="msg__meta">
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
         {(answer.keywords?.used ?? []).map((keyword) => (

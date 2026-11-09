@@ -254,6 +254,11 @@ def register_assistant_tools(
 
         return app_html()
 
+    # Kept artifacts and their view: composed answers are kept as artifacts.
+    from pheasant.mcp_server.artifact_tools import register_artifact_tools
+
+    register_artifact_tools(mcp, tools, anticipated, anticipated_resource)
+
     @mcp.tool(meta=app_meta())
     @anticipated
     def ask_knowledge_base(  # noqa: PLR0913 - mirrors the HTTP surface

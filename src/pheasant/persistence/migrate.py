@@ -124,6 +124,9 @@ TABLE_ORDER = (
     # manifest it sealed.
     "ingest_receipts",
     "snapshot_seals",
+    # Composed files and saved reports: what a person kept, and nothing on
+    # the target could write them again.
+    "saved_artifacts",
 )
 
 #: Core tables deliberately left behind, and why.

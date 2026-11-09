@@ -573,9 +573,39 @@ export interface EmbeddingsStatus {
   artifacts_scanned?: number;
 }
 
+/** A kept artifact as listed: composed files or a saved report, no contents. */
+export interface ArtifactSummary {
+  id: string;
+  kind: "files" | "report";
+  title: string;
+  created_at: string;
+  files: { name: string; language: string | null; previewable: boolean }[];
+  has_visual: boolean;
+}
+
+export interface ArtifactFile {
+  name: string;
+  language: string | null;
+  content: string;
+}
+
+/** `GET /artifacts/{id}`: the listing entry plus its contents. */
+export interface Artifact extends ArtifactSummary {
+  knowledge_base: string;
+  payload: {
+    question?: string;
+    summary?: string | null;
+    answer?: string;
+    files: ArtifactFile[];
+    not_covered?: string | null;
+  };
+}
+
 export interface ChatAnswer {
   question: string;
   answer: string;
+  /** A composed answer, kept by the region as an artifact (`/artifacts`). */
+  artifact?: ArtifactSummary | null;
   /** `inventory`: a question about the knowledge base itself, answered from
    * the index (`describe_knowledge_base` / `list_documents`), not a search. */
   mode: "llm" | "extractive" | "inventory" | "search" | "remove";

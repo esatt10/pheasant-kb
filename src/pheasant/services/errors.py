@@ -179,6 +179,20 @@ class AnswerNotFound(ServiceError):
         self.answer_id = answer_id
 
 
+class ArtifactNotFound(ServiceError):
+    """No kept artifact under this id for this caller, or it was deleted.
+
+    The same refusal for another principal's artifact, as `NotPermitted` reasons.
+    """
+
+    status = 404
+    code = "UNKNOWN_ARTIFACT"
+
+    def __init__(self, artifact_id: str) -> None:
+        super().__init__(f"No artifact is held under id: {artifact_id}")
+        self.artifact_id = artifact_id
+
+
 class SnapshotNotFound(ServiceError):
     """A snapshot id this region has never sealed."""
 

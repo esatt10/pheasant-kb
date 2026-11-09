@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel
 
 from pheasant.api.archive_routes import register_archive_routes
+from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
@@ -2040,6 +2041,7 @@ def create_app(
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
     register_region_routes(app, services=services)
+    register_artifact_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:

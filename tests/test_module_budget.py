@@ -117,7 +117,10 @@ CEILINGS: dict[str, int] = {
     # Raised to 1168 for `answer_streams`, a streamed answer kept for a
     # reader who reconnects; DDL belongs here, its code in
     # `services/answer_resume.py`.
-    "persistence/schema.py": 1168,
+    # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
+    # kept until deleted) and its owner index; its code lives in
+    # `services/artifacts.py`.
+    "persistence/schema.py": 1183,
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.

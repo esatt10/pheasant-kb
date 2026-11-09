@@ -127,6 +127,12 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `get_ingest_status` | Receipts: `accepted`, `indexed`, `rejected` or `failed`, per submitted item, with the error code and retryability of anything refused. |
 | `acknowledge_ingest` | Cross the index barrier for receipts whose artifacts now exist. Read from `artifacts` rather than from what a sync reported, because a sync's summary is a claim about what it did and this is a question about what the region holds. |
 | `get_index_queue` | Outstanding index tasks and whether an indexer has claimed each one. On a fleet `sync_source` answers `status: queued` — the sync was **published, not run** — and until an indexer claims it the task is `awaiting_claim` with a growing `waiting_seconds`. Other states: `retry_scheduled`, `claimed`, `claim_lapsed` (its indexer stopped heartbeating) and `dead`. `listing: "unavailable"` means the backend can count but not list its backlog, so an empty `tasks` there is not "nothing waiting". |
+| `list_artifacts` | The artifacts the region keeps for you, newest first: every composed answer (kept automatically, its id in `compose_artifact`'s result as `artifact_id`) and every saved report. Each entry is `{id, kind ("files" or "report"), title, created_at, files: [{name, language, previewable}], has_visual}`, without contents. Kept until deleted, so a new conversation or a restart finds them. Same operation as `GET /artifacts`. |
+| `get_artifact` | One kept artifact with its contents: the listing entry plus `payload` (`question`, `summary`, `files: [{name, language, content}]`, `not_covered`, `citations`, and a report's `answer`). Declares the artifact view (`ui://pheasant/artifact-view.html`, below), so a host that renders MCP Apps shows it the way pheasant does. Same operation as `GET /artifacts/{id}`. |
+| `save_artifact` | Keep a report or a set of files as an artifact: `title`, `markdown` (the report's text; raw HTML in it is not rendered), `files` (`[{name, language, content}]`; an `.html` file is shown running, sandboxed), `kind` (`report` or `files`). Composed answers are kept already. Same operation as `POST /artifacts`, which can also save an answer the web UI's stream kept, by `answer_id`. |
+| `view_artifact` | The artifact, or one `file` of it, as a self-contained HTML page in pheasant's style: without `file` the whole artifact as one report (its diagram drawn by the knowledge view, embedded); with `file`, `mode: "code"` (the source, highlighted in pheasant's syntax colours) or `"preview"` (an `.html` file running, `.md` rendered, `.svg` as a picture). `theme` `light`/`dark`, or omitted to follow the reader's system. Every page carries a policy that lets it run its own inline scripts and fetch nothing. Same renderer as `GET /artifacts/{id}/view`, the web UI's viewer and the downloads. |
+| `export_artifact` | The artifact as a file to save: `format` `markdown` or `html` (`{filename, media_type, content}`) or `zip` (every file at its path, a README and the HTML report, as `{filename, media_type, base64}`); with `file`, that one file exactly as written. Same operation as `GET /artifacts/{id}/export`. |
+| `delete_artifact` | Delete a kept artifact; it cannot be undone. Same operation as `DELETE /artifacts/{id}`. |
 | `get_region_status` | Whether the region is fully awake after scaling up from idle, and if not, what is still starting. `status` is `ready` (nothing to wait for), `waking` (a part is still starting: calls that need it may fail, so wait and retry), `warming` (everything answers, but the database is still reloading its cache after waking, so the first answers may be slower) or `unavailable` (a part still silent long after a wake should have finished). `components` gives each part (`database`, and `graph_service` on a fleet) with its state and a sentence; `elapsed_seconds` is how long this wake has taken so far and `typical_seconds` how long one usually takes. While the database itself is starting, MCP calls are answered by the api's wake gate with HTTP 503, `code: "REGION_WAKING"` and `Retry-After`. Same operation as `GET /region/status`. |
 | `reconcile_ingest` | Submitted against held. `silent_loss` is the number to read: receipts claiming an artifact this region does not have — deliberately not a difference between two totals, which can agree while one item was lost and another double-written. |
 | `seal_snapshot` | Seal the current state as a run's reference snapshot. Idempotent over an unchanged region, because the id is a digest of the state. Pin a search to the returned `snapshot_id` and this region answers from that state **or refuses** — it does not hold older corpus versions, so the guarantee is that two runs naming one snapshot cannot silently have seen different corpora. |
@@ -251,6 +257,15 @@ with the mode it actually granted, and send `host-context-changed` when the mode
 changes. Restyle the existing frame rather than moving it in the page — a moved
 iframe reloads and loses the layout — and ignore `size-changed` while
 fullscreen. `ui/src/chat/McpAppFrame.tsx` is a working reference.
+
+**The artifact view.** `get_artifact` declares
+`_meta.ui.resourceUri: "ui://pheasant/artifact-view.html"`, a second view for
+kept artifacts: a tab per file plus the whole artifact, a Source/Preview switch
+for HTML, Markdown and SVG files, and Copy. It holds no rendering of its own --
+each document comes from `tools/call view_artifact`, the region's renderer, and
+is shown in a nested frame sandboxed to scripts alone, under the policy every
+rendered document carries (no fetch, no form, no load from anywhere). An HTML
+report runs; it reaches nothing.
 
 ## Resources
 

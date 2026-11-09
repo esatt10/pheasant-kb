@@ -46,6 +46,20 @@ def test_the_view_is_self_contained_and_builds_no_markup_from_data() -> None:
     assert "ui/notifications/tool-result" in html
 
 
+def test_the_artifact_view_is_self_contained_and_frames_what_it_shows() -> None:
+    """Its only markup sink is a sandboxed frame's srcdoc, holding the region's rendering."""
+
+    from pheasant.mcp_server.artifact_tools import artifact_app_html
+
+    html = artifact_app_html()
+    assert html.lstrip().lower().startswith("<!doctype html>")
+    assert not re.search(r"<(script|link|img)[^>]+(src|href)\s*=\s*[\"']?(https?:)?//", html)
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+        assert sink not in html, f"the view must not use {sink}"
+    assert 'sandbox: "allow-scripts"' in html and "frame.srcdoc" in html
+    assert '"2026-01-26"' in html and "view_artifact" in html
+
+
 @pytest.mark.asyncio
 async def test_a_real_client_sees_the_app_the_tools_and_the_image(tmp_path: Path) -> None:
     pytest.importorskip("mcp")
@@ -109,6 +123,24 @@ sources:
                     read = await client.read_resource(APP_URI)
                     assert read.contents[0].mime_type == APP_MIME
                     assert read.contents[0].text == app_html()
+
+                    # Kept artifacts have their own view, and the tool that reads one declares it.
+                    from pheasant.mcp_server.artifact_tools import ARTIFACT_APP_URI
+
+                    assert resources[ARTIFACT_APP_URI].mime_type == APP_MIME
+                    meta = tools["get_artifact"].meta or {}
+                    assert meta.get("ui", {}).get("resourceUri") == ARTIFACT_APP_URI
+                    saved = await client.call_tool(
+                        "save_artifact",
+                        {"knowledge_base": "mcp-apps", "title": "Notes", "markdown": "# Notes"},
+                    )
+                    assert not saved.is_error, saved
+                    artifact_id = json.loads(saved.content[0].text)["id"]
+                    viewed = await client.call_tool(
+                        "view_artifact", {"knowledge_base": "mcp-apps", "artifact_id": artifact_id}
+                    )
+                    page = json.loads(viewed.content[0].text)["html"]
+                    assert "Content-Security-Policy" in page and "<h1>Notes</h1>" in page
 
                     result = await client.call_tool(
                         "get_image",

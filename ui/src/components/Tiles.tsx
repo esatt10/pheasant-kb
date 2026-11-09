@@ -116,6 +116,7 @@ export function useTileHosts(): Record<TileId, HTMLElement> {
       graph: make("graph"),
       facts: make("facts"),
       node: make("node"),
+      artifacts: make("artifacts"),
       taxonomy: make("taxonomy"),
     };
   });

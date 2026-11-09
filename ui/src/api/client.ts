@@ -46,6 +46,8 @@ import type {
   PipelineSettings,
 } from "./types";
 import type {
+  Artifact,
+  ArtifactSummary,
   ConfigSection,
   ConfigSectionResult,
   EvaluationCohortSummary,
@@ -757,6 +759,60 @@ export const api = {
     if (response.status === 401) signalApiAuthRequired();
     if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
     return URL.createObjectURL(await response.blob());
+  },
+  /** The artifacts the region keeps for this reader, newest first. */
+  artifacts: () => request<{ artifacts: ArtifactSummary[] }>("/artifacts"),
+  artifact: (id: string) => request<Artifact>(`/artifacts/${encodeURIComponent(id)}`),
+  /** Keep an answer the stream kept (by its `answer_id`) as a report. */
+  saveArtifact: (body: { answer_id?: string; title?: string; markdown?: string; kind?: string }) =>
+    request<Artifact>("/artifacts", { method: "POST", body: JSON.stringify(body) }),
+  deleteArtifact: (id: string) =>
+    request<{ deleted: string }>(`/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /**
+   * A rendered, pheasant-styled document of the artifact or one file, as text
+   * for a sandboxed `srcdoc` frame: fetched rather than put in an `src`,
+   * because a frame cannot carry the API token.
+   */
+  artifactDocument: async (
+    id: string,
+    options: { file?: string | null; mode?: "code" | "preview"; theme?: "light" | "dark" } = {},
+  ): Promise<string> => {
+    const response = await fetch(
+      `${API_BASE}/artifacts/${encodeURIComponent(id)}/view${qs({
+        file: options.file ?? undefined,
+        mode: options.mode,
+        theme: options.theme,
+      })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    return response.text();
+  },
+  /** Save an export to disk: `zip`, `html`, `markdown`, or one `file` as written. */
+  downloadArtifact: async (
+    id: string,
+    options: { format?: "zip" | "html" | "markdown"; file?: string | null } = {},
+  ): Promise<void> => {
+    const response = await fetch(
+      `${API_BASE}/artifacts/${encodeURIComponent(id)}/export${qs({
+        format: options.format,
+        file: options.file ?? undefined,
+      })}`,
+      { headers: requestHeaders() },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "artifact";
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   },
   /** An indexed image as MCP image content (`{data, mimeType}`), for the app bridge. */
   mediaBase64: async (nodeId: string): Promise<{ data: string; mimeType: string }> => {

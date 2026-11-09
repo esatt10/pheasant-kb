@@ -241,6 +241,13 @@ def answer(
                 intent=request.intent,
             )
             payload["query_embedding"] = embedding_metrics.as_dict()
+            # A composed answer is kept as an artifact the moment it exists,
+            # for every surface: `services/artifacts.py`.
+            from pheasant.services import artifacts
+
+            kept = artifacts.keep_composed(context, request.question, request.principal, payload)
+            if kept is not None:
+                payload["artifact"] = kept
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000

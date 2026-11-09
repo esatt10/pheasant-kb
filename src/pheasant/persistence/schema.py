@@ -104,6 +104,20 @@ CREATE TABLE IF NOT EXISTS answer_streams (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_answer_streams_created ON answer_streams(created_at);
+-- Composed files and saved reports, kept until their owner deletes them
+-- (`services/artifacts.py`). User data: a refresh, a restart and a backend
+-- migration all keep them.
+CREATE TABLE IF NOT EXISTS saved_artifacts (
+  id TEXT PRIMARY KEY,
+  kb_id TEXT NOT NULL,
+  owner TEXT,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_artifacts_owner ON saved_artifacts(kb_id, owner, created_at);
 -- The same tombstone for one document (`persistence/archive.py`). Every sync
 -- skips a path held here before reading it, so the removal survives
 -- incremental and full syncs. `kind` is `archived` (reinstatable) or

@@ -188,6 +188,9 @@ pheasant-kb/
 │   │                            sync_control (cancel a source's running
 │   │                            sync), voice (the composer's dictation:
 │   │                            a live transcription session, HTTP only),
+│   │                            artifacts + artifact_render (composed
+│   │                            files and saved reports, kept until
+│   │                            deleted; one pheasant-styled renderer),
 │   │                            answer_resume (a streamed answer kept an
 │   │                            hour for a reader whose stream dropped),
 │   │                            region_status (what is still waking or
@@ -229,7 +232,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 199 pytest modules, offline by design
+└── tests/                     ← 200 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1406,6 +1409,23 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   modes when hybrid is present, since hybrid already contains them. The stream
   carries provisional `draft` events that the verified `answer` replaces.
   `docs/configuration.md`, `scripts/benchmark_assistant_latency.py`.
+- **Artifacts are kept, and look like pheasant everywhere they are shown**
+  (`services/artifacts.py`, `services/artifact_render.py`, table
+  `saved_artifacts`; `/artifacts*`, MCP `list_/get_/save_/view_/export_/
+  delete_artifact`, `ui://pheasant/artifact-view.html`; the web UI's
+  Artifacts tab). Every composed answer is saved as a `files` artifact in
+  `services.assistant.answer`, so HTTP, the stream and MCP keep the same one;
+  any answer the stream kept, or any content, is saved as a `report`. Kept
+  until deleted and owned by `effective_principal`, so a reload -- which
+  empties the chat, since the region keeps no chat state -- leaves them in
+  the tab, the open one included. One renderer: highlighted code in the UI's
+  syntax colours (pygments), Markdown with raw HTML off and `[n]` linked to
+  the sources, a saved diagram drawn by the knowledge view itself (hosted in
+  the page by a few lines of the MCP Apps host protocol), an HTML file run as
+  its author wrote it. Every document begins with `DOCUMENT_POLICY` (inline
+  scripts and styles, data: images, nothing fetched) and is shown in a
+  `sandbox="allow-scripts"` frame; exports are `.zip`, `.html`, `.md`.
+  `tests/test_artifacts.py`.
 - **A dropped stream is not a lost answer** (`services/answer_resume.py`,
   table `answer_streams`; `GET /assistant/chat/answers/{id}`). The UI sends
   a random `answer_id` with each question and the region keeps that answer's
