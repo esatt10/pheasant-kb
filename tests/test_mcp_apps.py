@@ -88,6 +88,10 @@ sync:
     enabled: false
   scheduler:
     enabled: false
+# save_artifact below must not start a real sync child: it outlived the
+# test and held CI open for half an hour.
+artifacts:
+  index_on_save: false
 sources:
   - name: docs
     type: document_folder
