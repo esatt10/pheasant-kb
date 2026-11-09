@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { JobRecord, QueueTask, SourceProgress } from "../api/types";
-import { OPEN_JOBS_EVENT, QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegion";
+import {
+  OPEN_JOBS_EVENT,
+  QUEUE_STATE_LABEL,
+  outstanding,
+  unlistedWaiting,
+  useIndexQueue,
+} from "../hooks/useRegion";
 import { ProgressBar, formatDuration, formatRate, progressCaption } from "./SyncProgress";
 
 /**
@@ -49,6 +55,9 @@ export function JobsTray() {
   const queue = useIndexQueue();
   const queued = outstanding(queue.data);
   const preClaim = queued.filter((task) => task.state === "awaiting_claim");
+  // Counted but not listed (NATS): still waiting, so still shown.
+  const unlisted = unlistedWaiting(queue.data);
+  const waiting = preClaim.length + unlisted;
 
   useEffect(() => {
     const open = () => setExpanded(true);
@@ -62,7 +71,7 @@ export function JobsTray() {
   const failed = recent.filter((job) => job.status === "failed");
   const stalled = active.some((job) => job.stalled);
 
-  if (active.length === 0 && failed.length === 0 && queued.length === 0 && !expanded) {
+  if (active.length === 0 && failed.length === 0 && queued.length === 0 && unlisted === 0 && !expanded) {
     return null;
   }
 
@@ -78,9 +87,9 @@ export function JobsTray() {
         aria-expanded={expanded}
         title={expanded ? "Hide background work" : "Show background work"}
       >
-        {active.length > 0 || (preClaim.length === 0 && queued.some((task) => task.state === "claimed")) ? (
+        {active.length > 0 || (waiting === 0 && queued.some((task) => task.state === "claimed")) ? (
           <span className="spinner" />
-        ) : preClaim.length > 0 ? (
+        ) : waiting > 0 ? (
           <span className="queue-glyph" aria-hidden>
             ⧗
           </span>
@@ -88,16 +97,18 @@ export function JobsTray() {
         <span className="jobs-tray__summary">
           {active.length > 0
             ? `${summarize(active[0])}${active.length > 1 ? ` +${active.length - 1}` : ""}`
-            : preClaim.length > 0
+            : preClaim.length > 0 && unlisted === 0
               ? `${preClaim.length === 1 ? `Sync ${preClaim[0].source}` : `${preClaim.length} syncs`} queued · awaiting an indexer`
-              : queued.length > 0
+              : waiting > 0
+                ? `${waiting === 1 ? "1 sync" : `${waiting} syncs`} queued · awaiting an indexer`
+                : queued.length > 0
                 ? `Sync ${queued[0].source} · ${QUEUE_STATE_LABEL[queued[0].state]}${queued[0].claimed_by ? ` (${queued[0].claimed_by})` : ""}${queued.length > 1 ? ` +${queued.length - 1}` : ""}`
                 : failed.length > 0
                   ? `${failed.length} job${failed.length === 1 ? "" : "s"} failed`
                   : "Background work"}
         </span>
-        {active.length > 0 && preClaim.length > 0 ? (
-          <span className="pill pill--warn">+{preClaim.length} queued</span>
+        {active.length > 0 && waiting > 0 ? (
+          <span className="pill pill--warn">+{waiting} queued</span>
         ) : null}
         <span className="jobs-tray__chevron" aria-hidden>
           {expanded ? "▾" : "▴"}
@@ -123,7 +134,14 @@ export function JobsTray() {
               ))}
             </div>
           ) : null}
-          {records.length === 0 && queued.length === 0 ? (
+          {unlisted > 0 ? (
+            <p className="muted small" style={{ margin: 0 }}>
+              {unlisted === 1 ? "1 sync is" : `${unlisted} syncs are`} queued for an indexer. The{" "}
+              {queue.data?.backend ?? "index"} queue counts its waiting tasks but cannot list them,
+              so which ones is shown once an indexer claims each.
+            </p>
+          ) : null}
+          {records.length === 0 && queued.length === 0 && unlisted === 0 ? (
             <p className="muted small" style={{ margin: 0 }}>
               Nothing running. Syncs, uploads and re-indexes show up here with
               live progress.
