@@ -83,7 +83,7 @@ from pheasant.sync.graph_history import snapshot_after_sync
 from pheasant.sync.locks import EngineLease, SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
-from pheasant.sync.pipeline import beat_sources, default_interval, runs_automatically
+from pheasant.sync.pipeline import beat_sources, default_interval, startup_sources
 from pheasant.sync.preparation import (  # noqa: F401 - re-exported for callers and tests
     ReadFailures,
     _media_bytes,
@@ -657,8 +657,9 @@ class SyncEngine:
         self.reconcile_embeddings()
         self.ensure_node_index()
         results = []
+        due = set(startup_sources(self.enabled_sources(), self.config))
         for source in self.enabled_sources():
-            if source.enabled and source.sync.on_startup and runs_automatically(source):
+            if source.enabled and source.name in due:
                 mode: SyncMode = "incremental"
                 # Unconditional: a graph missing artifacts SQLite already has
                 # is never a state anyone wants served, and repair is the

@@ -254,6 +254,13 @@ def _header(artifact: dict[str, Any]) -> str:
     )
 
 
+def _turns(citation: dict[str, Any]) -> str:
+    """A thread's source: which turns cited it, numbered as the thread shows them."""
+
+    turns = [str(t) for t in citation.get("turns") or []]
+    return ("turn " if len(turns) == 1 else "turns ") + ", ".join(turns)
+
+
 def _sources(citations: list[dict[str, Any]]) -> str:
     if not citations:
         return ""
@@ -261,6 +268,7 @@ def _sources(citations: list[dict[str, Any]]) -> str:
         f'<li id="source-{_esc(c.get("index"))}" value="{_esc(c.get("index"))}">'
         f"{_esc(c.get('source'))} · {_esc(c.get('path'))}"
         + (f" — {_esc(c.get('section'))}" if c.get("section") else "")
+        + (f' <span class="muted">{_esc(_turns(c))}</span>' if c.get("turns") else "")
         + "</li>"
         for c in citations
         if c.get("index") is not None

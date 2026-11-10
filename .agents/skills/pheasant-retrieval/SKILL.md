@@ -126,6 +126,10 @@ path in either direction between two nodes.
   criteria and memory policy that produced it. Store it with your scores.
 - `memory="off"` keeps agent-memory records out of a corpus-only arm.
   `memory="only"` retrieves just those records.
+- `artifacts="exclude"` keeps saved artifacts (composed files, reports and
+  threads people kept) out of the results, for an arm over the sources alone;
+  `artifacts="only"` searches just them. The default includes them: they
+  are knowledge, and one may be an earlier answer to your own question.
 - Scope with `source_name`, `source_types`, `exclude_sources`, `node_types` and
   `section`. These criteria behave identically on MCP and HTTP.
 - Call `use_pheasant_for_raw_retrieval` (an MCP prompt) to get this workflow in

@@ -22,6 +22,7 @@ of it, and a thread of forty turns must still fit in one row.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -95,27 +96,128 @@ def trace_of(
     }
 
 
+#: A citation marker in prose: ``[3]``, never a link's ``[text](url)``.
+_MARKER = re.compile(r"\[(\d{1,3})\](?!\()")
+#: Fenced blocks and inline code, where ``[3]`` is code (``a[3]``), not a citation.
+_CODE = re.compile(r"```.*?(?:```|$)|`[^`\n]*`", re.DOTALL)
+#: Marks a thread whose evidence carries one numbering (`renumber`).
+THREAD_NUMBERING = "thread"
+
+
+def _source_key(citation: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(citation.get("source") or ""),
+        str(citation.get("path") or ""),
+        str(citation.get("section") or ""),
+    )
+
+
+def _remap(text: str, mapping: dict[str, int]) -> str:
+    """``text`` with each ``[n]`` in prose rewritten to ``[mapping[n]]``, in one pass."""
+
+    def prose(segment: str) -> str:
+        return _MARKER.sub(
+            lambda m: f"[{mapping[m.group(1)]}]" if m.group(1) in mapping else m.group(0), segment
+        )
+
+    out, last = [], 0
+    for code in _CODE.finditer(text or ""):
+        out += [prose(text[last : code.start()]), code.group(0)]
+        last = code.end()
+    out.append(prose((text or "")[last:]))
+    return "".join(out)
+
+
+def renumber(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One numbering for a whole thread's evidence; the thread's citation list.
+
+    Every answer numbers its own passages from ``[1]``, so ``[2]`` in the first
+    turn and ``[2]`` in the third are usually different documents, and a thread
+    listing both as ``[2]`` attributes one turn's claim to the other's source.
+    Here each distinct source (document and section) gets one thread number,
+    the first time any turn cites it; a source two turns cite keeps one number
+    and lists both turns. Each turn keeps its answer as written and its own
+    numbers (``turn_index``) beside the thread's (``index``), and a
+    ``citation_map`` from one to the other -- which is also how a compose
+    turn's files, whose ``[n]`` comments are code and are never rewritten, map
+    to the thread. Idempotent: it reads only what a turn kept as written.
+    """
+
+    numbered: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for turn in turns:
+        mapping: dict[str, int] = {}
+        cited = []
+        for citation in turn.get("citations") or []:
+            local = citation.get("turn_index", citation.get("index"))
+            entry = numbered.setdefault(
+                _source_key(citation),
+                {
+                    "index": len(numbered) + 1,
+                    "source": citation.get("source"),
+                    "path": citation.get("path"),
+                    "section": citation.get("section"),
+                    "turns": [],
+                },
+            )
+            if turn["turn"] not in entry["turns"]:
+                entry["turns"].append(turn["turn"])
+            mapping[str(local)] = entry["index"]
+            cited.append({**citation, "turn_index": local, "index": entry["index"]})
+        turn["citations"] = cited
+        turn["citation_map"] = mapping
+    return list(numbered.values())
+
+
 def transcript(turns: list[dict[str, Any]]) -> str:
-    """The thread as Markdown: each question, its answer, and what it rested on."""
+    """The thread as Markdown: each question, its answer, and what it rested on.
+
+    The answers' markers are the thread's numbers (`renumber`), so ``[5]``
+    means one source wherever it appears.
+    """
 
     lines: list[str] = []
     for turn in turns:
         trace = turn.get("trace") or {}
         meta = [str(v) for v in (trace.get("intent"), trace.get("channel")) if v]
+        mapping = turn.get("citation_map") or {}
         lines += [f"## {turn['turn']}. {turn['question'] or '(no question)'}", ""]
         if meta:
             lines += [f"*{' · '.join(meta)}*", ""]
-        lines += [turn["answer"].strip() or "_(no answer)_", ""]
+        lines += [_remap(turn["answer"], mapping).strip() or "_(no answer)_", ""]
         cited = [c for c in turn.get("citations") or [] if c.get("path")]
         if cited:
-            lines.append(
-                "Sources: "
-                + "; ".join(
-                    f"[{c.get('index')}] {c.get('source')} · {c.get('path')}" for c in cited
-                )
-            )
-            lines.append("")
+            seen: set[int] = set()
+            listed = []
+            for c in cited:
+                if c["index"] not in seen:
+                    seen.add(c["index"])
+                    listed.append(f"[{c['index']}] {c.get('source')} · {c.get('path')}")
+            lines += ["Sources: " + "; ".join(listed), ""]
+        if turn.get("files") and mapping:
+            pairs = ", ".join(f"[{local}] = [{thread}]" for local, thread in mapping.items())
+            lines += [f"*This turn's files cite its own numbering: {pairs}.*", ""]
     return "\n".join(lines)
+
+
+def renumbered(payload: dict[str, Any]) -> dict[str, Any]:
+    """A thread payload with one numbering, its transcript rebuilt (see `renumber`)."""
+
+    turns = payload.get("turns") or []
+    citations = renumber(turns)
+    visual_turn = payload.get("visual_turn")
+    out = {
+        **payload,
+        "citations": citations,
+        "answer": transcript(turns),
+        "citation_numbering": THREAD_NUMBERING,
+    }
+    # A diagram cites its own turn's passages by that turn's numbers.
+    for turn in turns:
+        if turn.get("turn") == visual_turn:
+            out["visual_citations"] = [
+                {**c, "index": c["turn_index"]} for c in turn.get("citations") or []
+            ]
+    return out
 
 
 def thread_payload(
@@ -141,7 +243,7 @@ def thread_payload(
     kept: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
     visual: dict[str, Any] | None = None
-    citations: list[dict[str, Any]] = []
+    visual_turn: int | None = None
     for number, turn in enumerate(turns, 1):
         if not isinstance(turn, dict):
             raise InvalidRequest(f"turns[{number - 1}] must be an object")
@@ -149,10 +251,11 @@ def thread_payload(
         answer = turn.get("answer") if isinstance(turn.get("answer"), dict) else {}
         compact = artifact_payload({**answer, "answer_mode": None}) if answer else {}
         turn_citations = compact.get("citations") or []
+        turn_files = []
         if (answer.get("route") or {}).get("intent") == "compose":
             for file in artifact_payload(answer).get("files") or []:
-                files.append({**file, "name": f"turn-{number}-{file['name']}"})
-        citations += [{**c, "turn": number} for c in turn_citations]
+                turn_files.append(f"turn-{number}-{file['name']}")
+                files.append({**file, "name": turn_files[-1]})
         # The diagram drawn for this turn after the fact wins over the one it
         # was answered with; the thread shows the last one drawn.
         answered = answer.get("visual") if isinstance(answer.get("visual"), dict) else None
@@ -161,13 +264,15 @@ def thread_payload(
             if (answered or {}).get("status") == "ok" and (answered or {}).get("diagram")
             else None
         )
-        visual = turn_visual or visual
+        if turn_visual:
+            visual, visual_turn = turn_visual, number
         kept.append(
             {
                 "turn": number,
                 "question": question,
                 "answer": str(answer.get("answer") or turn.get("text") or ""),
                 "citations": turn_citations,
+                "files": turn_files,
                 "visual": turn_visual,
                 "trace": trace_of(
                     answer,
@@ -181,12 +286,11 @@ def thread_payload(
     title = next((t["question"] for t in kept if t["question"].strip()), "Conversation")
     payload = {
         "question": kept[0]["question"],
-        # The transcript is what every viewer and export renders, as a report's
-        # answer is; `turns` keeps each turn's own trace beside it.
-        "answer": transcript(kept),
         "turns": kept,
         "files": files,
-        "citations": citations,
         "visual": visual,
+        "visual_turn": visual_turn,
     }
-    return payload, title
+    # The transcript is what every viewer and export renders, as a report's
+    # answer is; `turns` keeps each turn's own trace beside it.
+    return renumbered(payload), title

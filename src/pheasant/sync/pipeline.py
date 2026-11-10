@@ -180,9 +180,18 @@ def content_busy(state: Any, queue: Any, exclude: set[str]) -> bool:
         return False
 
 
-def startup_sources(sources: Any) -> list[str]:
-    """The names of ``sources`` a boot syncs: ``on_startup`` and running by itself."""
+def startup_sources(sources: Any, config: Any = None) -> list[str]:
+    """The names of ``sources`` a boot syncs: ``on_startup`` and running by itself.
 
+    None when the region's ``sync.scheduler.startup_sync`` is off: then a boot
+    syncs nothing and every source waits for its schedule -- what a region
+    that scales to zero wants, since each wake would otherwise re-sync all of
+    it.
+    """
+
+    scheduler = getattr(getattr(config, "sync", None), "scheduler", None)
+    if scheduler is not None and getattr(scheduler, "startup_sync", True) is False:
+        return []
     return [s.name for s in sources if s.sync.on_startup and runs_automatically(s)]
 
 

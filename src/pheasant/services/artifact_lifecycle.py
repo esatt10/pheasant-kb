@@ -190,11 +190,32 @@ def file_legacy(context: ServiceContext, records: list[dict[str, Any]]) -> None:
     """Bring artifacts kept under an older layout up to date, as a listing shows them."""
 
     _name_unnamed(context, records)
+    _renumber_threads(context, records)
     _file_unfiled(context, records)
 
 
 #: Artifacts filed into the source per listing, for those kept before they were knowledge.
 FILE_PER_LISTING = 20
+
+
+def _renumber_threads(context: ServiceContext, records: list[dict[str, Any]]) -> None:
+    """Give a thread saved before threads had one numbering its thread numbers.
+
+    Rebuilt from what each turn kept as written, so nothing is guessed; the
+    row is rewritten (the next listing finds nothing to do) and the folder
+    landed again, its README listing each source once.
+    """
+
+    from pheasant.services.artifact_trace import THREAD_NUMBERING, renumbered
+
+    for record in records:
+        payload = record.get("payload") or {}
+        if record.get("kind") != "thread" or payload.get("citation_numbering") == THREAD_NUMBERING:
+            continue
+        record["payload"] = renumbered(payload)
+        store._save_payload(context, record["id"], record["payload"])
+        if record["payload"].get("folder"):
+            store._publish(context, record)
 
 
 def _file_unfiled(context: ServiceContext, records: list[dict[str, Any]]) -> None:
