@@ -200,9 +200,12 @@ answers `/openai/v1/embeddings` works. A different model means re-embedding
 
 ## Limits
 
-- **Keys only.** Microsoft Entra ID tokens and managed identity are not wired
-  in. A token expires within the hour and would need a refresh loop that
-  pheasant does not have.
+- **Chat takes a key.** Embeddings, captions, transcripts and judgements
+  (`assistant.decisions`) fall back to the process's managed identity when
+  their key variable is unset, so a resource with keys switched off still
+  serves them (give the identity a data-plane role on the account). The
+  answering model (`assistant.provider: azure`) still needs
+  `AZURE_FOUNDRY_API_KEY`.
 - **Setup wizard.** `pheasant setup` does not offer Foundry. Use the config
   file.
 - **UI-pasted keys.** pheasant-kb turns these off (`allow_session_keys:

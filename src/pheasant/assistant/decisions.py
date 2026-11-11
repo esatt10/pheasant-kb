@@ -263,7 +263,8 @@ class Decider:
     #: Effort per rewrite (``none`` / ``low`` / ``full``); past the end, ``full``.
     repair_efforts: tuple[str, ...] = DEFAULT_REPAIR_EFFORTS
     #: ``environment`` / ``assistant`` (the answering model's own OpenAI
-    #: credential) — reported, never the key itself.
+    #: credential) / ``managed_identity`` (no key; a Foundry host signed with
+    #: this process's identity) — reported, never the key itself.
     source: str = "environment"
     deadline_monotonic: float | None = None
     last_failure: str | None = field(default=None, compare=False, repr=False)
@@ -347,7 +348,7 @@ class Decider:
         else:
             payload = {"model": self.model, "input": input, "questions": questions}
         url = self.endpoint
-        headers = foundry.auth_headers(url, self.api_key)
+        headers = foundry.credential_headers(url, self.api_key)
         started = time.perf_counter()
         try:
             _providers.note_model_call(self.model)
@@ -384,6 +385,12 @@ class Decider:
         return DecisionResult(answers=_parse(data), seconds=seconds, input_tokens=input_tokens)
 
 
+def _managed_identity() -> bool:
+    from pheasant.security import entra
+
+    return entra.managed_identity_available()
+
+
 def _short(message: str) -> str:
     message = " ".join(message.split())
     return message if len(message) <= 160 else message[:157] + "…"
@@ -397,7 +404,9 @@ def resolve_decider(
     ``settings`` is ``assistant``. The key is ``decisions.api_key_env`` when
     one is named; otherwise the answering model's own credential when that is
     OpenAI or Azure AI Foundry (a browser session's key included, since it is
-    the same account), otherwise ``OPENAI_API_KEY``. No key is not an error:
+    the same account), otherwise ``OPENAI_API_KEY``. With no key, a Foundry
+    ``base_url`` is called with the process's managed identity where it has
+    one. No key is not an error:
     the workflow is exactly what it was before this module existed. ``mode`` is the
     per-request ``decisions`` option, which wins over the configured mode in
     both directions.
@@ -422,7 +431,11 @@ def resolve_decider(
     else:
         api_key = env.get(DEFAULT_API_KEY_ENV)
     if not api_key:
-        return None
+        # A Foundry resource with its keys switched off is called with this
+        # process's managed identity, as embeddings are.
+        if not (base_url and foundry.is_foundry_url(base_url) and _managed_identity()):
+            return None
+        api_key, source = "", "managed_identity"
     return Decider(
         api_key=str(api_key),
         model=str(getattr(decisions, "model", None) or DEFAULT_MODEL),
