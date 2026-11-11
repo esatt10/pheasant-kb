@@ -379,6 +379,64 @@ def test_resolve_decider_reuses_the_foundry_assistants_credential() -> None:
     assert decider.describe()["api"] == "systemone"
 
 
+def _keyless_settings(base_url: str = RESOURCE) -> SimpleNamespace:
+    return SimpleNamespace(
+        enabled=True,
+        decisions=AssistantDecisionsSettings(
+            api="systemone",
+            model="ms-decision-1",
+            base_url=base_url,
+            api_key_env="AZURE_FOUNDRY_API_KEY",
+        ),
+    )
+
+
+def _managed_identity(monkeypatch: Any, available: bool = True) -> None:
+    from pheasant.security import entra
+
+    monkeypatch.setattr(entra, "managed_identity_available", lambda: available)
+    monkeypatch.setattr(entra, "managed_identity_token", lambda *args, **kwargs: "mi-token")
+
+
+def test_a_keyless_foundry_decider_signs_with_the_managed_identity(monkeypatch: Any) -> None:
+    """A resource with its keys switched off still judges, as embeddings do."""
+
+    _managed_identity(monkeypatch)
+    calls = _capture(
+        monkeypatch,
+        {"answers": {"sufficient": {"type": "choice", "choice": "x"}, "next": {"type": "choice"}}},
+    )
+    decider = resolve_decider(_keyless_settings(), None, {})
+    assert decider is not None
+    assert decider.api_key == "" and decider.source == "managed_identity"
+    assert decider.describe()["credential_source"] == "managed_identity"
+
+    decider.decide("e", QUESTIONS)
+    assert calls[0]["url"] == RESOURCE + "/providers/microsoft/v1/systemone"
+    assert calls[0]["headers"]["authorization"] == "Bearer mi-token"
+    assert "api-key" not in calls[0]["headers"]
+
+
+def test_a_keyless_decider_without_an_identity_or_off_foundry_is_off(monkeypatch: Any) -> None:
+    _managed_identity(monkeypatch, available=False)
+    assert resolve_decider(_keyless_settings(), None, {}) is None
+
+    _managed_identity(monkeypatch)
+    assert resolve_decider(_keyless_settings("https://proxy.example/v1"), None, {}) is None
+
+
+def test_a_configured_key_still_wins_over_the_managed_identity(monkeypatch: Any) -> None:
+    _managed_identity(monkeypatch)
+    calls = _capture(
+        monkeypatch,
+        {"answers": {"sufficient": {"type": "choice", "choice": "x"}, "next": {"type": "choice"}}},
+    )
+    decider = resolve_decider(_keyless_settings(), None, {"AZURE_FOUNDRY_API_KEY": "foundry-key"})
+    assert decider is not None and decider.source == "environment"
+    decider.decide("e", QUESTIONS)
+    assert calls[0]["headers"] == {"api-key": "foundry-key"}
+
+
 def test_decisions_api_setting_is_validated() -> None:
     assert AssistantDecisionsSettings().api == "decisions"
     with pytest.raises(ValueError, match="assistant.decisions.api"):

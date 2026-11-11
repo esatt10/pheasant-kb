@@ -63,6 +63,7 @@ def _steps(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "detail": str(step.get("detail") or "")[:MAX_DETAIL],
                 "passages": step.get("passages"),
                 "duration_seconds": step.get("duration_seconds"),
+                "model": step.get("model"),
             }
         )
     return kept

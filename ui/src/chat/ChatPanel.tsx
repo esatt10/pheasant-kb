@@ -637,7 +637,14 @@ function AgentTrace({ steps }: { steps: NonNullable<ChatAnswer["steps"]> }) {
             <li key={`${step.name}-${index}`}>
               <span className="trace__name">{step.name}</span>
               <div className="trace__detail">
-                <div>{step.detail}</div>
+                <div>
+                  {step.detail}
+                  {step.model ? (
+                    <span className="trace__model" title="Model this step used">
+                      {step.model}
+                    </span>
+                  ) : null}
+                </div>
                 <FanoutBreakdown timings={step.fanout_timings} />
               </div>
               <span className="trace__metrics">

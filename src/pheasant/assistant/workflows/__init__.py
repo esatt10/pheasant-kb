@@ -107,9 +107,32 @@ class WorkflowStep:
     reasoning_tokens: int | None = None
     provider_calls: int | None = None
     provider_retries: int | None = None
+    #: The model the step used — a chat, decision or embedding deployment —
+    #: or several joined by ", " in first-use order. ``None`` for a step that
+    #: used none.
+    model: str | None = None
     #: Individual query/mode fan-outs that make up a retrieval step. Entries
     #: include their mode, query index, phase, elapsed time, and result count.
     fanout_timings: list[dict[str, Any]] = field(default_factory=list)
+
+
+def step_payload(step: WorkflowStep) -> dict[str, Any]:
+    """One step as the answer and its stream both report it."""
+
+    return {
+        "name": step.name,
+        "detail": step.detail,
+        "passages": step.passages,
+        "duration_seconds": step.duration_seconds,
+        "input_tokens": step.input_tokens,
+        "output_tokens": step.output_tokens,
+        "cached_input_tokens": step.cached_input_tokens,
+        "reasoning_tokens": step.reasoning_tokens,
+        "provider_calls": step.provider_calls,
+        "provider_retries": step.provider_retries,
+        "model": step.model,
+        "fanout_timings": step.fanout_timings,
+    }
 
 
 @dataclass
@@ -322,4 +345,5 @@ __all__ = [
     "register_workflow",
     "reset_workflow_registry",
     "resolve_workflow_name",
+    "step_payload",
 ]

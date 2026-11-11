@@ -37,7 +37,8 @@ class AssistantDecisionsSettings(ModelMixin):
 
     It needs a key (``api_key_env``, else the answering model's own
     credential when that is OpenAI or Azure AI Foundry, else
-    ``OPENAI_API_KEY``). ``api`` picks the wire: ``decisions`` is OpenAI's
+    ``OPENAI_API_KEY``; with none, a Foundry ``base_url`` is signed with the
+    process's managed identity). ``api`` picks the wire: ``decisions`` is OpenAI's
     Decisions API, on api.openai.com or a Foundry ``gpt-6-luna`` deployment
     (``{resource}/openai/v1/decisions``); ``systemone`` is Microsoft-Decision-1
     on a Foundry resource (``{resource}/providers/microsoft/v1/systemone``),

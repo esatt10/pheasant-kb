@@ -31,7 +31,7 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pheasant import foundry
 from pheasant.assistant.catalog import (
@@ -86,6 +86,14 @@ class TokenUsage:
     cached_input_reports: int = 0
     reasoning_tokens: int = 0
     reasoning_reports: int = 0
+    #: Every model the node used, in first-use order: chat and decision
+    #: models as they are called, an embedding model as its vectors are used.
+    models: list[str] = field(default_factory=list)
+
+    @property
+    def model(self) -> str | None:
+        """The model the node used, or several joined by ", " in first-use order."""
+        return ", ".join(self.models) or None
 
     @property
     def reported_input(self) -> int | None:
@@ -126,10 +134,28 @@ def collect_token_usage() -> Iterator[TokenUsage]:
         _active_usage.reset(token)
 
 
-def note_model_call() -> None:
+def note_model_call(model: str | None = None) -> None:
     usage = _active_usage.get()
     if usage is not None:
         usage.calls += 1
+        _note_model(usage, model)
+
+
+def note_model_used(model: str | None) -> None:
+    """Name a model the node used without counting a provider call.
+
+    Query embeddings are cached per process, so a node can rank with a model's
+    vectors without asking the provider anything; ``calls`` keeps meaning
+    requests made, and the model is named either way.
+    """
+    usage = _active_usage.get()
+    if usage is not None:
+        _note_model(usage, model)
+
+
+def _note_model(usage: TokenUsage, model: str | None) -> None:
+    if model and model not in usage.models:
+        usage.models.append(model)
 
 
 def note_model_retry() -> None:
@@ -439,7 +465,7 @@ def _anthropic(
         "messages": [{"role": "user", "content": prompt}],
     }
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
-    note_model_call()
+    note_model_call(model)
     data = _http_json(f"{base}/v1/messages", payload, headers, timeout)
     reported = data.get("usage") or {}
     _record_usage(
@@ -510,7 +536,7 @@ def _openai(
     # is adjusted at most once, so this is bounded by the number of fields.
     while True:
         try:
-            note_model_call()
+            note_model_call(model)
             data = (
                 _http_chat_stream(url, payload, headers, timeout, on_delta)
                 if on_delta is not None
@@ -589,14 +615,14 @@ def _gemini(
     headers = {"x-goog-api-key": key}
     url = f"{base}/models/{model}:generateContent"
     try:
-        note_model_call()
+        note_model_call(model)
         data = _http_json(url, payload, headers, timeout)
     except ProviderError as exc:
         if "responseMimeType" not in generation or "responseMimeType" not in str(exc):
             raise
         note_model_retry()
         generation.pop("responseMimeType")
-        note_model_call()
+        note_model_call(model)
         data = _http_json(url, payload, headers, timeout)
     reported = data.get("usageMetadata") or {}
     _record_usage(

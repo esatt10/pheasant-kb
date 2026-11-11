@@ -259,6 +259,7 @@ def answer_question(
         WorkflowStep,
         build_workflow,
         resolve_workflow_name,
+        step_payload,
     )
 
     settings = getattr(config, "assistant", None)
@@ -458,6 +459,7 @@ def answer_question(
             reasoning_tokens=rewrite_usage.reported_reasoning,
             provider_calls=rewrite_usage.calls,
             provider_retries=rewrite_usage.retries,
+            model=rewrite_usage.model,
         )
     )
     if how:
@@ -643,22 +645,7 @@ def answer_question(
         "workflow": result.workflow,
         "route": route,
         "visual": None,
-        "steps": [
-            {
-                "name": step.name,
-                "detail": step.detail,
-                "passages": step.passages,
-                "duration_seconds": step.duration_seconds,
-                "input_tokens": step.input_tokens,
-                "output_tokens": step.output_tokens,
-                "cached_input_tokens": step.cached_input_tokens,
-                "reasoning_tokens": step.reasoning_tokens,
-                "provider_calls": step.provider_calls,
-                "provider_retries": step.provider_retries,
-                "fanout_timings": step.fanout_timings,
-            }
-            for step in steps
-        ],
+        "steps": [step_payload(step) for step in steps],
         "provider_call_count": sum(step.provider_calls or 0 for step in steps),
         "provider_retry_count": sum(step.provider_retries or 0 for step in steps),
         "retrieved_evidence_ids": result.retrieved_evidence_ids,
