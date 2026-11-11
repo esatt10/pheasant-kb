@@ -2,12 +2,19 @@
  * Dictation: the microphone streamed to a live transcription session, its
  * text written into the composer at the caret as it arrives.
  *
- * The region mints a short-lived secret for one OpenAI Realtime
- * transcription session (`POST /assistant/voice/session`, `gpt-live-transcribe`
- * by default) and the browser does the rest: it records the microphone, turns
- * it into 16-bit PCM at the session's rate, appends it to the session over a
- * WebSocket, and hands every transcript delta to `onText`. No audio passes
- * through the region, and the region's own key never reaches the browser.
+ * The region hands out one session (`POST /assistant/voice/session`,
+ * `gpt-live-transcribe` by default) and the browser does the rest: it records
+ * the microphone, turns it into 16-bit PCM at the session's rate, appends it to
+ * the session over a WebSocket, and hands every transcript delta to `onText`.
+ * The region's own key never reaches the browser. The session is one of two
+ * transports:
+ *
+ * - `direct`: a short-lived provider secret and the provider's socket; no
+ *   audio passes through the region (OpenAI's design).
+ * - `relay`: a one-use ticket and the region's own socket, which the api joins
+ *   to the provider with a credential in a header. Azure AI Foundry needs
+ *   this, because its socket takes a credential only as a header and a
+ *   browser cannot set one on a WebSocket.
  *
  * Stopping is immediate for the person — the microphone is released and the
  * button is off at once, so a new dictation can start without waiting — while
@@ -15,8 +22,33 @@
  * words for a moment before it closes.
  */
 
-import { api } from "../api/client";
+import { API_BASE, api } from "../api/client";
 import type { VoiceSession } from "../api/types";
+
+/** The subprotocol a relay ticket rides in (`services.voice.RELAY_TICKET_PROTOCOL`). */
+const RELAY_TICKET_PROTOCOL = "pheasant-voice-ticket.";
+
+/**
+ * The absolute WebSocket address for a session's `websocket_url`.
+ *
+ * A provider's socket arrives absolute and is used as it is. The region's
+ * relay arrives as a path, resolved against the API base this page talks to
+ * (same origin, `/api` behind the dev proxy, or a separately hosted API), with
+ * the page's `https:` becoming `wss:`.
+ */
+export function socketUrl(url: string, base: string = API_BASE, page: string = window.location.href): string {
+  if (/^wss?:\/\//i.test(url)) return url;
+  const resolved = new URL(`${base.replace(/\/$/, "")}${url}`, page);
+  resolved.protocol = resolved.protocol === "https:" ? "wss:" : "ws:";
+  return resolved.toString();
+}
+
+/** What the socket is opened with: the secret or ticket, beside `realtime`. */
+export function socketProtocols(session: VoiceSession): string[] {
+  return session.transport === "relay"
+    ? ["realtime", `${RELAY_TICKET_PROTOCOL}${session.client_secret}`]
+    : ["realtime", `openai-insecure-api-key.${session.client_secret}`];
+}
 
 /** Where `text` lands, and where the caret goes afterwards. */
 export interface Splice {
@@ -215,10 +247,7 @@ export class Dictation {
 
   private open(session: VoiceSession): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(session.websocket_url, [
-        "realtime",
-        `openai-insecure-api-key.${session.client_secret}`,
-      ]);
+      const socket = new WebSocket(socketUrl(session.websocket_url), socketProtocols(session));
       this.socket = socket;
       let opened = false;
       socket.onopen = () => {

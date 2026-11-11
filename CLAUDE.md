@@ -1505,6 +1505,20 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `tests/test_voice_dictation.py` over a real socket,
   `tests/test_dictation_browser.py` in Chromium with a fake microphone
   against the built UI (CI's browser job builds it).
+  **Foundry's dictation goes through the region** (`assistant.voice.transport`,
+  `auto` relays a Foundry host; `services/voice_relay.py`, `WS
+  /assistant/voice/relay`). Foundry's realtime socket takes a credential only
+  as a header and a browser cannot set one on a WebSocket (measured: the
+  subprotocol and a query parameter are 401, `Authorization: Bearer` opens).
+  So the session call returns a one-use `auth_tokens` ticket instead of a
+  provider secret. The relay redeems it (the HTTP bearer middleware does not
+  run for WebSockets, so the ticket *is* the credential), opens the provider
+  with the key or the managed identity's token, sends the region's own
+  `session.update`, and forwards only audio-buffer events from the browser.
+  Two traps it fell into: `_ui_api_prefix` is HTTP middleware, so the
+  `/api/...` spelling is registered as a second WebSocket path; and the
+  UI's static mount at `/` catches an unmatched WebSocket and asserts on it.
+  `tests/test_voice_relay.py`.
 - **Figures are graph edges.** `![](x.png)`, `![[x.png]]` and `<img>` resolve
   to `image` artifacts as `embeds` edges (`graph.media_links`, pure Python,
   kept off the WASM resolver's inputs); the indexer stores image bytes in a

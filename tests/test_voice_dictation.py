@@ -107,6 +107,8 @@ def test_a_minted_session_is_live_transcription_and_never_the_key(
         "model": "gpt-live-transcribe",
         "max_seconds": 60,
         "sample_rate": 24000,
+        # An OpenAI-spec base_url on `auto`: the browser opens the provider itself.
+        "transport": "direct",
     }
 
     response = client.post("/assistant/voice/session", json={})
@@ -120,6 +122,7 @@ def test_a_minted_session_is_live_transcription_and_never_the_key(
     assert minted["sample_rate"] == 24000
     host = provider.url.removeprefix("http://")
     assert minted["websocket_url"] == f"ws://{host}/v1/realtime?intent=transcription"
+    assert minted["transport"] == "direct"
 
     (request,) = provider.minted
     assert request["headers"]["authorization"] == "Bearer sk-region-secret"

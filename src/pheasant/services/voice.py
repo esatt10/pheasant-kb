@@ -10,10 +10,24 @@ transcription session and returns that, with the WebSocket address to open it
 at and the per-dictation cap (``assistant.voice.max_seconds``) the composer
 enforces.
 
+That is the ``direct`` transport, OpenAI's design. Azure AI Foundry's realtime
+WebSocket accepts a credential only as a request header (``api-key``, or
+``Authorization: Bearer`` with a minted secret or an Entra token), and a
+browser cannot set headers on a WebSocket, so ``direct`` cannot reach it. The
+``relay`` transport (``assistant.voice.transport``; ``auto`` picks it for a
+Foundry host) puts the api in between: the session call returns a one-use
+ticket and the region's own WebSocket address (:data:`RELAY_PATH`), and when
+the browser opens it the api opens the provider's socket with the header --
+its key, or its managed identity's token -- configures the transcription
+session itself, and joins the two (:mod:`pheasant.services.voice_relay`). The
+browser then talks only to the region: audio stays in the region's network,
+the provider's firewall needs no browser addresses, and no provider credential
+of any kind reaches a browser.
+
 HTTP only, like ``source_browser.raw_document``: it exists for a person's
 microphone, and an agent has no microphone to dictate with — it sends text.
 Query-time only, like the rest of the assistant: nothing here is on the
-indexing path, and with no key the microphone is simply not offered.
+indexing path, and with no credential the microphone is simply not offered.
 """
 
 from __future__ import annotations
@@ -21,6 +35,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -37,11 +53,33 @@ DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 SAMPLE_RATE = 24000
 #: Providers whose session key is an OpenAI-wire key (``assistant.catalog``).
 _OPENAI_WIRE = frozenset({"openai", "azure"})
+#: The region's own dictation WebSocket (``relay`` transport).
+RELAY_PATH = "/assistant/voice/relay"
+#: ``auth_tokens.kind`` of a relay ticket: one use, ``secret_ttl_seconds`` long.
+RELAY_TICKET_KIND = "voice_relay"
+#: The WebSocket subprotocol the composer offers a relay ticket under, beside
+#: ``realtime`` (a browser cannot send it any other way).
+RELAY_TICKET_PROTOCOL = "pheasant-voice-ticket."
 
 
 def _settings(context: ServiceContext) -> Any:
     assistant = getattr(context.config, "assistant", None)
     return getattr(assistant, "voice", None) if assistant is not None else None
+
+
+def transport(settings: Any) -> str:
+    """``direct`` or ``relay`` for these settings (``auto`` resolved by host)."""
+
+    chosen = str(getattr(settings, "transport", "auto") or "auto")
+    if chosen != "auto":
+        return chosen
+    return "relay" if foundry.is_foundry_url(getattr(settings, "base_url", None)) else "direct"
+
+
+def _managed_identity() -> bool:
+    from pheasant.security import entra
+
+    return entra.managed_identity_available()
 
 
 def _resolve_key(
@@ -74,6 +112,17 @@ def _unavailable_reason(
         return "the assistant is disabled"
     if settings is None or not getattr(settings, "enabled", True):
         return "assistant.voice.enabled is off"
+    if transport(settings) == "relay":
+        # The relay opens the provider's socket long after the session call,
+        # from a ticket alone, so a key pasted into one browser session cannot
+        # reach it: only the region's own credential counts here.
+        api_key, base_url = _resolve_key(settings, None, env)
+        if api_key or (foundry.is_foundry_url(base_url) and _managed_identity()):
+            return None
+        named = getattr(settings, "api_key_env", None) or DEFAULT_API_KEY_ENV
+        return (
+            f"no credential reaches assistant.voice (set {named}, or run with a managed identity)"
+        )
     api_key, _ = _resolve_key(settings, credential, env)
     if not api_key:
         named = getattr(settings, "api_key_env", None) or DEFAULT_API_KEY_ENV
@@ -110,6 +159,7 @@ def voice_status(
         "model": getattr(settings, "model", None),
         "max_seconds": int(getattr(settings, "max_seconds", 60) or 60),
         "sample_rate": SAMPLE_RATE,
+        "transport": transport(settings) if settings is not None else None,
     }
 
 
@@ -154,6 +204,8 @@ def start_voice_session(
     if reason is not None:
         raise VoiceNotConfigured(reason)
     settings = _settings(context)
+    if transport(settings) == "relay":
+        return _issue_relay_ticket(context, settings)
     api_key, base_url = _resolve_key(settings, credential, env)
     assert api_key  # _unavailable_reason established it
     base = foundry.openai_v1_url(base_url or DEFAULT_BASE_URL).rstrip("/")
@@ -195,4 +247,111 @@ def start_voice_session(
         "websocket_url": websocket_url(base_url),
         "sample_rate": SAMPLE_RATE,
         "max_seconds": int(settings.max_seconds),
+        "transport": "direct",
     }
+
+
+# ---------------------------------------------------------------------------
+# relay transport
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RelayTarget:
+    """Everything the relay needs to open one provider session."""
+
+    url: str
+    headers: dict[str, str]
+    #: The first event the relay sends: the transcription session's settings,
+    #: exactly the ``session`` a ``direct`` secret would have been minted for.
+    session_event: dict[str, Any]
+    max_seconds: int
+    principal: str | None
+    model: str
+
+
+def _issue_relay_ticket(context: ServiceContext, settings: Any) -> dict[str, Any]:
+    """A one-use ticket for the region's own socket, in the session's shape.
+
+    Nothing is asked of the provider here: the relay opens its session when the
+    browser arrives. The ticket is a row in ``auth_tokens`` (so any api replica
+    can redeem it, once) and is returned as ``client_secret``, the field a
+    ``direct`` session carries its secret in.
+    """
+
+    from pheasant.persistence import auth_tokens
+    from pheasant.security.identity import current_identity
+
+    identity = current_identity()
+    principal = getattr(identity, "principal", None) if identity is not None else None
+    try:
+        ticket, row = auth_tokens.issue(
+            context.state,
+            kind=RELAY_TICKET_KIND,
+            lifetime=timedelta(seconds=int(settings.secret_ttl_seconds)),
+            principal=principal,
+            data={"model": str(settings.model)},
+        )
+    except Exception as exc:  # noqa: BLE001 - a state store that cannot take the row
+        logger.warning("voice relay ticket could not be issued", exc_info=True)
+        raise VoiceUnavailable(f"the relay ticket could not be issued ({exc})") from exc
+    return {
+        "client_secret": ticket,
+        # Epoch seconds, as a provider's secret reports it.
+        "expires_at": int(datetime.fromisoformat(row["expires_at"]).timestamp()),
+        "model": str(settings.model),
+        "websocket_url": RELAY_PATH,
+        "sample_rate": SAMPLE_RATE,
+        "max_seconds": int(settings.max_seconds),
+        "transport": "relay",
+    }
+
+
+def open_relay(context: ServiceContext, ticket: str, *, env: dict[str, str]) -> RelayTarget | None:
+    """Redeem ``ticket`` and say how to reach the provider, or ``None``.
+
+    ``None`` for every reason a ticket fails (unknown, used, expired, not a
+    relay ticket) and when relaying is no longer configured, so a caller
+    cannot learn which. The ticket is spent before anything else happens: a
+    second attempt with it fails even if this one goes on to fail upstream.
+    """
+
+    from pheasant.persistence import auth_tokens
+
+    settings = _settings(context)
+    if not ticket or settings is None or transport(settings) != "relay":
+        return None
+    if _unavailable_reason(context, None, env) is not None:
+        return None
+    record = auth_tokens.consume(context.state, ticket, kind=RELAY_TICKET_KIND)
+    if record is None:
+        return None
+    api_key, base_url = _resolve_key(settings, None, env)
+    url = websocket_url(base_url)
+    if api_key:
+        headers = foundry.auth_headers(url, api_key)
+    else:
+        # A Foundry host with no key: this process's managed identity.
+        headers = foundry.credential_headers(url, "")
+        if not headers:
+            return None
+    return RelayTarget(
+        url=url,
+        headers=headers,
+        session_event={
+            "type": "session.update",
+            "session": session_request_body(settings)["session"],
+        },
+        max_seconds=int(settings.max_seconds),
+        principal=record.get("principal"),
+        model=str(settings.model),
+    )
+
+
+def relay_ticket(offered_protocols: str) -> str:
+    """The ticket among a ``Sec-WebSocket-Protocol`` header's values, or ``""``."""
+
+    for protocol in (part.strip() for part in (offered_protocols or "").split(",")):
+        if protocol.startswith(RELAY_TICKET_PROTOCOL):
+            return protocol[len(RELAY_TICKET_PROTOCOL) :]
+    return ""

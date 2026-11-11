@@ -13,6 +13,8 @@ export default defineConfig({
       "/api": {
         target: process.env.PHEASANT_API_BASE ?? "http://localhost:8765",
         changeOrigin: true,
+        // The dictation relay (`/assistant/voice/relay`) is a WebSocket.
+        ws: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
     },

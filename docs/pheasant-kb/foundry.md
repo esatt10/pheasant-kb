@@ -18,6 +18,7 @@ and keep a config file of your own, and removing those lines switches back.
 | Embeddings | `search.embeddings` | `{resource}/openai/v1/embeddings` | `text-embedding-3-small` |
 | Image captions | `ingestion.captioner` | `{resource}/openai/v1/chat/completions` | A vision-capable chat model (`gpt-6-luna`) |
 | Audio transcripts | `ingestion.transcriber` | `{resource}/openai/v1/audio/transcriptions` | `whisper` (or `gpt-4o-transcribe`) |
+| The composer's dictation | `assistant.voice` | `{resource}/openai/v1/realtime?intent=transcription`, relayed by the api (`transport: auto` relays a Foundry host) | `gpt-live-transcribe` (GlobalStandard) |
 
 Two things are the same in every row:
 

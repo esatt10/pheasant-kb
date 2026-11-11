@@ -2154,9 +2154,41 @@ to the transcriber with it, so the region's API key never reaches a browser and
 no audio passes through the region. Query-time only — nothing here touches
 indexing.
 
+That is the `direct` transport. **Azure AI Foundry needs the `relay`
+transport**, because its realtime WebSocket accepts a credential only as a
+request header (`api-key`, or `Authorization: Bearer`) and a browser cannot set
+headers on a WebSocket. With `relay`, `POST /assistant/voice/session` asks the
+provider for nothing. It returns a one-use ticket and the region's own socket,
+`/assistant/voice/relay`. When the browser opens that socket, the api:
+
+1. opens the provider's socket with its key in a header, or with its managed
+   identity's Entra token when no key is set;
+2. configures the transcription session itself;
+3. copies events both ways: audio-buffer events only from the browser, and
+   everything from the provider.
+
+So the browser talks only to the region. Audio stays in the region's network,
+the provider's firewall needs no browser addresses, and no provider credential
+reaches a browser. `auto` (the default) relays for a Foundry `base_url`
+(`*.cognitiveservices.azure.com`, `*.services.ai.azure.com`,
+`*.openai.azure.com`) and is `direct` for everything else, so an OpenAI region
+is unchanged.
+
 The key is `api_key_env` when one is named, otherwise a browser session's
-pasted OpenAI key, otherwise `OPENAI_API_KEY`. With none, the microphone is not
-shown (`GET /assistant/voice` says why), which is the standalone default.
+pasted OpenAI key (`direct` only), otherwise `OPENAI_API_KEY`. A relayed
+Foundry session with no key signs with the process's managed identity. That
+identity needs a data-plane role on the account, such as Cognitive Services
+OpenAI User. With no credential the microphone is not shown
+(`GET /assistant/voice` says why), which is the standalone default.
+
+```yaml
+assistant:
+  voice:
+    base_url: https://<resource>.cognitiveservices.azure.com/openai/v1
+    model: gpt-live-transcribe          # the deployment name
+    api_key_env: AZURE_FOUNDRY_API_KEY  # unset: the managed identity
+    # transport: auto                   # relays, because the host is Foundry
+```
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
@@ -2167,8 +2199,10 @@ shown (`GET /assistant/voice` says why), which is the standalone default.
 | `api_key_env` | str | unset | Read the key from this variable instead. |
 | `language` | ISO-639-1 | unset | A language hint for the transcriber. |
 | `transcription` | map | `{}` | Merged into the session's `transcription` object as it stands, for model options this schema does not name (`delay`, `keywords` …). |
-| `secret_ttl_seconds` | 10–7200 | `60` | How long a minted secret may wait to open its session. |
+| `secret_ttl_seconds` | 10–7200 | `60` | How long a minted secret, or a relay ticket, may wait to open its session. |
 | `request_timeout_seconds` | float | `10` | The mint request's timeout. |
+| `transport` | `auto` / `direct` / `relay` | `auto` | How the browser reaches the transcriber (above). `auto` relays for a Foundry `base_url`. |
+| `max_relay_sessions` | 1–1000 | `16` | Dictations one api process relays at once. Past it a new one is refused (close code 1013, retry), not queued. |
 
 The page needs a secure context for the microphone: `https://` or
 `localhost`, which is how pheasant-kb's UI is reached by default. A mint the
