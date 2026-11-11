@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/esatt10/pheasant
-  tag: 0.17.5
+  tag: 1.0.0
   pullPolicy: IfNotPresent
 
 replicaCount: 1
