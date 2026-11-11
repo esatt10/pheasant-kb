@@ -386,4 +386,11 @@ architecture, the invariants and the canonical validation commands.
 
 ## License
 
-Apache 2.0—see [LICENSE](LICENSE).
+Pheasant is source available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+Personal noncommercial use and the nonprofit, educational, research, and other
+organizational uses permitted by that license are free. Commercial use outside
+those permissions requires explicit written permission or a separate commercial
+agreement from the rights holder, [esatt10](https://github.com/esatt10).
+
+See [Licensing](docs/licensing.md) for examples, permission requests, and the
+Apache 2.0 rights that continue to apply to previously released code.

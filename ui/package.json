@@ -1,6 +1,7 @@
 {
   "name": "pheasant-ui",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "version": "0.1.0",
   "type": "module",
   "description": "Light React front end for pheasant: knowledge-graph navigation, source management, and configuration.",

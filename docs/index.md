@@ -5,6 +5,9 @@ sources (git repositories, folders, PDFs and Office documents, images and
 audio, web pages, Google Drive and APIs) into one **knowledge graph** with
 hybrid search and cited answers, served through a web UI, an HTTP API and MCP.
 
+Pheasant is source available under the PolyForm Noncommercial License 1.0.0.
+See [Licensing](licensing.md) for free permitted uses and commercial permission.
+
 ## Start here
 
 pheasant runs as **pheasant-kb**: one command, a small set of containers.

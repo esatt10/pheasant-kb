@@ -1,0 +1,16 @@
+Pheasant (https://github.com/esatt10/pheasant-kb)
+
+The project's current license is PolyForm Noncommercial License 1.0.0;
+see LICENSE. The rights holder for commercial permission requests is
+esatt10 (https://github.com/esatt10).
+
+The license change does not revoke or restrict rights already granted
+under Apache License 2.0. Code previously distributed under Apache 2.0,
+including repository history through commit
+97433969861b29c63ae01651a81075db738ac565, remains available under those
+terms. A copy of that license is retained in LICENSE-APACHE. Its presence
+does not offer new changes under Apache 2.0.
+
+Third-party dependencies and separately licensed or vendored materials
+retain their own licenses and notices. This change does not relicense
+those materials or remove any existing attribution requirements.

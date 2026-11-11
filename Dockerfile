@@ -49,7 +49,7 @@ FROM python:3.12-slim AS runtime
 LABEL org.opencontainers.image.title="pheasant" \
       org.opencontainers.image.description="Docker-first MCP knowledge graph indexer and agentic retrieval layer" \
       org.opencontainers.image.source="https://github.com/esatt10/pheasant-kb" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -68,7 +68,7 @@ RUN apt-get update \
 # package's declared deps (a hand-maintained list previously omitted core deps
 # added later — numpy (21.4) and zstandard (21.6a) — breaking the smoke test).
 ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,a2a,postgres,grpc,queue,analytics
-COPY pyproject.toml README.md LICENSE /app/
+COPY pyproject.toml README.md LICENSE LICENSE-APACHE NOTICE /app/
 # Resolve runtime dependencies before copying application source. A one-line
 # code edit should not invalidate and redownload the entire universal stack;
 # this layer now changes only when pyproject.toml or the selected extras do.

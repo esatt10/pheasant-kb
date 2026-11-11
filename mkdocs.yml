@@ -100,6 +100,7 @@ nav:
       - Attach to a Synapse fleet: how-to/attach-to-synapse.md
       - Architecture regression testing: how-to/architecture-regression.md
   - Reference:
+      - Licensing: licensing.md
       - Configuration: configuration.md
       - Connector SDK: reference/connector-sdk.md
       - Interface matrix: reference/interfaces.md
