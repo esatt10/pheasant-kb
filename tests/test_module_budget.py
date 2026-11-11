@@ -79,7 +79,9 @@ CEILINGS: dict[str, int] = {
     # Raised by 14 for the sync pipeline's six `sources[].sync` fields
     # (schedule, paused, pipeline, the pacing three) and their docstring: they
     # are per-source settings, so they live on `SourceSyncSettings`.
-    "config/schema.py": 2359,  # + the artifacts section, the scheduler's default cadence
+    # + security.connections and connector.connection (the section itself is
+    # `config/connections.py`).
+    "config/schema.py": 2366,  # + the artifacts section, the scheduler's default cadence
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -91,8 +93,12 @@ CEILINGS: dict[str, int] = {
     "jobs.py": 803,
     # Raised from 1300 for `get_region_status`, registered from its own
     # module (`mcp_server/region_tools.py`) like every newer plane.
-    "mcp_server/server.py": 1303,
-    "mcp_server/tools.py": 2050,
+    # Raised from 1303 for register_source's `connection` argument; the
+    # connection tools register from `mcp_server/connection_tools.py`.
+    "mcp_server/server.py": 1310,
+    # Raised from 2050: the ConnectionTools mixin in the base list, and
+    # register_source's `connection` (checked in `connection_tools.py`).
+    "mcp_server/tools.py": 2059,
     "memory/formation.py": 1150,
     "memory/store.py": 950,
     # Raised from 1050 for the readiness plane's two tables. Deliberate, and
@@ -120,14 +126,14 @@ CEILINGS: dict[str, int] = {
     # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
     # kept until deleted) and its owner index; its code lives in
     # `services/artifacts.py`.
-    "persistence/schema.py": 1195,  # + region_settings
+    "persistence/schema.py": 1212,  # + region_settings, + connections
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.
     "persistence/backends.py": 815,
     # Lowered from 1800 when the derived-index migrations moved to
     # `persistence/derived_indexes.py`.
-    "persistence/state_store.py": 1798,  # + saved_artifacts columns
+    "persistence/state_store.py": 1799,  # + saved_artifacts columns, + connections in `required`
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.
@@ -150,7 +156,9 @@ CEILINGS: dict[str, int] = {
     # source is saved, and after a killed predecessor) and the method that
     # picks the truth this process holds -- saved rows, or the working graph
     # only when it is loaded. The reconcile itself is in `search/node_index.py`.
-    "sync/engine.py": 2895,
+    # Raised from 2895: the engine installs its state store as the place
+    # this process reads connected accounts from (`connections/resolve.py`).
+    "sync/engine.py": 2900,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

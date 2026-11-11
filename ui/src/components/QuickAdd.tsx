@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { CopyLine } from "./CopyLine";
 import { UploadDrop } from "./UploadDrop";
+import { SourceSignIn } from "../sources/Connections";
 
 const EXAMPLES = [
   { label: "A folder", value: "/workspace/notes" },
@@ -31,9 +32,18 @@ const EXAMPLES = [
 export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const [target, setTarget] = useState("");
   const [split, setSplit] = useState(false);
+  // The connected account a private repository or Drive is read with.
+  const [connection, setConnection] = useState<string | null>(null);
 
   const add = useMutation({
-    mutationFn: () => api.quickAdd({ target: target.trim(), split, sync_now: true, wait: false }),
+    mutationFn: () =>
+      api.quickAdd({
+        target: target.trim(),
+        split,
+        sync_now: true,
+        wait: false,
+        connection: connection ?? undefined,
+      }),
     onSuccess: onAdded,
   });
 
@@ -68,7 +78,7 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
               className="text-input"
               autoFocus
               spellCheck={false}
-              placeholder="/workspace/notes  ·  https://github.com/owner/repo  ·  gdrive:folder"
+              placeholder="/workspace/notes  ·  https://github.com/owner/repo  ·  gdrive:"
               value={target}
               onChange={(event) => setTarget(event.target.value)}
               onKeyDown={(event) => {
@@ -90,6 +100,13 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
               </button>
             ))}
           </div>
+
+          <SourceSignIn
+            target={target}
+            value={connection}
+            onChange={setConnection}
+            onTarget={setTarget}
+          />
 
           <label className="checkbox">
             <input

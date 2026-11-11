@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 
 class PathPolicyError(ValueError):
@@ -62,3 +63,37 @@ def resolve_config_write_target(
             else "."
         )
     )
+
+
+def allowed_roots(config: Any) -> list[Path]:
+    """Roots a UI or agent may browse and register sources under.
+
+    The workspace, the exports path and ``security.allow_workspace_roots``,
+    plus ``/`` where the region lets a person choose any path. Roots that do
+    not exist are dropped: they can never contain a selectable path.
+    """
+
+    roots = [
+        config.pheasant.workspace_root,
+        config.pheasant.exports_path,
+        *config.security.allow_workspace_roots,
+    ]
+    if config.security.allow_user_selected_source_paths:
+        roots.append(Path("/"))
+    seen: list[Path] = []
+    for root in roots:
+        resolved = Path(root).expanduser().resolve()
+        if resolved not in seen and resolved.exists():
+            seen.append(resolved)
+    return seen
+
+
+def resolve_source_path(path: str, config: Any) -> Path:
+    """A source path a caller supplied, held to the region's path policy."""
+
+    if config.security.allow_user_selected_source_paths:
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.exists():
+            raise PathPolicyError(f"Path does not exist: {resolved}")
+        return resolved
+    return resolve_under(path, allowed_roots(config))

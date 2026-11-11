@@ -51,10 +51,10 @@ record permanently distinguishable from a written one.
 from __future__ import annotations
 
 import hashlib
-import os
 from datetime import UTC, datetime
 from typing import Any
 
+from pheasant.connections import environment as connection_environment
 from pheasant.memory.compaction import _bucket_key, mean_pairwise_jaccard
 from pheasant.memory.policy import STEERING_KINDS
 from pheasant.memory.store import MemoryRecord, MemoryStore
@@ -191,7 +191,7 @@ def run_synthesis(
 
     from pheasant.assistant.llm import llm_from_selection
 
-    selection = _resolve_provider(settings, os.environ)
+    selection = _resolve_provider(settings, connection_environment())
     llm = llm_from_selection(selection, settings)
     if llm is None:
         return {"skipped": "no model reachable"}

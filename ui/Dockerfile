@@ -18,7 +18,7 @@ RUN npm run build
 FROM nginx:1.27-alpine AS runtime
 LABEL org.opencontainers.image.title="pheasant UI" \
       org.opencontainers.image.description="Light React front end for pheasant" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="AGPL-3.0-only OR LicenseRef-pheasant-commercial"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

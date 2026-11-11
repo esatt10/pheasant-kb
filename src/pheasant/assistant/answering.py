@@ -19,7 +19,6 @@ per-request orchestration on the other.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import replace
 from typing import Any
@@ -33,6 +32,7 @@ from pheasant.assistant.chat import (
 )
 from pheasant.assistant.figure_markers import number_figures as number_figures
 from pheasant.assistant.figure_markers import verify_figures as verify_figures
+from pheasant.connections import environment as connection_environment
 from pheasant.search.criteria import scoped_sources
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,9 @@ def resolve_llm(config: Any, credential: Any = None, env: dict[str, str] | None 
     from pheasant.assistant.llm import llm_from_selection
 
     settings = getattr(config, "assistant", None)
-    selected = resolve_provider(config, credential, env if env is not None else dict(os.environ))
+    selected = resolve_provider(
+        config, credential, env if env is not None else connection_environment()
+    )
     return llm_from_selection(selected, settings)
 
 
@@ -263,7 +265,7 @@ def answer_question(
     )
 
     settings = getattr(config, "assistant", None)
-    env = env if env is not None else dict(os.environ)
+    env = env if env is not None else connection_environment()
     # First-word keywords (`@table`, `@detailed`, `@doc`, `@search` …) say
     # what kind of answer is wanted. They are read off the words and then
     # removed, so what is searched and written about is the question itself.

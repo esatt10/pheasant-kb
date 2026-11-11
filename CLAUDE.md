@@ -112,6 +112,12 @@ pheasant-kb/
 │   │                            worker_transport, grpc, pdf_split (one
 │   │                            long PDF's pages read by the fleet)
 │   ├── connectors/            ← first-party SDK plugins: gdrive
+│   ├── connections/           ← accounts connected while the region runs:
+│   │                            vault (AES-GCM rows, the key kept elsewhere),
+│   │                            providers (what can be connected, and each
+│   │                            one's check), google (Drive sign-in, refresh,
+│   │                            service accounts), resolve (how any process
+│   │                            reads a secret: environment, then connection)
 │   ├── ingestion/             ← pipeline, chunking, chunk_plan (the per-
 │   │                            file planner), packing (units to chunks),
 │   │                            content_types, taxonomy, pdf_pages,
@@ -194,7 +200,10 @@ pheasant-kb/
 │   │                            answer_resume (a streamed answer kept an
 │   │                            hour for a reader whose stream dropped),
 │   │                            region_status (what is still waking or
-│   │                            warming after a scale-to-zero wake)
+│   │                            warming after a scale-to-zero wake),
+│   │                            connections (connect, check, sign in, remove),
+│   │                            quick_add (one field to sources, for the UI's
+│   │                            Add box and MCP add_source)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
 │   │                            assistant_tools (answer, visuals, images),
 │   │                            compose_tools (compose_artifact as a job),
@@ -232,7 +241,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 202 pytest modules, offline by design
+└── tests/                     ← 203 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →

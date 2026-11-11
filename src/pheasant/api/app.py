@@ -20,6 +20,7 @@ from pheasant.api.archive_routes import register_archive_routes
 from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
+from pheasant.api.connection_routes import register_connection_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
 from pheasant.api.readiness_routes import register_readiness_routes
@@ -45,6 +46,8 @@ from pheasant.config.schema import (
     SourceConfig,
     SourceType,
 )
+from pheasant.connections import environment as connection_environment
+from pheasant.connections import secret as connection_secret
 from pheasant.deployment.roles import Role, resolve_role, validate_role
 from pheasant.deployment.roles import describe as describe_role
 from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter, DrainState
@@ -57,7 +60,6 @@ from pheasant.jobs import JOBS_CLEAR_PATH, JobClearServiceClient, JobClearServic
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
-from pheasant.registry.placement import place_all
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
@@ -84,7 +86,6 @@ from pheasant.sync.engine import SyncEngine
 from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 from pheasant.sync.remote_worker import ResultCache
 from pheasant.sync.web_connector import registration_connector
-from pheasant.targets import merged_urls
 from pheasant.telemetry import metrics
 from pheasant.version import __version__
 
@@ -394,6 +395,8 @@ class QuickAddRequest(BaseModel):
     # false so pasting a large repo's URL never blocks the form (and the
     # reverse proxy in front of it) on however long the first index takes.
     wait: bool = True
+    #: A connected account the new sources read with (``services/connections``).
+    connection: str | None = None
 
 
 class RemoteExtractPagesRequest(BaseModel):
@@ -728,23 +731,11 @@ def _tuning_sweeps(trials: list[dict], metric: str) -> dict[str, list[dict]]:
 
 
 def _allowed_roots(config: PheasantConfig) -> list[Path]:
-    """Roots a UI may browse / register sources under.
+    """Roots a UI may browse / register sources under (``path_policy.allowed_roots``)."""
 
-    Mirrors the allowlist used by the MCP register tool plus the exports path.
-    """
-    roots = [
-        config.pheasant.workspace_root,
-        config.pheasant.exports_path,
-        *config.security.allow_workspace_roots,
-    ]
-    if config.security.allow_user_selected_source_paths:
-        roots.append(Path("/"))
-    seen: list[Path] = []
-    for root in roots:
-        resolved = root.expanduser().resolve()
-        if resolved not in seen and resolved.exists():
-            seen.append(resolved)
-    return seen
+    from pheasant.security.path_policy import allowed_roots
+
+    return allowed_roots(config)
 
 
 def _configured_roots(config: PheasantConfig) -> list[Path]:
@@ -795,12 +786,9 @@ def _config_write_roots(config: PheasantConfig) -> list[Path]:
 
 
 def _resolve_source_path(path: str, config: PheasantConfig) -> Path:
-    if config.security.allow_user_selected_source_paths:
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.exists():
-            raise PathPolicyError(f"Path does not exist: {resolved}")
-        return resolved
-    return resolve_under(path, _allowed_roots(config))
+    from pheasant.security.path_policy import resolve_source_path
+
+    return resolve_source_path(path, config)
 
 
 def _path_is_unused(type_name: str, is_builtin: bool) -> bool:
@@ -2038,6 +2026,7 @@ def create_app(
     register_inventory_routes(app, services=services)
     register_archive_routes(app, services=services)
     register_source_url_routes(app, services=services)
+    register_connection_routes(app, services=services, config=config)
     register_sync_wait_routes(app, services=services)
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
@@ -4569,7 +4558,7 @@ def create_app(
             "model": settings.model,
             "base_url": settings.base_url,
             "api_key_env": settings.api_key_env,
-            "api_key_present": bool(os.environ.get(settings.api_key_env)),
+            "api_key_present": bool(connection_secret(settings.api_key_env)),
             "dimensions": settings.dimensions,
             "batch_size": settings.batch_size,
             "store_provider": config.search.vector_store.provider,
@@ -5002,7 +4991,7 @@ def create_app(
                 "api_key_env": spec.api_key_env,
                 "key_hint": spec.key_hint,
                 # Whether the *server* already holds a key for this provider.
-                "env_key_present": bool(os.environ.get(spec.api_key_env)),
+                "env_key_present": bool(connection_secret(spec.api_key_env)),
             }
             for spec in PROVIDERS.values()
         ]
@@ -5011,12 +5000,12 @@ def create_app(
         credential = app.state.session_keys.get(session_id)
         configured = settings.provider
         if configured == "auto":
-            configured = resolve_auto_provider(dict(os.environ))
+            configured = resolve_auto_provider(connection_environment())
         # `ready` must mean "a credential actually resolves", not "a provider
         # name is configured" — otherwise a config naming a provider whose key
         # env var is unset reports "model connected" while every answer comes
         # back extractive. Resolve exactly the way /assistant/chat does.
-        selected = resolve_provider(config, credential, dict(os.environ))
+        selected = resolve_provider(config, credential, connection_environment())
         return {
             "enabled": settings.enabled,
             "providers": providers,
@@ -5144,7 +5133,7 @@ def create_app(
         )
         from pheasant.assistant.workflows.agentic import DEFAULTS as AGENTIC_DEFAULTS
 
-        selected = resolve_provider(config, None, dict(os.environ))
+        selected = resolve_provider(config, None, connection_environment())
         return {
             "workflows": list_workflows(),
             "configured": config.assistant.workflow,
@@ -5174,91 +5163,28 @@ def create_app(
     # ------------------------------------------------------------------
     # Quick add — the UI counterpart to `pheasant up <anything>`.
     # ------------------------------------------------------------------
-    def _live_source(name: str) -> SourceConfig | None:
-        """A source as it is registered now, or None."""
-
-        if state.source_removed(name):
-            return None
-        SourceRegistry(config, state).adopt(name)  # another replica may have changed it
-        for source in config.sources:
-            if source.name == name:
-                return source
-        return None
-
     @app.post("/sources/quick-add")
     def quick_add(req: QuickAddRequest) -> dict:
-        from pheasant.targets import TargetError, fetch_target, resolve_targets
+        from pheasant.services.errors import InvalidRequest
+        from pheasant.services.quick_add import AddTargetRequest, add_targets
 
-        state_dir = Path(config.pheasant.state_path)
-        # In a role-split fleet the API owns registration, not source
-        # materialization. Its /state and /workspace mounts are deliberately
-        # read-only; the queued indexer owns the writable workspace and will
-        # clone/fetch a managed repository under the source write lease.
-        # Single-process deployments keep the eager clone that makes
-        # `quick-add(wait=true)` immediately syncable.
-        materialize_here = role_policy.indexes_locally
-        if materialize_here:
-            clone_root = state_dir / "sources"
-            external_workspace = state_dir / "external"
-        else:
-            workspace_root = Path(config.pheasant.workspace_root)
-            clone_root = workspace_root / "sources"
-            external_workspace = workspace_root / "external"
         try:
-            targets = resolve_targets(
-                [req.target],
-                clone_root=clone_root,
-                workspace=external_workspace,
-                split=req.split,
-                name=req.name,
+            registered = add_targets(
+                services,
+                AddTargetRequest(
+                    target=req.target,
+                    name=req.name,
+                    split=req.split,
+                    taxonomy=req.taxonomy,
+                    connection=req.connection,
+                ),
             )
-            # Before fetching: a name taken by another source moves a checkout.
-            placed = place_all(targets, _live_source)
-            if materialize_here:
-                for _, target, _ in placed:
-                    fetch_target(target)
-        except TargetError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        registry = SourceRegistry(config, state)
-        created: list[dict] = []
-        # Sources a web page joined rather than created (`registry.placement`).
-        extended: set[str] = set()
-        for kind, target, existing in placed:
-            payload = target.to_source_dict()
-            if kind != "new":
-                payload = existing.model_dump(mode="json")
-            if kind == "join":
-                payload["urls"] = merged_urls(list(existing.urls), target.urls)
-                extended.add(target.name)
-            if req.taxonomy:
-                payload["taxonomy"] = {**(payload.get("taxonomy") or {}), "enabled": True}
-            if target.local:
-                try:
-                    if target.clone_url and not materialize_here:
-                        # The managed checkout intentionally does not exist
-                        # yet. Enforce the allowlist without the local-path
-                        # existence check; the indexer creates it while
-                        # processing the queued sync.
-                        payload["path"] = str(
-                            resolve_under(payload["path"], _allowed_roots(config))
-                        )
-                    else:
-                        payload["path"] = str(_resolve_source_path(payload["path"], config))
-                except PathPolicyError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-            try:
-                source = _source_from_payload(payload)
-            except (ValueError, TypeError) as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid source: {exc}") from exc
-            registry.register_source(source)
-            # The engine resolves sources off the live config object, so a
-            # freshly registered source is invisible to sync until it lands
-            # there too (same step the /sources route takes).
-            config.sources = [s for s in config.sources if s.name != source.name]
-            config.sources.append(source)
-            audit(source.name, "quick_add", {"target": req.target, "type": target.type})
-            created.append(payload)
+        except ServiceError as exc:
+            # A target quick-add cannot use has always been a 400 here.
+            status = 400 if isinstance(exc, InvalidRequest) else exc.status
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        created = registered["sources"]
+        extended = set(registered["extended"])
 
         results = []
         syncing: list[str] = []

@@ -31,16 +31,16 @@ from urllib.parse import unquote, urlparse
 
 from pheasant.config.schema import SourceConfig, SourceType
 from pheasant.git_auth import (
-    git_env as _git_env,
+    git_env as _signed_git_env,
 )
 from pheasant.git_auth import (
     github_authentication_error as _github_authentication_error,
 )
 from pheasant.git_auth import (
-    github_token as _github_token,
+    has_credential as _has_credential,
 )
 from pheasant.git_auth import (
-    is_github_https_url as _is_github_https_url,
+    signed_by_target as _signed_by_target,
 )
 
 GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht")
@@ -512,7 +512,21 @@ def managed_target(source: SourceConfig) -> ResolvedTarget | None:
         clone_url=clone_url,
         clone_path=str(getattr(repo, "clone_path", "") or path),
         clone_ref=str(getattr(repo, "clone_ref", "") or "") or None,
+        connector=(
+            {"connection": source.connector.connection}
+            if getattr(getattr(source, "connector", None), "connection", None)
+            else None
+        ),
     )
+
+
+def _git_env(clone_url: str | None = None) -> dict[str, str]:
+    from pheasant.connections import ConnectionUnavailable
+
+    try:  # signed with the source's connection, which may be one this region lacks
+        return _signed_git_env(clone_url)
+    except ConnectionUnavailable as exc:
+        raise TargetError(str(exc)) from exc
 
 
 def _run_git(destination: Path, args: list[str], clone_url: str) -> subprocess.CompletedProcess:
@@ -532,8 +546,7 @@ def _run_git(destination: Path, args: list[str], clone_url: str) -> subprocess.C
         ) from exc
     if (
         result.returncode != 0
-        and _is_github_https_url(clone_url)
-        and _github_token()
+        and _has_credential(clone_url)
         and _github_authentication_error(result)
     ):
         try:
@@ -554,9 +567,9 @@ def _run_git(destination: Path, args: list[str], clone_url: str) -> subprocess.C
         if anonymous_result.returncode == 0:
             return anonymous_result
         raise TargetError(
-            f"git {' '.join(args[:2])} failed for {destination}: GitHub rejected the configured "
-            "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
-            "or use an SSH remote for a private repository"
+            f"git {' '.join(args[:2])} failed for {destination}: the host rejected the "
+            "configured token (the source's connection, or GITHUB_TOKEN/GH_TOKEN) and anonymous "
+            "access was also denied; connect the account again or use an SSH remote"
         )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "git command failed").strip()
@@ -651,6 +664,7 @@ def _fast_forward_target(target: ResolvedTarget, destination: Path, clone_url: s
         )
 
 
+@_signed_by_target
 def managed_repository_state(target: ResolvedTarget) -> dict[str, object]:
     """Return local/remote commit evidence after a managed update."""
 
@@ -686,6 +700,7 @@ def refresh_managed_repository(source: SourceConfig) -> dict[str, object] | None
     return state
 
 
+@_signed_by_target
 def fetch_target(target: ResolvedTarget) -> str | None:
     """Materialize a remote target locally. Returns a status line, or None.
 
@@ -741,8 +756,7 @@ def fetch_target(target: ResolvedTarget) -> str | None:
         ) from exc
     if (
         result.returncode != 0
-        and _is_github_https_url(clone_url)
-        and _github_token()
+        and _has_credential(clone_url)
         and _github_authentication_error(result)
         # Git normally removes a failed clone directory. Do not remove an
         # unexpected path just to attempt the anonymous fallback.
@@ -766,9 +780,9 @@ def fetch_target(target: ResolvedTarget) -> str | None:
             result = anonymous_result
         else:
             raise TargetError(
-                f"could not clone {target.clone_url}: GitHub rejected the configured "
-                "GITHUB_TOKEN/GH_TOKEN and anonymous access was also denied; update the token "
-                "or use an SSH remote for a private repository"
+                f"could not clone {target.clone_url}: the host rejected the configured "
+                "token (the source's connection, or GITHUB_TOKEN/GH_TOKEN) and anonymous access "
+                "was also denied; connect the account again or use an SSH remote"
             )
     if result.returncode != 0:
         raise TargetError(

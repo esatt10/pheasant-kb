@@ -57,6 +57,9 @@ TABLE_ORDER = (
     # on the new backend; they are digests, so copying them reveals nothing.
     "auth_tokens",
     "oauth_clients",
+    # Connected accounts, sealed: the key travels separately, so a copy
+    # reveals nothing and the region keeps every connection it had.
+    "connections",
     "memory_records",
     # Phase 3: after memory_records — its rows reference record_id (member
     # and canonical), the same FK-dependency-order rule every other table

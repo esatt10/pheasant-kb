@@ -387,7 +387,7 @@ class APIConnector(SourceConnector):
             )
         response = _urlopen(
             endpoint,
-            headers=self.source.connector.headers,
+            headers=source_request_headers(self.source),
             timeout=self.source.connector.request_timeout_seconds,
         )
         payload = json.loads(response["content"].decode("utf-8"))
@@ -475,7 +475,7 @@ class APIConnector(SourceConnector):
             )
         response = _urlopen(
             item.uri,
-            headers=self.source.connector.headers,
+            headers=source_request_headers(self.source),
             timeout=self.source.connector.request_timeout_seconds,
         )
         content = response["content"]
@@ -562,6 +562,22 @@ FETCHABLE_SCHEMES = frozenset({"http", "https"})
 def is_fetchable_url(url: str) -> bool:
     """Whether the connectors may fetch ``url`` at all."""
     return urlparse(url).scheme.lower() in FETCHABLE_SCHEMES
+
+
+def source_request_headers(source: Any) -> dict[str, str]:
+    """``connector.headers``, plus the token of the connection the source names.
+
+    A source with no ``connector.connection`` gets its headers unchanged, so
+    every source registered before connections existed requests what it did.
+    """
+
+    from pheasant import connections
+    from pheasant.connections.google import GoogleAuthError
+
+    try:
+        return connections.request_headers(source)
+    except (connections.ConnectionUnavailable, GoogleAuthError) as exc:
+        raise ConnectorUnavailable(f"source {source.name}: {exc}") from exc
 
 
 def require_fetchable_url(url: str) -> str:

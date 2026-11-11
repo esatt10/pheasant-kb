@@ -40,12 +40,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.request import Request, urlopen
 
 from pheasant import foundry
+from pheasant.connections import secret
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
 from pheasant.ingestion._modal import stub_fingerprint
 
@@ -148,7 +148,7 @@ class OpenAISpecVisionCaptioner:
             ],
         }
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
-        api_key = os.environ.get(self.api_key_env or "", "")
+        api_key = secret(self.api_key_env) or ""
         # `api-key` on an Azure AI Foundry resource, Bearer everywhere else,
         # and a managed identity's token for a Foundry resource with no key.
         headers.update(foundry.credential_headers(self.base_url, api_key))

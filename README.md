@@ -399,4 +399,7 @@ architecture, the invariants and the canonical validation commands.
 
 ## License
 
-Apache 2.0—see [LICENSE](LICENSE).
+From 1.0.0, pheasant-kb is dual-licensed: the [GNU AGPL v3.0](LICENSE)
+(`AGPL-3.0-only`), or a [commercial license](COMMERCIAL-LICENSE.md) for use
+without the AGPL's obligations. Versions up to 0.17.5 remain available under
+Apache 2.0.

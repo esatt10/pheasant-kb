@@ -2,7 +2,8 @@
 # First-boot secrets for the pheasant-kb stack (compose.yaml, `secrets-init`).
 #
 # The stack has four boundaries and needs four distinct tokens (see the
-# comment above `x-kb-env` in compose.yaml). Asking a person to generate them
+# comment above `x-kb-env` in compose.yaml), plus the key that seals the
+# accounts people connect (`credential-key`, read by the api and indexer only). Asking a person to generate them
 # by hand is the step that kept the fleet from being a one-line start, so this
 # writes them into volumes once and every tier reads its own as a file through
 # the image's `*_FILE` convention.
@@ -44,7 +45,8 @@ for pair in \
     api-token:PHEASANT_API_TOKEN \
     graph-token:PHEASANT_GRAPH_SERVICE_TOKEN \
     worker-token:PHEASANT_INDEX_WORKER_TOKEN \
-    ingestion-token:PHEASANT_INGESTION_SERVICE_TOKEN
+    ingestion-token:PHEASANT_INGESTION_SERVICE_TOKEN \
+    credential-key:PHEASANT_CREDENTIAL_KEY
 do
     file="$SECRETS_DIR/${pair%%:*}"
     name="${pair#*:}"

@@ -8,6 +8,7 @@ import { QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegio
 import { AddSourceWizard } from "../sources/AddSourceWizard";
 import { TaxonomyOutline } from "../sources/TaxonomyOutline";
 import { QuickAdd } from "../components/QuickAdd";
+import { ConnectionsPanel } from "../sources/Connections";
 import { SourceStatus } from "../components/SourceStatus";
 import { useSession } from "../state/session";
 
@@ -307,6 +308,8 @@ export function SourcesPage() {
         exclude globs, chunking, branch policy, sync triggers, and connector settings for
         Google Drive or any installed plugin.
       </p>
+
+      <ConnectionsPanel />
 
       {quickAdd ? (
         <QuickAdd

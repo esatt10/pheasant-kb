@@ -2026,3 +2026,77 @@ export interface LedgerDetail {
   document: LedgerDocument;
   failed_runs: { at: string | null; error: string | null }[];
 }
+
+// --- Connected accounts (`services/connections.py`) -------------------------
+
+export interface ConnectionField {
+  name: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder: string;
+  help: string;
+  kind: "text" | "textarea" | "url";
+}
+
+export interface ConnectionMethod {
+  id: string;
+  label: string;
+  /** A browser round trip to the service: "Sign in with GitHub" and friends. */
+  browser: boolean;
+  fields: ConnectionField[];
+  oauth: {
+    service: string;
+    client_id_env: string;
+    client_secret_env: string;
+    register_url: string;
+    secret_required: boolean;
+    scopes: string[];
+    /** The region holds an OAuth client for this service: the form is one button. */
+    client_configured?: boolean;
+    callback_path?: string;
+  } | null;
+}
+
+export interface ConnectionProvider {
+  id: string;
+  label: string;
+  kind: "source" | "model";
+  description: string;
+  env: string | null;
+  hosts: string[];
+  source_types: string[];
+  token_url: string | null;
+  checkable: boolean;
+  methods: ConnectionMethod[];
+}
+
+export interface ConnectionCheck {
+  ok: boolean;
+  detail: string;
+  account: string | null;
+  checked_at: string;
+}
+
+export interface ConnectionRecord {
+  name: string;
+  provider: string;
+  label: string;
+  kind: "source" | "model" | null;
+  method: string;
+  status: string;
+  details: { account?: string; hint?: string; method_label?: string; [key: string]: unknown };
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  check: ConnectionCheck | null;
+  stands_in_for: string | null;
+  overridden_by_environment: boolean;
+  used_by: string[];
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionRecord[];
+  providers: ConnectionProvider[];
+  vault: { available: boolean; key_source: string | null; reason: string | null };
+}

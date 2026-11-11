@@ -22,6 +22,9 @@ import type {
   NodeLinkGraph,
   Overview,
   QuickAddResponse,
+  ConnectionCheck,
+  ConnectionRecord,
+  ConnectionsResponse,
   SearchMode,
   SearchResponse,
   SourceRecord,
@@ -496,11 +499,47 @@ export const api = {
     split?: boolean;
     sync_now?: boolean;
     wait?: boolean;
+    /** A connected account the new sources read with. */
+    connection?: string;
   }) =>
     request<QuickAddResponse>("/sources/quick-add", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  // Connected accounts
+  connections: () => request<ConnectionsResponse>("/connections"),
+  connect: (body: {
+    provider: string;
+    fields: Record<string, string>;
+    name?: string;
+    method?: string;
+    verify?: boolean;
+  }) =>
+    request<{ status: string; connection: ConnectionRecord }>("/connections", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  startSignIn: (body: {
+    provider: string;
+    name?: string;
+    client_id?: string;
+    client_secret?: string;
+    return_to?: string;
+  }) =>
+    request<{ authorize_url: string; name: string; expires_at: string }>(
+      "/connections/oauth/start",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  testConnection: (name: string) =>
+    request<{ connection: ConnectionRecord; check: ConnectionCheck }>(
+      `/connections/${encodeURIComponent(name)}/test`,
+      { method: "POST" },
+    ),
+  removeConnection: (name: string, force = false) =>
+    request<{ status: string }>(
+      `/connections/${encodeURIComponent(name)}${force ? "?force=true" : ""}`,
+      { method: "DELETE" },
+    ),
   registerSource: (body: SourceWritePayload & { name: string; path: string }) =>
     request<{ status: string; source: Record<string, unknown> }>("/sources", {
       method: "POST",

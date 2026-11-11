@@ -9,6 +9,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 from pheasant.config.assistant_decisions import AssistantDecisionsSettings
 from pheasant.config.assistant_voice import AssistantVoiceSettings
+from pheasant.config.connections import ConnectionSettings
 from pheasant.config.exclusions import (
     DEFAULT_EXCLUDES as DEFAULT_EXCLUDES,
 )
@@ -1412,6 +1413,8 @@ class SecuritySettings(ModelMixin):
     api_auth: ApiAuthSettings = field(default_factory=ApiAuthSettings)
     entra: EntraSettings = field(default_factory=EntraSettings)
     service_identity: ServiceIdentitySettings = field(default_factory=ServiceIdentitySettings)
+    #: Accounts connected while the region runs (``config/connections.py``).
+    connections: ConnectionSettings = field(default_factory=ConnectionSettings)
     allow_user_selected_source_paths: bool = True
     #: Whether a web source registered over MCP may name a loopback, private,
     #: link-local or otherwise non-public address. Off: an agent steered by a
@@ -1483,6 +1486,10 @@ class SourceConnectorSettings(ModelMixin):
     # Name of the environment variable holding the connector's API token
     # (Step 31.2+ SaaS connectors). The secret itself never lands in config.
     api_key_env: str | None = None
+    #: A connection's name (``security.connections``): the account this source
+    #: is read with -- a git token, a Drive sign-in, an API token. It wins over
+    #: ``api_key_env`` and over any ambient environment variable.
+    connection: str | None = None
     api_endpoint: str | None = None
     api_items_field: str = "items"
     api_content_field: str = "content"

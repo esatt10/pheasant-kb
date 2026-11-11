@@ -40,6 +40,7 @@ from pheasant.sync.connectors import (
     is_fetchable_url,
     logger,
     require_fetchable_url,
+    source_request_headers,
 )
 from pheasant.sync.web_adapters import SiteAdapter, adapter_for
 from pheasant.sync.web_pacing import HostPacer
@@ -268,7 +269,7 @@ class WebCollectionConnector(SourceConnector):
         else:
             response = _urlopen(
                 item.uri,
-                headers=self.source.connector.headers,
+                headers=source_request_headers(self.source),
                 timeout=self.source.connector.request_timeout_seconds,
                 etag=cached.get("etag"),
                 last_modified=cached.get("last_modified"),
@@ -327,7 +328,7 @@ class WebCollectionConnector(SourceConnector):
 
         return _urlopen(
             url,
-            headers=self.source.connector.headers,
+            headers=source_request_headers(self.source),
             timeout=self.source.connector.request_timeout_seconds,
         )
 

@@ -485,5 +485,7 @@ jobs:
           GEMINI_API_KEY: ""
         run: |
           npm install --no-save playwright
-          npx playwright install --with-deps chromium
+          # Chromium from Playwright's CDN; the apt top-up is best effort (see ci.yml).
+          npx playwright install chromium
+          npx playwright install-deps chromium || echo "apt unreachable; using the runner's libraries"
           node ci-render.mjs

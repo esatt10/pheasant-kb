@@ -218,6 +218,11 @@ class SyncEngine:
         self.paths.ensure()
         self.state = state or StateStore.from_config(self.config, self.paths.sqlite)
         self.state.migrate()
+        # Every secret this process reads (a git token, a model key, a Drive
+        # sign-in) can now come from a connection in this store.
+        from pheasant import connections
+
+        connections.install(self.config, self.state)
         # Single-writer lease (Synapse 21.2): acquired lazily on the first
         # sync so read-only engines (e.g. docker-exec MCP stdio beside a
         # running server) keep working against a served state directory.
