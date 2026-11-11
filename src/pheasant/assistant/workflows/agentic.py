@@ -1336,6 +1336,7 @@ def _bind(fn):
                 last.reasoning_tokens = usage.reported_reasoning
                 last.provider_calls = usage.calls
                 last.provider_retries = usage.retries
+                last.model = usage.model
             for step in new_steps:
                 if request is None:
                     continue

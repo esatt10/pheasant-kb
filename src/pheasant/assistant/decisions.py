@@ -350,7 +350,7 @@ class Decider:
         headers = foundry.auth_headers(url, self.api_key)
         started = time.perf_counter()
         try:
-            _providers.note_model_call()
+            _providers.note_model_call(self.model)
             data = _providers._http_json(url, payload, headers, timeout)
         except ProviderError as exc:
             message = str(exc) or type(exc).__name__

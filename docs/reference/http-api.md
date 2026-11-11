@@ -307,10 +307,18 @@ See [Stress-test readiness](../stress-test-readiness.md).
 | GET | `/assistant/apps/knowledge-view` | pheasant's MCP App view (the `ui://pheasant/knowledge-view.html` resource), for the web UI to host in a sandboxed frame. Served with a `sandbox` CSP. The hosting page answers the view's `ui/request-display-mode` by restyling the same frame to the whole window (the view's Expand button; see [MCP tools](../mcp_tools.md#mcp-apps)). |
 | GET | `/media?node_id=…` | An indexed image's bytes (`image/png`, `jpeg`, `webp`, `gif`; never SVG), `nosniff` and a `sandbox` CSP, under the same read check as other content. `404 UNKNOWN_MEDIA` for a node that is not a stored image. Same operation as the MCP `get_image` tool. |
 
-Each step reports `duration_seconds`, `input_tokens`, and `output_tokens`.
-Token counts are provider-reported, not estimated: `null` means the provider
-did not report usage, while `0` means the step made no model call. The
-`retrieve` step also lists the search modes it attempted.
+Each step reports `duration_seconds`, `input_tokens`, `output_tokens`, and
+`model`. Token counts are provider-reported, not estimated: `null` means the
+provider did not report usage, while `0` means the step made no model call.
+`model` names the deployment the step used: the chat model for writing and
+rewriting, the decision model for `decide` and `accept`, the embedding model
+for a `retrieve` whose vector arm ran (named even when the query's vector came
+from the embedding cache, which makes no provider call). A step that used
+several names them comma-separated in first-use order, such as a `decide` that
+fell back from an unavailable decision model to the chat model; one that used
+none reports `null`. The `retrieve` step also lists the search modes it
+attempted. The stream's `step` events and a saved answer's `trace.steps` carry
+the same field.
 
 See [Ask your knowledge base](../how-to/chat-and-ui.md) and
 [Customize the answering workflow](../how-to/agent-workflows.md).

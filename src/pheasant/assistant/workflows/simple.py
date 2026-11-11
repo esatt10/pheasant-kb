@@ -177,6 +177,7 @@ class SimpleWorkflow:
                         reasoning_tokens=usage.reported_reasoning,
                         provider_calls=usage.calls,
                         provider_retries=usage.retries,
+                        model=usage.model,
                     )
                 )
                 request.report(steps[-1])
@@ -194,6 +195,7 @@ class SimpleWorkflow:
                         reasoning_tokens=usage.reported_reasoning,
                         provider_calls=usage.calls,
                         provider_retries=usage.retries,
+                        model=usage.model,
                     )
                 )
                 request.report(steps[-1])

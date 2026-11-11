@@ -55,6 +55,7 @@ from pheasant.assistant.document_assembly import (
     _reassemble_selected,
     _selected_output_length,
 )
+from pheasant.assistant.providers import note_model_used
 from pheasant.graph.traversal import neighbors as _graph_neighbors
 from pheasant.graph.traversal import slice_ as _graph_slice
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
@@ -579,6 +580,11 @@ class PheasantRetriever:
             ),
         )
         failed_arms = payload.get("arm_failures") or []
+        if mode in {"hybrid", "vector"} and "vector" not in failed_arms:
+            # Named on the step whether the query's vector came from the
+            # provider or the embedding cache: the arm ranked with this model.
+            vector = getattr(self.search_engine, "vector", None)
+            note_model_used(getattr(getattr(vector, "embedder", None), "model", None))
         if failed_arms:
             with self._diagnostic_lock:
                 self._arm_failures.extend(

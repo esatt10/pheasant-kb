@@ -20,6 +20,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from pheasant.api.artifact_routes import channel as artifact_channel
+from pheasant.assistant.workflows import step_payload
 from pheasant.services import answer_resume
 from pheasant.services import assistant as assistant_service
 
@@ -298,22 +299,7 @@ def register_assistant_routes(
                     defer_visual=True,
                     permit=permit,
                     request_budget=budget,
-                    on_step=lambda step: emit(
-                        {
-                            "type": "step",
-                            "name": step.name,
-                            "detail": step.detail,
-                            "passages": step.passages,
-                            "duration_seconds": step.duration_seconds,
-                            "input_tokens": step.input_tokens,
-                            "output_tokens": step.output_tokens,
-                            "cached_input_tokens": step.cached_input_tokens,
-                            "reasoning_tokens": step.reasoning_tokens,
-                            "provider_calls": step.provider_calls,
-                            "provider_retries": step.provider_retries,
-                            "fanout_timings": step.fanout_timings,
-                        }
-                    ),
+                    on_step=lambda step: emit({"type": "step", **step_payload(step)}),
                     on_draft=lambda delta: emit({"type": "draft", "delta": delta}),
                 )
                 answer["executor_wait_ms"] = (worker_started - answer_started) * 1000

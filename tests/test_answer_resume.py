@@ -255,4 +255,5 @@ class _Step:
         self.reasoning_tokens = 0
         self.provider_calls = 0
         self.provider_retries = 0
+        self.model = None
         self.fanout_timings = None

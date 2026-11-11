@@ -2484,6 +2484,7 @@ select.text-input {
 }
 
 .trace__list {
+  container-type: inline-size;
   margin: 0;
   padding: calc(8px * var(--sp)) calc(10px * var(--sp));
   list-style: none;
@@ -2514,6 +2515,23 @@ select.text-input {
 .trace__detail {
   color: var(--text-soft);
   overflow-wrap: anywhere;
+}
+
+/* Inline after the step's text, so naming a model widens no column: the
+   metrics keep their right-aligned seconds and the chip wraps with the text. */
+.trace__model {
+  display: inline-block;
+  margin-left: calc(6px * var(--sp));
+  padding: 0 calc(5px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--fs));
+  line-height: 1.6;
+  vertical-align: baseline;
+  white-space: nowrap;
 }
 
 .trace__fanouts {
@@ -2549,7 +2567,10 @@ select.text-input {
   white-space: nowrap;
 }
 
-@media (max-width: 700px) {
+/* By the trace's own width rather than the viewport's: on a desktop the chat
+   column sits between two panels and is often narrower than a phone is wide
+   in landscape, and three metrics beside the detail left it a sliver. */
+@container (max-width: 640px) {
   .trace__list li {
     grid-template-columns: 76px minmax(0, 1fr);
   }
@@ -2557,6 +2578,17 @@ select.text-input {
   .trace__metrics {
     grid-column: 2;
     justify-content: flex-start;
+  }
+}
+
+@container (max-width: 360px) {
+  .trace__list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: calc(2px * var(--sp));
+  }
+
+  .trace__metrics {
+    grid-column: 1;
   }
 }
 

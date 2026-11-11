@@ -508,6 +508,9 @@ export interface WorkflowStep {
   duration_seconds?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  /** The chat, decision or embedding model the step used; several are joined
+   *  by ", " in first-use order. Absent or null when it used none. */
+  model?: string | null;
   fanout_timings?: QueryFanoutTiming[];
 }
 

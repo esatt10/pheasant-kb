@@ -30,7 +30,7 @@ def _answer(question: str, intent: str = "compose") -> dict[str, Any]:
         "keywords": {"used": ["@compose"]} if intent == "compose" else None,
         "decisions": {"accepted": True, "sufficiency": 0.91},
         "citations": CITED,
-        "steps": [{"name": "plan", "detail": "one query per component"}],
+        "steps": [{"name": "plan", "detail": "one query per component", "model": "gpt-6-luna"}],
         "visual": {"status": "none"},
     }
 
@@ -67,6 +67,7 @@ def test_keeping_is_opt_in_and_the_switch_reaches_every_surface(
     trace = kept["payload"]["trace"]
     assert trace["intent"] == "compose" and trace["confidence"]["accepted"] is True
     assert trace["steps"][0]["name"] == "plan" and kept["index_status"] == "pending"
+    assert trace["steps"][0]["model"] == "gpt-6-luna", "a kept trace says which model ran"
 
     # The switch, set over HTTP, is read by MCP -- and the other way round.
     assert client.put("/artifacts/settings", json={"auto_save": True}).json()["settings"][
