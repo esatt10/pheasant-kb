@@ -49,7 +49,7 @@ FROM python:3.12-slim AS runtime
 LABEL org.opencontainers.image.title="pheasant" \
       org.opencontainers.image.description="Docker-first MCP knowledge graph indexer and agentic retrieval layer" \
       org.opencontainers.image.source="https://github.com/esatt10/pheasant-kb" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="AGPL-3.0-only OR LicenseRef-pheasant-commercial"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
