@@ -435,7 +435,10 @@ jobs:
 
   render:
     name: The tuning page renders
-    runs-on: ubuntu-latest
+    # Pinned: `playwright install --with-deps` installs system packages with
+    # apt, and on the image ubuntu-latest moved to (resolute) every mirror
+    # failed to resolve, twice in a row, before a test ran.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     # Split from `ui` because they answer different questions and need

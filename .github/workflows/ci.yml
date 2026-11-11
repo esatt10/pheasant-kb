@@ -82,7 +82,10 @@ jobs:
     # PHEASANT_REQUIRE_BROWSER makes not finding it a failure, so this job
     # cannot go green by testing nothing.
     name: MCP App view in a real browser
-    runs-on: ubuntu-latest
+    # Pinned: `playwright install --with-deps` installs system packages with
+    # apt, and on the image ubuntu-latest moved to (resolute) every mirror
+    # failed to resolve, twice in a row, before a test ran.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
