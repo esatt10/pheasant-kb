@@ -856,6 +856,14 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     public.discard("start_voice_session")
     public.discard("websocket_url")
     public.discard("session_request_body")
+    # The relay transport is the same operation's other half, and as HTTP-only:
+    # `open_relay` redeems a ticket for the region's own dictation WebSocket,
+    # `relay_ticket` reads it from the handshake, and `transport` is the rule
+    # both operations choose by. Driven over real sockets in
+    # tests/test_voice_relay.py and in the browser test's relayed case.
+    public.discard("open_relay")
+    public.discard("relay_ticket")
+    public.discard("transport")
 
     missing = sorted(public - set(CONFORMED))
     assert not missing, (

@@ -8,7 +8,11 @@ Two halves, both as the browser and the region meet them:
   a scripted refusal.
 * ``WS /v1/realtime?intent=transcription`` — what the composer opens with that
   secret, offered as the ``openai-insecure-api-key.<secret>`` subprotocol
-  beside ``realtime``. An unknown secret is refused. It counts the PCM each
+  beside ``realtime``. An unknown secret is refused. With ``header_keys`` it
+  also admits a credential the way Azure AI Foundry does -- only as a header,
+  ``api-key: <key>`` or ``Authorization: Bearer <key>`` -- which is how the
+  region's relay opens it; a ``session.update`` is recorded and answered with
+  ``session.updated``. It counts the PCM each
   ``input_audio_buffer.append`` carries and, as audio keeps arriving, streams
   ``conversation.item.input_audio_transcription.delta`` events one word at a
   time; ``input_audio_buffer.commit`` answers ``committed``, the words not yet
@@ -42,6 +46,10 @@ class Session:
     last_audio_at: float | None = None
     committed: bool = False
     closed: bool = False
+    headers: dict[str, str] = field(default_factory=dict)
+    updates: list[dict[str, Any]] = field(default_factory=list)
+    #: Event types received that were neither audio nor a session update.
+    other_events: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +61,10 @@ class FakeRealtime:
     minted: list[dict[str, Any]] = field(default_factory=list)
     sessions: list[Session] = field(default_factory=list)
     url: str = ""
+    #: Credentials admitted as a header (``api-key`` or ``Bearer``), Foundry-style.
+    header_keys: set[str] = field(default_factory=set)
+    #: Every socket attempt's headers, admitted or not.
+    attempts: list[dict[str, str]] = field(default_factory=list)
 
     def app(self) -> Any:
         from starlette.applications import Starlette
@@ -80,12 +92,22 @@ class FakeRealtime:
                 p.split(".", 1)[1] for p in protocols if p.startswith("openai-insecure-api-key.")
             ]
             issued = {f"ek_test_{n}" for n in range(1, len(self.minted) + 1)}
-            if "realtime" not in protocols or not secrets or secrets[0] not in issued:
+            headers = dict(socket.headers)
+            self.attempts.append(headers)
+            scheme, _, bearer = headers.get("authorization", "").partition(" ")
+            header_key = headers.get("api-key") or (bearer if scheme.lower() == "bearer" else "")
+            if header_key and header_key in self.header_keys:
+                credential = f"header:{header_key}"
+            elif "realtime" in protocols and secrets and secrets[0] in issued:
+                credential = secrets[0]
+            else:
                 await socket.close(code=4001)
                 return
-            session = Session(secret=secrets[0], protocols=protocols, query=socket.url.query)
+            session = Session(
+                secret=credential, protocols=protocols, query=socket.url.query, headers=headers
+            )
             self.sessions.append(session)
-            await socket.accept(subprotocol="realtime")
+            await socket.accept(subprotocol="realtime" if "realtime" in protocols else None)
             await socket.send_json(
                 {"type": "session.created", "session": {"type": "transcription"}}
             )
@@ -95,6 +117,14 @@ class FakeRealtime:
                 while True:
                     event = await socket.receive_json()
                     kind = event.get("type")
+                    if kind == "session.update":
+                        session.updates.append(event)
+                        await socket.send_json(
+                            {"type": "session.updated", "session": event.get("session", {})}
+                        )
+                        continue
+                    if kind not in {"input_audio_buffer.append", "input_audio_buffer.commit"}:
+                        session.other_events.append(str(kind))
                     if kind == "input_audio_buffer.append":
                         pcm = base64.b64decode(event["audio"])
                         now = time.monotonic()

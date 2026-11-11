@@ -288,12 +288,16 @@ export interface VoiceStatus {
 
 /** `POST /assistant/voice/session`: one live transcription session to open. */
 export interface VoiceSession {
+  /** A provider's short-lived secret (`direct`), or the region's one-use relay ticket (`relay`). */
   client_secret: string;
   expires_at: number | null;
   model: string;
+  /** The provider's WebSocket (`direct`), or the region's own relay path (`relay`). */
   websocket_url: string;
   sample_rate: number;
   max_seconds: number;
+  /** Absent from an older region, which is always `direct`. */
+  transport?: "direct" | "relay";
 }
 
 /** One first-word keyword (`@table`, `@doc` …) and what it answers with. */

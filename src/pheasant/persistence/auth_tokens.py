@@ -14,6 +14,9 @@ digest, so a copy of this table opens nothing. Kinds:
 ``oauth_code``     a one-use authorization code handed to an MCP client
 ``login``          the state of a round trip to Entra, ten minutes at most
 ``consent``        a signed-in user deciding whether an MCP client may connect
+``voice_relay``    a one-use ticket for the dictation relay's WebSocket
+                   (``services/voice.py``), which a browser cannot send a
+                   bearer token on
 
 Rows live in the state store rather than in a process so every api replica
 honours what any of them issued -- and a revocation everywhere.

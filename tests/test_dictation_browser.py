@@ -81,10 +81,23 @@ def browser() -> Iterator[Any]:
 
 @pytest.fixture
 def region(tmp_path, monkeypatch) -> Iterator[dict[str, Any]]:
+    yield from _region(tmp_path, monkeypatch, transport="direct")
+
+
+@pytest.fixture
+def relay_region(tmp_path, monkeypatch) -> Iterator[dict[str, Any]]:
+    """A region relaying dictation, to a provider that takes a header only (Foundry's rule)."""
+
+    yield from _region(tmp_path, monkeypatch, transport="relay")
+
+
+def _region(tmp_path, monkeypatch, *, transport: str) -> Iterator[dict[str, Any]]:
     from pheasant.api.app import create_app
     from pheasant.config.schema import PheasantConfig
 
     provider = FakeRealtime()
+    if transport == "relay":
+        provider.header_keys = {"sk-region-secret"}
     provider_server, provider_thread, provider_url = serve(provider.app())
     monkeypatch.setenv("PHEASANT_UI_DIST", str(DIST))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-region-secret")
@@ -116,7 +129,11 @@ def region(tmp_path, monkeypatch) -> Iterator[dict[str, Any]]:
             # No chat model: a sent question is answered extractively, offline.
             "assistant": {
                 "provider": "none",
-                "voice": {"base_url": f"{provider_url}/v1", "max_seconds": LIMIT_SECONDS},
+                "voice": {
+                    "base_url": f"{provider_url}/v1",
+                    "max_seconds": LIMIT_SECONDS,
+                    "transport": transport,
+                },
             },
         }
     )
@@ -246,6 +263,47 @@ def test_speech_streams_in_at_the_caret_and_stops_when_asked(browser, region) ->
     assert 18_000 < rate < 30_000, f"{rate:.0f} samples/s is not a 24 kHz stream"
     # The region minted it with its own key, and the browser never saw that key.
     assert provider.minted[0]["headers"]["authorization"] == "Bearer sk-region-secret"
+    assert "sk-region-secret" not in page.content()
+
+
+def test_a_relayed_dictation_streams_through_the_region(browser, relay_region) -> None:
+    """The same dictation with ``transport: relay``: the browser talks only to the region.
+
+    The stand-in admits a credential only as a header, as Azure AI Foundry does,
+    so this passes only if the region's relay opened the provider's socket with
+    its own key -- and the page never held that key or a provider secret.
+    """
+
+    page = _page(browser, relay_region["url"])
+    sockets: list[str] = []
+    page.on("websocket", lambda socket: sockets.append(socket.url))
+    box = page.locator(BOX)
+    box.fill("Ask ")
+    box.evaluate("el => { el.focus(); el.setSelectionRange(4, 4); }")
+    mic = _mic(page)
+    mic.wait_for(state="visible")
+    mic.click()
+    _wait_state(page, "live")
+    _wait_value(page, "Ask What", prefix=True)
+    mic.click()
+    _wait_value(page, "Ask " + SPOKEN)
+    assert _live_tracks(page) == 0
+
+    provider = relay_region["provider"]
+    # The page opened the region's relay and nothing else.
+    region_host = relay_region["url"].split("//", 1)[1]
+    # (`/api/…` or `/…`, whichever API base the bundle was built with.)
+    assert sockets and all(
+        url.startswith(f"ws://{region_host}/") and url.endswith("/assistant/voice/relay")
+        for url in sockets
+    ), sockets
+    assert not provider.minted, "a relayed dictation asks the provider for no secret"
+    session = provider.sessions[0]
+    assert session.headers["authorization"] == "Bearer sk-region-secret"
+    assert not any(p.startswith("openai-insecure-api-key.") for p in session.protocols)
+    assert session.updates and session.committed
+    # Real PCM16 crossed the relay (it stops at the first word: a few hundred ms).
+    assert session.audio_bytes > 4_800 and session.audio_bytes % 2 == 0
     assert "sk-region-secret" not in page.content()
 
 

@@ -92,16 +92,19 @@ day, person and conversation. See [Keep what pheasant generates](artifacts.md).
 
 ### Dictation
 
-With an OpenAI key on the server (or pasted for the session), a microphone
-sits beside **Send**. Press it, allow the microphone, and speak: the words
+With an OpenAI key on the server (or pasted for the session), or a
+`gpt-live-transcribe` deployment on Azure AI Foundry, a microphone sits beside
+**Send**. Press it, allow the microphone, and speak: the words
 stream into the question box **wherever the cursor is**, so you can dictate
 into the middle of something you typed, and move the cursor while you talk.
 The button is filled and pulsing while it listens, with the time left beside
 it; press it again to stop, and the last words still land. One dictation lasts
 at most a minute — the button turns itself off at the limit — and the next one
-can start straight away. Sending the question ends a dictation. Speech goes
-from the browser to the transcriber (`gpt-live-transcribe`), not through
-pheasant; see [`assistant.voice`](../configuration.md#assistantvoice-dictation-in-the-composer).
+can start straight away. Sending the question ends a dictation. With OpenAI,
+speech goes from the browser to the transcriber (`gpt-live-transcribe`), not
+through pheasant. With Foundry it goes through the region, which relays it to
+the transcriber, because Foundry's socket takes a credential only as a header.
+See [`assistant.voice`](../configuration.md#assistantvoice-dictation-in-the-composer).
 
 Visuals render in pheasant's MCP App view, hosted in a sandboxed frame — the
 same view an MCP host such as Claude renders for the `ask_knowledge_base`,

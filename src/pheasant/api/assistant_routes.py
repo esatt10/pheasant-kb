@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -441,6 +441,83 @@ def register_assistant_routes(
             media_type="application/json",
             headers={"Cache-Control": "no-store"},
         )
+
+    from pheasant.services.voice_relay import RelayGate
+
+    relay_gate = RelayGate()
+
+    # Both spellings of the path, as the UI's API base can be "" or "/api": the
+    # middleware that accepts `/api/*` for HTTP (`app.py`, `_ui_api_prefix`)
+    # does not run for WebSockets, so the alias is registered here instead.
+    @app.websocket("/api/assistant/voice/relay")
+    @app.websocket("/assistant/voice/relay")
+    async def assistant_voice_relay(websocket: WebSocket) -> None:
+        """One dictation relayed to the transcriber (``assistant.voice.transport: relay``).
+
+        The operations are `services.voice.open_relay` and
+        `services.voice_relay.run`; this adapter owns only Starlette's socket.
+        A browser cannot send a bearer token on a WebSocket, and the HTTP
+        middleware that checks one does not run for WebSockets, so the
+        credential here is the one-use ticket ``POST /assistant/voice/session``
+        handed to an authenticated caller, offered as a subprotocol. Every
+        failure before the relay starts is the same refusal (1008), so a caller
+        cannot learn whether a ticket was unknown, spent or expired.
+        """
+
+        from starlette.concurrency import run_in_threadpool
+        from starlette.websockets import WebSocketDisconnect
+
+        from pheasant.services import voice as voice_service
+        from pheasant.services import voice_relay
+
+        ticket = voice_service.relay_ticket(websocket.headers.get("sec-websocket-protocol", ""))
+        target = await run_in_threadpool(
+            voice_service.open_relay, services, ticket, env=connection_environment()
+        )
+        if target is None:
+            voice_relay.count("refused")
+            await websocket.close(code=voice_relay.CLOSE_POLICY)
+            return
+        settings = services.config.assistant.voice
+        if not relay_gate.acquire(int(settings.max_relay_sessions)):
+            voice_relay.count("busy")
+            await websocket.close(code=voice_relay.CLOSE_TRY_AGAIN)
+            return
+
+        async def receive() -> str | bytes | None:
+            try:
+                message = await websocket.receive()
+            except (WebSocketDisconnect, RuntimeError):
+                return None
+            if message.get("type") == "websocket.disconnect":
+                return None
+            if message.get("text") is not None:
+                return str(message["text"])
+            if message.get("bytes") is not None:
+                return bytes(message["bytes"])
+            return ""
+
+        async def send(frame: str | bytes) -> None:
+            if isinstance(frame, bytes):
+                await websocket.send_bytes(frame)
+            else:
+                await websocket.send_text(frame)
+
+        async def close(code: int, reason: str) -> None:
+            await websocket.close(code=code, reason=reason or None)
+
+        try:
+            await voice_relay.run(
+                voice_relay.BrowserSide(
+                    accept=lambda: websocket.accept(subprotocol="realtime"),
+                    receive=receive,
+                    send=send,
+                    close=close,
+                ),
+                target,
+            )
+        finally:
+            relay_gate.release()
 
     @app.get("/assistant/apps/knowledge-view")
     def knowledge_view() -> Response:
