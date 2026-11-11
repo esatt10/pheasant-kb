@@ -435,10 +435,7 @@ jobs:
 
   render:
     name: The tuning page renders
-    # Pinned: `playwright install --with-deps` installs system packages with
-    # apt, and on the image ubuntu-latest moved to (resolute) every mirror
-    # failed to resolve, twice in a row, before a test ran.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     # Split from `ui` because they answer different questions and need
@@ -488,5 +485,7 @@ jobs:
           GEMINI_API_KEY: ""
         run: |
           npm install --no-save playwright
-          npx playwright install --with-deps chromium
+          # Chromium from Playwright's CDN; the apt top-up is best effort (see ci.yml).
+          npx playwright install chromium
+          npx playwright install-deps chromium || echo "apt unreachable; using the runner's libraries"
           node ci-render.mjs

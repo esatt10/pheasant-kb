@@ -82,10 +82,7 @@ jobs:
     # PHEASANT_REQUIRE_BROWSER makes not finding it a failure, so this job
     # cannot go green by testing nothing.
     name: MCP App view in a real browser
-    # Pinned: `playwright install --with-deps` installs system packages with
-    # apt, and on the image ubuntu-latest moved to (resolute) every mirror
-    # failed to resolve, twice in a row, before a test ran.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -100,7 +97,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,mcp]" playwright
-          python -m playwright install --with-deps chromium
+          # Chromium comes from Playwright's CDN; its system libraries are
+          # already on GitHub's Ubuntu images. The apt top-up is best effort:
+          # when the runners could not resolve Ubuntu's mirrors, --with-deps
+          # failed every browser job before a test ran.
+          python -m playwright install chromium
+          python -m playwright install-deps chromium || echo "apt unreachable; using the runner's libraries"
 
       # Composer dictation is driven against the built web UI (a fake
       # microphone, a stand-in transcription wire), so this job builds it.
