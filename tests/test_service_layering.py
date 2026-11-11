@@ -87,6 +87,9 @@ LAYERS: dict[str, int] = {
     "security": 1,
     "synapse": 1,
     "connectors": 1,
+    # Sealed accounts and how any process reads a secret: below every
+    # consumer (git, connectors, model clients), above nothing but persistence.
+    "connections": 1,
     "sandbox": 1,
     "registry": 1,
     "deployment": 1,

@@ -1173,6 +1173,13 @@ shard into several regions.
 | `service_identity.enabled` | bool | `false` | Managed-identity tokens on the internal boundaries: a sender whose token variable is unset asks its identity for `audience`; a receiver admits a token carrying the boundary's app role (`graph.query`, `worker.prepare`, `ingestion.land`). Configured tokens keep working on both sides. |
 | `service_identity.tenant_id` / `audience` / `app_id` | string | `""` | The internal app registration: `audience` is what a sender asks for (`api://<app id>`), `app_id` the `aud` of a v2 token. |
 | `service_identity.managed_identity_client_id` | string | `""` | A user-assigned identity's client id; empty uses `AZURE_CLIENT_ID`. |
+| `connections.enabled` | bool | `true` | Accounts connected while the region runs, from the Sources page, MCP `connect_service` or `POST /connections`: git tokens, a Google Drive sign-in, API tokens, model keys. Sealed (AES-256-GCM) in the `connections` table. See [Connect accounts and keys](pheasant-kb/connections.md). |
+| `connections.key_env` | string | `PHEASANT_CREDENTIAL_KEY` | The variable holding the sealing key (any long random string). A fleet sets it on the api and the indexer; a worker refuses to start holding it. |
+| `connections.generate_key_file` | bool | `true` | With no such variable, a process whose `/state` is writable generates `<state_path>/credential.key` once (the standalone path). |
+| `connections.public_url` | string | `null` | The address a browser returns to after a Google sign-in (`{public_url}/connections/oauth/callback`). Unset: `entra.public_url`, else the address the browser used. |
+| `connections.microsoft_tenant` | string | `common` | The Entra tenant a "Sign in with Microsoft" (Azure DevOps) goes to: `common` takes work, school and personal accounts; a tenant id or `organizations` narrows it. Each service's OAuth client is read from `GITHUB_OAUTH_CLIENT_ID`/`_SECRET`, `MICROSOFT_OAUTH_CLIENT_ID` (a public client: no secret needed), `GITLAB_OAUTH_CLIENT_ID`/`_SECRET` and `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`. |
+| `connections.cache_seconds` | integer | `15` | How long a process reuses what it read of the table: a connection made on the api reaches the indexer within this. |
+| `connections.oauth_timeout_seconds` | integer | `900` | How long a browser has to finish a sign-in. |
 
 The built-in secret and generated-directory exclude globs are maintained in
 `src/pheasant/config/exclusions.py` and remain available through
@@ -2184,6 +2191,7 @@ Each source item supports:
 | `chunking.*` | object | see below | Chunking strategy/size overlap. |
 | `sync.*` | object | see below | Source-specific trigger policies. |
 | `connector.*` | object | see below | Connector feature flags and provider-specific options. |
+| `connector.connection` | string/null | `null` | A connected account's name (`security.connections`): the git token a managed repository is cloned with, the Drive sign-in a `gdrive` source reads with, the bearer token an `api` or `web_collection` source sends. It wins over `connector.api_key_env` and over `GITHUB_TOKEN`. Unset, a repository on a host whose provider has exactly one connection (GitHub, GitLab, Azure DevOps) and a `gdrive` source with one Drive connection read with that one. |
 | `urls` | list[string] | `[]` | URL list (mainly for `web_collection`). |
 
 ### `sources[].repo`

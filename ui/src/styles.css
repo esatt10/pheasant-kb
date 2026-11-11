@@ -6572,3 +6572,134 @@ select.text-input {
 
 /* The Syncs page's region-wide default schedule. */
 .syncs__default { display: inline-flex; align-items: center; gap: calc(6px * var(--sp)); }
+
+/* --- Connected accounts (sources/Connections.tsx) ------------------------- */
+.connect-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.connect-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92em;
+  cursor: pointer;
+}
+.connect-toggle:hover {
+  background: var(--bg-hover);
+}
+.connect-toggle--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.connect-toggle__badge {
+  color: var(--ok);
+  font-weight: 700;
+}
+.source-sign-in {
+  display: grid;
+  gap: 8px;
+}
+.connect-panel {
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: 12px;
+}
+.connect-panel__using {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.connect-panel__using .text-input {
+  width: auto;
+}
+.connect-form {
+  display: grid;
+  gap: 10px;
+}
+.connect-form__intro {
+  margin: 0;
+}
+.connect-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.connect-method {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+.connect-method--on {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+.connection-line {
+  overflow-wrap: anywhere;
+}
+.connection-ok {
+  color: var(--ok);
+}
+.connection-warn {
+  color: var(--warn);
+}
+.connections {
+  margin-top: 28px;
+  display: grid;
+  gap: 10px;
+}
+.connections h2 {
+  margin: 0;
+}
+.connections__sub {
+  margin: 6px 0 0;
+  font-size: 1em;
+}
+.connection-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.connection-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+@media (max-width: 860px) {
+  .connection-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
+.connect-form__setup {
+  /* A sentence with links and code, not a row of flex items. */
+  display: block;
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

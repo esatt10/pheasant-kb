@@ -8,8 +8,9 @@ returned byte-for-byte from the API; no transformation beyond a stable
 title header. Incremental: ``item.sha256`` is a ``(file_id, modifiedTime,
 md5Checksum)`` version proxy for the engine's pre-read skip, and the
 per-file cursor lets ``read_item`` raise :class:`ItemNotModified` for
-unchanged files. Token from ``connector.api_key_env`` (default
-``GDRIVE_TOKEN``). ACL capture (Phase 32 reserved): ``metadata["acl"]``
+unchanged files. Token from the source's Drive connection (a sign-in,
+refreshed as it expires, or a service account), else ``connector.api_key_env``
+(default ``GDRIVE_TOKEN``). ACL capture (Phase 32 reserved): ``metadata["acl"]``
 carries owner emails + the ``shared`` flag.
 """
 
@@ -63,16 +64,37 @@ class GDriveConnector(SourceConnector):
     complete_listing = True  # pages through every non-trashed file
 
     def _token(self) -> str:
+        """The source's connection, else ``$api_key_env``, else the one Drive sign-in.
+
+        A connection (``connector.connection``) is a sign-in, a service account
+        or a pasted token, and a sign-in is refreshed here when it runs out --
+        which is what an access token in a variable could never do.
+        """
+
         import os
 
-        env_name = self.source.connector.api_key_env or DEFAULT_TOKEN_ENV
-        token = os.environ.get(env_name)
-        if not token:
-            raise ConnectorUnavailable(
-                f"gdrive connector for source {self.source.name} needs an OAuth "
-                f"access token in ${env_name}"
-            )
-        return token
+        from pheasant import connections
+        from pheasant.connections import google
+
+        try:
+            name = connections.source_connection(self.source)
+            if name:
+                _, secret = connections.named(name, providers_allowed=("google_drive",))
+                return google.access_token_for(secret)
+            env_name = self.source.connector.api_key_env or DEFAULT_TOKEN_ENV
+            token = os.environ.get(env_name) or connections.secret(env_name)
+            if token:
+                return token
+            row = connections.ambient("google_drive")
+            if row is not None:
+                return google.access_token_for(connections.resolve.opened(row))
+        except (connections.ConnectionUnavailable, google.GoogleAuthError) as exc:
+            raise ConnectorUnavailable(f"gdrive source {self.source.name}: {exc}") from exc
+        raise ConnectorUnavailable(
+            f"gdrive connector for source {self.source.name} needs a Google Drive "
+            f"connection (Sources > Connect > Google Drive) or an OAuth access token in "
+            f"${env_name}"
+        )
 
     def _base_url(self) -> str:
         return (self.source.connector.api_endpoint or DEFAULT_BASE_URL).rstrip("/")

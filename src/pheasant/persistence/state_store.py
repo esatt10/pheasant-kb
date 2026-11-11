@@ -384,6 +384,7 @@ class StateStore:
                 "answer_streams": "updated_at",
                 "saved_artifacts": "archived_at",
                 "region_settings": "updated_by",
+                "connections": "check_json",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()

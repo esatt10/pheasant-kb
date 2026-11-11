@@ -39,13 +39,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.request import Request, urlopen
 
 from pheasant import foundry
+from pheasant.connections import secret
 from pheasant.ingestion._modal import sidecar_text, stub_fingerprint
 
 if TYPE_CHECKING:
@@ -129,7 +129,7 @@ class OpenAISpecTranscriber:
             return authored
         body, content_type = self._multipart(content, relative_path)
         headers = {"Content-Type": content_type, "User-Agent": "pheasant/0.1"}
-        api_key = os.environ.get(self.api_key_env or "", "")
+        api_key = secret(self.api_key_env) or ""
         # `api-key` on an Azure AI Foundry resource, Bearer everywhere else,
         # and a managed identity's token for a Foundry resource with no key.
         headers.update(foundry.credential_headers(self.base_url, api_key))

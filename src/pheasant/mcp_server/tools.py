@@ -24,6 +24,7 @@ from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
 from pheasant.jobs import JobRegistry
 from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
+from pheasant.mcp_server.connection_tools import ConnectionTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.mcp_server.source_url_tools import SourceUrlTools
@@ -80,7 +81,13 @@ def _preview_rows(results: list[dict]) -> list[dict]:
 
 
 class PheasantTools(
-    ReadinessTools, AssistantTools, InventoryTools, ArchiveTools, SourceUrlTools, SyncControlTools
+    ReadinessTools,
+    AssistantTools,
+    InventoryTools,
+    ArchiveTools,
+    SourceUrlTools,
+    SyncControlTools,
+    ConnectionTools,
 ):
     def __init__(self, config: PheasantConfig, *, vector: Any = None):
         self.config = config
@@ -202,10 +209,12 @@ class PheasantTools(
         wait: bool = False,
         sync_mode: str = "incremental",
         urls: list[str] | None = None,
+        connection: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         source = self._new_source(name, SourceType(source_type), path, list(urls or []))
         source.description, source.enabled = description, enabled
+        source.connector.connection = self._connected(connection)
         if include is not None:
             source.include = include
         if exclude is not None:

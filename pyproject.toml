@@ -45,6 +45,10 @@ dependencies = [
   # work off the event loop instead of leaving it on a sync `def` route by
   # accident. Bounded to match starlette's own anyio<5,>=3.6.2.
   "anyio>=3.6.2,<5",
+  # Seals connected accounts at rest (`connections/vault.py`: AES-256-GCM) and
+  # signs a Drive service account's token request (RS256). Already in the
+  # image through the a2a extra; core because a standalone region connects too.
+  "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

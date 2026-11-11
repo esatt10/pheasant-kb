@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { SourceRecord, SourceTypeInfo, SourceWritePayload } from "../api/types";
 import { DirectoryBrowser } from "./DirectoryBrowser";
+import { useConnections } from "./Connections";
 
 const SYNC_MODES = ["incremental", "full", "validate_only", "repair"];
 
@@ -76,6 +77,9 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
   // holds an environment variable *name*, never a token, so promoting it out
   // of the raw JSON costs nothing in safety and saves hand-writing JSON.
   const [apiKeyEnv, setApiKeyEnv] = useState(String(connector.api_key_env ?? ""));
+  // A connected account (Sources > Connections) wins over the variable above.
+  const [connection, setConnection] = useState(String(connector.connection ?? ""));
+  const connectionCatalog = useConnections();
   const [syncNow, setSyncNow] = useState(!editing);
   const [syncMode, setSyncMode] = useState("incremental");
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +144,8 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
     // The dedicated field wins over whatever the JSON says, so editing the
     // obvious control cannot be silently undone by a stale JSON blob.
     if (apiKeyEnv.trim()) connectorPayload.api_key_env = apiKeyEnv.trim();
+    if (connection) connectorPayload.connection = connection;
+    else delete connectorPayload.connection;
     const payload: SourceWritePayload = {
       type,
       path: effectivePath ?? undefined,
@@ -239,10 +245,9 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                   </label>
                 ) : (
                   <p>
-                    Point it at your account with Connector JSON, in Sync and connectors —
-                    typically an api_key_env naming the environment variable that holds the
-                    token. The token itself is read from the container environment and never
-                    stored in your config.
+                    Choose a Connection below (connect accounts on the Sources page), or name
+                    an environment variable that holds the token. Neither puts the token in
+                    your config.
                   </p>
                 )}
               </div>
@@ -320,6 +325,34 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
                 </label>
               )}
             </div>
+
+            {connectionCatalog.data?.connections.length ? (
+              <label className="field">
+                <span>Connection</span>
+                <select
+                  className="text-input"
+                  value={connection}
+                  onChange={(event) => setConnection(event.target.value)}
+                >
+                  <option value="">None — public, or the environment's token</option>
+                  {connectionCatalog.data.connections
+                    .filter((c) => {
+                      const provider = connectionCatalog.data!.providers.find(
+                        (p) => p.id === c.provider,
+                      );
+                      return provider?.kind === "source";
+                    })
+                    .map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.label} · {c.details.account ?? c.name}
+                      </option>
+                    ))}
+                </select>
+                <span className="muted small">
+                  The account this source is read with. Connect one on the Sources page.
+                </span>
+              </label>
+            ) : null}
 
             <label className="field">
               <span>Description</span>

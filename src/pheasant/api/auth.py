@@ -47,6 +47,10 @@ AUTH_PUBLIC_PATHS = frozenset(
         "/token",
         "/register",
         "/revoke",
+        # A service's sign-in sends the browser back here with no bearer
+        # token; the single-use `state` it carries is the credential
+        # (`api/connection_routes.py`).
+        "/connections/oauth/callback",
     }
 )
 MCP_SCOPE = "pheasant"

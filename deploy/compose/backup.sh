@@ -9,7 +9,8 @@
 #   db.pgdump          the database: state, chunks, graph rows, BM25 index
 #   state.tar.gz       /state: vectors, graph snapshots, media, uploads
 #   memory.tar.gz      /memory: agent memory records
-#   secrets.tar.gz     the four tokens, so agents and browsers keep working
+#   secrets.tar.gz     the four tokens and the connection key, so agents,
+#                      browsers and connected accounts keep working
 #   SHA256SUMS         what restore.sh verifies before it touches anything
 #
 # The database and /state have to be copied together and from the same

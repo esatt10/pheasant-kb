@@ -264,11 +264,24 @@ def _credential_envs(config: object) -> list[tuple[str, str]]:
         (named("security.idp.api_key_env"), "the identity provider"),
         (named("graph.query_service_token_env"), "the internal graph-query API"),
         (named("ingestion.landing_service_token_env"), "the internal landing service"),
+        (
+            named("security.connections.key_env", "PHEASANT_CREDENTIAL_KEY"),
+            "the connected accounts (the key that opens every stored token)",
+        ),
     ]
     # `security.api_auth.token_env` is deliberately absent: that is the key to
     # this process's own front door, not a credential to somewhere else, and a
     # worker that serves an API at all needs it.
     candidates.extend((name, "a chat provider") for name in _MODEL_KEY_ENVS)
+    candidates.extend(
+        (name, "an OAuth client the region signs people in with")
+        for name in (
+            "GITHUB_OAUTH_CLIENT_SECRET",
+            "MICROSOFT_OAUTH_CLIENT_SECRET",
+            "GITLAB_OAUTH_CLIENT_SECRET",
+            "GOOGLE_OAUTH_CLIENT_SECRET",
+        )
+    )
     seen: set[str] = set()
     ordered: list[tuple[str, str]] = []
     for name, reason in candidates:

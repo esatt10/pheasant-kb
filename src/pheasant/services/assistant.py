@@ -21,13 +21,13 @@ reading the workflow module's docstring. It lived in `api/app.py`, and
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pheasant.connections import environment as connection_environment
 from pheasant.services import ServiceContext
 from pheasant.services.errors import (
     AssistantBusy,
@@ -232,7 +232,7 @@ def answer(
                 graph=context.graph,
                 state=context.state,
                 credential=credential,
-                env=env if env is not None else dict(os.environ),
+                env=env if env is not None else connection_environment(),
                 mode=request.mode,
                 max_results=request.max_results,
                 source_name=source_name,
@@ -631,7 +631,7 @@ def assess_evidence(
     if intent not in chat.INTENTS:
         intent = chat.classify_intent(question)[0]
 
-    env = env if env is not None else dict(os.environ)
+    env = env if env is not None else connection_environment()
     decider = decisions.resolve_decider(settings, resolve_llm(context.config, None, env), env)
     if decider is None:
         raise DecisionsNotConfigured()

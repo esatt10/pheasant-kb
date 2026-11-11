@@ -10,7 +10,6 @@ pasted, server-sent events, and response headers.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -21,6 +20,7 @@ from pydantic import BaseModel
 
 from pheasant.api.artifact_routes import channel as artifact_channel
 from pheasant.assistant.workflows import step_payload
+from pheasant.connections import environment as connection_environment
 from pheasant.services import answer_resume
 from pheasant.services import assistant as assistant_service
 
@@ -173,7 +173,7 @@ def register_assistant_routes(
         permit = assistant_service.acquire(services)
         budget = assistant_service.create_request_budget(services, answer_request)
         credential = session_keys().get(req.session_id)
-        environ = dict(os.environ)
+        environ = connection_environment()
 
         def run_answer() -> dict[str, Any]:
             worker_started = time.perf_counter()
@@ -272,7 +272,7 @@ def register_assistant_routes(
                 pass
 
         credential = session_keys().get(req.session_id)
-        environ = dict(os.environ)
+        environ = connection_environment()
         # Captured here, in the request, because `run()` executes on a worker
         # thread after this route has already returned its response object.
         parent_event = observed(request)
@@ -384,7 +384,7 @@ def register_assistant_routes(
                 principal_groups=req.principal_groups,
             ),
             credential=session_keys().get(req.session_id),
-            env=dict(os.environ),
+            env=connection_environment(),
         )
 
     @app.post("/assistant/assess")
@@ -400,7 +400,7 @@ def register_assistant_routes(
                 answer=req.answer,
                 relevance=req.relevance,
             ),
-            env=dict(os.environ),
+            env=connection_environment(),
         )
 
     @app.get("/assistant/voice")
@@ -415,7 +415,7 @@ def register_assistant_routes(
         from pheasant.services import voice as voice_service
 
         return voice_service.voice_status(
-            services, credential=session_keys().get(session_id), env=dict(os.environ)
+            services, credential=session_keys().get(session_id), env=connection_environment()
         )
 
     @app.post("/assistant/voice/session")
@@ -434,7 +434,7 @@ def register_assistant_routes(
         from pheasant.services import voice as voice_service
 
         minted = voice_service.start_voice_session(
-            services, credential=session_keys().get(req.session_id), env=dict(os.environ)
+            services, credential=session_keys().get(req.session_id), env=connection_environment()
         )
         return Response(
             content=json_module.dumps(minted),

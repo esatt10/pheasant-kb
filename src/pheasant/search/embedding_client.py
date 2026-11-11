@@ -19,7 +19,6 @@ import http.client
 import io
 import json
 import logging
-import os
 import random
 import re
 import socket
@@ -37,6 +36,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 
 from pheasant import foundry
+from pheasant.connections import secret
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +393,7 @@ class OpenAISpecEmbedder:
         """
 
         headers = {"Accept": "application/json"}
-        key = os.environ.get(self.api_key_env or "", "")
+        key = secret(self.api_key_env) or ""
         headers.update(foundry.credential_headers(self.base_url, key))
         try:
             _transport(Request(f"{self.base_url}/models", headers=headers, method="GET"), timeout)
@@ -561,7 +561,7 @@ class OpenAISpecEmbedder:
             # a compatible server that rejects an unknown field would 400 forever.
             body["encoding_format"] = "base64"
         headers = {"Content-Type": "application/json", "User-Agent": "pheasant/0.1"}
-        api_key = os.environ.get(self.api_key_env or "", "")
+        api_key = secret(self.api_key_env) or ""
         # `api-key` on a Foundry resource, Bearer everywhere else, and a
         # managed identity's token for a Foundry resource with no key.
         headers.update(foundry.credential_headers(self.base_url, api_key))

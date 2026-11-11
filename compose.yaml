@@ -49,9 +49,27 @@ x-kb-env: &kb-env
   PHEASANT_GRAPH_SERVICE_TOKEN_FILE: /run/pheasant/secrets/graph-token
   PHEASANT_INDEX_WORKER_TOKEN_FILE: /run/pheasant/secrets/worker-token
   PHEASANT_INGESTION_SERVICE_TOKEN_FILE: /run/pheasant/secrets/ingestion-token
-  OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env — see docs/pheasant-kb/index.md}
+  # Optional: without it, connect OpenAI on the Sources page (Connections), and
+  # the key is held encrypted in the database instead (docs/pheasant-kb/connections.md).
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   GH_TOKEN: ${GH_TOKEN:-}
+
+# The OAuth clients behind "Sign in with GitHub / Microsoft / GitLab / Google"
+# on the Sources page (docs/pheasant-kb/connections.md). Each is registered once
+# with its service, with this region's callback
+# (http://127.0.0.1:8765/connections/oauth/callback locally). Unset, that
+# sign-in asks for a client instead; tokens and keys work either way. Only the
+# api (which starts a sign-in) and the indexer (which refreshes one) hold them.
+x-oauth-clients: &oauth-clients
+  GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+  GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+  MICROSOFT_OAUTH_CLIENT_ID: ${MICROSOFT_OAUTH_CLIENT_ID:-}
+  MICROSOFT_OAUTH_CLIENT_SECRET: ${MICROSOFT_OAUTH_CLIENT_SECRET:-}
+  GITLAB_OAUTH_CLIENT_ID: ${GITLAB_OAUTH_CLIENT_ID:-}
+  GITLAB_OAUTH_CLIENT_SECRET: ${GITLAB_OAUTH_CLIENT_SECRET:-}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
 
 # The configuration every pheasant tier mounts. Generated from
 # deploy/compose/answers/pheasant-kb.json; point PHEASANT_KB_CONFIG at your own
@@ -172,7 +190,11 @@ services:
       # Loopback by default even with a token: a token is authentication, not
       # a perimeter, and Docker's iptables rules bypass most host firewalls.
       - "${PHEASANT_BIND:-127.0.0.1}:${PHEASANT_PORT:-8765}:8765"
-    environment: *kb-env
+    environment:
+      <<: [*kb-env, *oauth-clients]
+      # Opens the accounts connected from the UI, MCP or HTTP; only the two
+      # tiers that read with them hold it (`pheasant worker` refuses it).
+      PHEASANT_CREDENTIAL_KEY_FILE: /run/pheasant/secrets/credential-key
     volumes:
       - *kb-config
       - *kb-secrets
@@ -246,7 +268,11 @@ services:
         condition: service_completed_successfully
       nats:
         condition: service_healthy
-    environment: *kb-env
+    environment:
+      <<: [*kb-env, *oauth-clients]
+      # Opens the accounts connected from the UI, MCP or HTTP; only the two
+      # tiers that read with them hold it (`pheasant worker` refuses it).
+      PHEASANT_CREDENTIAL_KEY_FILE: /run/pheasant/secrets/credential-key
     volumes:
       - *kb-config
       - *kb-secrets

@@ -555,6 +555,60 @@ class StateStoreUnavailable(ServiceError):
         )
 
 
+class ConnectionNotFound(ServiceError):
+    status = 404
+    code = "UNKNOWN_CONNECTION"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Unknown connection: {name}")
+        self.name = name
+
+
+class ConnectionsUnavailable(ServiceError):
+    """This process cannot seal or open connected accounts: it holds no key.
+
+    Not retryable: an operator has to give the process the key (or a writable
+    ``/state``), and repeating the call changes neither.
+    """
+
+    status = 503
+    code = "CONNECTIONS_UNAVAILABLE"
+
+
+class ConnectionRejected(ServiceError):
+    """The service said the token, key or sign-in is not valid; nothing was stored."""
+
+    code = "CONNECTION_REJECTED"
+
+
+class ConnectionInUse(ServiceError):
+    status = 409
+    code = "CONNECTION_IN_USE"
+
+    def __init__(self, name: str, sources: list[str]) -> None:
+        super().__init__(
+            f"Connection {name} is what {', '.join(sources)} read with; remove those sources "
+            "first, or pass force to remove it anyway (they stop syncing until reconnected)"
+        )
+        self.sources = sources
+
+
+class ConnectionForbidden(ServiceError):
+    """Connecting an account is an administrator's act on a region that has roles."""
+
+    status = 403
+    code = "CONNECTION_FORBIDDEN"
+
+    def __init__(self) -> None:
+        super().__init__("Only an Admin may connect or remove accounts on this region")
+
+
+class SignInExpired(ServiceError):
+    """A service's sign-in came back with a state this region is not waiting for."""
+
+    code = "CONNECTION_SIGN_IN_EXPIRED"
+
+
 def transient_refusal(exc: BaseException) -> ServiceError | None:
     """The retryable refusal ``exc`` amounts to, or ``None`` if it is not one.
 

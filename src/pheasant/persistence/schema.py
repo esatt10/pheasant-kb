@@ -131,6 +131,23 @@ CREATE TABLE IF NOT EXISTS region_settings (
   updated_by TEXT,
   PRIMARY KEY (kb_id, section)
 );
+-- Accounts connected from the UI, MCP or HTTP (`connections/vault.py`): a
+-- token, a Drive sign-in, a service account. `sealed` is AES-256-GCM under a
+-- key that is never stored here; `details_json` is what a list may show.
+CREATE TABLE IF NOT EXISTS connections (
+  name TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  method TEXT NOT NULL,
+  status TEXT NOT NULL,
+  sealed TEXT,
+  key_id TEXT,
+  details_json TEXT NOT NULL,
+  oauth_state TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT,
+  check_json TEXT
+);
 -- The same tombstone for one document (`persistence/archive.py`). Every sync
 -- skips a path held here before reading it, so the removal survives
 -- incremental and full syncs. `kind` is `archived` (reinstatable) or
