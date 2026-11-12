@@ -8,6 +8,47 @@ nothing else, and `GET /metrics` returned the literal string `pheasant_up 1`.
 Two surfaces answer it now: per-source progress (for a human) and Prometheus
 metrics (for a scheduler).
 
+## Measure interactive mutations
+
+`scripts/benchmark_mutations.py` measures artifact save acknowledgment,
+searchability, delete acknowledgment, verified retrieval exclusion and physical
+cleanup separately. It also measures removal of an uploaded source. Run it
+inside an API container so credentials remain inside the container:
+
+```bash
+docker compose exec -T api python /app/scripts/benchmark_mutations.py --samples 5
+docker compose exec -T api python /app/scripts/benchmark_mutations.py --samples 5 --wait-for-projection
+docker compose exec -T indexer python /app/scripts/benchmark_job_publication.py /state
+```
+
+It uses uniquely named probe data and removes only the artifacts and source it
+created. The physical-cleanup check uses the fleet's PostgreSQL database in
+read-only mode. Compare equivalent samples on Docker and the hosted instance;
+report the first sample separately from steady-state results. A sleeping API,
+database or indexer can add wake-up time, so an acknowledgment target is not
+a guarantee that a newly saved file is already searchable.
+
+`--wait-for-projection` also measures completed publication intent and verifies
+that the saved document is returned by text search before deletion. The progress
+probe measures 50 updates against 15 disposable job files on the actual share.
+
+The row-backed writer reads touched nodes and edge pairs and retains a compact
+path/reference catalogue between tasks. Changed paths invalidate affected
+references, including links to targets that arrive later. It does not need to
+load the corpus graph for an incremental mutation. A failed or killed writer
+is discarded and recovered from committed state and durable work.
+
+Artifact writes also send a coalesced projection notification to interrupt an
+idle broker claim. This notification performs only pending durable work; it
+does not schedule another full source sync. A failed notification leaves the
+intent available to the drainer's next recovery pass.
+
+For fleet writers, interval-based graph history runs separately from indexing,
+streaming a consistent database view into an atomic snapshot. An interrupted
+export leaves the previous snapshot available. History completion is separate
+from indexed content becoming searchable. Setting the interval to zero keeps
+the explicit inline snapshot-after-every-sync behavior.
+
 ## Per-source progress
 
 Every source-listing route (`GET /sources`, `GET /overview`) carries a
@@ -36,6 +77,11 @@ In a role-split fleet, indexers write these job snapshots atomically under
 `/state/jobs` and API replicas read them from the shared state mount. This is
 why the Jobs tray and Sources rows continue to show live progress even though
 the process serving the UI never performs indexing itself.
+
+The fleet coalesces filesystem progress writes on a separate publisher. Live
+updates and final counters remain in memory immediately; a slow share cannot
+hold up a finished task. Terminal snapshots are published ahead of ordinary
+progress, and interrupted writes retry the latest snapshot.
 
 The API mount remains read-only. When a user clears a finished notification,
 the API clears its local cards and asks the authenticated indexer to remove the

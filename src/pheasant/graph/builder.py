@@ -378,6 +378,10 @@ class GraphBuilder:
         headings or entities extracted from *another memory*, or a store of
         related notes would knit itself together and call that grounding.
         """
+        if getattr(self.graph, "is_row_working_set", False):
+            from pheasant.graph.row_enrichment import memory_inputs
+
+            return memory_inputs(self, state, records)
         from pheasant.memory.bridge import BridgeInputs, normalize_label
 
         memory_sources = {str(row.get("source_id") or "") for row in records}
@@ -600,6 +604,10 @@ class GraphBuilder:
         Returns the number of cross-source edges resolved this pass.
         """
 
+        if getattr(self.graph, "is_row_working_set", False):
+            from pheasant.graph.row_enrichment import cross_source
+
+            return cross_source(self)
         ref_edges: list[tuple[str, str, str, str | None]] = []
         # Image links resolve separately (`resolve_image_edges`): they target
         # `image` nodes, which the document resolver and its WASM twin must not

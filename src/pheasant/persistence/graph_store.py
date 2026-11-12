@@ -630,9 +630,8 @@ class GraphStore:
 
         import zstandard as zstd
 
-        raw = Path(path).read_bytes()
-        text = zstd.ZstdDecompressor().decompress(raw).decode("utf-8")
-        return SimpleMultiDiGraph.from_node_link(json.loads(text))
+        with Path(path).open("rb") as raw, zstd.ZstdDecompressor().stream_reader(raw) as reader:
+            return SimpleMultiDiGraph.from_node_link(json.load(reader))
 
     def list_snapshots(self, kb_id: str) -> list[Path]:
         """All snapshot files for a KB, oldest-first (by embedded timestamp)."""

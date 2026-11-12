@@ -7,11 +7,10 @@ swung by 4x. Cooperative yielding (:mod:`pheasant.sync.pacing`) softened that;
 it could not remove it, because the work and the serving still shared one
 interpreter.
 
-So the server does not index. It runs ``python -m pheasant sync`` as a child
-process, which owns the CPU cost in its own interpreter, writes to ``/state``
-the way any other client would, and reports its result on stdout. The parent
-then reloads the graph from disk — cheap now that it is compressed — and keeps
-serving throughout.
+The server delegates indexing to a child interpreter. Fleets reuse the
+supervised ``sync.writer`` process across tasks, retaining its graph working
+set; standalone keeps the one-shot ``python -m pheasant sync`` path. Both
+report progress and results while the parent keeps serving.
 
 Nothing about correctness changes: the child takes the same single-writer
 lease (:class:`~pheasant.sync.locks.EngineLease`) the in-process path took, so
@@ -374,6 +373,16 @@ class WorkerBackedEngine:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)
 
+    def _run(self, *args: Any, **kwargs: Any) -> dict:
+        # Role-split fleets reuse a supervised interpreter across all of this
+        # process's producers. The standalone subprocess contract stays intact.
+        config = getattr(self._engine, "config", None)
+        if config is not None and config.sync.queue.enabled:
+            from pheasant.sync.writer import run
+
+            return run(*args, **kwargs)
+        return run_sync(*args, **kwargs)
+
     def _can_delegate(self) -> bool:
         """Can a child process reconstruct *this* engine from disk?
 
@@ -435,7 +444,7 @@ class WorkerBackedEngine:
                 full_scan=full_scan,
                 on_progress=_as_engine_hook(on_progress),
             )
-        report = run_sync(
+        report = self._run(
             self._config_path,
             source_name,
             mode,
@@ -454,7 +463,7 @@ class WorkerBackedEngine:
                 task,
                 on_progress=_as_engine_hook(on_progress),
             )
-        report = run_sync(
+        report = self._run(
             self._config_path,
             str(task.source_id),
             str(task.mode),
@@ -501,7 +510,7 @@ class WorkerBackedEngine:
                     self.sync_source(name, mode, max_depth=max_depth, on_progress=on_progress)
                     for name in names
                 ]
-        report = run_sync(
+        report = self._run(
             self._config_path,
             None,
             mode,

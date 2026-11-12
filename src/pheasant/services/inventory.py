@@ -53,6 +53,8 @@ ORDERS = ("path", "recent")
 ARTIFACT_SCOPE = (
     "a.type <> ? AND substr(a.source_id, 1, 2) <> '__' "
     "AND NOT EXISTS (SELECT 1 FROM removed_sources r WHERE r.source_id = a.source_id)"
+    " AND NOT EXISTS (SELECT 1 FROM archived_documents h WHERE h.source_id=a.source_id "
+    "AND h.relative_path=a.relative_path)"
 )
 
 

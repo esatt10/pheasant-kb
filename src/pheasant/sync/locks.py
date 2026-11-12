@@ -25,6 +25,13 @@ def _pid_is_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError as exc:
+        # Windows reports a PID that no longer exists as ERROR_INVALID_PARAMETER,
+        # rather than ESRCH/ProcessLookupError. A supervised writer killed
+        # between requests must be able to reclaim that dead owner's lease.
+        if getattr(exc, "winerror", None) == 87:
+            return False
+        raise
     return True
 
 

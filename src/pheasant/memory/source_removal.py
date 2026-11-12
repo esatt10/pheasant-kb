@@ -68,6 +68,21 @@ def retire_source_memories(engine: Any, source_name: str) -> dict[str, int]:
     support: dict[str, set[str]] = {}
     members: dict[str, set[str]] = {}
     graph = engine.graph_builder.graph
+    # Removing one source must not materialize the whole corpus just to read
+    # memory provenance. Only memory-origin edges participate in this rule.
+    if engine.graph_store.rows is not None and (
+        not engine._graph_loaded or getattr(graph, "is_row_working_set", False)
+    ):
+        from pheasant.graph.simple import SimpleMultiDiGraph
+
+        rows = engine.graph_store.rows
+        kb_id = engine.config.knowledge_base_id
+        edges = rows.out_edges(kb_id, list(artifact_to_record))
+        pairs = [((a, b), attrs) for group in edges.values() for a, b, attrs in group]
+        endpoints = {n for pair, _ in pairs for n in pair}
+        graph = SimpleMultiDiGraph.from_stored(
+            rows.get_nodes(kb_id, endpoints, materialized=True).items(), pairs
+        )
     with graph.reading():
         nodes = graph.node_map()
         for (origin, target), edges in graph.iter_edges():

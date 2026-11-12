@@ -22,8 +22,8 @@ two halves:
 
 :func:`apply` is the direct path for a process that writes its own index: one
 source's removal with no listing, so the document leaves search as the request
-returns. A fleet's api replica cannot do that — it publishes an incremental
-sync instead, and the indexer's sync reaches :func:`prune` on its own.
+returns. A fleet's api replica publishes a targeted ``prune_documents`` task,
+and the indexer calls this direct path without listing unrelated content.
 """
 
 from __future__ import annotations
@@ -52,7 +52,9 @@ def admit(state: Any, source_name: str, items: list[Any]) -> tuple[list[Any], li
     return [item for item in items if item.relative_path not in paths], held
 
 
-def prune(engine: Any, source_name: str, artifacts: dict[str, Any]) -> int:
+def prune(
+    engine: Any, source_name: str, artifacts: dict[str, Any], *, targeted: bool = False
+) -> int:
     """Remove what is held out of ``source_name``; return how many artifacts went.
 
     ``artifacts`` is the source's manifest map and is updated in place. Read
@@ -75,10 +77,17 @@ def prune(engine: Any, source_name: str, artifacts: dict[str, Any]) -> int:
     ids = [artifact_id for artifact_id, _, _ in gone]
     with engine._sync_mutex:
         if ids:
-            engine._ensure_persisted_graph_loaded()
+            if not targeted:
+                engine._ensure_persisted_graph_loaded()
+            else:
+                from pheasant.sync import removal
+
+                engine.checkpoint_graph()
+                removal.documents(engine, source_name, gone)
             for start in range(0, len(ids), DELETE_BATCH):
                 engine.state.delete_artifacts(ids[start : start + DELETE_BATCH])
-            engine.graph_builder.remove_vanished_artifacts(source_name, gone)
+            if not targeted:
+                engine.graph_builder.remove_vanished_artifacts(source_name, gone)
         for path in paths:
             artifacts.pop(path, None)
         _delete_uploads(engine, source_name, [r for r in held if r["kind"] == "removed"])
@@ -102,7 +111,22 @@ def apply(engine: Any, source_name: str) -> int:
     source = engine._source(source_name)
     with engine.commit_meter.busy(), engine._source_write_lock(source.name):
         manifest = engine.manifests.load(source.name)
-        removed = prune(engine, source.name, manifest.setdefault("artifacts", {}))
+        targeted = engine.graph_store.rows is not None
+        removed = prune(
+            engine, source.name, manifest.setdefault("artifacts", {}), targeted=targeted
+        )
+        if targeted:
+            if engine.vectors is not None:
+                live = {
+                    str(r["id"])
+                    for r in engine.state.rows(
+                        "SELECT id FROM chunks WHERE source_id=?", (source.name,)
+                    )
+                }
+                engine.vectors.prune_source(source.name, live)
+                engine.vectors.flush()
+            engine.manifests.save(source.name, manifest)
+            return removed
         if removed:
             engine._finalize_index_state(
                 source=source,

@@ -52,6 +52,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -92,6 +93,22 @@ SPARE_MIN_ROWS = 4096
 #: Dead rows -- removed by a delta, still occupying their slot -- past this
 #: share of a snapshot make the next refresh a full load, which compacts.
 DEAD_MAX_SHARE = 0.10
+
+
+def _available_memory(root: Path = Path("/sys/fs/cgroup")) -> int | None:
+    """Container headroom, including a reserve for requests and other threads."""
+    for limit_file, used_file in (
+        ("memory.max", "memory.current"),
+        ("memory/memory.limit_in_bytes", "memory/memory.usage_in_bytes"),
+    ):
+        try:
+            limit = int((root / limit_file).read_text().strip())
+            used = int((root / used_file).read_text().strip())
+            if 0 < limit < 2**60:
+                return max(0, limit - used - max(128 * 1024**2, limit // 10))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 class _Snapshot:
@@ -162,7 +179,8 @@ class ResidentVectors:
             _yield_cpu()
         started = time.monotonic()
         try:
-            if self._bytes_for(table) > self.max_bytes:
+            vector_bytes = self._bytes_for(table)
+            if vector_bytes > self.max_bytes:
                 self._oversized = version
                 with self._lock:
                     self._snapshot = None  # an older, smaller copy is not this table
@@ -177,6 +195,20 @@ class ResidentVectors:
             snapshot = _delta(table, version, held) if held is not None else None
             how = "updated" if snapshot is not None else "loaded"
             if snapshot is None:
+                # The configured cap bounds raw vectors, not peak RSS. A full
+                # read also holds Arrow batches, a combined column, the spare
+                # matrix, native buffers and metadata. Leave those allocations
+                # off a constrained API tier; its configured disk/ANN path can
+                # answer without risking the entire process for this cache.
+                available = _available_memory()
+                if available is not None and 6 * vector_bytes > available:
+                    self._oversized = version
+                    with self._lock:
+                        self._snapshot = None
+                    logger.info(
+                        "Resident vector reload exceeds container headroom; searching on disk"
+                    )
+                    return
                 snapshot = _full(table, version)
             with self._lock:
                 self._snapshot = snapshot

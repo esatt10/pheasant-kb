@@ -67,7 +67,7 @@ SCHEMA = schema_for(SQLITE)
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
 # 3: idx_sync_events_source. 4: idx_artifacts_source.
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 
 class StateStore:
@@ -348,8 +348,7 @@ class StateStore:
         """Run DDL once across a concurrently starting fleet.
 
         db-init, API, indexer and short-lived sync children often start
-        together. Replaying the full schema from all of them deadlocks
-        PostgreSQL catalog locks against ordinary chunk writes. The backend's
+        together. Replaying schema DDL deadlocks catalogs against chunk writes. The backend's
         advisory lock elects one migrator; the marker makes later calls cheap.
         """
 
@@ -361,6 +360,7 @@ class StateStore:
             self.conn.commit()
             version = self.rows("SELECT value FROM pheasant_schema_meta WHERE key=?", ("core",))
             required = {
+                "artifact_outbox": "revision",
                 "artifacts": "acl",
                 "index_tasks": "id",
                 "source_leases": "source_id",

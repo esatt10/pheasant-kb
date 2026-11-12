@@ -1,15 +1,7 @@
 """Artifacts the region keeps: composed files and saved reports, as knowledge.
 
-A composed SuiteScript or Terraform module, or an answer worth keeping as a
-report, used to live only in the browser tab that asked for it -- the region
-keeps no chat state, so a refresh took it away. Now every composed answer is
-kept the moment it is written, and any answer the stream kept
-(`services/answer_resume.py`) or any content a caller sends can be kept as a
-report. Keeping is opt-in: an answer is kept when somebody saves it (the
-Save buttons, ``save_artifact``, ``save: true`` on a question), or every
-composed answer when ``auto_save`` is on (`services/artifact_settings.py`). A
-whole conversation can be kept too, as a ``thread``. And kept means
-*knowledge*, not a sidecar:
+Saved files, reports and conversation threads outlive the browser session.
+Saving is explicit unless ``auto_save`` is enabled. Kept means knowledge:
 
 * **A source.** Each artifact lands, through the ordinary submission path
   (`services/ingestion.py`: receipts, idempotent placement, forwarded to the
@@ -23,12 +15,9 @@ whole conversation can be kept too, as a ``thread``. And kept means
   folder small however many people work in the region, a conversation's
   artifacts stay together, and the id makes every artifact's folder its own.
   Listings read the same way: newest day first, then person.
-* **Indexed when saved, with a schedule behind it.** Saving lands the files
-  and, with ``index_on_save`` (the default), starts the ``artifacts`` sync --
-  on a fleet a queued task for the indexer. The beat also syncs the source at
-  most every ``index_interval_seconds``, giving way while content sources sync
-  (`sync/pipeline.beat_sources`). Until the sync lands an artifact is readable
-  from its row and listed ``pending``.
+* **Indexed asynchronously on a fleet.** The row and durable projection intent
+  commit together. The writer lands and indexes the files; the row is readable
+  immediately. ``index_on_save`` and the scheduled beat control searchability.
 * **Traceable.** Each kept answer carries its trace (`services/artifact_trace.py`):
   conversation, channel, ids, keywords, intent, the judgements behind it and
   the steps it took.
@@ -63,6 +52,13 @@ from pheasant.config.schema import ARTIFACT_KINDS
 from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services import artifact_render as render
+from pheasant.services.artifact_dispatch import (
+    _defer_removal,
+    _deferred,
+    _enqueue,
+    _pacing,
+    _wake_projection,
+)
 from pheasant.services.artifact_files import INDEX_FILE, kept_visual, source_files
 from pheasant.services.artifact_scope import (  # noqa: F401 - the module's public names
     ARTIFACT_MODES,
@@ -232,23 +228,30 @@ def _store(
         "archived_at": None,
         "index_status": "pending",
     }
-    context.state.execute(
-        "INSERT INTO saved_artifacts(id, kb_id, owner, kind, title, payload_json, created_at, "
-        "updated_at, session_id, channel) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (
-            artifact_id,
-            context.config.knowledge_base_id,
-            who,
-            kind,
-            title,
-            encoded,
-            created,
-            created,
-            conversation_id,
-            channel,
-        ),
-    )
-    _publish(context, record)
+    deferred = _deferred(context)
+    with context.state.conn:
+        context.state.conn.execute(
+            "INSERT INTO saved_artifacts(id, kb_id, owner, kind, title, payload_json, created_at, "
+            "updated_at, session_id, channel) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                artifact_id,
+                context.config.knowledge_base_id,
+                who,
+                kind,
+                title,
+                encoded,
+                created,
+                created,
+                conversation_id,
+                channel,
+            ),
+        )
+        if deferred:
+            _enqueue(context, record, "publish")
+    if deferred:
+        _wake_projection(context)
+    else:
+        _publish(context, record)
     return record
 
 
@@ -259,6 +262,12 @@ def _publish(context: ServiceContext, record: dict[str, Any]) -> None:
     replica with no landing service) still has the artifact, just not yet as
     knowledge, and says so in the log.
     """
+
+    if _deferred(context):
+        with context.state.conn:
+            _enqueue(context, record, "publish")
+        _wake_projection(context)
+        return
 
     from pheasant.services import ingestion
 
@@ -325,15 +334,6 @@ def _ensure_source(context: ServiceContext, directory: str) -> None:
     ).sources[0]
     SourceRegistry(config, context.state).register_source(source)
     config.sources = [s for s in config.sources if s.name != ARTIFACTS_SOURCE] + [source]
-
-
-def _pacing(settings: Any) -> dict[str, Any]:
-    return {
-        "min_interval_seconds": int(settings.index_interval_seconds or 0) or None,
-        "yield_to_content": bool(settings.yield_to_content),
-        # A boot is not a reason to index generated work ahead of content.
-        "on_startup": False,
-    }
 
 
 def apply_pacing(context: ServiceContext) -> None:
@@ -646,18 +646,28 @@ def _remove(context: ServiceContext, folder: str, names: list[str], actor: str |
 
     from pheasant.services import archive
 
+    if _deferred(context):
+        _defer_removal(context, folder, names, actor)
+        _wake_projection(context)
+        return names
     removed: list[str] = []
-    for name in names:
-        path = f"{ARTIFACTS_SOURCE}/{folder}/{name}"
-        try:
-            archive.archive_documents(
-                context, archive.ArchiveRequest(documents=[path], actor=actor or "artifacts")
-            )
-            removed.append(name)
-        except ServiceError:
-            # Not indexed yet (an indexer has not reached it): nothing in the
-            # index to take out, and nothing is lost by moving on.
-            continue
+    paths = [f"{folder}/{name}" for name in names]
+    indexed = {
+        str(r["relative_path"])
+        for r in context.state.rows(
+            "SELECT relative_path FROM artifacts WHERE source_id=?", (ARTIFACTS_SOURCE,)
+        )
+    }
+    present = [path for path in paths if path in indexed]
+    if present:
+        archive.archive_documents(
+            context,
+            archive.ArchiveRequest(
+                documents=[f"{ARTIFACTS_SOURCE}/{path}" for path in present],
+                actor=actor or "artifacts",
+            ),
+        )
+        removed = [name for name, path in zip(names, paths, strict=True) if path in indexed]
     return removed
 
 
@@ -669,6 +679,10 @@ def delete(
     record = _load(context, artifact_id)
     folder = (record.get("payload") or {}).get("folder")
     names = [name for name, _text in source_files(record)]
+    if folder and _deferred(context):
+        _defer_removal(context, folder, names, owner(principal), artifact_id=artifact_id)
+        _wake_projection(context)
+        return {"deleted": record["id"], "title": record["title"], "removed_files": names}
     removed = _remove(context, folder, names, owner(principal)) if folder else []
     _forget(context, artifact_id)
     return {"deleted": record["id"], "title": record["title"], "removed_files": removed}

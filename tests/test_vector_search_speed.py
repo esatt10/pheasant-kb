@@ -296,6 +296,38 @@ def test_a_table_over_the_cap_is_searched_on_disk(tmp_path: Path) -> None:
     assert store._resident._snapshot is None
 
 
+def test_container_pressure_skips_full_resident_load(tmp_path, monkeypatch):
+    from pheasant.search import vector_resident
+
+    store = _store(tmp_path, resident=True)
+    raw_bytes = store._resident._bytes_for(store._table())
+    monkeypatch.setattr(vector_resident, "_available_memory", lambda: 5 * raw_bytes)
+    monkeypatch.setattr(
+        vector_resident, "_full", lambda *_: pytest.fail("unsafe resident allocation")
+    )
+    store._resident.background = False
+    assert [cid for cid, _, _ in store.search(QUERIES[2], 10)] == [
+        cid for cid, _ in _exact(store, QUERIES[2], 10)
+    ]
+    assert store._resident._snapshot is None
+    assert store._resident._oversized == int(store._table().version)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_container_headroom_accounts_for_existing_usage(tmp_path, legacy):
+    from pheasant.search.vector_resident import _available_memory
+
+    root = tmp_path / "memory" if legacy else tmp_path
+    root.mkdir(exist_ok=True)
+    (root / ("memory.limit_in_bytes" if legacy else "memory.max")).write_text(str(1024**3))
+    (root / ("memory.usage_in_bytes" if legacy else "memory.current")).write_text(
+        str(256 * 1024**2)
+    )
+    assert _available_memory(tmp_path) == (1024 - 256 - 128) * 1024**2
+    (root / ("memory.limit_in_bytes" if legacy else "memory.max")).write_text("max")
+    assert _available_memory(tmp_path) is None
+
+
 def test_growing_past_the_cap_drops_the_older_copy(tmp_path: Path) -> None:
     resident = ResidentVectors(10**9, background=False)
     store = _store(tmp_path, n=50)

@@ -246,6 +246,10 @@ def _serve_app(cfg, config_path: str, *, report_ui: bool = True, role: str | Non
                 drainer.stop()
             scheduler.stop()
             watcher.stop()
+        from pheasant.sync.writer import close as close_writers
+
+        close_writers()
+        app_obj.state.jobs.close()
         app_obj.state.engine.close()
 
 
@@ -419,24 +423,9 @@ class _OrchestrationSupervisor:
 def _durable_backlog_depth(cfg, state) -> int:
     """Pending/in-flight durable work that should outrank startup scans."""
 
-    from pheasant.sync.queue import QueueUnavailable, queue_from_config
+    from pheasant.sync.mutation_tasks import backlog_depth
 
-    queue = queue_from_config(cfg, state)
-    try:
-        depth = queue.depth() if queue is not None else {}
-    except QueueUnavailable as exc:
-        # Unknown, not empty. Proceeding is what an unreadable queue always
-        # led to here (it used to read as zeros); now it says so.
-        import logging
-
-        logging.getLogger("pheasant.cli").warning(
-            "Durable queue depth unavailable (%s); not deferring startup reconciliation", exc
-        )
-        depth = {}
-    finally:
-        if queue is not None:
-            queue.close()
-    return int(depth.get("pending", 0)) + int(depth.get("inflight", 0))
+    return backlog_depth(cfg, state)
 
 
 def _orchestration_supervisor(
@@ -507,15 +496,8 @@ def _orchestration_supervisor(
 class _QueueDrainer:
     """Claim and run index tasks for as long as this process serves.
 
-    A background thread rather than a second process: the sync it runs already
-    goes to a child through ``WorkerBackedEngine``, so the drain loop itself is
-    only waiting, and giving it its own process would buy nothing but a second
-    thing to supervise.
-
-    The loop lives here rather than in ``SyncEngine`` because it is a
-    *deployment* behavior — it exists only for the indexer role, and an engine
-    that drained a queue on its own would do it inside the CLI, the tests, and
-    every embedded caller too.
+    A background thread dispatches to the reusable writer interpreter. Queue
+    draining belongs to the indexer role, not embedded or read-only engines.
     """
 
     def __init__(self, cfg, config_path: str, *, sync_lock=None) -> None:
@@ -552,8 +534,7 @@ class _QueueDrainer:
 
         log = logging.getLogger("pheasant.cli")
         # This long-lived engine coordinates queue/state only. Each claimed
-        # task runs in an isolated child that owns graph and vector commits;
-        # eagerly loading the same graph here silently doubles peak RSS.
+        # task runs in a reusable child owning graph and vector commits.
         engine = _engine(
             Path(self.config_path),
             load_persisted_graph=False,
@@ -567,16 +548,13 @@ class _QueueDrainer:
         from pheasant.sync.worker import WorkerBackedEngine
 
         worker = WorkerBackedEngine(engine, self.config_path)
-        jobs = JobRegistry(shared_path=Path(self.cfg.pheasant.state_path) / "jobs")
+        jobs = JobRegistry(shared_path=engine.paths.state / "jobs", async_snapshots=True)
         owner = owner_id()
         visibility = float(self.cfg.sync.queue.visibility_seconds or 300)
         log.info("draining index queue as %s", owner)
         try:
             while not self._stop.is_set():
-                # A short idle timeout rather than a long block: `drain`
-                # returns when the backlog clears, and the outer loop is what
-                # notices the stop event. Blocking inside `drain` for minutes
-                # would make SIGTERM take minutes.
+
                 def handle(task):
                     job = jobs.create(
                         "sync",
@@ -614,11 +592,17 @@ class _QueueDrainer:
                     return result
 
                 def drain_once() -> None:
+                    # Durable artifact intents outrank bulk freshness scans.
+                    # Recovery does not depend on a successful broker publish.
+                    from pheasant.sync.mutation_tasks import drain_pending
+
+                    drain_pending(worker, engine, self.cfg, self._stop, log)
                     drain(
                         queue,
                         handle,
                         owner=owner,
-                        idle_timeout=2.0,
+                        idle_timeout=0.0,
+                        max_tasks=1,
                         visibility_seconds=visibility,
                     )
 
@@ -631,9 +615,11 @@ class _QueueDrainer:
                     # two child processes after the visibility timeout.
                     with self.sync_lock:
                         drain_once()
+                self._stop.wait(0.1)
         except Exception:  # noqa: BLE001 - a drainer that dies silently is worse
             log.exception("index queue drainer stopped")
         finally:
+            jobs.close()
             queue.close()
             engine.close()
 

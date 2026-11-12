@@ -1059,6 +1059,11 @@ def create_app(
         indexing=Indexing(
             local=role_policy.indexes_locally,
             start_sync=lambda name: _sync_started(*_start_background_sync(name, "incremental")),
+            remove_documents=lambda name: {
+                "queued_tasks": _publish_background_sync(
+                    [name], "incremental", task_payload={"operation": "prune_documents"}
+                )
+            },
         ),
     )
 
@@ -1226,7 +1231,9 @@ def create_app(
     # Indexer roles publish atomic progress snapshots here. API replicas mount
     # /state read-only and merge those snapshots into the same HTTP/UI surface
     # as their process-local jobs.
-    app.state.jobs = JobRegistry(shared_path=paths.state / "jobs")
+    app.state.jobs = JobRegistry(
+        shared_path=paths.state / "jobs", async_snapshots=role_policy.drains_queue
+    )
     jobs = app.state.jobs
     # The API tier sees shared progress snapshots but mounts their directory
     # read-only.  Its finished-job clear operation therefore asks the writable
