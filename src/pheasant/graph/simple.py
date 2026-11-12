@@ -152,7 +152,7 @@ class SimpleMultiDiGraph:
     def add_edge(self, source, target, **attrs):
         with self._lock:
             data = self._edges[(source, target)]
-            data[len(data)] = attrs
+            data[max(data, default=-1) + 1] = attrs
             self._edge_count += 1
             self._out.setdefault(source, {})[target] = None
             self._pending_pairs.add((source, target))

@@ -126,7 +126,7 @@ CEILINGS: dict[str, int] = {
     # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
     # kept until deleted) and its owner index; its code lives in
     # `services/artifacts.py`.
-    "persistence/schema.py": 1212,  # + region_settings, + connections
+    "persistence/schema.py": 1224,  # + durable artifact projection outbox (DDL only)
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.

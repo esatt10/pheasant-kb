@@ -141,6 +141,11 @@ class JobSnapshotStore:
         return _refresh_snapshot(payload)
 
     def _evict(self) -> None:
+        # Counting directory entries does not require opening every snapshot.
+        # On a network share, rereading all jobs after every progress update
+        # cost more than the mutation that produced the progress.
+        if sum(1 for _ in self.path.glob("*.json")) <= self.max_records:
+            return
         records = self.list()
         if len(records) <= self.max_records:
             return

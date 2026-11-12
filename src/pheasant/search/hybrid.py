@@ -389,6 +389,16 @@ class HybridSearch:
         text_results = collected.get("text", [])
         graph_results = collected.get("graph", [])
         vector_results = collected.get("vector", [])
+        from pheasant.persistence.visibility import admit
+
+        # Tombstones are effective at acknowledgment, before physical cleanup.
+        # Batch all arms once so a paused indexer cannot serve removed content.
+        counts = (len(text_results), len(graph_results))
+        all_hits = text_results + graph_results + vector_results
+        admitted = {id(hit) for hit in admit(self.store.state, all_hits)}
+        text_results = [h for h in all_hits[: counts[0]] if id(h) in admitted]
+        graph_results = [h for h in all_hits[counts[0] : sum(counts)] if id(h) in admitted]
+        vector_results = [h for h in all_hits[sum(counts) :] if id(h) in admitted]
 
         if stages is not None:
             # Before any filter runs: this is what each arm could actually

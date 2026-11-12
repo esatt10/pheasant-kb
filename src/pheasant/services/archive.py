@@ -71,6 +71,7 @@ class Indexing:
 
     local: bool
     start_sync: Callable[[str], dict[str, Any]]
+    remove_documents: Callable[[str], dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -248,7 +249,8 @@ def archived_documents(context: ServiceContext, request: ArchivedRequest) -> dic
 def _apply_removal(context: ServiceContext, source_name: str) -> dict[str, Any]:
     indexing = _indexing(context)
     if not indexing.local:
-        return {**indexing.start_sync(source_name), "status": "removal_queued"}
+        remove = indexing.remove_documents or indexing.start_sync
+        return {**remove(source_name), "status": "removal_queued"}
     from pheasant.sync import archived as archived_step
 
     try:

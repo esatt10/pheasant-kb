@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 #: Copied in dependency order: a row whose foreign key is not yet present would
 #: be rejected. ``chunks_fts`` is rebuilt from ``chunks``, never copied.
 TABLE_ORDER = (
+    "artifact_outbox",
     "knowledge_bases",
     "sources",
     # A UI removal's tombstone. Dropping it would bring every source the user

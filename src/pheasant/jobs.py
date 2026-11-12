@@ -396,31 +396,27 @@ class JobRegistry:
         max_records: int = DEFAULT_MAX_RECORDS,
         *,
         shared_path: str | Path | None = None,
+        async_snapshots: bool = False,
     ) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._max_records = max_records
         self._subscribers: list[Queue] = []
-        self._shared = JobSnapshotStore(shared_path, max_records) if shared_path else None
-        if self._shared is not None:
-            beat = threading.Thread(target=self._heartbeat, name="pheasant-job-heartbeat")
-            beat.daemon = True
-            beat.start()
+        from pheasant.job_publication import configure
 
-    def _heartbeat(self) -> None:
-        """Keep this process's running snapshots fresh, and fail the orphaned ones."""
+        configure(
+            self,
+            JobSnapshotStore(shared_path, max_records) if shared_path else None,
+            async_snapshots,
+            SNAPSHOT_HEARTBEAT_SECONDS,
+            TERMINAL,
+        )
 
-        while True:
-            time.sleep(SNAPSHOT_HEARTBEAT_SECONDS)
-            with self._lock:
-                running = [job for job in self._jobs.values() if job.status not in TERMINAL]
-            for job in running:
-                self._publish(job)
-            try:
-                self._shared.reap_stale({job.id for job in running})  # type: ignore[union-attr]
-            except Exception:  # noqa: BLE001 - observability must never stop a process
-                logger.debug("could not reap stale job snapshots", exc_info=True)
+    def close(self) -> None:
+        self._closed.set()
+        if self._publisher is not None:
+            self._publisher.close()
 
     # -- lifecycle --------------------------------------------------------
 
@@ -725,6 +721,8 @@ class JobRegistry:
                     removed_ids.add(candidate)
             if removed_ids:
                 self._order = [candidate for candidate in self._order if candidate in self._jobs]
+            if self._publisher is not None:
+                self._publisher.discard(removed_ids)
         if self._shared is not None:
             removed_ids.update(self._shared.clear_finished(job_id))
         return len(removed_ids)
@@ -760,18 +758,18 @@ class JobRegistry:
                 return items
 
     def _publish(self, job: Job) -> None:
-        # Serialized **under** the lock. `snapshot = job` in the callers above
-        # is a reference, not a copy, so the job keeps mutating while it is
-        # being rendered: `as_dict` walks `job.sources` and `job.log`, both of
-        # which the indexing thread writes to on every artifact. That is a
-        # torn payload at best and `RuntimeError: dictionary changed size
-        # during iteration` — raised from inside a progress callback, on the
-        # sync path — at worst. Every call site releases the lock before
-        # calling this, so taking it here cannot deadlock.
+        # Freeze the live job under the registry lock. Queueing persistence
+        # here also preserves the order of progress and terminal snapshots.
         with self._lock:
+            if job.id not in self._jobs:
+                return
             payload = job.as_dict()
             subscribers = list(self._subscribers)
-        if self._shared is not None:
+            if self._publisher is not None:
+                # Enqueue under the registry lock so a delayed progress thread
+                # cannot overwrite a newer terminal snapshot out of order.
+                self._publisher.submit(payload)
+        if self._shared is not None and self._publisher is None:
             try:
                 self._shared.write(payload)
             except OSError:

@@ -52,6 +52,11 @@ def snapshot_after_sync(engine: Any) -> None:
     storage = engine.config.storage
     if not storage.graph_snapshots:
         return
+    if getattr(engine, "_row_working_set", False) and storage.graph_snapshot_interval_seconds > 0:
+        from pheasant.sync.history_publisher import request
+
+        request(engine)
+        return
     kb_id = engine.config.knowledge_base_id
     try:
         now = utc_now()

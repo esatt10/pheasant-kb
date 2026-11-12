@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS saved_artifacts (
   archived_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_saved_artifacts_owner ON saved_artifacts(kb_id, owner, created_at);
+-- Durable file projections. Coalesced per folder; acknowledgment never waits
+-- for the writing tier to wake. Retried by the single indexer after a crash.
+CREATE TABLE IF NOT EXISTS artifact_outbox (
+  kb_id TEXT NOT NULL,
+  folder TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_error TEXT,
+  PRIMARY KEY (kb_id, folder)
+);
 -- Settings a running region changes for every replica at once, laid over the
 -- config's defaults (`services/artifact_settings.py`): one row per section.
 CREATE TABLE IF NOT EXISTS region_settings (
@@ -950,12 +962,9 @@ CREATE TABLE IF NOT EXISTS graph_edges (
 -- scan of the edge table -- the O(edges) cost this whole change exists to take
 -- off the sync path.
 CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(kb_id, target);
--- Two more looked obviously useful and are deliberately absent: one on
--- `graph_edges(source_id)` and one on `graph_nodes(artifact_id)`. Nothing
--- reads either -- per-source deletion goes through the node table and
--- cascades by endpoint -- and at 630k edges they measured 190MB of the
--- database between them. An index with no reader is the storage version of a
--- config flag with no reader: it looks like the mechanism, and it is not.
+-- graph_edges(source_id) remains unindexed: source removal cascades by node
+-- endpoint. Targeted document removal uses graph_nodes(artifact_id); its
+-- partial lookup index is installed once by derived_indexes.py on upgrades too.
 -- One row per knowledge base: the publication record the graph file used to
 -- keep in a JSON sidecar. `node_fold`/`edge_fold` are the XOR aggregates the
 -- generation id is derived from, persisted rather than recomputed so a restart

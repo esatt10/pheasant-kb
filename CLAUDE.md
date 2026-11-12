@@ -241,7 +241,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 204 pytest modules, offline by design
+└── tests/                     ← 209 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -631,7 +631,8 @@ connector that remembers "unchanged" (Drive, web validators) re-reads it. An
 upload is `removed`, not `archived`: the indexer deletes its bytes from the
 landing zone and drops the row, and reinstating it is refused. A name must
 match one document (`AMBIGUOUS_DOCUMENT`). An api replica writes the row and
-publishes an incremental sync; the indexer's sync prunes it
+publishes a targeted `prune_documents` task; the indexer removes only the
+affected rows and incident edges, without loading or enriching the corpus
 (`ServiceContext.indexing` says which).
 
 **A pasted target never replaces a different source**
@@ -703,9 +704,11 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   nothing to do. The whole-file backend still needs all of it, and still has
   it.
 - **Snapshots stay files.** History is read whole or not at all and is
-  interval-gated rather than per-commit, so materializing one from rows at
-  O(N) is the right cost in the right place — and it keeps a snapshot the same
-  document whichever backend produced it.
+  interval-gated rather than per-commit. A row-backed fleet writer requests
+  history on a separate publisher (`sync/history_publisher.py`), streamed from
+  one read-only transaction (`persistence/snapshot_stream.py`; repeatable-read
+  on PostgreSQL). It cannot block task completion or publish a partial file.
+  Interval zero and standalone/file-backed history retain inline behavior.
 - **What did not change.** Artifacts and chunks were already rows and are
   untouched; they are the model this followed. Vectors stay in LanceDB, which
   is columnar and append-incremental and never had the whole-file-rewrite
@@ -825,18 +828,16 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   and where replicas exist. A standalone SQLite container serving heavily
   concurrent *graph* queries is the one shape that is worse off than before,
   and `storage.graph_format: node_link_json` is still there for it.
-- **The prerequisite for dropping the working set is batching, and Postgres
-  sets the bar.** The builder does a read-modify-write per node (`upsert_node`
-  reads `created_at`, `upsert_edge` reads the existing edge). Against rows
-  that is a point lookup: **8.2µs batched / 13.1µs each on SQLite** (630k of
-  them ≈ 5–8s, about 2% of a full index) but **46.5µs batched / 456µs each on
-  Postgres** — a socket round trip is 35× an in-process one, so the same 630k
-  is 29s batched and **287s unbatched**. Batching is therefore the whole
-  feasibility argument, not an optimization, and the fleet is exactly where
-  Postgres runs. The only irreducibly global structure left is cross-source
-  resolution's `by_path` index — every artifact path in the region, because a
-  reference resolves only once both sources are indexed — and that is ~15% of
-  nodes held for one pass rather than for the process.
+- **The fleet writer no longer needs the resident corpus.** Its supervised
+  interpreter uses `graph/working_set.py`: lazy node and pair reads, a tracked
+  delta, and clean-cache release between tasks. `graph/reference_catalog.py`
+  retains compact path/spec metadata and resolves only affected referrers
+  against the full path set; adding a late target still repairs earlier links.
+  `graph/row_enrichment.py` reads memory bridge inputs from rows. An external
+  generation invalidates these caches; a failed result discards the child.
+  Standalone and file-backed engines retain the resident path. Batching still
+  matters: the measured PostgreSQL point-read cost was 456µs versus 46.5µs
+  batched, so resolved pairs are fetched together.
 
 ### Retrieval
 
@@ -1425,8 +1426,12 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   Artifacts tab). Every composed answer is saved as a `files` artifact in
   `services.assistant.answer`, so HTTP, the stream and MCP keep the same one;
   any answer the stream kept, or any content, is saved as a `report`. Each
-  lands through `services.ingestion.submit` in the `artifacts` source (a
-  landing-zone `document_folder`, registered like the drop zone's) at
+  lands in the `artifacts` source (standalone uses `services.ingestion.submit`;
+  a fleet commits `artifact_outbox` with the saved row and its reusable writer
+  projects the files asynchronously). Saves do not wait for a sleeping indexer.
+  Row-backed removals use `sync/removal.py`'s targeted deltas and retrieval
+  honors tombstones while cleanup is pending. The source is a
+  landing-zone `document_folder`, registered like the drop zone's, at
   `<owner>/<yyyy>/<mm>/<title>--<id>/`: its files, a `README.md` whose Sources
   link every cited document by path -- the Markdown pass and cross-source
   resolution make those `references` edges, so the compose's evidence *is*

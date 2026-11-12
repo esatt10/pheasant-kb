@@ -95,6 +95,14 @@ An artifact is readable the moment it is saved. It becomes searchable once the
 (**Index right after saving**); until then the list marks it
 **not indexed yet**.
 
+On a fleet, saving commits the artifact and a durable file-publication intent
+in one database transaction. The response does not wait for the indexer to
+wake, accept files, embed them or update the graph. The indexer retries pending
+intents after a restart, and batches file removals for an artifact. Deleting
+an artifact excludes its documents from retrieval immediately; physical file,
+vector and graph cleanup follows on the writer. Saving, searchability and
+physical cleanup are separate milestones.
+
 ## Remove artifacts
 
 | To remove | Do |

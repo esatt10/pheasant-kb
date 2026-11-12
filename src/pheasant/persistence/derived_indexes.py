@@ -24,6 +24,8 @@ def migrate_derived_indexes(store: Any) -> None:
 
     _artifact_terms_node_lookup(store)
     _graph_edges_hierarchy(store)
+    _graph_artifact_lookup(store)
+    _source_mutation_lookup(store)
 
 
 def _applied(store: Any, marker: str) -> bool:
@@ -38,6 +40,23 @@ def _record(store: Any, marker: str) -> None:
         (marker, "1", datetime.now(UTC).isoformat()),
     )
     store.conn.commit()
+
+
+def _source_mutation_lookup(store: Any) -> None:
+    """Source cleanup must not scan every other source's content.
+
+    Artifact-id indexes do not serve source-id predicates. PostgreSQL also
+    does not automatically index foreign keys. The missing indexes left
+    targeted source removals scanning the entire chunks and terms tables.
+    """
+    marker = "source_mutation_lookup_v1"
+    if _applied(store, marker):
+        return
+    for table in ("chunks", "symbols", "artifact_terms", "memory_records"):
+        store.conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_source_id ON {table}(source_id)"
+        )
+    _record(store, marker)
 
 
 def _artifact_terms_node_lookup(store: Any) -> None:
@@ -80,5 +99,17 @@ def _graph_edges_hierarchy(store: Any) -> None:
     store.conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_graph_edges_hierarchy "
         f"ON graph_edges(kb_id, source, target) WHERE type = '{HIERARCHY_EDGE_TYPE}'"
+    )
+    _record(store, marker)
+
+
+def _graph_artifact_lookup(store: Any) -> None:
+    """Targeted document deletion now reads this formerly-unused column."""
+    marker = "graph_artifact_lookup_v1"
+    if _applied(store, marker):
+        return
+    store.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_graph_nodes_artifact "
+        "ON graph_nodes(kb_id,artifact_id) WHERE artifact_id IS NOT NULL"
     )
     _record(store, marker)

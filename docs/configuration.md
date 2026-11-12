@@ -438,6 +438,12 @@ unchanged either way.
 | `retention.keep_snapshots` | integer | `10` (example) | Snapshot retention count target. |
 | `retention.keep_event_days` | integer | `30` (example) | Event retention age target in days. |
 
+Row-backed fleet writers publish interval-based graph history in the background
+from a consistent read-only database view. Partial exports are never published;
+the previous snapshot survives interruption. Setting `graph_snapshot_interval_seconds` to
+`0` retains inline snapshots after each sync. Standalone and file-backed history
+retain their existing synchronous behavior.
+
 > Notes:
 > - If `sqlite_path`, `graph_path`, or `manifest_path` are omitted, they are derived from `pheasant.state_path`.
 

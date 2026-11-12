@@ -17,6 +17,28 @@ from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
 
 
+def test_restarted_row_writer_keeps_unchanged_generation(loaded_config):
+    loaded_config.storage.graph_snapshots = False
+    engine = SyncEngine(loaded_config, defer_persisted_graph_load=True)
+    try:
+        engine.sync_source("architecture-notes", "incremental")
+        before = engine.graph_store.published_generation(loaded_config.knowledge_base_id)
+    finally:
+        engine.close()
+    restarted = SyncEngine(loaded_config, defer_persisted_graph_load=True)
+    try:
+        result = restarted.sync_source("architecture-notes", "incremental")
+        assert result.indexed_artifacts == 0
+        assert (
+            restarted.graph_store.published_generation(loaded_config.knowledge_base_id)[
+                "generation_id"
+            ]
+            == before["generation_id"]
+        )
+    finally:
+        restarted.close()
+
+
 def test_configured_upload_source_keeps_zip_index_across_restart(tmp_path: Path) -> None:
     state_path = tmp_path / "state"
     upload_dir = state_path / "uploads" / "uploads"

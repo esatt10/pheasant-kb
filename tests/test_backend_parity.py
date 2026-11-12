@@ -193,6 +193,45 @@ def _reset(dsn: str) -> None:
         conn.execute("CREATE SCHEMA public")
 
 
+@postgres
+def test_cold_row_writer_preserves_resident_enrichment_on_postgres(tmp_path, monkeypatch):
+    from tests.test_row_writer import _content
+
+    _reset(DSN)
+    workspace = _corpus(tmp_path)
+    sqlite = SyncEngine(_config(tmp_path, workspace, "sqlite"))
+    pg = SyncEngine(_config(tmp_path, workspace, "postgres"), defer_persisted_graph_load=True)
+    monkeypatch.setattr(pg.graph_store, "load", lambda *_: pytest.fail("whole graph loaded"))
+    try:
+        for engine in (sqlite, pg):
+            engine.sync_source("docs", "incremental")
+        assert _content(pg) == _content(sqlite)
+        (workspace / "runbook.md").write_text("# Updated Runbook\n\nSee [billing](billing.md).\n")
+        for engine in (sqlite, pg):
+            engine.sync_source("docs", "incremental")
+        assert _content(pg) == _content(sqlite)
+        before = pg.graph_store.published_generation("parity")["generation_id"]
+        pg.reload_graph()
+        assert pg.sync_source("docs", "incremental").indexed_artifacts == 0
+        assert pg.graph_store.published_generation("parity")["generation_id"] == before
+    finally:
+        sqlite.close()
+        pg.close()
+
+
+@postgres
+def test_streamed_postgres_snapshot_pins_one_generation(tmp_path, monkeypatch):
+    from tests.test_snapshot_stream import assert_snapshot_consistency
+
+    _reset(DSN)
+    workspace = _corpus(tmp_path)
+    engine = SyncEngine(_config(tmp_path, workspace, "postgres"), defer_persisted_graph_load=True)
+    try:
+        assert_snapshot_consistency(engine, monkeypatch)
+    finally:
+        engine.close()
+
+
 @pytest.fixture()
 def both(tmp_path: Path) -> dict[str, dict[str, Any]]:
     _reset(DSN)

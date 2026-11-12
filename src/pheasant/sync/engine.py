@@ -4,7 +4,6 @@ import inspect
 import json
 import logging
 import os
-import shutil
 import threading
 import time
 from collections import deque
@@ -23,7 +22,6 @@ from pheasant.graph.builder import GraphBuilder
 from pheasant.ingestion.captioner import captioner_from_config, source_includes_images
 from pheasant.ingestion.content_types import DOCUMENT_EXTENSIONS
 from pheasant.ingestion.extractor import extractor_from_config, source_includes_documents
-from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.ingestion.media import media_store_for_config, stored_suffix
 from pheasant.ingestion.pipeline import (
     git_state,
@@ -38,7 +36,6 @@ from pheasant.ingestion.walk import (
     aggregate_depth_counts,
     walk_source,
 )
-from pheasant.memory.source_removal import reconcile_after_source_removal, retire_source_memories
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
@@ -258,6 +255,11 @@ class SyncEngine:
         self.graph_store.on_publish = self._on_graph_published
         self.graph_builder = GraphBuilder(config)
         self._loads_persisted_graph = bool(load_persisted_graph)
+        self._row_working_set = bool(
+            load_persisted_graph
+            and defer_persisted_graph_load
+            and self.graph_store.rows is not None
+        )
         self._graph_loaded = not self._loads_persisted_graph
         #: Which published generation this process is actually serving, or
         #: None for a process that holds no graph. "Stale" was previously
@@ -341,6 +343,9 @@ class SyncEngine:
             except Exception as exc:  # pragma: no cover - shutdown must not raise
                 logger.warning("Could not flush vector store on shutdown: %s", exc)
         self.lease.release()
+        from pheasant.sync.history_publisher import close as close_history
+
+        close_history(self)
         try:
             self._graph_notifier.close()
         except Exception as exc:  # pragma: no cover - shutdown must not raise
@@ -388,6 +393,9 @@ class SyncEngine:
         one assignment.
         """
 
+        if self._row_working_set:
+            self._reset_row_working_set()
+            return self.graph_store.counts(self.config.knowledge_base_id)[0]
         if not self._loads_persisted_graph:
             # Nothing private to reload. On the row backend that is the normal
             # case for a serving replica — it reads the graph out of the shared
@@ -520,12 +528,28 @@ class SyncEngine:
         with self._sync_mutex:
             if self._graph_loaded:
                 return
+            if self._row_working_set:
+                self._reset_row_working_set()
+                return
             loaded = self.graph_store.load(self.config.knowledge_base_id)
             if len(loaded):
                 self.graph_builder.graph = loaded
                 loaded.take_index_delta()
             self._graph_loaded = True
             self._note_loaded_generation()
+
+    def _reset_row_working_set(self) -> None:
+        from pheasant.graph.working_set import RowWorkingSet
+
+        self.graph_builder.graph = RowWorkingSet(
+            self.graph_store.rows, self.config.knowledge_base_id
+        )
+        self.graph_builder.upsert_node(
+            self.config.knowledge_base_id, "knowledge_base", self.config.knowledge_base_id, {}
+        )
+        self.graph_builder._detached.clear()
+        self._graph_loaded = True
+        self._note_loaded_generation()
 
     def _graph_counts(self) -> tuple[int, int]:
         if self._graph_loaded or not self._loads_persisted_graph:
@@ -1740,6 +1764,11 @@ class SyncEngine:
                 pending_enrich = bool(self.state.get_fingerprint(dirty_scope))
                 if indexed or mode == "full" or pending_enrich:
                     report("enriching", total_items, total_items, "linking the graph")
+                    if self._row_working_set:
+                        # The row-backed passes read committed path/reference
+                        # catalogs. Persist this batch's delta first, without
+                        # advancing its manifest ahead of successful enrichment.
+                        self.checkpoint_graph()
                     self.graph_builder.add_similarity_edges(
                         source.name,
                         changed_ids=None if mode == "full" else changed_ids,
@@ -1802,6 +1831,10 @@ class SyncEngine:
         self, task: Any, *, on_progress: ProgressHook | None = None
     ) -> SyncResult:
         operation = str((getattr(task, "payload", None) or {}).get("operation") or "")
+        if operation in {"project_artifacts", "prune_documents"}:
+            from pheasant.sync.mutation_tasks import apply
+
+            return apply(self, task, on_progress)
         if operation == "delete_source":
             return self.remove_source(str(task.source_id), on_progress=on_progress)
         if operation == "replace_source":
@@ -1851,47 +1884,9 @@ class SyncEngine:
     def remove_source(
         self, source_name: str, *, on_progress: ProgressHook | None = None
     ) -> SyncResult:
-        """Remove one source through the graph's single-writer publication path."""
+        from pheasant.sync.removal import apply_source
 
-        report = _progress_reporter(on_progress, source_name)
-        report("claimed", 0, 1, f"removing {source_name}")
-        with self._source_write_lock(source_name):
-            with self._sync_mutex:
-                registered_source = self.state.get_source(source_name)
-                uploaded_files = (
-                    owned_upload_directory(
-                        self.paths.state,
-                        str(registered_source["name"]),
-                        str(registered_source["type"]),
-                        str(registered_source["path"]),
-                    )
-                    if registered_source
-                    else None
-                )
-                self._ensure_persisted_graph_loaded()
-                retire_source_memories(self, source_name)
-                self.graph_builder.remove_source_content(source_name)
-                self.flush_node_index()
-                # Publish graph removal before deleting the registry entry. If
-                # killed here, redelivery is idempotent and completes cleanup.
-                self.graph_store.save(
-                    self.config.knowledge_base_id,
-                    self.graph_builder.graph,
-                )
-                # Prune vectors after graph publication so retries finish cleanup.
-                if self.vectors is not None:
-                    self.vectors.prune_source(source_name, set())
-                    self.vectors.flush()
-                # Delete only upload-owned bytes; leave ordinary source files.
-                if uploaded_files is not None and uploaded_files.exists():
-                    shutil.rmtree(uploaded_files)
-                self.manifests.delete(source_name)
-                self.state.delete_source(source_name)
-                self.config.sources = [s for s in self.config.sources if s.name != source_name]
-        reconcile_after_source_removal(self, source_name)
-        nodes, edges = self._graph_counts()
-        report("saving", 1, 1, f"removed {source_name}")
-        return SyncResult(source_name, 0, 0, nodes, edges, "removed")
+        return apply_source(self, source_name, on_progress)
 
     def replace_source(
         self,

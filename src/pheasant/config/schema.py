@@ -310,9 +310,9 @@ class StorageSettings(ModelMixin):
     """On-disk state layout + graph snapshot/retention policy (Synapse 21.6A).
 
     - ``graph_snapshots`` toggles zstd-compressed timestamped graph snapshots
-      written after a successful sync. Defaults **on** — a snapshot is additive
-      history beside the (unchanged) ``graph.latest.json`` and is bounded by the
-      retention cap below, so standalone behavior stays sane.
+      requested after a successful sync. Row-backed fleet writers stream interval
+      snapshots in the background; interval zero and standalone stay inline.
+      Defaults **on**, with additive history bounded by the retention cap below.
     - ``graph_snapshot_interval_seconds`` is the minimum spacing between
       snapshots; syncs closer together than this reuse the most recent snapshot.
     - ``compression`` selects the snapshot codec (``zstd`` only, for now).

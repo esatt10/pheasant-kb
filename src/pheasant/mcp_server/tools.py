@@ -131,7 +131,11 @@ class PheasantTools(
             graph=self.graph,
             engine=self.engine,
             # A remote graph means another process indexes: publish, as HTTP does.
-            indexing=Indexing(local=not self._remote_graph, start_sync=self._sync_for_archive),
+            indexing=Indexing(
+                local=not self._remote_graph,
+                start_sync=self._sync_for_archive,
+                remove_documents=self._remove_documents,
+            ),
             # Left to the context's config-derived fallback on purpose. The MCP
             # server has no role of its own — it is mounted inside whatever
             # process serves it, and the `--role api` that makes that process a
@@ -156,37 +160,15 @@ class PheasantTools(
         mode: str,
         max_depth: int | None = None,
         full_scan: bool = False,
+        operation: str | None = None,
     ) -> dict:
-        """Route fleet MCP writes through the same durable queue as HTTP."""
+        from pheasant.mcp_server.sync_dispatch import publish
 
-        from pheasant.sync.queue import IndexTask, queue_from_config
+        return publish(self.config, self.state, source_name, mode, max_depth, full_scan, operation)
 
-        payload = {
-            "max_depth": max_depth,
-            "full_scan": bool(full_scan),
-            "source_config": SourceRegistry(self.config, self.state).config_digest(source_name),
-        }
-        digest = hashlib.sha256(
-            (
-                f"{self.config.knowledge_base_id}\0{source_name}\0{mode}\0"
-                + json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            ).encode()
-        ).hexdigest()[:24]
-        task = IndexTask(
-            id=f"idx-{digest}",
-            source_id=source_name,
-            mode=mode,
-            payload=payload,
-            max_attempts=max(1, int(self.config.sync.queue.max_attempts or 1)),
-        )
-        queue = queue_from_config(self.config, self.state)
-        if queue is None:
-            raise RuntimeError("remote graph fleet needs an enabled sync queue")
-        try:
-            queue.publish(task)
-        finally:
-            queue.close()
-        return {"source_id": source_name, "status": "queued", "task_id": task.id}
+    def _remove_documents(self, source_name: str) -> dict:
+        task = self._publish_sync(source_name, "incremental", operation="prune_documents")
+        return {"status": "queued", "queued_tasks": [task["task_id"]]}
 
     def list_knowledge_bases(self) -> dict:
         return {"knowledge_bases": KnowledgeBaseRegistry(self.state).list()}
