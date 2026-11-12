@@ -92,3 +92,86 @@ observed regressions; the final measurements below supersede that candidate.
 
 These suites overlap; their counts should not be added. Cloud and local timing
 results below are integration probes against the actual deployed image.
+
+## Final deployed-image results
+
+The final local run completed five artifact samples and its source probe. The
+first sample after rollout completed projection in 2.565 s and positive retrieval
+in 2.655 s. The remaining four samples were:
+
+| Warm local metric | Median | Range |
+| --- | ---: | ---: |
+| Full projection completion | 0.924 s | 0.521–0.968 s |
+| Positive retrieval verified | 1.008 s | 0.601–1.039 s |
+| Save acknowledgement | 0.045 s | 0.026–0.086 s |
+| Delete acknowledgement | 0.028 s | 0.014–0.038 s |
+| Retrieval exclusion verified after delete | 0.121 s | 0.080–0.209 s |
+| Physical artifact cleanup after delete | 0.276 s | 0.183–0.586 s |
+
+Local source deletion acknowledged in 0.039 s and physical cleanup completed in
+0.655 s. The earlier local baseline only measured indexed status, so it is not
+an equivalent full-projection baseline. The intermediate final-code run before
+the broker notification completed warm projection in 1.531–2.521 s; removing the
+idle claim wait improved that final part of the path further.
+
+A complete captured Azure run produced three artifact samples and its source
+probe, with the writer already warm:
+
+| Warm Azure metric | Median | Range |
+| --- | ---: | ---: |
+| Full projection completion | 2.683 s | 2.615–4.050 s |
+| Positive retrieval verified | 2.734 s | 2.665–5.385 s |
+| Save acknowledgement | 0.035 s | 0.027–0.177 s |
+| Delete acknowledgement | 0.033 s | 0.028–0.045 s |
+| Retrieval exclusion verified after delete | 0.118 s | 0.111–0.338 s |
+| Physical artifact cleanup after delete | 0.325 s | 0.279–0.393 s |
+
+Azure source deletion acknowledged in 0.075 s and physical cleanup completed in
+2.049 s. The equivalent warm full-projection median improved from 7.023 s to
+2.683 s: **61.8% lower latency, about 2.62× faster**. Positive retrieval was not
+measured in that earlier baseline and is not included in that percentage.
+
+The first completed Azure sample immediately after rollout took **38.309 s**
+for full projection and **40.744 s** for positive retrieval. Its cold enrichment
+span was 29.341 s, versus roughly 0.4–0.5 s for warm enrichment; compact metadata
+still requires first-use work. Embedding also cost about 0.5 s per warm sync.
+Earlier interactive exec sessions ended without complete summaries, and one
+recorded a 5.36 s exclusion check. Those partial sessions are diagnostic evidence,
+not additional complete cohorts. Capturing output inside the container produced
+the complete Azure run above. The Azure exec control plane also returned HTTP
+429 during repeated diagnostics; further probes were stopped to let it recover.
+
+The local target is approximately reached for these small warm artifacts.
+Azure remains above one second, and cold starts remain substantially slower.
+This implementation must **not** be described as one-second end-to-end indexing.
+
+## Deployment
+
+PR: [#143 — Reduce artifact and source mutation latency (1.1.0)](https://github.com/esatt10/pheasant-kb/pull/143),
+with `/release minor` selected. The PR is open for review; no merge or stable
+package publication is implied.
+
+All local application containers (API, graph, indexer, logger and four workers)
+were verified healthy on the same immutable image as all Azure application
+tiers:
+
+```text
+acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:f791431a61f0b88498edfab3fa7988007dc2d41b013fdbe761acdf77a3f160ca
+```
+
+The registry tag is `1.1.0-row-writer-rc6`; the running configurations pin the
+digest. This image contains the final runtime code. Subsequent report/document
+updates do not change that code.
+
+| Azure application | Latest and ready revision |
+| --- | --- |
+| API | `pheasant-kb--0000059` |
+| Indexer | `pheasant-indexer--0000054` |
+| Graph | `pheasant-graph--0000052` |
+| Logger | `pheasant-logger--0000052` |
+| Worker | `pheasant-worker--0000044` |
+
+Each image patch asserted that the complete Azure scaling configuration was
+unchanged. Local PostgreSQL/NATS and all data volumes were retained. Local probe
+cleanup was verified with zero saved probes, probe sources or pending outbox
+records. Azure cleanup is checked separately after interrupted exec sessions.
