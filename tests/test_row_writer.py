@@ -19,6 +19,7 @@ def _config(root: Path, workspace: Path) -> PheasantConfig:
                 "name": "parity",
                 "state_path": str(root),
                 "workspace_root": str(workspace),
+                "exports_path": str(root / "exports"),
             },
             "storage": {"graph_snapshots": False},
             "sources": [

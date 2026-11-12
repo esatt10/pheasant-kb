@@ -395,7 +395,9 @@ class HybridSearch:
         # Batch all arms once so a paused indexer cannot serve removed content.
         counts = (len(text_results), len(graph_results))
         all_hits = text_results + graph_results + vector_results
-        admitted = {id(hit) for hit in admit(self.store.state, all_hits)}
+        state = getattr(self.store, "state", None)
+        visible = admit(state, all_hits) if state is not None else all_hits
+        admitted = {id(hit) for hit in visible}
         text_results = [h for h in all_hits[: counts[0]] if id(h) in admitted]
         graph_results = [h for h in all_hits[counts[0] : sum(counts)] if id(h) in admitted]
         vector_results = [h for h in all_hits[sum(counts) :] if id(h) in admitted]

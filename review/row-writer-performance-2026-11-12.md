@@ -145,7 +145,14 @@ The local target is approximately reached for these small warm artifacts.
 Azure remains above one second, and cold starts remain substantially slower.
 This implementation must **not** be described as one-second end-to-end indexing.
 
-## Deployment
+Five additional public HTTPS probes all passed. Creation to positive retrieval
+had a 2.191 s median (1.272–2.528 s); delete acknowledgement took 0.202–0.230 s,
+and exclusion was verified within 0.639 s. This public check measures retrieval
+without the internal outbox barrier. Final SQL verification through the indexer
+found zero saved probes, probe sources or pending projection intents. The new
+background history snapshot was present on the Azure share.
+
+## Measured deployment
 
 PR: [#143 — Reduce artifact and source mutation latency (1.1.0)](https://github.com/esatt10/pheasant-kb/pull/143),
 with `/release minor` selected. The PR is open for review; no merge or stable
@@ -160,8 +167,12 @@ acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:f791431a61f0b88498edfab3fa798
 ```
 
 The registry tag is `1.1.0-row-writer-rc6`; the running configurations pin the
-digest. This image contains the final runtime code. Subsequent report/document
-updates do not change that code.
+digest. This image contains the runtime used for the measurements above.
+The full CI matrix subsequently caught a compatibility issue for stateless
+search adapters, an absolute export path in two new test fixtures, and a stale
+test-module count. The follow-up preserves the persisted-store tombstone path,
+isolates fixture exports, and corrects the count. The PR description records
+the final replacement image digest and revisions after that correction.
 
 | Azure application | Latest and ready revision |
 | --- | --- |
@@ -174,4 +185,4 @@ updates do not change that code.
 Each image patch asserted that the complete Azure scaling configuration was
 unchanged. Local PostgreSQL/NATS and all data volumes were retained. Local probe
 cleanup was verified with zero saved probes, probe sources or pending outbox
-records. Azure cleanup is checked separately after interrupted exec sessions.
+records. Final Azure SQL verification also found zero of all three.
