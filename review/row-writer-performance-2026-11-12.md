@@ -186,3 +186,21 @@ Each image patch asserted that the complete Azure scaling configuration was
 unchanged. Local PostgreSQL/NATS and all data volumes were retained. Local probe
 cleanup was verified with zero saved probes, probe sources or pending outbox
 records. Final Azure SQL verification also found zero of all three.
+
+## API memory pressure found during final validation
+
+A later probe capture disappeared because the Azure API container restarted
+with exit code 137. Its Python RSS was 2,055,924 KiB against a 2 GiB allowance.
+The API uses the row graph and remote graph service, but also enables an
+optional resident vector cache. Its 1,024 MiB cap bounds raw vectors; a full
+reload additionally holds Arrow buffers, a combined column, a spare matrix,
+native buffers and metadata. The raw-vector cap alone does not bound peak RSS.
+
+Full resident reloads now check cgroup v1/v2 memory headroom, including a reserve
+for requests, before allocating that cache. Insufficient headroom uses the
+existing configured disk/ANN path, and incremental cache deltas can still proceed
+without a full copy. No memory allocation, replica limit or scaling setting was
+increased. The ANN fallback retains the recall/latency tradeoff already selected
+by the deployment; text retrieval and mutation indexing are unaffected by that
+choice. This runtime correction is included in the final image identified in
+the PR description, with post-deployment verification recorded there.
