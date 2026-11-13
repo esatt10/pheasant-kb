@@ -21,7 +21,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: pheasant
-          image: ghcr.io/esatt10/pheasant:1.2.0
+          image: ghcr.io/esatt10/pheasant:1.3.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
