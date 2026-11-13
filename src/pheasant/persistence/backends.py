@@ -628,11 +628,10 @@ class PostgresBackend(StateBackend):
     def statement(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[Row], int]:
         """Run a statement that may write, returning ``(rows, rowcount)``.
 
-        Unlike :meth:`rows`, this keeps the connection until commit: the
-        sqlite3-shaped ``StateStore`` write path and ``UPDATE ... RETURNING``
-        must not lose pending work to an automatic release. Read rowcount
-        inside the cursor block, before psycopg closes it; a bare UPDATE or
-        DELETE has no returned rows to tell us how much it changed.
+        Unlike :meth:`rows`, this keeps pending work until commit. StateStore
+        writes and UPDATE RETURNING must not auto-release the connection.
+        Read rowcount before psycopg closes the cursor; a bare UPDATE/DELETE
+        has no returned rows to tell us how much it changed.
         """
 
         conn = self._conn()
