@@ -352,8 +352,18 @@ def test_the_image_writes_a_standalone_config_when_none_is_mounted(tmp_path: Pat
         assert seen.read_text() == expected
 
 
-def test_the_configuration_reference_lists_the_current_defaults() -> None:
+@pytest.mark.parametrize("separator", ["/", "\\"])
+def test_the_configuration_reference_lists_the_current_defaults(
+    monkeypatch: pytest.MonkeyPatch, separator: str
+) -> None:
     from pheasant.config.flagship import defaults_table
+
+    standalone = PheasantConfig().model_dump(mode="json")
+    standalone["security"]["allow_workspace_roots"] = [
+        root.replace("\\", "/").replace("/", separator)
+        for root in standalone["security"]["allow_workspace_roots"]
+    ]
+    monkeypatch.setattr(PheasantConfig, "model_dump", lambda self, **kwargs: standalone)
 
     text = (ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
     start = text.index("<!-- defaults-table:start")

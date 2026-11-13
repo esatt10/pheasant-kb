@@ -345,11 +345,21 @@ def defaults_table() -> str:
             cursor = cursor.get(part) if isinstance(cursor, dict) else None
         return cursor
 
+    def reference_paths(value: Any) -> Any:
+        # model_dump turns Path values into host-native strings, including
+        # paths nested in lists such as security.allow_workspace_roots.
+        if isinstance(value, list):
+            return [reference_paths(item) for item in value]
+        if isinstance(value, dict):
+            return {key: reference_paths(item) for key, item in value.items()}
+        if isinstance(value, str) and value.startswith("\\"):
+            return value.replace("\\", "/")
+        return value
+
     def cell(value: Any) -> str:
         if value is None:
             return "unset"
-        if isinstance(value, str) and value.startswith("\\"):
-            value = value.replace("\\", "/")  # Reference paths do not depend on the build host.
+        value = reference_paths(value)
         text = json.dumps(value) if not isinstance(value, str) else value
         return f"`{text}`".replace("|", "\\|")
 

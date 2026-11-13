@@ -104,7 +104,7 @@ standalone is selected:
 | `graph.wasm_cross_source_resolution` | `true` | `false` |
 | `graph.query_service_url` | `http://graph:8765` | unset |
 | `graph.max_nodes` | unset | `1500000` |
-| `security.allow_workspace_roots` | `["/workspace", "/memory", "/state", "/exports", "/data"]` | `["\\workspace", "\\exports"]` |
+| `security.allow_workspace_roots` | `["/workspace", "/memory", "/state", "/exports", "/data"]` | `["/workspace", "/exports"]` |
 | `security.allow_user_selected_source_paths` | `false` | `true` |
 | `security.acl_enforced` | `true` | `false` |
 | `memory.default_policy` | `prefer` | `auto` |

@@ -175,6 +175,26 @@ def seeded(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
+def test_empty_artifact_sources_do_not_change_the_baseline_candidate_window(seeded: Any) -> None:
+    from pheasant.evaluation.contracts import EvaluatedQuery
+    from pheasant.evaluation.replay import ReplayEngine
+    from pheasant.evaluation.runner import _replay_searcher
+    from pheasant.evaluation.variants import default_matrix
+
+    replay = ReplayEngine(
+        _replay_searcher(seeded),
+        "kb",
+        graph=seeded.graph_builder.graph,
+        max_results=5,
+        explain=True,
+    )
+    query = EvaluatedQuery("empty-artifacts", QUERIES[0])
+    results = [replay.replay_query(variant, query) for variant in default_matrix()]
+    assert all(not result.failed for result in results)
+    assert {result.stages["query"]["fetch_n"] for result in results} == {5}
+    assert all(result.ranked_ids == results[0].ranked_ids for result in results)
+
+
 def test_a_run_produces_every_required_report_section(seeded: Any) -> None:
     outcome = evaluation.run(seeded)
     assert outcome.status == "completed"

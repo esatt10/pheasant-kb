@@ -238,9 +238,18 @@ class ReplayEngine:
         self.explain = bool(explain)
         from pheasant.artifacts.migration import retrieval_source_ids
 
-        self.artifact_sources = retrieval_source_ids(
-            getattr(getattr(searcher, "store", None), "state", None)
-        )
+        state = getattr(getattr(searcher, "store", None), "state", None)
+        self.artifact_sources = retrieval_source_ids(state)
+        if state is not None:
+            # An empty artifact source cannot contribute content. Excluding it
+            # would still trigger filter over-fetching on B0/B2-B4, widening
+            # their graph candidate window relative to B1/B5. That changes
+            # measured exposure even when there is no intervention to measure.
+            self.artifact_sources = [
+                source
+                for source in self.artifact_sources
+                if state.rows("SELECT 1 FROM artifacts WHERE source_id=? LIMIT 1", (source,))
+            ]
 
     def _policy(self, variant: Variant, query: EvaluatedQuery) -> dict[str, Any]:
         """The memory policy for one (variant, query) pair.
