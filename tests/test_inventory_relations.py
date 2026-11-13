@@ -22,6 +22,7 @@ Five claims, each with a way to fail:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -401,6 +402,36 @@ def test_the_keyword_reads_them_loosely(question: str, action: str, expected: di
     assert read is not None and read.action == action and read.trigger == "keyword"
     for key, value in expected.items():
         assert getattr(read, key) == value
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["Artifacts/Report  page 2.md", 'artifacts/Owner/Source "reference".md', "Notes/日本語.md"],
+)
+def test_explicit_document_literals_preserve_the_selected_path(path: str) -> None:
+    from pheasant.assistant.keywords import inventory_form
+
+    asked = inventory.read_question(inventory_form(f"@doc {json.dumps(path)}"), sources=SOURCES)
+    assert asked is not None and asked.action == "document"
+    assert asked.path == path
+    assert asked.page is None
+
+
+def test_viewer_ask_describes_a_selected_file_with_spaces_on_both_transports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = "notes/Report  page 2.md"
+    monkeypatch.setitem(CORPUS, path, "# Saved report\n\n## Source references\n\nKnown evidence.\n")
+    mine = _region(tmp_path)
+    question = f"@doc {json.dumps(path)}"
+    expected = mine["tools"].describe_document(mine["kb"], path)
+    over_mcp = mine["tools"].ask_knowledge_base(mine["kb"], question)
+    response = mine["client"].post("/assistant/chat", json={"question": question})
+    assert response.status_code == 200
+    for answer in (over_mcp, response.json()):
+        assert answer["inventory"]["tool"] == "describe_document"
+        assert answer["inventory"]["result"]["document"]["id"] == expected["document"]["id"]
+        assert path in answer["answer"]
 
 
 def _ask(region: dict[str, Any], question: str, **body: Any) -> tuple[dict, dict]:

@@ -104,6 +104,36 @@ def test_an_artifact_outlives_the_process_that_kept_it(loaded_config, composing:
     assert later.get(f"/artifacts/{kept['id']}").json()["title"] == "a script"
 
 
+def test_ask_can_describe_a_selected_saved_artifact_file(loaded_config) -> None:
+    app = create_app(config=loaded_config)
+    client = TestClient(app)
+    kept = client.post(
+        "/artifacts",
+        json={
+            "title": "Source reference report",
+            "markdown": "# Report\n\nSaved evidence.\n",
+            "files": [
+                {"name": "Source  reference page 2.md", "content": "# Reference\n\nKnown.\n"}
+            ],
+            "sync": False,
+        },
+    )
+    assert kept.status_code == 200
+    tools = PheasantTools(loaded_config)
+    tools.engine.sync_source("artifacts", "full")
+    documents = client.get("/documents", params={"source_name": "artifacts"}).json()["documents"]
+    selected = next(
+        row for row in documents if row["path"].endswith(kept.json()["files"][0]["name"])
+    )
+    question = f"@doc {json.dumps('artifacts/' + selected['path'])}"
+    for answer in (
+        tools.ask_knowledge_base(loaded_config.knowledge_base_id, question),
+        client.post("/assistant/chat", json={"question": question}).json(),
+    ):
+        assert answer["inventory"]["tool"] == "describe_document"
+        assert answer["inventory"]["result"]["document"]["id"] == selected["id"]
+
+
 def test_the_rendered_artifact_is_pheasant_styled_and_cannot_reach_out(
     loaded_config, composing: None
 ) -> None:

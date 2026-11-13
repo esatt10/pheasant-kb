@@ -685,6 +685,8 @@ select.text-input {
 }
 
 .source-item__name {
+  flex: 1;
+  min-width: 0;
   font-weight: 550;
   font-size: calc(13px * var(--fs));
   overflow: hidden;
@@ -692,7 +694,16 @@ select.text-input {
   white-space: nowrap;
 }
 
+.source-item__count {
+  flex: none;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: calc(11px * var(--fs));
+  font-variant-numeric: tabular-nums;
+}
+
 .source-item__meta {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: calc(6px * var(--sp));
@@ -5931,7 +5942,7 @@ select.text-input {
     gap: calc(2px * var(--sp));
   }
 
-  .notebook--tabs .source-item__meta .pill {
+  .notebook--tabs .source-item__meta .pill:not(.browser-row__health) {
     display: none;
   }
 
@@ -6043,6 +6054,10 @@ select.text-input {
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
+}
+
+.panel__tabs .tab[aria-selected="true"] {
+  flex: 0 0 auto;
 }
 
 .panel__bar--drop .panel__tabs {

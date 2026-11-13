@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, onApiAuthChanged } from "../api/client";
 import type { SourceRecord } from "../api/types";
 import { QuickAdd } from "./QuickAdd";
 import { SourceStatus } from "./SourceStatus";
 import { TileFold, TileGrip } from "./Tiles";
 import { colorForNode } from "../graph/graphStyles";
+import { HealthPill } from "../browser/HealthPill";
 
 /**
  * The Sources rail.
@@ -47,6 +48,20 @@ export function SourceRail({
   onBrowse?: (name: string | null) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const client = useQueryClient();
+  const summary = useQuery({
+    queryKey: ["source-rail-summary"],
+    queryFn: () => api.browse({ source: null, path: "" }),
+    enabled: !waiting && sources.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+  useEffect(() => onApiAuthChanged(() => {
+    void client.resetQueries({ queryKey: ["source-rail-summary"] });
+  }), [client]);
+  const bySource = new Map(summary.data?.directories.map(folder => [folder.source, folder]));
 
   // Every kind of source present, in a stable order. Rendered only when there
   // is more than one — with a single kind the chips would be a row that can
@@ -55,6 +70,7 @@ export function SourceRail({
   const visible = selectedType
     ? sources.filter((source) => source.type === selectedType)
     : sources;
+  const documents = visible.reduce((total, source) => total + (bySource.get(source.name)?.documents ?? 0), 0);
 
   const sync = useMutation({
     mutationFn: (name: string) => api.syncSource(name, "incremental"),
@@ -123,11 +139,14 @@ export function SourceRail({
                 : selectedType
                   ? `${visible.length} ${selectedType}`
                   : `${sources.length} indexed`}
+              {summary.isSuccess ? ` · ${documents.toLocaleString()} docs` : ""}
             </span>
           </button>
 
           {visible.map((source) => {
             const inScope = selected === source.name || alsoSelected.includes(source.name);
+            const metrics = bySource.get(source.name);
+            const count = metrics?.documents ?? 0;
             return (
             // The row is a plain container holding two siblings — selecting the
             // source and syncing it are separate actions, so nesting the sync
@@ -149,6 +168,11 @@ export function SourceRail({
                 <span className="source-item__top">
                   <span className="source-dot" style={{ background: colorForNode("source") }} />
                   <span className="source-item__name">{source.name}</span>
+                  <span className="source-item__count" title={summary.isSuccess
+                    ? `${count.toLocaleString()} indexed documents · ${documents ? (100 * count / documents).toFixed(1) : "0"}% of visible documents`
+                    : "Document counts are loading"}>
+                    {summary.isSuccess ? `${count.toLocaleString()} doc${count === 1 ? "" : "s"}` : "—"}
+                  </span>
                 </span>
                 <span className="source-item__meta">
                   <span className="pill">{source.type}</span>
@@ -161,8 +185,9 @@ export function SourceRail({
                       sync failed
                     </span>
                   ) : source.last_status ? (
-                    <SourceStatus source={source} />
+                    metrics ? <span>{source.last_status}</span> : <SourceStatus source={source} />
                   ) : null}
+                  <HealthPill health={metrics?.health} />
                 </span>
                 <span className="source-item__path">
                   {source.uploaded_archives?.length

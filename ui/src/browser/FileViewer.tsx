@@ -354,7 +354,7 @@ function LoadedViewer({
           <button
             type="button"
             className="btn btn--small btn--ghost"
-            onClick={() => onAsk(`@doc ${doc.source}/${doc.path}`)}
+            onClick={() => onAsk(`@doc ${JSON.stringify(`${doc.source}/${doc.path}`)}`)}
             title="Describe this document in the chat: outline, symbols, links in and out"
           >
             Ask
