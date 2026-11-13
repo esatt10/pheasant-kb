@@ -1301,11 +1301,12 @@ attached — `pytest` stays network-free by construction rather than by mocking.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `otlp_endpoint` | string \| null | `null` | OTLP collector endpoint. `null` attaches no exporter at all: spans are still created and still feed the ledger, they just go nowhere off-box. |
-| `otlp_protocol` | string | `http/protobuf` | OTLP wire protocol. |
+| `otlp_endpoint` | string \| null | `null` | OTLP collector endpoint. `null` uses standard `OTEL_EXPORTER_OTLP_ENDPOINT` / per-signal variables when present (including Azure Container Apps). Without any endpoint there is no exporter. |
+| `otlp_protocol` | string | `http/protobuf` | `http/protobuf` or `grpc` for explicit endpoints; environment endpoints honor standard OTEL protocol variables. Both exporters ship in the universal image. |
 | `otlp_headers_env` | string | `PHEASANT_OTLP_HEADERS` | Environment variable holding `key=value,key=value` exporter headers. The **name**, never the value — same rule as `storage.dsn_env`. |
 | `service_name` | string | `pheasant` | `service.name` on every exported span. |
 | `sample_ratio` | float | `1.0` | Head sampling for *exported* spans only. It deliberately does not thin the ledger: sampling out a span your collector does not need should not also cost the region a data point formation counts on. |
+| `ui_events` | bool | `false` | Bounded navigation and tagged action spans, without DOM text, input values, query strings or identity. Browser requests carry W3C trace context. |
 | `interactions.enabled` | bool | `false` | Record interactions. Off, the region behaves exactly as it did before this existed. On, it is recording queries and principals — a deliberate choice, not a default. |
 | `interactions.redact_text` | bool | `false` | Record no free text at all — neither the question nor the answer. Named for what it does rather than one of the two fields it covers: redacting a question while keeping an answer that quotes the corpus back at it would be incoherent. Identity, modality, criteria, result ids and result paths are still recorded, so `path-affinity-v1` and `retrieval-gap-v1` still work; only the lexical rule `alias-cooccurrence-v1` goes quiet. |
 | `interactions.max_answer_chars` | integer | `4000` | Cap on a recorded assistant answer, in characters. **`0` records no answers at all** — the same "0 means off" shape `hot_retention_days` and `supersede_retention_days` use. A cap rather than an unbounded field because an answer is model output at 10-50x a question's bytes; left unbounded, chat traffic would dominate a ledger sized for search. A truncated answer is marked `answer_truncated` in `attributes`. |

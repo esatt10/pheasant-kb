@@ -500,6 +500,9 @@ def _build_interaction_buffer(
     and this runs before anything has served a request.
     """
 
+    from pheasant.telemetry.interactions import configure_tracing
+
+    configure_tracing(config.observability)
     settings = getattr(getattr(config, "observability", None), "interactions", None)
     if settings is None or not getattr(settings, "enabled", False):
         return None
@@ -507,12 +510,10 @@ def _build_interaction_buffer(
         from pheasant.sync.log_queue import log_queue_from_config
         from pheasant.telemetry.interactions import (
             InteractionBuffer,
-            configure_tracing,
             resolve_sink,
             set_process_buffer,
         )
 
-        configure_tracing(config.observability)
         queue = log_queue_from_config(config, state)
         app.state.log_queue = queue
         sink = resolve_sink(
@@ -1212,6 +1213,10 @@ def create_app(
                 except Exception:  # pragma: no cover - shutdown must not raise
                     logger.debug("could not close the metrics queue handle", exc_info=True)
 
+            from pheasant.telemetry.interactions import TRACING
+
+            TRACING.shutdown()
+
     app = FastAPI(title="pheasant", version=__version__, lifespan=lifespan)
     app.state.config = config
     app.state.state = state
@@ -1356,7 +1361,19 @@ def create_app(
                             return JSONResponse(status_code=504, content={"detail": str(exc)})
                 return await timed_response()
 
-            if interaction_buffer is None or _metric_path(path) in UNOBSERVED_PATHS:
+            from pheasant.telemetry.interactions import TRACING
+
+            if (interaction_buffer is None and not TRACING.enabled) or _metric_path(
+                path
+            ) in UNOBSERVED_PATHS:
+                if _metric_path(path) == "/mcp":
+                    # Tools own their spans/ledger rows. Carry the caller's
+                    # context into the mounted transport without counting an
+                    # extra HTTP interaction for every tool invocation.
+                    from pheasant.telemetry.interactions import adopt_trace
+
+                    with adopt_trace(request.headers.get("traceparent")):
+                        return await continue_request()
                 return await continue_request()
             # One bounded append per request and nothing else. Everything the
             # ledger costs beyond this happens on the flusher thread or on the
@@ -1459,6 +1476,9 @@ def create_app(
     identity_service = IdentityService(config, state)
     app.state.identity = identity_service
     register_identity_routes(app, identity_service, resource_name=config.pheasant.name)
+    from pheasant.api.telemetry_routes import register_telemetry_routes
+
+    register_telemetry_routes(app, config)
     if identity_service.enforcing:
         auth_public_paths = frozenset(config.security.api_auth.public_paths or ())
 

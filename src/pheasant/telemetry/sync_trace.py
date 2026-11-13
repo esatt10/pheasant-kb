@@ -80,12 +80,38 @@ class SyncTrace:
         self._phase_start = self.start
         self._stages: list[tuple[str, float, float]] = []
         self._token: contextvars.Token | None = None
+        self._otel_token: Any = None
+        from pheasant.telemetry.interactions import current_trace_flags
+
+        self.trace_flags = current_trace_flags()
 
     def __enter__(self) -> SyncTrace:
         self._token = _CURRENT.set(self)
+        from pheasant.telemetry.interactions import TRACING
+
+        if TRACING.enabled:
+            from opentelemetry import context, trace
+
+            self._otel_token = context.attach(
+                trace.set_span_in_context(
+                    trace.NonRecordingSpan(
+                        trace.SpanContext(
+                            int(self.trace_id, 16),
+                            int(self.span_id, 16),
+                            False,
+                            trace.TraceFlags(self.trace_flags),
+                        )
+                    )
+                )
+            )
         return self
 
     def __exit__(self, *_exc: Any) -> None:
+        if self._otel_token is not None:
+            from opentelemetry import context
+
+            context.detach(self._otel_token)
+            self._otel_token = None
         if self._token is not None:
             _CURRENT.reset(self._token)
             self._token = None
@@ -167,6 +193,7 @@ class SyncTrace:
                 **{f"pheasant.sync.{k}": v for k, v in attributes.items() if v is not None},
             },
         )
+        run["trace_flags"] = self.trace_flags
         spans = [run]
         for name, start, stop in stages:
             spans.append(
@@ -183,6 +210,8 @@ class SyncTrace:
                     attributes={"pheasant.source": self.source_name, "pheasant.sync.stage": name},
                 )
             )
+        for span in spans:
+            span["trace_flags"] = self.trace_flags
         return spans
 
 
@@ -285,48 +314,10 @@ def _export(spans: list[dict[str, Any]]) -> None:
     """The same spans over OTLP, when a tracer provider is configured (best effort)."""
 
     try:
-        from opentelemetry import trace as ot_trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.trace import (
-            NonRecordingSpan,
-            SpanContext,
-            Status,
-            StatusCode,
-            TraceFlags,
-        )
-    except ImportError:
-        return
-    provider = ot_trace.get_tracer_provider()
-    if not isinstance(provider, TracerProvider):
-        return
-    tracer = provider.get_tracer("pheasant.sync")
-    try:
-        run = spans[0]
-        parent_id = run.get("parent_span_id")
-        context = None
-        if parent_id:
-            parent = SpanContext(
-                int(run["trace_id"], 16), int(parent_id, 16), True, TraceFlags(TraceFlags.SAMPLED)
-            )
-            context = ot_trace.set_span_in_context(NonRecordingSpan(parent))
-        root = tracer.start_span(
-            run["name"],
-            context=context,
-            start_time=_ns(run["start_time"]),
-            attributes=run["attributes"],
-        )
-        if run["status"]["code"] == "ERROR":
-            root.set_status(Status(StatusCode.ERROR, run["status"].get("message")))
-        stage_context = ot_trace.set_span_in_context(root)
-        for stage in spans[1:]:
-            span = tracer.start_span(
-                stage["name"],
-                context=stage_context,
-                start_time=_ns(stage["start_time"]),
-                attributes=stage["attributes"],
-            )
-            span.end(end_time=_ns(stage["end_time"]))
-        root.end(end_time=_ns(run["end_time"]))
+        from pheasant.telemetry.interactions import TRACING
+
+        for span in spans:
+            TRACING.export_span(span)
     except Exception:  # noqa: BLE001 - export is a mirror, never a failure
         logger.debug("OTLP export of a sync trace failed", exc_info=True)
 

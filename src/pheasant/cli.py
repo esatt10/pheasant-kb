@@ -2297,6 +2297,9 @@ def main(argv: list[str] | None = None) -> int:
 
         on_progress = _progress_emitter() if getattr(args, "progress", False) else None
         engine = _engine(Path(args.config), defer_persisted_graph_load=True)
+        from pheasant.telemetry.interactions import TRACING, configure_tracing
+
+        configure_tracing(engine.config.observability)
         if args.wait_for_lease is not None:
             engine.lease.wait_timeout_s = max(0.0, args.wait_for_lease)
         try:
@@ -2353,6 +2356,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         finally:
             engine.close()
+            TRACING.shutdown()
         if getattr(args, "json", False):
             # One line, last: the server runs this command as a subprocess and
             # reads the report off stdout.

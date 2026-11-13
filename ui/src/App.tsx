@@ -1,3 +1,4 @@
+import { Telemetry } from "./components/Telemetry";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { JobsTray } from "./components/JobsTray";
@@ -26,6 +27,7 @@ export function App() {
   return (
     <SessionProvider>
       <PermissionProvider>
+      <Telemetry />
       <div className="app">
         <TopBar />
         <RegionBanner />

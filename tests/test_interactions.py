@@ -524,12 +524,9 @@ def test_a_configured_endpoint_without_the_extra_degrades_rather_than_raising(
         # that is not there. The suite is offline by construction, and this is
         # the one place that could make it otherwise.
         if attached:
-            from opentelemetry import trace as ot_trace
+            from pheasant.telemetry.interactions import TRACING
 
-            provider = ot_trace.get_tracer_provider()
-            shutdown = getattr(provider, "shutdown", None)
-            if shutdown is not None:
-                shutdown()
+            TRACING.shutdown()
 
 
 def test_the_process_buffer_is_a_single_shared_slot() -> None:

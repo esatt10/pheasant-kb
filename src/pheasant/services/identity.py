@@ -160,6 +160,10 @@ class IdentityService:
         """What a client may know before it holds a credential."""
 
         return {
+            "telemetry": {
+                "ui_enabled": self.config.observability.ui_events,
+                "sample_ratio": self.config.observability.sample_ratio,
+            },
             "authorization": {"version": 1, "roles": ["Admin", "Contributor", "Reader"]},
             "shared_token": self.shared_token_enabled,
             "entra": self.entra_enabled,

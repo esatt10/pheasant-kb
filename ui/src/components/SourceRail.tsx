@@ -158,6 +158,7 @@ export function SourceRail({
             >
               <button
                 className="source-item__select"
+                data-telemetry-action="source.select"
                 onClick={(event) =>
                   onToggle && (event.ctrlKey || event.metaKey)
                     ? onToggle(source.name)

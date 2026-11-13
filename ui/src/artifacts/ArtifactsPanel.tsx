@@ -255,7 +255,7 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
                     title={item.bulk_supported === false ? "Manage this artifact individually" : undefined}
                     onChange={() => toggle(item.id)}
                   />
-                  <button type="button" className="artifacts__item" onClick={() => onSelect(item.id)}>
+                  <button type="button" className="artifacts__item" data-telemetry-action="artifact.select" onClick={() => onSelect(item.id)}>
                     <span className="artifacts__item-title">{item.title}</span>
                     <span className="muted small">
                       {describe(item)}
