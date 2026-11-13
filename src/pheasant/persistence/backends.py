@@ -628,19 +628,11 @@ class PostgresBackend(StateBackend):
     def statement(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[Row], int]:
         """Run a statement that may write, returning ``(rows, rowcount)``.
 
-        Distinct from :meth:`rows` in two ways, both load-bearing:
-
-        - This never auto-releases the connection. ``_PgConnection.execute``
-          — the sqlite3-shaped path every ``with self.conn:`` block in
-          ``StateStore`` uses — is a *write* path, so releasing after it
-          would hand back the connection mid-transaction and discard the
-          uncommitted work. ``UPDATE ... RETURNING`` (the queue's claim)
-          needs the same.
-        - ``cursor.rowcount`` is read *inside* the ``with conn.cursor()``
-          block, before psycopg closes the cursor — reading it after would
-          raise, and a bare ``UPDATE``/``DELETE`` (no ``RETURNING``) is
-          exactly the shape that has no rows to fall back on for "how many
-          did this touch".
+        Unlike :meth:`rows`, this keeps the connection until commit: the
+        sqlite3-shaped ``StateStore`` write path and ``UPDATE ... RETURNING``
+        must not lose pending work to an automatic release. Read rowcount
+        inside the cursor block, before psycopg closes it; a bare UPDATE or
+        DELETE has no returned rows to tell us how much it changed.
         """
 
         conn = self._conn()
