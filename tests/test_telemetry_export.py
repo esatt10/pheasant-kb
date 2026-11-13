@@ -420,3 +420,97 @@ def test_real_nats_postgres_and_grpc_join_one_trace(monkeypatch, collector, tmp_
         backend.close()
         server.stop(0).wait()
         tracing.shutdown()
+
+
+def test_sync_subprocess_and_remote_executor_keep_context(monkeypatch, collector, tmp_path):
+    import os
+
+    import grpc
+
+    from pheasant.setup_wizard import Wizard, render_config_yaml
+    from pheasant.sync.grpc_worker import PreparationWorkerServicer, load_protos
+    from pheasant.sync.remote_worker import ResultCache
+    from pheasant.sync.worker import run_sync
+    from pheasant.telemetry import interactions
+    from pheasant.telemetry.sync_trace import emit
+    from tests.test_grpc_worker import _config, _write_docs
+
+    endpoint, protocol, traces, _ = collector
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", protocol)
+    monkeypatch.setenv("PHEASANT_INDEX_WORKER_TOKEN", "grpc-token")
+    tracing = Tracing()
+    monkeypatch.setattr(interactions, "TRACING", tracing)
+    tracing.configure(ObservabilitySettings())
+    workspace = tmp_path / "docs"
+    _write_docs(workspace, 2)
+    server_config = _config(tmp_path, workspace, state_name="preparation")
+    server_config.sync.concurrency.remote_worker_enabled = True
+    _, rpc = load_protos()
+    server = grpc.server(ThreadPoolExecutor(max_workers=2))
+    rpc.add_PreparationWorkerServicer_to_server(
+        PreparationWorkerServicer(server_config, ResultCache(maxsize=8)), server
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    preset = {
+        "pheasant.defaults": "standalone",
+        "pheasant.name": "otel-sync",
+        "pheasant.state_path": str(tmp_path / "indexer-state"),
+        "pheasant.workspace_root": str(workspace),
+        "pheasant.exports_path": str(tmp_path / "exports"),
+        "sync.concurrency.file_executor": "remote",
+        "sync.concurrency.max_parallel_files": 2,
+        "sync.concurrency.worker_transport": "grpc",
+        "sync.concurrency.remote_worker_urls": [f"grpc://127.0.0.1:{port}"],
+        "sources": [
+            {
+                "name": "docs",
+                "type": "markdown_folder",
+                "path": str(workspace),
+                "include": ["**/*.md"],
+            }
+        ],
+    }
+    if os.environ.get("PHEASANT_TEST_POSTGRES_DSN"):
+        preset.update(
+            {
+                "storage.backend": "postgres",
+                "storage.dsn_env": "PHEASANT_TEST_POSTGRES_DSN",
+                "storage.lexical_index": "tsvector",
+            }
+        )
+    path = tmp_path / "pheasant.yaml"
+    path.write_text(
+        render_config_yaml(Wizard(accept_defaults=True, preset=preset).config_dict()),
+        encoding="utf-8",
+    )
+    trace_id = "e" * 32
+    try:
+        report = run_sync(
+            path,
+            "docs",
+            "incremental",
+            task_payload={"traceparent": f"00-{trace_id}-{'f' * 16}-01"},
+        )
+        assert report["status"] == "ok", report
+        run = report["results"][0]
+        assert run["indexed_artifacts"] == 2, run
+        emit(run["details"]["otel_spans"])
+        tracing.flush()
+        result = flattened(traces)
+        named = {s.name: s for s in result}
+        assert "grpc.post" in named, [(s.name, s.trace_id.hex()) for s in result]
+        for name in ["pheasant.sync", "grpc.post", "grpc.PrepareBatch"]:
+            assert named[name].trace_id.hex() == trace_id, [
+                (s.name, s.trace_id.hex()) for s in result
+            ]
+        if os.environ.get("PHEASANT_TEST_POSTGRES_DSN"):
+            assert any(
+                s.name.startswith("postgresql.") and s.trace_id.hex() == trace_id for s in result
+            )
+        assert named["grpc.post"].parent_span_id == named["pheasant.sync"].span_id
+        assert named["grpc.PrepareBatch"].parent_span_id == named["grpc.post"].span_id
+    finally:
+        server.stop(0).wait()
+        tracing.shutdown()

@@ -27,15 +27,24 @@ def span(
     if not TRACING.enabled or TRACING.tracer is None:
         yield None
         return
+    from opentelemetry import trace
     from opentelemetry.trace import SpanKind, Status, StatusCode
 
-    ambient = current_trace()
+    # Most dependencies already run inside an SDK span. Let the SDK inherit
+    # it directly: avoid parsing W3C headers and minting unused random IDs on
+    # every database statement. Only transport/queue boundaries need decoding.
+    inherited = trace.get_current_span().get_span_context().is_valid
+    ambient = None if inherited else current_trace()
     if traceparent is None and ambient:
         traceparent = f"00-{ambient[0]}-{ambient[1]}-{current_trace_flags():02x}"
-    if require_parent and not traceparent:
+    if require_parent and not inherited and not traceparent:
         yield None
         return
-    context = TRACING.parent_context(InteractionContext.create(traceparent=traceparent))
+    context = (
+        TRACING.parent_context(InteractionContext.create(traceparent=traceparent))
+        if traceparent
+        else None
+    )
     with TRACING.tracer.start_as_current_span(
         name,
         context=context,
