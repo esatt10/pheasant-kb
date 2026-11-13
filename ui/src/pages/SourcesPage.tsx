@@ -134,10 +134,10 @@ export function SourcesPage() {
       <div className="page__header">
         <h1>Sources</h1>
         <div className="button-row">
-          <button className="btn" onClick={() => setShowWizard(true)}>
+          <button data-permission="sources.manage" className="btn" onClick={() => setShowWizard(true)}>
             Advanced…
           </button>
-          <button className="btn btn--primary" onClick={() => setQuickAdd(true)}>
+          <button data-permission="sources.manage" className="btn btn--primary" onClick={() => setQuickAdd(true)}>
             + Add source
           </button>
         </div>
@@ -152,7 +152,7 @@ export function SourcesPage() {
         <div className={`banner banner--${notice.kind} sync-notice`} role="status">
           <span>{notice.text}</span>
           {notice.retry ? (
-            <button className="btn btn--small" onClick={() => sync.mutate(notice.retry!)}>
+            <button data-permission="sources.manage" className="btn btn--small" onClick={() => sync.mutate(notice.retry!)}>
               Retry
             </button>
           ) : null}
@@ -237,7 +237,7 @@ export function SourcesPage() {
                   disabled={Boolean(source.syncing)}
                   onSync={(mode) => sync.mutate({ name: source.name, mode })}
                 />
-                <button className="btn btn--small" onClick={() => setEditingSource(source)}>
+                <button data-permission="sources.manage" className="btn btn--small" onClick={() => setEditingSource(source)}>
                   edit
                 </button>
                 <button
@@ -258,10 +258,10 @@ export function SourcesPage() {
                     {outlineFor === source.name ? "hide outline" : "outline"}
                   </button>
                 ) : null}
-                <button className="btn btn--small" onClick={() => promote.mutate(source.name)}>
+                <button data-permission="security.manage" className="btn btn--small" onClick={() => promote.mutate(source.name)}>
                   promote
                 </button>
-                <button className="btn btn--small" onClick={() => disable.mutate(source.name)}>
+                <button data-permission="sources.manage" className="btn btn--small" onClick={() => disable.mutate(source.name)}>
                   disable
                 </button>
                 <RemoveSourceButton
@@ -391,7 +391,7 @@ function SyncControl({
           </option>
         ))}
       </select>
-      <button
+      <button data-permission="sources.manage"
         className="btn btn--small btn--primary"
         onClick={() => onSync(mode)}
         disabled={disabled}
@@ -424,7 +424,7 @@ function RemoveSourceButton({
     return () => window.clearTimeout(timer);
   }, [armed]);
   return (
-    <button
+    <button data-permission="sources.manage"
       className={`btn btn--small btn--danger${armed ? " btn--armed" : ""}`}
       disabled={pending}
       onClick={() => {

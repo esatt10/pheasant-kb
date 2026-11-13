@@ -49,6 +49,7 @@ from typing import Any
 
 from pheasant.assistant.artifact_files import artifact_payload
 from pheasant.config.schema import ARTIFACT_KINDS
+from pheasant.security.authorization import allowed, require_permission
 from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services import artifact_render as render
@@ -167,6 +168,7 @@ def _store(
     replaces: str | None = None,
     visibility_scope: str = "org",
 ) -> dict[str, Any]:
+    require_permission("artifacts.manage")
     from pheasant.services import artifact_settings
 
     if not artifact_settings.current(context).enabled:
@@ -388,6 +390,11 @@ def keep_composed(
 
     from pheasant.services import artifact_settings
     from pheasant.services.artifact_trace import trace_of
+
+    if save is True:
+        require_permission("artifacts.manage")
+    if not allowed("artifacts.manage"):
+        return None
 
     if (result.get("route") or {}).get("intent") != "compose":
         return None
@@ -658,6 +665,7 @@ def delete(
     context: ServiceContext, artifact_id: str, principal: str | None = None
 ) -> dict[str, Any]:
     """Remove the artifact: its row, and its files from the index like any document's."""
+    require_permission("artifacts.manage")
 
     from pheasant.services import artifact_outputs
 

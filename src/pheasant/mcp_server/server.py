@@ -1020,6 +1020,10 @@ def _anticipated_failures(surface: str) -> Any:
     def decorate(fn):
         operation = getattr(fn, "__name__", surface)
 
+        from pheasant.mcp_server.authorization import authorized
+
+        fn = authorized(fn)
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             def run():
@@ -1098,6 +1102,8 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
     ) as event:
         if identity is not None:
             event.attributes["auth_method"] = identity.method
+            event.attributes["roles"] = list(identity.roles)
+            event.attributes["token_id"] = identity.token_id
         query = kwargs.get("query")
         event.query_text = str(query) if isinstance(query, str) else None
         event.criteria = {

@@ -57,7 +57,7 @@ function ArtifactSettingsBar() {
   return (
     <div className="artifacts__settings">
       <label className="artifacts__switch" title="Keep every composed answer the moment it is written">
-        <input
+        <input data-permission="artifacts.manage"
           type="checkbox"
           checked={current.auto_save}
           disabled={change.isPending}
@@ -71,7 +71,7 @@ function ArtifactSettingsBar() {
       {open ? (
         <div className="artifacts__settings-detail small">
           <label title="Start the artifacts sync as soon as something is saved">
-            <input
+            <input data-permission="artifacts.manage"
               type="checkbox"
               checked={current.index_on_save}
               onChange={(event) => change.mutate({ index_on_save: event.target.checked })}
@@ -80,7 +80,7 @@ function ArtifactSettingsBar() {
           </label>
           <label>
             Also index every{" "}
-            <input
+            <input data-permission="artifacts.manage"
               type="number"
               min={0}
               defaultValue={Math.round(current.index_interval_seconds / 60)}
@@ -89,7 +89,7 @@ function ArtifactSettingsBar() {
             min
           </label>
           <label title="Hold artifact indexing while content sources sync">
-            <input
+            <input data-permission="artifacts.manage"
               type="checkbox"
               checked={current.yield_to_content}
               onChange={(event) => change.mutate({ yield_to_content: event.target.checked })}
@@ -98,7 +98,7 @@ function ArtifactSettingsBar() {
           </label>
           <label>
             Archive drafts after{" "}
-            <input
+            <input data-permission="artifacts.manage"
               type="number"
               min={0}
               defaultValue={current.retention_days}
@@ -106,11 +106,11 @@ function ArtifactSettingsBar() {
             />{" "}
             days (0 keeps)
           </label>
-          <label>Keep finished jobs for <input type="number" min={0}
+          <label>Keep finished jobs for <input data-permission="artifacts.manage" type="number" min={0}
             defaultValue={current.job_retention_days}
             onBlur={event => number("job_retention_days", event.target.value)} /> days (0 keeps)</label>
           <label>
-            <input
+            <input data-permission="artifacts.manage"
               type="checkbox"
               checked={current.enabled}
               onChange={(event) => change.mutate({ enabled: event.target.checked })}
@@ -190,15 +190,15 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
         <div className="artifacts__bulk">
           <span className="small">{chosen.size} selected</span>
           {archived ? (
-            <button type="button" className="btn btn--small" onClick={() => bulk.mutate("restore")}>
+            <button data-permission="artifacts.manage" type="button" className="btn btn--small" onClick={() => bulk.mutate("restore")}>
               Restore
             </button>
           ) : (
-            <button type="button" className="btn btn--small" onClick={() => bulk.mutate("archive")}>
+            <button data-permission="artifacts.manage" type="button" className="btn btn--small" onClick={() => bulk.mutate("archive")}>
               Archive
             </button>
           )}
-          <button
+          <button data-permission="artifacts.manage"
             type="button"
             className="btn btn--small btn--danger"
             onClick={() => {
@@ -461,7 +461,7 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
         <button type="button" className="btn btn--small" onClick={() => download.mutate({ format: "markdown" })}>
           Markdown
         </button>
-        <button
+        <button data-permission="artifacts.manage"
           type="button"
           className="btn btn--small btn--ghost"
           onClick={() => {

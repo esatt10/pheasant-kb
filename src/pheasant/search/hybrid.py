@@ -33,15 +33,14 @@ from pheasant.search.observability import observe_search, should_sample, stage_d
 from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
 from pheasant.search.sqlite_store import SearchStore
 from pheasant.search.vector_store import VectorSearcher
+from pheasant.security.authorization import scoped_principal
 from pheasant.telemetry.interactions import annotate_current
 
 logger = logging.getLogger(__name__)
 
 VALID_MODES = {"hybrid", "text", "graph", "vector"}
 
-#: Upper bound on a single query's result count. High enough that no
-#: legitimate caller notices, low enough that a hostile one cannot ask the
-#: region to load its whole index into memory.
+#: Bound result counts so a hostile request cannot load the whole index.
 MAX_RESULTS_CEILING = 500
 
 # These are process-wide serving limits. Query fan-out stays inside one
@@ -196,6 +195,7 @@ class HybridSearch:
         ``exclude`` (a ``criteria.Exclusion``) leaves named documents out (see
         ``criteria.path_scope_sql`` and ``criteria.scope_hits``).
         """
+        principal, principal_groups = scoped_principal(principal, principal_groups)
         mode = mode if mode in VALID_MODES else "hybrid"
         # Clamped, not just floored: `max_results` arrives straight off an
         # unauthenticated HTTP body, and an over-fetching ACL pass multiplies

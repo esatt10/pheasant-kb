@@ -97,6 +97,9 @@ def expand_principal(
     config_groups: dict[str, list[str]] | None,
 ) -> set[str] | None:
     """The principal's full identity set, or None for an anonymous caller."""
+    from pheasant.security.authorization import scoped_principal
+
+    principal, groups = scoped_principal(principal, groups)
     if not principal:
         return None
     identities = {principal}

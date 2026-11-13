@@ -265,12 +265,12 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
         {d.description ? <p className="muted small">{d.description}</p> : null}
         <div className="button-row">
           {d.state === "deleted" ? (
-            <button type="button" className="btn btn--small btn--primary" onClick={() => restore.mutate()}>
+            <button data-permission="sources.manage" type="button" className="btn btn--small btn--primary" onClick={() => restore.mutate()}>
               Restore pipeline
             </button>
           ) : (
             <>
-              <button
+              <button data-permission="sources.manage"
                 type="button"
                 className="btn btn--small btn--primary"
                 onClick={() => run.mutate()}
@@ -280,15 +280,15 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
                 {d.running ? "Running…" : run.isPending ? "Starting…" : requestedAt !== null ? "Queued…" : "Run now"}
               </button>
               {d.state === "scheduled" ? (
-                <button type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: true })}>
+                <button data-permission="sources.manage" type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: true })}>
                   Pause
                 </button>
               ) : d.state === "paused" ? (
-                <button type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: false })}>
+                <button data-permission="sources.manage" type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: false })}>
                   Resume
                 </button>
               ) : (
-                <button type="button" className="btn btn--small" onClick={() => configure.mutate({ schedule: "auto" })}>
+                <button data-permission="sources.manage" type="button" className="btn btn--small" onClick={() => configure.mutate({ schedule: "auto" })}>
                   Schedule again
                 </button>
               )}
@@ -373,7 +373,7 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
             documents stay until you remove the source.
           </p>
           <div className="button-row">
-            <button
+            <button data-permission="sources.manage"
               type="button"
               className="btn btn--small btn--danger"
               disabled={d.state === "manual"}
@@ -381,7 +381,7 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
             >
               Delete schedule
             </button>
-            <button
+            <button data-permission="sources.manage"
               type="button"
               className="btn btn--small btn--danger"
               onClick={() =>
@@ -685,10 +685,10 @@ function Ledger({ source, onBack }: { source: string; onBack: () => void }) {
             </div>
             <div className="syncs__section">
               <div className="button-row">
-                <button type="button" className="btn btn--small" onClick={() => recheck.mutate([selected.url ?? selected.path])}>
+                <button data-permission="sources.manage" type="button" className="btn btn--small" onClick={() => recheck.mutate([selected.url ?? selected.path])}>
                   {recheck.isPending ? "Starting…" : "Recheck now"}
                 </button>
-                <button
+                <button data-permission="sources.manage"
                   type="button"
                   className="btn btn--small btn--danger"
                   onClick={() =>
@@ -878,7 +878,7 @@ function DefaultCadence({ defaults }: { defaults: PipelineDefaults }) {
   return (
     <label className="syncs__default" title="How often every source syncs unless it sets its own schedule">
       <span className="muted small">Default schedule</span>
-      <select
+      <select data-permission="sources.manage"
         className="text-input text-input--small"
         value={value == null ? "beat" : String(value)}
         disabled={change.isPending}

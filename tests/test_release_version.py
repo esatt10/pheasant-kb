@@ -63,7 +63,8 @@ def test_render_prompt_discloses_patch_default() -> None:
     assert "`3` / `patch` (default) -> `1.2.4`" in rendered
 
 
-def test_release_options_are_incremented_from_highest_existing_tag() -> None:
+def test_release_options_are_incremented_from_highest_existing_tag(monkeypatch) -> None:
+    monkeypatch.setattr(release_version, "project_version", lambda: "1.2.0")
     assert release_options({"1.2.3", "latest", "sha-deadbeef"}) == {
         "major": "2.0.0",
         "minor": "1.3.0",
@@ -163,6 +164,8 @@ def test_an_unpublished_minor_is_not_demoted_by_a_later_patch(monkeypatch, tmp_p
     patch, and the image it builds contains #52 as well — so the release must
     be the minor #52 asked for, not the patch #53 did.
     """
+
+    monkeypatch.setattr(release_version, "project_version", lambda: "1.2.0")
 
     _fake_github(
         monkeypatch,

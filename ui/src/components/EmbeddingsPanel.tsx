@@ -105,7 +105,7 @@ export function EmbeddingsPanel() {
       </div>
 
       <label className="checkbox">
-        <input
+        <input data-permission="security.manage"
           type="checkbox"
           checked={Boolean(value("enabled"))}
           onChange={(event) =>
@@ -297,7 +297,7 @@ export function EmbeddingsPanel() {
       ) : null}
 
       <div className="button-row">
-        <button
+        <button data-permission="security.manage"
           className="btn btn--primary"
           disabled={!dirty || save.isPending}
           onClick={() =>
@@ -314,7 +314,7 @@ export function EmbeddingsPanel() {
         >
           {save.isPending ? "Saving…" : "Save"}
         </button>
-        <button
+        <button data-permission="security.manage"
           className="btn"
           disabled={!data.active || rebuild.isPending}
           onClick={() => rebuild.mutate(false)}
@@ -322,7 +322,7 @@ export function EmbeddingsPanel() {
         >
           {rebuild.isPending ? "Building…" : "Build missing vectors"}
         </button>
-        <button
+        <button data-permission="security.manage"
           className="btn"
           disabled={!data.active || rebuild.isPending}
           onClick={() => rebuild.mutate(true)}

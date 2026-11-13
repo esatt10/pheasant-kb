@@ -641,7 +641,7 @@ export function CandidateReview() {
         <span className="candidates__selection">
           {selected.size > 0 ? `${selected.size} selected` : ""}
         </span>
-        <button
+        <button data-permission="artifacts.manage"
           type="button"
           className="button button--primary"
           disabled={selected.size === 0 || decide.isPending}
@@ -649,7 +649,7 @@ export function CandidateReview() {
         >
           Promote
         </button>
-        <button
+        <button data-permission="artifacts.manage"
           type="button"
           className="button"
           disabled={selected.size === 0 || decide.isPending}
@@ -722,7 +722,7 @@ export function CandidateReview() {
                       </span>
                       <span className="candidate__hint">{relative(candidate.last_seen)}</span>
                       <span className="candidate__row-actions">
-                        <button
+                        <button data-permission="artifacts.manage"
                           type="button"
                           className="button button--primary"
                           disabled={decide.isPending}
@@ -732,7 +732,7 @@ export function CandidateReview() {
                         >
                           Promote
                         </button>
-                        <button
+                        <button data-permission="artifacts.manage"
                           type="button"
                           className="button"
                           disabled={decide.isPending}

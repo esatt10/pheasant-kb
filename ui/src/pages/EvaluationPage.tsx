@@ -175,7 +175,7 @@ export function EvaluationPage() {
             recorded queries worth replaying — without it every demonstrated metric reports
             “not enough evidence” rather than a number.
           </p>
-          <button className="btn" onClick={() => start.mutate()} disabled={start.isPending}>
+          <button data-permission="evaluation.manage" className="btn" onClick={() => start.mutate()} disabled={start.isPending}>
             Run one anyway
           </button>
         </section>
@@ -189,12 +189,12 @@ export function EvaluationPage() {
         <h1>Knowledge effectiveness</h1>
         <div className="page__actions">
           {finished && (
-            <button className="btn" onClick={() => removeRun.mutate()} disabled={removeRun.isPending}
+            <button data-permission="evaluation.manage" className="btn" onClick={() => removeRun.mutate()} disabled={removeRun.isPending}
               title="Delete operational history; the published report remains in Artifacts">
               Delete run history
             </button>
           )}
-          <button
+          <button data-permission="evaluation.manage"
             className="btn btn--primary"
             onClick={() => start.mutate()}
             disabled={start.isPending || live?.status === "running"}

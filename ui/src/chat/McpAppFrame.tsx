@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { VisualResponse } from "../api/types";
 import { useAppliedTheme } from "../hooks/useTheme";
+import { usePermissions } from "../state/permissions";
 
 /**
  * pheasant's MCP App view, hosted the way an MCP host hosts it.
@@ -68,6 +69,8 @@ export function McpAppFrame({
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<DisplayMode>("inline");
   const theme = useAppliedTheme();
+  const { can } = usePermissions();
+  const maySave = can("artifacts.manage");
   const view = useQuery({
     queryKey: ["mcp-app-knowledge-view"],
     queryFn: api.knowledgeView,
@@ -75,8 +78,8 @@ export function McpAppFrame({
   });
 
   // Latest values for the message handler, which is registered once.
-  const latest = useRef({ result, onAsk, onRedrawn, onSaved, theme, mode });
-  latest.current = { result, onAsk, onRedrawn, onSaved, theme, mode };
+  const latest = useRef({ result, onAsk, onRedrawn, onSaved, theme, mode, maySave });
+  latest.current = { result, onAsk, onRedrawn, onSaved, theme, mode, maySave };
   // The visual the view is showing, so the host does not send it back the
   // picture it just drew itself.
   const shown = useRef<unknown>(null);
@@ -118,6 +121,7 @@ export function McpAppFrame({
             hostInfo: { name: "pheasant-ui", version: "1" },
             hostCapabilities: { openLinks: {}, serverTools: {} },
             hostContext: {
+              pheasantCanSaveArtifact: latest.current.maySave,
               theme: latest.current.theme,
               displayMode: latest.current.mode,
               availableDisplayModes: DISPLAY_MODES,
@@ -175,6 +179,7 @@ export function McpAppFrame({
               return;
             }
             if (name === "save_artifact") {
+              if (!latest.current.maySave) throw new Error("permission required: artifacts.manage");
               // The view's "Save": the diagram as drawn now, kept as a report.
               const saved = await api.saveArtifact({
                 title: typeof args.title === "string" ? args.title : undefined,
@@ -245,10 +250,10 @@ export function McpAppFrame({
   useEffect(() => {
     if (!ready) return;
     frameRef.current?.contentWindow?.postMessage(
-      { jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { displayMode: mode } },
+      { jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { displayMode: mode, pheasantCanSaveArtifact: maySave } },
       "*",
     );
-  }, [ready, mode]);
+  }, [ready, mode, maySave]);
 
   // Fullscreen is an overlay over the app, so the app must not scroll behind
   // it, and Escape must always be a way out even when the view has no focus.

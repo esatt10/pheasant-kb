@@ -25,6 +25,7 @@ from pheasant.assistant.artifact_files import (  # noqa: F401
     declared_types,
 )
 from pheasant.mcp_server.artifact_tools import ArtifactTools
+from pheasant.security.authorization import background_target
 
 
 class ComposeTools(ArtifactTools):
@@ -139,7 +140,9 @@ class ComposeTools(ArtifactTools):
                 result=payload,
             )
 
-        threading.Thread(target=run, name=f"pheasant-mcp-compose-{job.id}", daemon=True).start()
+        threading.Thread(
+            target=background_target(run), name=f"pheasant-mcp-compose-{job.id}", daemon=True
+        ).start()
         return {
             **job.as_dict(),
             "job_id": job.id,

@@ -40,6 +40,7 @@ from pheasant.search.criteria import (
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
 from pheasant.search.sqlite_store import SearchStore
+from pheasant.security.authorization import background_target, require_permission
 from pheasant.security.path_policy import resolve_config_write_target, resolve_under
 from pheasant.services import ServiceContext
 from pheasant.services import graph as graph_service
@@ -197,6 +198,7 @@ class PheasantTools(
         urls: list[str] | None = None,
         connection: str | None = None,
     ) -> dict:
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         source = self._new_source(name, SourceType(source_type), path, list(urls or []))
         source.description, source.enabled = description, enabled
@@ -289,6 +291,7 @@ class PheasantTools(
         full_scan: bool = False,
     ) -> dict:
         """Start indexing and immediately return a followable job record."""
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         self._require_source(source_name)
         with self._job_lock:
@@ -332,7 +335,7 @@ class PheasantTools(
             )
 
         threading.Thread(
-            target=run,
+            target=background_target(run),
             name=f"pheasant-mcp-sync-{source_name}",
             daemon=True,
         ).start()
@@ -378,6 +381,7 @@ class PheasantTools(
         transport: str = "mcp",
         client_id: str | None = None,
     ) -> dict:
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         self._require_source(source_name)
         self.state.set_source_enabled(source_name, False, "disabled")
@@ -395,6 +399,7 @@ class PheasantTools(
         transport: str = "mcp",
         client_id: str | None = None,
     ) -> dict:
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         self._require_source(source_name)
         if self._remote_graph:
@@ -415,6 +420,7 @@ class PheasantTools(
         transport: str = "mcp",
         client_id: str | None = None,
     ) -> dict:
+        require_permission("security.manage")
         self._require_knowledge_base(knowledge_base)
         source = self._source_config(source_name)
         source_payload = source.model_dump(mode="json")
@@ -476,6 +482,7 @@ class PheasantTools(
         admit, and whether the configured limits would refuse the sync.
         Reads no file content and writes nothing.
         """
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         return self.engine.scan_source(source_name, max_depth=max_depth)
 
@@ -487,6 +494,7 @@ class PheasantTools(
         max_depth: int | None = None,
         full_scan: bool = False,
     ) -> dict:
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         if self._remote_graph:
             result = self._publish_sync(source_name, mode, max_depth, full_scan)
@@ -508,6 +516,7 @@ class PheasantTools(
         max_depth: int | None = None,
         full_scan: bool = False,
     ) -> dict:
+        require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
         if self._remote_graph:
             results = [
@@ -560,6 +569,7 @@ class PheasantTools(
         itself. All three are optional and default to the pre-33.5 behavior
         (CLAUDE.md §4 rule 8: additive only).
         """
+        require_permission("artifacts.manage")
         from pheasant.services.artifact_records import WriteRequest, write
 
         self._require_knowledge_base(knowledge_base)
@@ -661,6 +671,7 @@ class PheasantTools(
         indexed by the same pipeline, so it competes for a slot on the same
         ranking as anything else --- it simply was not typed by anyone.
         """
+        require_permission("artifacts.manage")
 
         from pheasant.artifacts.formation import admit
 
@@ -674,6 +685,7 @@ class PheasantTools(
 
         The rule that proposed it will not suggest it again.
         """
+        require_permission("artifacts.manage")
 
         from pheasant.artifacts.formation import reject
 
@@ -687,6 +699,7 @@ class PheasantTools(
         deleted) and re-syncs the memory source so they leave the index. The
         scheduler runs this automatically; this tool is the on-demand edge.
         """
+        require_permission("artifacts.manage")
         from pheasant.artifacts.maintenance import run_memory_maintenance
 
         self._require_knowledge_base(knowledge_base)
@@ -711,6 +724,7 @@ class PheasantTools(
         disabled, no `type: memory` source is configured, or no model is
         reachable.
         """
+        require_permission("artifacts.manage")
         from pheasant.artifacts.store import MemoryStore, memory_source
         from pheasant.artifacts.synthesis import run_synthesis
 
@@ -901,6 +915,7 @@ class PheasantTools(
 
         ``pheasant://evaluation/taxonomy`` lists every event type.
         """
+        require_permission("evaluation.manage")
 
         self._require_knowledge_base(knowledge_base)
         import pheasant.evaluation as evaluation
@@ -974,6 +989,7 @@ class PheasantTools(
         run. A batch also takes the region's evaluation lease, so asking twice
         gets you the run already in flight rather than a second one.
         """
+        require_permission("evaluation.manage")
 
         self._require_knowledge_base(knowledge_base)
         import threading
@@ -1011,7 +1027,9 @@ class PheasantTools(
             except Exception as exc:  # noqa: BLE001 - a job records its own failure
                 self.jobs.finish(job.id, status="failed", error=str(exc))
 
-        threading.Thread(target=_run, name="pheasant-mcp-evaluation", daemon=True).start()
+        threading.Thread(
+            target=background_target(_run), name="pheasant-mcp-evaluation", daemon=True
+        ).start()
         return {"status": "started", "job_id": job.id, "mode": mode}
 
     def get_evaluation_status(self, knowledge_base: str, run_id: str | None = None) -> dict:
@@ -1066,6 +1084,7 @@ class PheasantTools(
         :meth:`get_retrieval_tuning_status`; progress lives in ``/state``, so
         it survives a restart and is readable from any process.
         """
+        require_permission("tuning.manage")
 
         self._require_knowledge_base(knowledge_base)
         import threading
@@ -1122,7 +1141,9 @@ class PheasantTools(
             except Exception as exc:  # noqa: BLE001 - a job records its own failure
                 self.jobs.finish(job.id, status="failed", error=str(exc))
 
-        threading.Thread(target=_run, name="pheasant-mcp-tuning", daemon=True).start()
+        threading.Thread(
+            target=background_target(_run), name="pheasant-mcp-tuning", daemon=True
+        ).start()
         return {"job_id": job.id, "status": "running", "diagnose_only": bool(diagnose_only)}
 
     def get_retrieval_tuning_status(
@@ -1235,6 +1256,7 @@ class PheasantTools(
         Reversible: :meth:`rollback_tuning_bundle` returns the region to its
         configured values, and what the bundle replaced is stored on it.
         """
+        require_permission("tuning.manage")
 
         self._require_knowledge_base(knowledge_base)
         from pheasant.tuning import store as tuning_store
@@ -1253,6 +1275,7 @@ class PheasantTools(
         to a decision somebody made before, and is recorded as a rollback
         rather than a fresh apply that happens to use old numbers.
         """
+        require_permission("tuning.manage")
 
         self._require_knowledge_base(knowledge_base)
         from pheasant.tuning import store as tuning_store
@@ -1298,6 +1321,7 @@ class PheasantTools(
         resumable rather than destructive. It lands as a row, so it reaches a
         batch running in a different process or on a different replica.
         """
+        require_permission("tuning.manage")
 
         self._require_knowledge_base(knowledge_base)
         import pheasant.tuning as tuning
@@ -1321,6 +1345,7 @@ class PheasantTools(
         the set they want rather than a delta against one they may not have
         read.
         """
+        require_permission("tuning.manage")
 
         self._require_knowledge_base(knowledge_base)
         from pheasant.search.ranking import PARAMETER_STAGES

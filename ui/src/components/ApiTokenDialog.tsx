@@ -8,6 +8,7 @@ import {
   type PersonalKey,
 } from "../api/client";
 import { CopyLine } from "./CopyLine";
+import { usePermissions } from "../state/permissions";
 
 const METHOD_LABELS: Record<string, string> = {
   api_token: "shared token",
@@ -89,6 +90,7 @@ export function ApiTokenDialog({
             <span className="muted">
               {" "}
               via {METHOD_LABELS[identity?.auth_method ?? ""] ?? identity?.auth_method}
+              {identity?.role ? ` · ${identity.role}` : ""}
             </span>
           </p>
         ) : null}
@@ -142,6 +144,8 @@ export function ApiTokenDialog({
 
 /** Keys a signed-in person mints for agents and scripts; each shown once. */
 function PersonalKeys() {
+  const { can } = usePermissions();
+  const [role, setRole] = useState("");
   const [keys, setKeys] = useState<PersonalKey[]>([]);
   const [name, setName] = useState("");
   const [days, setDays] = useState(90);
@@ -161,7 +165,7 @@ function PersonalKeys() {
     event.preventDefault();
     setError(null);
     try {
-      const body = await api.createPersonalKey({ name: name.trim() || "key", days });
+      const body = await api.createPersonalKey({ name: name.trim() || "key", days, role: role || undefined });
       setCreated(body.key);
       setName("");
       refresh();
@@ -209,6 +213,12 @@ function PersonalKeys() {
         </ul>
       ) : null}
       <form className="auth-keyform" onSubmit={create}>
+        <select className="text-input" aria-label="Key role" value={role} onChange={event => setRole(event.target.value)}>
+          <option value="">My current permissions</option>
+          <option value="Reader">Reader</option>
+          {can("sources.manage") ? <option value="Contributor">Contributor</option> : null}
+          {can("security.manage") ? <option value="Admin">Admin</option> : null}
+        </select>
         <input
           className="text-input"
           value={name}

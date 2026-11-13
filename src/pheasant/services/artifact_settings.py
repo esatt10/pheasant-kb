@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pheasant.config.schema import ARTIFACT_KINDS, ArtifactsSettings
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 
@@ -98,6 +99,7 @@ def update(context: ServiceContext, changes: dict[str, Any], actor: str | None) 
     A key set back to its config default is dropped from the overlay, so
     "what did somebody change" stays answerable.
     """
+    require_permission("artifacts.manage")
 
     if not isinstance(changes, dict) or not changes:
         raise InvalidRequest("name at least one artifacts setting to change")

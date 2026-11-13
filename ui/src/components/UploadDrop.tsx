@@ -36,7 +36,7 @@ export function UploadDrop({
   };
 
   return (
-    <div className="upload">
+    <div className="upload" data-permission="sources.manage">
       <div
         className={`upload__zone${dragging ? " upload__zone--active" : ""}`}
         onDragOver={(event) => {

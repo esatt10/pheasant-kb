@@ -30,10 +30,10 @@ export function ArtifactRecords() {
     <label className="field">Scope <select className="text-input" value={scope} onChange={event => setScope(event.target.value)}>
       <option value="user">Personal</option><option value="session">Session</option><option value="org">Shared</option>
     </select></label>
-    <button className="btn" disabled={!text.trim() || save.isPending} onClick={() => save.mutate()}>
+    <button data-permission="artifacts.manage" className="btn" disabled={!text.trim() || save.isPending} onClick={() => save.mutate()}>
       {save.isPending ? "Saving…" : supersedes ? "Save correction" : "Save artifact"}
     </button>
-    {supersedes ? <button className="btn" onClick={() => { setSupersedes(null); setText(""); }}>Cancel correction</button> : null}
+    {supersedes ? <button data-permission="artifacts.manage" className="btn" onClick={() => { setSupersedes(null); setText(""); }}>Cancel correction</button> : null}
     </div>
     {save.isError ? <p className="error">{(save.error as Error).message}</p> : null}
     {records.isError ? <p className="error">{(records.error as Error).message}</p> : null}
@@ -42,7 +42,7 @@ export function ArtifactRecords() {
     <details><summary>Review knowledge records</summary>
       {records.data?.records.map(record => <article key={record.record_id} className="memory-card">
         <p>{record.text}</p><span className="badge">{record.scope}</span>
-        <button className="btn btn--small" onClick={() => { setText(record.text); setScope(record.scope); setSupersedes(record.record_id); }}>Correct</button>
+        <button data-permission="artifacts.manage" className="btn btn--small" onClick={() => { setText(record.text); setScope(record.scope); setSupersedes(record.record_id); }}>Correct</button>
       </article>)}
     </details>
     <CandidateReview />

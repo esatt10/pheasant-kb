@@ -111,18 +111,25 @@ def install_guard(
             )
         request.state.identity = identity
         token = bind_identity(identity)
+        from pheasant.security.authorization import _REFRESH
+
+        refresh_token = _REFRESH.set(lambda _identity: service.authenticate(supplied))
         try:
             response = await call_next(request)
         finally:
+            _REFRESH.reset(refresh_token)
             reset_identity(token)
         access_log.info(
-            "%s %s %d principal=%s auth=%s %.0fms",
+            "%s %s %d principal=%s auth=%s %.0fms roles=%s token=%s subject=%s",
             request.method,
             path,
             response.status_code,
             identity.principal,
             identity.method,
             (time.monotonic() - started) * 1000,
+            ",".join(identity.roles),
+            identity.token_id or "-",
+            identity.subject or "-",
         )
         return response
 
@@ -134,6 +141,7 @@ def request_identity(request: Request) -> Identity | None:
 class PersonalKeyRequest(BaseModel):
     name: str
     days: int | None = None
+    role: str | None = None
 
 
 def _refusal(exc: ServiceError) -> HTTPException:
@@ -170,7 +178,16 @@ def build_router(service: IdentityService) -> APIRouter:
     def auth_me(request: Request) -> dict:
         identity = request_identity(request)
         if identity is None:
-            return {"principal": None, "auth_method": None, "person": False, "roles": []}
+            from pheasant.security.authorization import ROLE_PERMISSIONS
+
+            return {
+                "principal": None,
+                "auth_method": None,
+                "person": False,
+                "roles": [],
+                "role": None,
+                "permissions": sorted(ROLE_PERMISSIONS["Admin"]) if not service.enforcing else [],
+            }
         return identity.as_dict()
 
     @router.post("/auth/logout")
@@ -267,7 +284,7 @@ Approve only if you just started connecting this client.</p>
     def create_key(request: Request, body: PersonalKeyRequest) -> dict:
         try:
             return service.create_personal_key(
-                request_identity(request), name=body.name, days=body.days or 0
+                request_identity(request), name=body.name, days=body.days or 0, role=body.role
             )
         except ServiceError as exc:
             raise _refusal(exc) from exc

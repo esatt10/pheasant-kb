@@ -12,6 +12,7 @@ from pheasant.artifacts.reinforcement import StateReinforcementIndex
 from pheasant.artifacts.store import ArtifactRecordStore, artifact_source
 from pheasant.config.schema import PheasantConfig
 from pheasant.registry.source_registry import SourceRegistry
+from pheasant.security.authorization import require_permission
 from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services.errors import ArtifactNotFound, InvalidRequest
@@ -69,6 +70,7 @@ class WriteRequest:
 def write(
     context: ServiceContext, request: WriteRequest, *, legacy: bool = False
 ) -> dict[str, Any]:
+    require_permission("artifacts.manage")
     found = source(context, create=not legacy)
     if found is None:
         raise InvalidRequest(
@@ -234,6 +236,7 @@ def get_record(
 
 
 def retire(context: ServiceContext, artifact_id: str, principal: str | None = None) -> dict:
+    require_permission("artifacts.manage")
     found = source(context)
     held = get_record(context, artifact_id, principal)
     store = ArtifactRecordStore(found.path)

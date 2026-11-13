@@ -188,7 +188,7 @@ export function ConfigPage() {
           Export adjusted YAML
         </button>
         <span>
-          <button className="btn btn--primary" onClick={saveToServer} disabled={save.isPending}>
+          <button data-permission="settings.manage" className="btn btn--primary" onClick={saveToServer} disabled={save.isPending}>
             {save.isPending ? "Saving…" : "Save to pheasant"}
           </button>
         </span>

@@ -46,6 +46,7 @@ from typing import Any
 
 from pheasant.ingestion.landing import owned_upload_directory
 from pheasant.persistence import archive
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import (
     AmbiguousDocument,
@@ -105,6 +106,7 @@ class ArchivedRequest:
 
 def archive_documents(context: ServiceContext, request: ArchiveRequest) -> dict[str, Any]:
     """Remove each named document from the index and hold it out of every sync."""
+    require_permission("sources.manage")
 
     kb_id = context.knowledge_base(request.knowledge_base)
     names = _requested(request.documents, request.folders)
@@ -160,6 +162,7 @@ def archive_documents(context: ServiceContext, request: ArchiveRequest) -> dict[
 
 def reinstate_documents(context: ServiceContext, request: ArchiveRequest) -> dict[str, Any]:
     """Let archived documents back in, and sync their sources to read them again."""
+    require_permission("sources.manage")
 
     kb_id = context.knowledge_base(request.knowledge_base)
     names = _requested(request.documents, request.folders)

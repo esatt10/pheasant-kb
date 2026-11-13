@@ -119,7 +119,7 @@ export function JobsTray() {
         <div className="jobs-tray__body">
           {recent.length > 0 ? (
             <div className="jobs-tray__actions">
-              <button className="button button--ghost" onClick={() => clear.mutate(undefined)}>
+              <button data-permission="jobs.manage" className="button button--ghost" onClick={() => clear.mutate(undefined)}>
                 Clear finished
               </button>
             </div>
@@ -172,6 +172,7 @@ function JobRow({ job, onClear }: { job: JobRecord; onClear: () => void }) {
           <button
             className="job__clear"
             onClick={onClear}
+            data-permission="jobs.manage"
             aria-label={`Clear ${job.label}`}
             title="Clear"
           >

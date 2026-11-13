@@ -50,6 +50,7 @@ from typing import Any
 from pheasant.ingestion.landing_service import LandingServiceError
 from pheasant.persistence import receipts as receipt_ledger
 from pheasant.security import corpus_policy
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import (
     ContaminationRefused,
@@ -133,6 +134,7 @@ def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any
     :func:`acknowledge_indexed`. Doing both here would make the two
     indistinguishable in exactly the payload built to distinguish them.
     """
+    require_permission("sources.manage")
 
     if not request.items:
         raise InvalidRequest("A submission needs at least one item")
@@ -241,6 +243,7 @@ def acknowledge_indexed(
     caller needs is whether the region *holds* the artifact. Those agree almost
     always, and the case where they do not is precisely the one worth catching.
     """
+    require_permission("sources.manage")
 
     kb_id = context.knowledge_base(knowledge_base)
     pending = receipt_ledger.listing(

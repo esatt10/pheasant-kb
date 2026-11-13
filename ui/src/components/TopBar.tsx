@@ -128,6 +128,7 @@ export function TopBar() {
         </NavLink>
         <NavLink
           to="/tuning"
+          data-permission="tuning.manage"
           className={({ isActive }) => (isActive ? "navlink active" : "navlink")}
         >
           Tuning
