@@ -1,3 +1,4 @@
+import { browserTraceparent } from "../telemetry";
 import type {
   MemoryConsolidateResponse,
   MemoryCandidateEvidence,
@@ -135,6 +136,7 @@ export function adoptSignInSession(): boolean {
 
 /** What a client may know before it holds a credential (`GET /auth/config`). */
 export interface AuthConfig {
+  telemetry?: { ui_enabled: boolean; sample_ratio: number };
   shared_token: boolean;
   entra: boolean;
   login_url: string | null;
@@ -188,6 +190,8 @@ function requestHeaders(initial?: HeadersInit, json = true): Headers {
   if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
   // Kept artifacts and the ledger record the channel: this is the web UI.
   if (!headers.has("x-pheasant-modality")) headers.set("x-pheasant-modality", "ui");
+  const parent = browserTraceparent();
+  if (parent && !headers.has("traceparent")) headers.set("traceparent", parent);
   const token = getApiToken();
   if (token && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${token}`);
@@ -373,6 +377,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, response.status, code, retryable);
   }
+  if (response.status === 204) return undefined as T;
   if (!isJson) {
     throw new ApiError(invalidJsonResponse(requestPath, contentType), response.status);
   }
@@ -1072,6 +1077,7 @@ export const api = {
 
   // Identity: the shared token, or sign-in with Microsoft and personal keys.
   authConfig: () => request<AuthConfig>("/auth/config"),
+  uiTelemetry: (events: unknown[]) => request<void>("/telemetry/ui", { method: "POST", body: JSON.stringify({ events }) }),
   me: () => request<AuthIdentity>("/auth/me"),
   signOut: () => request<{ signed_out: boolean }>("/auth/logout", { method: "POST" }),
   personalKeys: () => request<{ keys: PersonalKey[] }>("/auth/keys"),

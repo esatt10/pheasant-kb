@@ -37,11 +37,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
 
 from pheasant.sync.remote_worker import RemoteWorkerError
+from pheasant.telemetry.interactions import inject_traceparent
+from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +210,7 @@ class GrpcTransport:
         except Exception:  # pragma: no cover - closing a dead channel
             pass
 
+    @instrument("grpc.post", attributes={"rpc.system": "grpc", "rpc.service": "PreparationWorker"})
     def post(
         self,
         connection: Any | None,
@@ -232,7 +236,9 @@ class GrpcTransport:
                 stub.PrepareBatch(
                     iter(requests),
                     timeout=budget,
-                    metadata=(("authorization", f"Bearer {token}"),),
+                    metadata=tuple(
+                        inject_traceparent({"authorization": f"Bearer {token}"}).items()
+                    ),
                 )
             )
         except grpc.RpcError as exc:
@@ -251,6 +257,9 @@ class GrpcTransport:
         # exclusive HTTP connection pool.
         return {"results": results}, None
 
+    @instrument(
+        "grpc.extract_pages", attributes={"rpc.system": "grpc", "rpc.service": "PreparationWorker"}
+    )
     def extract_pages(
         self,
         url: str,
@@ -277,7 +286,7 @@ class GrpcTransport:
             response = stub.ExtractPages(
                 request,
                 timeout=timeout,
-                metadata=(("authorization", f"Bearer {token}"),),
+                metadata=tuple(inject_traceparent({"authorization": f"Bearer {token}"}).items()),
             )
         except grpc.RpcError as exc:
             if exc.code() != grpc.StatusCode.UNIMPLEMENTED:
@@ -424,6 +433,12 @@ class PreparationWorkerServicer:
         if inbound_method(authorization, token_env, WORKER_PREPARE, identity) is None:
             context.abort(grpc.StatusCode.UNAUTHENTICATED, "invalid indexing worker token")
 
+    @instrument(
+        "grpc.PrepareBatch",
+        kind="SERVER",
+        inbound=True,
+        attributes={"rpc.system": "grpc", "rpc.service": "PreparationWorker"},
+    )
     def PrepareBatch(self, request_iterator: Any, context: Any):  # noqa: N802 - gRPC spelling
         import grpc
 
@@ -472,6 +487,12 @@ class PreparationWorkerServicer:
             refused_count,
         )
 
+    @instrument(
+        "grpc.ExtractPages",
+        kind="SERVER",
+        inbound=True,
+        attributes={"rpc.system": "grpc", "rpc.service": "PreparationWorker"},
+    )
     def ExtractPages(self, request: Any, context: Any):  # noqa: N802 - gRPC spelling
         """Read one page range with the extractor's own page reader.
 
@@ -534,6 +555,10 @@ def serve(
     # worker` on an image without the [grpc] extra greeted an operator with a
     # traceback instead — on the tier that scales hardest and comes up last.
     _pb2, pb2_grpc = load_protos()
+    from pheasant.telemetry.interactions import configure_tracing
+
+    os.environ["PHEASANT_ROLE"] = "worker"
+    configure_tracing(config.observability)
 
     import grpc
 

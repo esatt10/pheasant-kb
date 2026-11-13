@@ -1046,7 +1046,9 @@ def _anticipated_failures(surface: str) -> Any:
                     raise deliberate(str(refusal)) from exc
 
             buffer = _interaction_buffer()
-            if buffer is None:
+            from pheasant.telemetry.interactions import TRACING
+
+            if buffer is None and not TRACING.enabled:
                 return run()
             return _observed(buffer, operation, kwargs, run)
 
@@ -1083,6 +1085,7 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
         Modality,
         extract_results,
         observe,
+        traceparent_header,
     )
 
     identity = current_identity()
@@ -1093,6 +1096,7 @@ def _observed(buffer: Any, operation: str, kwargs: dict[str, Any], run: Any) -> 
         principal=effective_principal(kwargs.get("principal")),
         session_id=kwargs.get("session"),
         client_id=kwargs.get("client_id"),
+        traceparent=traceparent_header(),
     )
     with observe(
         buffer,
@@ -1258,6 +1262,9 @@ def run_mcp_server(config: PheasantConfig, transport: str = "stdio") -> None:
     on a keyword the chosen transport does not accept.
     """
 
+    from pheasant.telemetry.interactions import configure_tracing
+
+    configure_tracing(config.observability)
     mcp = create_mcp_server(config)
     if transport == "stdio":
         mcp.run(transport="stdio")

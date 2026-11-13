@@ -200,6 +200,11 @@ keywords later in a sentence and email addresses are just text.
 | `@compose` (`@build`, `@scaffold`) | A new artifact — a configuration, script or set of files — assembled from what the sources document, written in one pass and checked identifier by identifier before it returns; the same pin as `intent: compose`. |
 | `@diagram`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A grounded picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
 
+Quote a literal document path when it contains spaces, for example
+`@doc "artifacts/Source reference page 2.md"`. The file viewer's **Ask** button
+does this automatically. Quoted paths retain their case, spaces and filename
+words such as `page 2`; they are looked up directly in the index.
+
 The keyword is removed before the question is searched or written about, and
 it wins over the request's own `depth` / `visual` (it was typed into this
 message; the length selector is a standing preference). The payload says what

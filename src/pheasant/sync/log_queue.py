@@ -48,6 +48,7 @@ from pheasant.telemetry.interactions import (
     read_spool,
 )
 from pheasant.telemetry.metrics import REGISTRY
+from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
 
@@ -457,6 +458,7 @@ def drop_expired_partitions(
     return dropped
 
 
+@instrument("pheasant.logger.batch", kind="CONSUMER", attributes={"messaging.system": "nats"})
 def handle_batch(state: Any, task: LogTask) -> int:
     """The queue handler: persist one claimed batch."""
 

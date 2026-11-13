@@ -31,6 +31,7 @@ from typing import Any
 
 from pheasant.persistence.pg_liveness import TCP_KEEPALIVES, IdleCheck, is_disconnect
 from pheasant.persistence.sql import POSTGRES, SQLITE, Dialect, Row
+from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
 
@@ -492,6 +493,7 @@ class PostgresBackend(StateBackend):
                 logger.debug("pool check before the retry failed", exc_info=True)
             return self._rows_once(sql, params)
 
+    @instrument("postgresql.rows_once", attributes={"db.system": "postgresql"}, require_parent=True)
     def _rows_once(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
         conn = self._conn()
         from pheasant.request_budget import DeadlineExceeded, remaining_seconds
@@ -622,22 +624,14 @@ class PostgresBackend(StateBackend):
             # right outcome for one that refused this.
             logger.debug("Could not restore transactional mode", exc_info=True)
 
+    @instrument("postgresql.statement", attributes={"db.system": "postgresql"}, require_parent=True)
     def statement(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[Row], int]:
         """Run a statement that may write, returning ``(rows, rowcount)``.
 
-        Distinct from :meth:`rows` in two ways, both load-bearing:
-
-        - This never auto-releases the connection. ``_PgConnection.execute``
-          — the sqlite3-shaped path every ``with self.conn:`` block in
-          ``StateStore`` uses — is a *write* path, so releasing after it
-          would hand back the connection mid-transaction and discard the
-          uncommitted work. ``UPDATE ... RETURNING`` (the queue's claim)
-          needs the same.
-        - ``cursor.rowcount`` is read *inside* the ``with conn.cursor()``
-          block, before psycopg closes the cursor — reading it after would
-          raise, and a bare ``UPDATE``/``DELETE`` (no ``RETURNING``) is
-          exactly the shape that has no rows to fall back on for "how many
-          did this touch".
+        Unlike :meth:`rows`, this keeps pending work until commit. StateStore
+        writes and UPDATE RETURNING must not auto-release the connection.
+        Read rowcount before psycopg closes the cursor; a bare UPDATE/DELETE
+        has no returned rows to tell us how much it changed.
         """
 
         conn = self._conn()
@@ -655,6 +649,7 @@ class PostgresBackend(StateBackend):
         self._local.dirty = True
         return result, rowcount
 
+    @instrument("postgresql.execute", attributes={"db.system": "postgresql"}, require_parent=True)
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         conn = self._conn()
         try:
@@ -665,6 +660,9 @@ class PostgresBackend(StateBackend):
             raise
         self._local.dirty = True
 
+    @instrument(
+        "postgresql.executemany", attributes={"db.system": "postgresql"}, require_parent=True
+    )
     def executemany(self, sql: str, seq: list[tuple[Any, ...]]) -> None:
         if not seq:
             return
@@ -677,6 +675,9 @@ class PostgresBackend(StateBackend):
             raise
         self._local.dirty = True
 
+    @instrument(
+        "postgresql.executescript", attributes={"db.system": "postgresql"}, require_parent=True
+    )
     def executescript(self, script: str) -> None:
         conn = self._conn()
         try:
@@ -689,6 +690,7 @@ class PostgresBackend(StateBackend):
         self._local.dirty = False
         self._finish()
 
+    @instrument("postgresql.commit", attributes={"db.system": "postgresql"}, require_parent=True)
     def commit(self) -> None:
         try:
             self._conn().commit()

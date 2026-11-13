@@ -1,3 +1,4 @@
+import { recordUI } from "../telemetry";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -288,6 +289,7 @@ export function ChatPanel({
   const submit = (text: string) => {
     const question = text.trim();
     if (!question || ask.isPending) return;
+    recordUI("ask", window.location.pathname);
     // `@taxonomy` on its own opens the browser at once, on the source the chat
     // is scoped to; the answer (from the index, no model) confirms where.
     if (/^@(taxonomy|browse|folders)$/i.test(question)) {

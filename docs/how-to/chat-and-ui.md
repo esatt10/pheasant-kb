@@ -1,10 +1,16 @@
 # Ask your knowledge base (the web UI)
 
 The pheasant UI is a three-pane workspace: **Sources** on the left,
-**Chat** in the middle, **Knowledge** (graph / facts / node) on the right.
+**Chat** in the middle, and **Artifacts** initially open on the right. Graph,
+Facts, Node and Taxonomy remain available as tabs; saved tab preferences are
+retained. Ordinary answers keep the pane you selected open.
 You ask a question in prose; pheasant answers from your own indexed content,
 cites the passages it used, and lights up the corresponding nodes on the
 knowledge graph.
+
+The Sources rail shows each source's indexed document count and the same
+readability badge as Taxonomy. Hover a count for its share of the visible
+documents. Long names truncate while counts stay visible.
 
 Start it with `pheasant host <target>` (containers, UI included on `:8080`),
 `docker compose -f deploy/compose/docker-compose.yml up -d --build` from a clone, or by building `ui/dist` and

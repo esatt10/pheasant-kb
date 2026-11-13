@@ -42,7 +42,6 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
-import os
 import re
 import secrets
 import threading
@@ -58,6 +57,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pheasant.telemetry.metrics import REGISTRY
+from pheasant.telemetry.tracing import Tracing as _Tracing
+from pheasant.telemetry.tracing import parse_headers as _parse_headers  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -221,10 +222,34 @@ def annotate_current(key: str, value: Any) -> bool:
 def current_trace() -> tuple[str, str] | None:
     """``(trace_id, span_id)`` for the call in progress, or ``None``."""
 
+    if TRACING.enabled:
+        active = TRACING.current_ids()
+        if active:
+            return active
+    from pheasant.telemetry.sync_trace import current
+
+    sync = current()
+    if sync is not None:
+        return sync.trace_id, sync.span_id
     return _CURRENT_TRACE.get()
 
 
-def traceparent_header(sampled: bool = True) -> str | None:
+_CURRENT_FLAGS: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "pheasant_trace_flags", default=1
+)
+
+
+def current_trace_flags() -> int:
+    if TRACING.enabled:
+        from opentelemetry import trace
+
+        context = trace.get_current_span().get_span_context()
+        if context.is_valid:
+            return int(context.trace_flags)
+    return _CURRENT_FLAGS.get()
+
+
+def traceparent_header(sampled: bool | None = None) -> str | None:
     """The W3C ``traceparent`` for the call in progress, or ``None``.
 
     What makes a trace survive pheasant's own service hops. Without it a
@@ -237,6 +262,8 @@ def traceparent_header(sampled: bool = True) -> str | None:
     if trace is None:
         return None
     trace_id, span_id = trace
+    if sampled is None:
+        sampled = bool(current_trace_flags() & 1)
     return f"00-{trace_id}-{span_id}-{'01' if sampled else '00'}"
 
 
@@ -274,10 +301,12 @@ def adopt_trace(traceparent: str | None) -> Iterator[None]:
         return
     trace_id, span_id = parsed
     token = _CURRENT_TRACE.set((trace_id, span_id))
+    flags = _CURRENT_FLAGS.set(int(traceparent.strip()[-2:], 16))
     try:
         yield
     finally:
         _CURRENT_TRACE.reset(token)
+        _CURRENT_FLAGS.reset(flags)
 
 
 def event_id(trace_id: str, span_id: str) -> str:
@@ -318,6 +347,7 @@ class InteractionContext:
     trace_id: str = ""
     span_id: str = ""
     parent_span_id: str | None = None
+    trace_flags: int = 1
 
     @classmethod
     def create(
@@ -345,6 +375,7 @@ class InteractionContext:
             trace_id=trace_id,
             span_id=new_span_id(),
             parent_span_id=parent,
+            trace_flags=int(traceparent.strip()[-2:], 16) if inbound else 1,
         )
 
 
@@ -836,126 +867,6 @@ class InteractionBuffer:
 # --------------------------------------------------------------------------
 
 
-class _Tracing:
-    """Holds whatever OpenTelemetry we managed to configure, if any.
-
-    Deliberately a small object rather than module globals so a test can build
-    one, and so "is tracing on" is a question with one answer instead of three
-    module-level flags that can disagree.
-    """
-
-    def __init__(self) -> None:
-        self.tracer: Any = None
-        self.enabled = False
-
-    def configure(self, settings: Any) -> bool:
-        endpoint = getattr(settings, "otlp_endpoint", None)
-        if not endpoint:
-            # No exporter, and therefore no SDK needed. Spans still exist --
-            # they are just ours, and they still feed the ledger.
-            self.tracer, self.enabled = None, False
-            return False
-        try:
-            from opentelemetry import trace as ot_trace
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                OTLPSpanExporter,
-            )
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-            from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-        except ImportError:
-            logger.warning(
-                "observability.otlp_endpoint is set but the [otel] extra is not "
-                "installed; spans will not be exported. Install with: "
-                'pip install "pheasant[otel]"'
-            )
-            self.tracer, self.enabled = None, False
-            return False
-
-        headers = _parse_headers(os.environ.get(getattr(settings, "otlp_headers_env", "") or ""))
-        from pheasant.telemetry.sync_trace import ROLE_ENV
-
-        role = os.environ.get(ROLE_ENV)
-        provider = TracerProvider(
-            resource=Resource.create(
-                {
-                    "service.name": str(getattr(settings, "service_name", "pheasant")),
-                    # Which tier emitted a span: the stdout spans say so too.
-                    **({"pheasant.role": role} if role else {}),
-                }
-            ),
-            sampler=TraceIdRatioBased(float(getattr(settings, "sample_ratio", 1.0) or 1.0)),
-        )
-        provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=str(endpoint), headers=headers or None))
-        )
-        ot_trace.set_tracer_provider(provider)
-        self.tracer = ot_trace.get_tracer("pheasant")
-        self.enabled = True
-        return True
-
-    def parent_context(self, context: InteractionContext) -> Any:
-        """Rebuild an OTel context from the inbound ``traceparent``.
-
-        Without this the SDK starts its own root trace for a call the caller
-        already had a trace for, and the operator's collector shows two
-        unrelated traces where there was one request.
-        """
-
-        if not context.parent_span_id or not context.trace_id:
-            return None
-        try:
-            from opentelemetry.trace.propagation.tracecontext import (
-                TraceContextTextMapPropagator,
-            )
-
-            header = f"00-{context.trace_id}-{context.parent_span_id}-01"
-            return TraceContextTextMapPropagator().extract({"traceparent": header})
-        except Exception:  # noqa: BLE001 - propagation is best-effort
-            return None
-
-    def current_ids(self) -> tuple[str, str] | None:
-        """``(trace_id, span_id)`` of the active span, in W3C hex.
-
-        This is what keeps a ledger row and an exported span naming the *same*
-        call. Without it the two are minted independently and an operator
-        correlating a slow span in their collector to a row here finds
-        nothing -- which is most of the reason to export spans at all.
-        """
-
-        try:
-            from opentelemetry import trace as ot_trace
-
-            span_context = ot_trace.get_current_span().get_span_context()
-            if not span_context.is_valid:
-                return None
-            return (
-                format(span_context.trace_id, "032x"),
-                format(span_context.span_id, "016x"),
-            )
-        except Exception:  # noqa: BLE001 - never break a call over an id
-            return None
-
-
-def _parse_headers(raw: str) -> dict[str, str]:
-    """``key=value,key=value`` from an environment variable.
-
-    The variable's **name** comes from config, never its value -- the same rule
-    ``storage.dsn_env`` follows, so a config file that gets committed cannot
-    leak a collector credential.
-    """
-
-    headers: dict[str, str] = {}
-    for part in (raw or "").split(","):
-        if "=" in part:
-            key, _, value = part.partition("=")
-            key, value = key.strip(), value.strip()
-            if key:
-                headers[key] = value
-    return headers
-
-
 TRACING = _Tracing()
 
 
@@ -965,7 +876,12 @@ def configure_tracing(settings: Any) -> bool:
     try:
         return TRACING.configure(settings)
     except Exception:  # noqa: BLE001 - telemetry must never break startup
-        logger.warning("Could not configure OTLP tracing; continuing without it", exc_info=True)
+        TRACING.shutdown()
+        logger.warning(
+            "Could not configure OTLP tracing; install the [otel] extra "
+            "and check the exporter settings",
+            exc_info=True,
+        )
         return False
 
 
@@ -1027,13 +943,22 @@ def observe(
         started_at=_iso(started),
     )
     token = _CURRENT_TRACE.set((event.trace_id, event.span_id))
+    flags_token = _CURRENT_FLAGS.set(context.trace_flags)
     event_token = _CURRENT_EVENT.set(event)
     span_cm = None
     if TRACING.enabled and TRACING.tracer is not None:
+        from opentelemetry.trace import SpanKind
+
         span_cm = TRACING.tracer.start_as_current_span(
-            operation, context=TRACING.parent_context(context)
+            operation,
+            context=TRACING.parent_context(context),
+            kind=SpanKind.SERVER,
+            record_exception=False,
+            set_status_on_exception=False,
         )
-        span_cm.__enter__()
+        sdk_span = span_cm.__enter__()
+        if getattr(sdk_span, "parent", None):
+            event.parent_span_id = format(sdk_span.parent.span_id, "016x")
         # Adopt the SDK's ids rather than our own. The event was built with
         # locally minted ones because they must exist with or without the
         # extra; when a real span is running, *its* ids are the ones the
@@ -1062,6 +987,7 @@ def observe(
                 logger.debug("Span exit failed", exc_info=True)
         _CURRENT_TRACE.reset(token)
         _CURRENT_EVENT.reset(event_token)
+        _CURRENT_FLAGS.reset(flags_token)
         if buffer is not None:
             buffer.record(event)
 
@@ -1083,6 +1009,11 @@ def _annotate_span(event: InteractionEvent) -> None:
     span.set_attribute("pheasant.kb", event.kb_id)
     span.set_attribute("pheasant.modality", str(event.modality))
     span.set_attribute("pheasant.operation", event.operation)
+    if "http_status" in event.attributes:
+        span.set_attribute("http.response.status_code", event.attributes["http_status"])
+    if "method" in event.attributes:
+        span.set_attribute("http.request.method", event.attributes["method"])
+        span.set_attribute("http.route", event.operation)
     if event.result_count is not None:
         span.set_attribute("pheasant.result_count", int(event.result_count))
     if event.status != "ok":

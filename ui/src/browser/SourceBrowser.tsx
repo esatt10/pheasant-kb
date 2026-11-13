@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { BrowseFile, BrowseFolder, BrowseResponse, FileQuality, FolderHealth } from "../api/types";
+import type { BrowseFile, BrowseFolder, BrowseResponse, FileQuality } from "../api/types";
+import { HealthPill, healthClass } from "./HealthPill";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileDock, TileFold, TileGrip } from "../components/Tiles";
 import { ArchivedList } from "./ArchivedList";
@@ -343,20 +344,6 @@ function FolderSummary({ listing }: { listing?: BrowseResponse }) {
   );
 }
 
-/** A folder's (or a source's) readable share, beside its count; nothing when all reads. */
-function HealthPill({ health }: { health?: FolderHealth | null }) {
-  if (!health || health.percent === null || (health.percent === 100 && !health.warning)) return null;
-  const detail =
-    health.ok !== undefined
-      ? `${health.ok} ok, ${health.warning} warning, ${health.error} error beneath`
-      : `${health.percent}% of this source reads`;
-  return (
-    <span className={`pill browser-row__health ${healthClass(health)}`} title={detail}>
-      {health.percent}%
-    </span>
-  );
-}
-
 /** A file's state: nothing when ok, a mark naming its flags otherwise. */
 function QualityMark({ quality }: { quality?: FileQuality }) {
   if (!quality || quality.status === "ok") return null;
@@ -373,11 +360,6 @@ function QualityMark({ quality }: { quality?: FileQuality }) {
 function qualityTitle(file: BrowseFile): string {
   const reasons = (file.quality?.flags ?? []).map((flag) => `${flag.code}: ${flag.reason}`);
   return [file.url ?? file.path, ...reasons].join("\n");
-}
-
-function healthClass(health: FolderHealth): string {
-  if (health.status === "degraded" || health.error) return "error";
-  return health.percent === 100 && !health.warning ? "muted" : "source-status--partial";
 }
 
 function count(n: number, noun: string): string {

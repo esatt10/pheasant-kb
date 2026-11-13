@@ -10,6 +10,7 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager
+from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -867,6 +868,7 @@ class SyncEngine:
         ) as executor:
             futures = [
                 executor.submit(
+                    copy_context().run,
                     self.sync_source,
                     source.name,
                     mode,
@@ -989,7 +991,12 @@ class SyncEngine:
             ) as executor:
                 futures = [
                     executor.submit(
-                        drain, queue, run, owner=owner_id(), visibility_seconds=visibility
+                        copy_context().run,
+                        drain,
+                        queue,
+                        run,
+                        owner=owner_id(),
+                        visibility_seconds=visibility,
                     )
                     for _ in range(workers)
                 ]
@@ -1429,6 +1436,7 @@ class SyncEngine:
                         artifacts.get(item.relative_path),
                     )
                 return executor.submit(
+                    copy_context().run,
                     self._prepare_item,
                     connector,
                     source,
@@ -1552,6 +1560,7 @@ class SyncEngine:
 
                 def submit(batch: list[tuple[int, ConnectorItem]]) -> Future[list[_PreparedItem]]:
                     return executor.submit(
+                        copy_context().run,
                         self._prepare_batch_remote,
                         pool,
                         connector,

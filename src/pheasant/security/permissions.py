@@ -124,6 +124,7 @@ HTTP_PERMISSIONS = {
     ("POST", "/artifacts/records/enable"): "artifacts.manage",
     ("POST", "/artifacts/restore"): "artifacts.manage",
     ("POST", "/artifacts/synthesize"): "artifacts.manage",
+    ("POST", "/telemetry/ui"): "knowledge.use",
     ("POST", "/assistant/assess"): "knowledge.use",
     ("POST", "/assistant/chat"): "knowledge.use",
     ("POST", "/assistant/chat/stream"): "knowledge.use",

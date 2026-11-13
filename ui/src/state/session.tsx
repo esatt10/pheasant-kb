@@ -96,7 +96,7 @@ export const DEFAULT_TILE_LAYOUT: TileLayout = {
   right: ["panel"],
 };
 
-export const DEFAULT_DOCKED: PanelTab[] = ["graph", "facts", "node", "artifacts", "taxonomy"];
+export const DEFAULT_DOCKED: PanelTab[] = ["artifacts", "graph", "facts", "node", "taxonomy"];
 
 /** An opaque id for one conversation (a topic of the chat). */
 export function newConversationId(): string {
@@ -232,7 +232,7 @@ const INITIAL: SessionState = {
   pathScope: null,
   sourceTypeFilter: null,
   hiddenTypes: NOISY_NODE_TYPES,
-  panelTab: "graph",
+  panelTab: "artifacts",
   artifactId: null,
   selectedId: null,
   centerId: null,
@@ -502,7 +502,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
           ? firstAnswer || state.artifactId === action.answer.artifact.id
             ? { panelTab: "artifacts" as PanelTab, artifactId: action.answer.artifact.id, ...unfoldTab(state, "artifacts") }
             : {}
-          : { panelTab: (action.answer.facts.length > 0 ? "facts" : "graph") as PanelTab }),
+          : {}),
       };
     }
     case "visual-drawn":
@@ -640,7 +640,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         selectedId: null,
         centerId: null,
         showAll: false,
-        panelTab: "graph",
+        panelTab: "artifacts",
       };
     default:
       return state;

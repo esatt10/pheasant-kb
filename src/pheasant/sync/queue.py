@@ -41,6 +41,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pheasant.persistence.heartbeat import WARN_EVERY
+from pheasant.telemetry.interactions import inject_traceparent
+from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
 
@@ -628,8 +630,16 @@ class NatsQueue(TaskQueue):
             self._js = self._run(setup())
             return self._js
 
+    @instrument(
+        "nats.publish",
+        kind="PRODUCER",
+        attributes={"messaging.system": "nats", "messaging.operation": "publish"},
+    )
     def publish(self, task: IndexTask) -> IndexTask:
         js = self._connect()
+        propagated = inject_traceparent({})
+        if propagated:
+            task.payload["traceparent"] = propagated["traceparent"]
         body = json.dumps(task.as_dict(), sort_keys=True).encode("utf-8")
 
         async def send() -> None:
@@ -637,7 +647,9 @@ class NatsQueue(TaskQueue):
             # object with the same logical id is a new requested run. Using
             # ``task.id`` here made JetStream silently suppress every rapid
             # re-run for its default two-minute duplicate window.
-            await js.publish(self.subject, body, headers={"Nats-Msg-Id": task.publish_id})
+            await js.publish(
+                self.subject, body, headers=inject_traceparent({"Nats-Msg-Id": task.publish_id})
+            )
 
         self._run(send())
         return task

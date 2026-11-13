@@ -37,7 +37,7 @@ jobs:
             extras: "dev,mcp"
             require-agent: "0"
           - python-version: "3.12"
-            extras: "dev,mcp,agent"
+            extras: "dev,mcp,agent,otel,grpc"
             require-agent: "1"
 
     steps:

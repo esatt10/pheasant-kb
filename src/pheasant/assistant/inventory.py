@@ -34,6 +34,7 @@ stay comparable.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable, Iterable
@@ -327,7 +328,32 @@ def read_question(
     keyword = has_keyword(question)
     if not keyword and mode != "auto":
         return None
-    text = _normalize(_KEYWORD_RE.sub(" ", question or "") if keyword else question)
+    raw = _KEYWORD_RE.sub(" ", question or "") if keyword else question
+    # Viewer selections are literal paths, not prose. Preserve their case,
+    # repeated spaces and words such as "page 2" before normalizing grammar.
+    literal = (
+        re.fullmatch(
+            r'\s*(?:document|doc|file|artifact)\s+("(?:\\.|[^"\\])*"|`[^`]+`|\'[^\']+\')\s*',
+            raw,
+            re.IGNORECASE,
+        )
+        if keyword
+        else None
+    )
+    if literal:
+        quoted = literal.group(1)
+        try:
+            path = json.loads(quoted) if quoted.startswith('"') else quoted[1:-1]
+        except ValueError:
+            path = quoted[1:-1]
+        return InventoryQuestion(
+            action="document",
+            trigger="keyword",
+            why="asks about one document",
+            path=path,
+            text=raw.strip(),
+        )
+    text = _normalize(raw)
     page = None
     paged = _PAGE_RE.search(text)
     if paged and paged.start() > 0:

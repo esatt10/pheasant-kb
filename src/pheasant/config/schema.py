@@ -1451,7 +1451,7 @@ class ObservabilitySettings(ModelMixin):
     Neither requires the other, and both are off by default.
 
     ``pytest`` stays network-free by construction rather than by mocking:
-    the OTLP exporter is attached only when `otlp_endpoint` is set, and the
+    the OTLP exporter is attached only when an endpoint is configured or injected, and the
     default is ``None``.
     """
 
@@ -1469,6 +1469,8 @@ class ObservabilitySettings(ModelMixin):
     #: span the operator's collector does not need should not also cost the
     #: region a data point it counts on.
     sample_ratio: float = 1.0
+    #: Bounded UI navigation/action spans, without DOM text or form values.
+    ui_events: bool = False
 
     interactions: InteractionSettings = field(default_factory=InteractionSettings)
 
