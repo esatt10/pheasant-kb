@@ -99,7 +99,7 @@ export function KnowledgeBasePanel() {
       ) : null}
 
       <div>
-        <button
+        <button data-permission="security.manage"
           className="btn btn--primary"
           disabled={!dirty || update.isPending || !name.trim()}
           onClick={() => update.mutate()}

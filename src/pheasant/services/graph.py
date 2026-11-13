@@ -107,7 +107,9 @@ def _identities(
     """
 
     from pheasant.security.acl import expand_principal
+    from pheasant.security.authorization import scoped_principal
 
+    principal, principal_groups = scoped_principal(principal, principal_groups)
     security = context.config.security
     identities = expand_principal(principal, principal_groups, security.groups)
     if identities is not None and principal:

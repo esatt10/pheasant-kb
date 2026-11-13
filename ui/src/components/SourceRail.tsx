@@ -76,7 +76,7 @@ export function SourceRail({
               Browse
             </button>
           ) : null}
-          <button
+          <button data-permission="sources.manage"
             className="btn btn--small btn--primary"
             onClick={() => setAdding(true)}
             title="Add a folder, repo or URL"
@@ -194,7 +194,7 @@ export function SourceRail({
                     browse
                   </button>
                 ) : null}
-                <button
+                <button data-permission="sources.manage"
                   className="btn btn--small btn--ghost"
                   onClick={() => sync.mutate(source.name)}
                   disabled={sync.isPending || Boolean(source.syncing)}

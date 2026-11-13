@@ -64,6 +64,7 @@ from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
 from pheasant.search.sqlite_store import SearchStore
+from pheasant.security.authorization import background_target
 from pheasant.security.path_policy import (
     PathPolicyError,
     resolve_config_write_target,
@@ -2460,7 +2461,7 @@ def create_app(
                 to_start,
             )
         threading.Thread(
-            target=_run_background_sync,
+            target=background_target(_run_background_sync),
             args=(source_name, mode, job.id),
             name=f"pheasant-bgsync-{source_name or 'all'}",
             daemon=True,
@@ -2965,7 +2966,9 @@ def create_app(
             except Exception as exc:  # noqa: BLE001 - a job records its own failure
                 app.state.jobs.finish(job.id, status="failed", error=str(exc))
 
-        threading.Thread(target=_run, name="pheasant-evaluation", daemon=True).start()
+        threading.Thread(
+            target=background_target(_run), name="pheasant-evaluation", daemon=True
+        ).start()
         return {"job_id": job.id, "status": "running", "mode": req.mode}
 
     @app.get("/evaluation/report")
@@ -3077,7 +3080,9 @@ def create_app(
             except Exception as exc:  # noqa: BLE001 - a job records its own failure
                 app.state.jobs.finish(job.id, status="failed", error=str(exc))
 
-        threading.Thread(target=_run, name="pheasant-tuning", daemon=True).start()
+        threading.Thread(
+            target=background_target(_run), name="pheasant-tuning", daemon=True
+        ).start()
         return {"job_id": job.id, "status": "running"}
 
     @app.get("/tuning/status")
@@ -4386,6 +4391,11 @@ def create_app(
             candidate = PheasantConfig.model_validate(data)
         except (ConfigError, ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid config: {exc}") from exc
+        from pheasant.security.authorization import require_configuration_change
+
+        require_configuration_change(
+            config.model_dump(mode="json"), candidate.model_dump(mode="json")
+        )
         errors = validate_source_paths(candidate, require_exists=False)
         if errors:
             raise HTTPException(status_code=400, detail="; ".join(errors))
@@ -4755,6 +4765,9 @@ def create_app(
         except (ConfigError, ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid {section}: {exc}") from exc
 
+        from pheasant.security.authorization import require_configuration_change
+
+        require_configuration_change(current, candidate.model_dump(mode="json"))
         live = LIVE_APPLICABLE_SECTIONS[section]
         applied = False
         if live:
@@ -5169,6 +5182,9 @@ def create_app(
             return RedirectResponse(url="/mcp/", status_code=307)
 
         app.mount("/mcp", mcp_asgi_app)
+    from pheasant.api.authorization import install_authorization
+
+    install_authorization(app)
     _mount_ui(app, config)
     return app
 

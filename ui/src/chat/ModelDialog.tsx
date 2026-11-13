@@ -140,7 +140,7 @@ export function ModelDialog({ status, sessionId, onSession, onClose }: ModelDial
 
         <div className="modal__footer">
           {sessionId ? (
-            <button
+            <button data-permission="security.manage"
               className="btn btn--danger"
               onClick={() => revoke.mutate()}
               disabled={revoke.isPending}
@@ -151,7 +151,7 @@ export function ModelDialog({ status, sessionId, onSession, onClose }: ModelDial
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button
+          <button data-permission="security.manage"
             className="btn btn--primary"
             onClick={() => save.mutate()}
             disabled={!apiKey.trim() || save.isPending || status?.allow_session_keys === false}

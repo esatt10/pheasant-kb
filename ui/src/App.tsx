@@ -11,6 +11,7 @@ import { SourcesPage } from "./pages/SourcesPage";
 import { SyncsPage } from "./pages/SyncsPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { SessionProvider } from "./state/session";
+import { PermissionProvider, PermissionPage } from "./state/permissions";
 
 /**
  * The session store sits ABOVE the router on purpose: routes unmount as you
@@ -24,6 +25,7 @@ import { SessionProvider } from "./state/session";
 export function App() {
   return (
     <SessionProvider>
+      <PermissionProvider>
       <div className="app">
         <TopBar />
         <RegionBanner />
@@ -34,7 +36,7 @@ export function App() {
             <Route path="/memory" element={<Navigate to="/artifacts" replace />} />
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/evaluation" element={<EvaluationPage />} />
-            <Route path="/tuning" element={<TuningPage />} />
+            <Route path="/tuning" element={<PermissionPage permission="tuning.manage"><TuningPage /></PermissionPage>} />
             <Route path="/sources" element={<SourcesPage />} />
             <Route path="/syncs" element={<SyncsPage />} />
             <Route path="/config" element={<ConfigPage />} />
@@ -42,6 +44,7 @@ export function App() {
         </main>
         <JobsTray />
       </div>
+      </PermissionProvider>
     </SessionProvider>
   );
 }

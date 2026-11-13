@@ -36,7 +36,10 @@ class EntraSettings(ModelMixin):
     audiences: list[str] = field(default_factory=list)
     #: A token or sign-in must carry one of these app roles. Empty admits any
     #: user of the tenant the app registration lets through.
-    allowed_roles: list[str] = field(default_factory=lambda: ["Reader", "Admin"])
+    allowed_roles: list[str] = field(default_factory=lambda: ["Reader", "Contributor", "Admin"])
+    #: Optional authoritative Terraform assignments, keyed by Entra object id.
+    #: None uses verified claims; an empty map denies every Entra identity.
+    role_assignments: dict[str, str] | None = None
     #: The externally reachable base URL (``https://host``): redirect URIs and
     #: the MCP OAuth metadata are absolute and cannot be derived per request
     #: behind an ingress.
@@ -75,3 +78,43 @@ class ServiceIdentitySettings(ModelMixin):
     app_id: str = ""
     #: A user-assigned identity's client id; empty uses ``AZURE_CLIENT_ID``.
     managed_identity_client_id: str = ""
+
+
+@dataclass
+class ApiAuthSettings(ModelMixin):
+    """First-party bearer auth for the HTTP/MCP surface (Phase 35.8).
+
+    The HTTP API has no authentication of its own, and for one container on
+    loopback that is the right trade: a local tool behind the operator's own
+    perimeter. The fleet is a different deployment. There the API is a
+    multi-replica Service that necessarily binds ``0.0.0.0``, and the only
+    thing between it and the network is a port-publishing decision an
+    operator can reasonably change — while the surface behind it can register
+    a source over any allow-listed path and read what it finds.
+
+    So this makes "behind an authenticating ingress" the default rather than
+    the instruction; ``security.entra`` (``config/identity.py``) adds people.
+
+    Roles other than ``all`` refuse to serve a non-loopback bind with neither
+    of the two set — see :func:`pheasant.deployment.roles.validate_role`.
+    ``all`` is exempt because a single container is the local-first tool and
+    must keep starting with no configuration at all.
+    """
+
+    #: Environment variable holding the shared bearer token. The secret itself
+    #: never belongs in YAML, so — like every other credential here — only the
+    #: variable *name* is written to config.
+    token_env: str = "PHEASANT_API_TOKEN"
+    #: Additional bearer credentials: environment variable name -> app role.
+    #: Values are read from the environment, never from config or API output.
+    role_tokens: dict[str, str] = field(default_factory=dict)
+    #: "Something in front of this authenticates callers." Turns off the
+    #: startup refusal without turning on a token. Opt-in and explicit,
+    #: because the failure it suppresses is silent by construction.
+    behind_authenticating_proxy: bool = False
+    #: Paths answerable without a token. The probes must stay open or the
+    #: orchestrator cannot tell a healthy pod from an unauthenticated one, and
+    #: ``/metrics`` is scraped by a collector that holds no pheasant identity.
+    #: ``/internal/*`` is deliberately absent: those routes enforce their own
+    #: per-boundary tokens and are exempted structurally, not by this list.
+    public_paths: list[str] = field(default_factory=lambda: ["/health", "/ready", "/metrics"])

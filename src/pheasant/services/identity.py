@@ -34,8 +34,8 @@ import os
 import secrets
 import threading
 import time
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -94,10 +94,38 @@ class IdentityService:
         self.config = config
         self.state = state
         self.settings = config.security.entra
+        from pheasant.security.authorization import ROLE_PERMISSIONS
+
+        if self.settings.role_assignments is not None:
+            for subject, role in self.settings.role_assignments.items():
+                if not subject or role not in ROLE_PERMISSIONS:
+                    raise ValueError(
+                        "Entra role_assignments needs an object id and a valid app role"
+                    )
         # Read once: rotating the shared token is a restart, the same contract
         # as every other credential here, none of which is read out of YAML.
         token_env = str(getattr(config.security.api_auth, "token_env", "") or "")
         self._shared = os.environ.get(token_env, "").strip() if token_env else ""
+        self._role_tokens = []
+        for name, role in config.security.api_auth.role_tokens.items():
+            if role not in ROLE_PERMISSIONS:
+                raise ValueError(f"unknown role for security.api_auth.role_tokens: {role}")
+            value = os.environ.get(name, "").strip()
+            if value:
+                boundary_names = (
+                    config.graph.query_service_token_env,
+                    config.ingestion.landing_service_token_env,
+                    config.sync.concurrency.remote_worker_token_env,
+                )
+                if any(value == os.environ.get(boundary, "") for boundary in boundary_names):
+                    raise ValueError(
+                        "role API tokens must differ from internal service credentials"
+                    )
+                if value == self._shared or any(value == entry[0] for entry in self._role_tokens):
+                    raise ValueError(
+                        "role API tokens must be distinct from each other and the admin token"
+                    )
+                self._role_tokens.append((value, name, role))
         audiences = [self.settings.client_id, *self.settings.audiences]
         self.verifier = entra.EntraVerifier(self.settings.tenant_id, audiences)
         self._cache: dict[str, tuple[Identity, float]] = {}
@@ -113,13 +141,17 @@ class IdentityService:
 
     @property
     def shared_token_enabled(self) -> bool:
-        return bool(self._shared)
+        return bool(self._shared or self._role_tokens)
 
     @property
     def enforcing(self) -> bool:
         """Whether any credential is required at all."""
 
-        return self.shared_token_enabled or self.entra_enabled
+        return (
+            self.shared_token_enabled
+            or self.entra_enabled
+            or bool(self.config.security.api_auth.role_tokens)
+        )
 
     def public_url(self, fallback: str = "") -> str:
         return (str(self.settings.public_url or "") or fallback).rstrip("/")
@@ -128,6 +160,7 @@ class IdentityService:
         """What a client may know before it holds a credential."""
 
         return {
+            "authorization": {"version": 1, "roles": ["Admin", "Contributor", "Reader"]},
             "shared_token": self.shared_token_enabled,
             "entra": self.entra_enabled,
             "login_url": "/auth/login" if self.entra_enabled else None,
@@ -161,19 +194,55 @@ class IdentityService:
             bearer.encode("utf-8", "surrogateescape"), self._shared.encode("utf-8")
         ):
             return Identity(SHARED_TOKEN_PRINCIPAL, API_TOKEN, roles=("Admin",))
+        for value, name, role in self._role_tokens:
+            if secrets.compare_digest(bearer.encode(), value.encode()):
+                return Identity(f"api-token:{name}", API_TOKEN, roles=(role,))
         key = hashlib.sha256(bearer.encode("utf-8", "surrogateescape")).hexdigest()
         now = time.monotonic()
         with self._lock:
             cached = self._cache.get(key)
             if cached and cached[1] > now:
-                return cached[0]
+                return self._current_grant(cached[0])
         identity = self._resolve(bearer)
         if identity is not None:
             with self._lock:
                 if len(self._cache) > 4096:
                     self._cache.clear()
-                self._cache[key] = (identity, now + CACHE_SECONDS)
-        return identity
+                lifetime = CACHE_SECONDS
+                if identity.expires_at is not None:
+                    lifetime = min(lifetime, max(0.0, identity.expires_at - time.time()))
+                self._cache[key] = (identity, now + lifetime)
+        return self._current_grant(identity) if identity is not None else None
+
+    def _current_grant(self, identity: Identity) -> Identity | None:
+        """Terraform's current assignment caps every credential, including old keys.
+
+        Permission intersection preserves explicit key restrictions through a
+        role change; removing the subject denies sessions and OAuth refreshes.
+        No directory or database call is added to the cached request path.
+        """
+        from pheasant.security.authorization import ROLE_PERMISSIONS, permissions
+
+        assignments = self.settings.role_assignments
+        if not identity.is_person or assignments is None:
+            return identity
+        role = assignments.get(identity.subject)
+        if role not in ROLE_PERMISSIONS or identity.tenant_id != self.settings.tenant_id:
+            return None
+        ceiling = permissions(identity)
+        capped = ceiling & ROLE_PERMISSIONS[role]
+        effective = next(
+            (
+                name
+                for name in ("Admin", "Contributor", "Reader")
+                if ROLE_PERMISSIONS[name] <= capped
+            ),
+            None,
+        )
+        return replace(identity, roles=(effective,) if effective else (), permissions=tuple(capped))
+
+    def refresh_identity(self, identity: Identity) -> Identity | None:
+        return self._current_grant(identity)
 
     def _resolve(self, bearer: str) -> Identity | None:
         if bearer.startswith(auth_tokens.PREFIX):
@@ -188,6 +257,13 @@ class IdentityService:
                 subject=str(record.get("subject") or ""),
                 roles=tuple(record.get("roles") or ()),
                 token_id=record["id"],
+                tenant_id=str(record["data"].get("tenant_id") or self.settings.tenant_id),
+                permissions=tuple(record["data"]["permissions"])
+                if "permissions" in record["data"]
+                else None,
+                expires_at=datetime.fromisoformat(record["expires_at"]).timestamp()
+                if record.get("expires_at")
+                else None,
             )
         if self.entra_enabled and entra.looks_like_jwt(bearer):
             claims = self.verifier.verify(bearer)
@@ -202,6 +278,8 @@ class IdentityService:
                 display_name=str(claims.get("name") or ""),
                 subject=str(claims.get("oid") or ""),
                 roles=tuple(roles),
+                tenant_id=str(claims.get("tid") or ""),
+                expires_at=float(claims["exp"]) + entra.CLOCK_SKEW_SECONDS,
             )
         return None
 
@@ -289,7 +367,11 @@ class IdentityService:
             display_name=str(claims.get("name") or ""),
             subject=str(claims.get("oid") or ""),
             roles=tuple(roles),
+            tenant_id=str(claims.get("tid") or ""),
         )
+        identity = self._current_grant(identity)
+        if identity is None:
+            raise SignInFailed("this account has not been granted access to this region")
         logger.info("sign-in: principal=%s flow=%s", identity.principal, data.get("flow"))
         return LoginResult(identity=identity, flow=str(data.pop("flow", "ui")), data=data)
 
@@ -322,12 +404,33 @@ class IdentityService:
             display_name=identity.display_name,
             subject=identity.subject,
             roles=identity.roles,
+            data={
+                "tenant_id": identity.tenant_id,
+                "permissions": list(self._permissions(identity)),
+            },
         )
         return credential
 
-    def create_personal_key(self, identity: Identity | None, *, name: str, days: int) -> dict:
+    def create_personal_key(
+        self, identity: Identity | None, *, name: str, days: int, role: str | None = None
+    ) -> dict:
         if identity is None or not identity.is_person:
             raise PersonIdentityRequired()
+        from pheasant.security.authorization import require_permission
+
+        require_permission("keys.self")
+        identity = self._current_grant(identity)
+        if identity is None:
+            raise PersonIdentityRequired()
+        from pheasant.security.authorization import ROLE_PERMISSIONS, PermissionDenied
+
+        key_roles = identity.roles
+        ceiling = self._permissions(identity)
+        if role is not None:
+            if role not in ROLE_PERMISSIONS or not ROLE_PERMISSIONS[role] <= ceiling:
+                raise PermissionDenied("keys.self")
+            key_roles = (role,)
+            ceiling = ROLE_PERMISSIONS[role]
         name = (name or "").strip()[:MAX_KEY_NAME]
         if not name:
             raise InvalidRequest("a personal key needs a name")
@@ -342,26 +445,56 @@ class IdentityService:
             principal=identity.principal,
             display_name=identity.display_name,
             subject=identity.subject,
-            roles=identity.roles,
+            roles=key_roles,
+            data={"tenant_id": identity.tenant_id, "permissions": sorted(ceiling)},
             name=name,
         )
         logger.info("personal key created: principal=%s key=%s", identity.principal, row["id"])
         return {"key": credential, **_public(row)}
 
+    @staticmethod
+    def _permissions(identity: Identity) -> frozenset[str]:
+        from pheasant.security.authorization import permissions
+
+        return permissions(identity)
+
     def list_personal_keys(self, identity: Identity | None) -> list[dict]:
         if identity is None or not identity.is_person:
             raise PersonIdentityRequired()
-        rows = auth_tokens.list_for(self.state, identity.principal, kind="personal")
+        from pheasant.security.authorization import require_permission
+
+        require_permission("keys.self")
+        rows = self._personal_keys(identity)
         return [_public(row) for row in rows]
 
     def revoke_personal_key(self, identity: Identity | None, key_id: str) -> bool:
         if identity is None or not identity.is_person:
             raise PersonIdentityRequired()
-        revoked = auth_tokens.revoke(self.state, key_id, principal=identity.principal)
+        from pheasant.security.authorization import require_permission
+
+        require_permission("keys.self")
+        owned = {row["id"] for row in self._personal_keys(identity)}
+        revoked = key_id in owned and auth_tokens.revoke(self.state, key_id)
         self.forget()
         if revoked:
             logger.info("personal key revoked: principal=%s key=%s", identity.principal, key_id)
         return revoked
+
+    def _personal_keys(self, identity: Identity) -> list[dict]:
+        if identity.subject:
+            rows = self.state.rows(
+                "SELECT * FROM auth_tokens WHERE subject=? AND kind=? ORDER BY created_at DESC",
+                (identity.subject, "personal"),
+            )
+            import json
+
+            return [
+                dict(row)
+                for row in rows
+                if json.loads(row["data_json"] or "{}").get("tenant_id", self.settings.tenant_id)
+                == identity.tenant_id
+            ]
+        return auth_tokens.list_for(self.state, identity.principal, kind="personal")
 
     def end_session(self, identity: Identity | None) -> None:
         if identity is not None and identity.method == ENTRA_SSO and identity.token_id:
@@ -388,7 +521,11 @@ class IdentityService:
             subject=identity.subject,
             roles=identity.roles,
             client_id=str(request.get("client_id") or ""),
-            data=request,
+            data={
+                **request,
+                "tenant_id": identity.tenant_id,
+                "permissions": sorted(self._permissions(identity)),
+            },
         )
         return credential
 
@@ -443,6 +580,8 @@ class IdentityService:
         record = auth_tokens.consume(self.state, token, kind="oauth_refresh")
         if record is None or record.get("client_id") != client_id:
             raise SignInFailed("the refresh token is invalid or was already used")
+        if scopes and not set(scopes) <= set(record["data"].get("scopes") or []):
+            raise SignInFailed("a refresh cannot increase the approved scopes")
         record["data"] = {
             **record["data"],
             "scopes": list(scopes or record["data"].get("scopes") or []),
@@ -460,16 +599,30 @@ class IdentityService:
 
     def _token_pair(self, record: dict[str, Any]) -> dict[str, Any]:
         data = record["data"]
+        identity = self._current_grant(
+            Identity(
+                principal=record["principal"],
+                method=MCP_OAUTH,
+                subject=str(record.get("subject") or ""),
+                roles=tuple(record.get("roles") or ()),
+                tenant_id=str(data.get("tenant_id") or self.settings.tenant_id),
+                permissions=tuple(data["permissions"]) if "permissions" in data else None,
+            )
+        )
+        if identity is None:
+            raise SignInFailed("this account has not been granted access to this region")
         carried = {
             "family": data.get("family") or secrets.token_hex(8),
             "scopes": list(data.get("scopes") or []),
             "resource": data.get("resource"),
+            "tenant_id": identity.tenant_id,
+            "permissions": sorted(self._permissions(identity)),
         }
         common = {
             "principal": record["principal"],
             "display_name": record.get("display_name"),
             "subject": record.get("subject"),
-            "roles": record.get("roles") or (),
+            "roles": identity.roles,
             "client_id": record["client_id"],
             "data": carried,
         }

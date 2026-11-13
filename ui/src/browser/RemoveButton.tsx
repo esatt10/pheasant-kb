@@ -44,7 +44,7 @@ export function RemoveButton({
 
   return (
     <>
-      <button
+      <button data-permission="sources.manage"
         type="button"
         className={`scope-toggle scope-toggle--remove${armed ? " scope-toggle--armed" : ""}`}
         disabled={remove.isPending}

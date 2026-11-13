@@ -121,6 +121,11 @@ existed, and nothing read it.
 
 ## Sign-in with Microsoft (Entra ID)
 
+From 1.3.0, [Admin, Contributor and Reader](how-to/roles.md) are enforced per
+operation across the UI, HTTP and MCP. Reader can consume and generate output,
+but cannot manage sources, publish artifacts or run tuning. Contributor has
+application/content control; Admin also manages security and infrastructure.
+
 `security.entra` adds verified people beside the shared token; it does not
 replace it. With it on, the guard in front of the HTTP API and `/mcp`
 resolves five credentials, one way (`services/identity.py`):

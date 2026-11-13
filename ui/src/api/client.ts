@@ -146,6 +146,10 @@ export interface AuthIdentity {
   auth_method: string | null;
   display_name?: string;
   roles: string[];
+  role: string | null;
+  permissions: string[];
+  subject?: string;
+  tenant_id?: string;
   person: boolean;
 }
 
@@ -1071,7 +1075,7 @@ export const api = {
   me: () => request<AuthIdentity>("/auth/me"),
   signOut: () => request<{ signed_out: boolean }>("/auth/logout", { method: "POST" }),
   personalKeys: () => request<{ keys: PersonalKey[] }>("/auth/keys"),
-  createPersonalKey: (body: { name: string; days?: number }) =>
+  createPersonalKey: (body: { name: string; days?: number; role?: string }) =>
     request<PersonalKey & { key: string }>("/auth/keys", {
       method: "POST",
       body: JSON.stringify(body),

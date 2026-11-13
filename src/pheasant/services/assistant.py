@@ -159,6 +159,11 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
     opens an event stream; after that, a refusal can only be an event.
     """
 
+    from pheasant.security.authorization import require_permission
+
+    require_permission("knowledge.use")
+    if request.save is True:
+        require_permission("artifacts.manage")
     context.knowledge_base(request.knowledge_base)
     settings = getattr(context.config, "assistant", None)
     if settings is not None and not getattr(settings, "enabled", True):
@@ -204,6 +209,12 @@ def answer(
     """
 
     server_started = time.perf_counter()
+    from dataclasses import replace
+
+    from pheasant.security.authorization import scoped_principal
+
+    principal, groups = scoped_principal(request.principal, request.principal_groups)
+    request = replace(request, principal=principal, principal_groups=groups)
     admission_started = server_started
     admit(context, request)
     from pheasant.assistant.chat import answer_question

@@ -214,6 +214,10 @@ def test_an_entra_token_needs_a_granted_role(client: TestClient, tenant: Tenant)
         "display_name": "Alice Example",
         "roles": ["Reader"],
         "person": True,
+        "role": "Reader",
+        "permissions": ["keys.self", "knowledge.use"],
+        "subject": tenant.claims()["oid"],
+        "tenant_id": TENANT,
     }
     no_role = tenant.sign(tenant.claims(roles=[]))
     assert client.get("/auth/me", headers=_bearer(no_role)).status_code == 401

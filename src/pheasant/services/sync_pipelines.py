@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound
 from pheasant.sync.pipeline import SCHEDULES, state_of
@@ -123,6 +124,7 @@ def set_defaults(
     context: ServiceContext, seconds: int | None, actor: str | None = None
 ) -> dict[str, Any]:
     """Set the region's default cadence for every replica (``None``: every beat)."""
+    require_permission("sources.manage")
 
     from pheasant.sync.pipeline import SCHEDULE_SECTION
 
@@ -196,6 +198,7 @@ class PipelineChange:
 
 def configure(context: ServiceContext, change: PipelineChange) -> dict[str, Any]:
     """Apply ``change.settings`` and return the pipeline as it now is."""
+    require_permission("sources.manage")
 
     context.knowledge_base(change.knowledge_base)
     source = _registered(context, change.source_name)
@@ -233,6 +236,7 @@ def delete(
     context: ServiceContext, name: str, what: str, knowledge_base: str | None = None
 ) -> dict[str, Any]:
     """``what="schedule"``: manual runs only. ``what="pipeline"``: nothing syncs it."""
+    require_permission("sources.manage")
 
     if what == "schedule":
         settings: dict[str, Any] = {"schedule": "manual", "paused": False}
@@ -247,6 +251,7 @@ def restore(
     context: ServiceContext, name: str, knowledge_base: str | None = None
 ) -> dict[str, Any]:
     """A deleted pipeline back, on its automatic schedule."""
+    require_permission("sources.manage")
 
     settings = {"pipeline": True, "schedule": "auto", "paused": False}
     return configure(context, PipelineChange(name, knowledge_base, settings))

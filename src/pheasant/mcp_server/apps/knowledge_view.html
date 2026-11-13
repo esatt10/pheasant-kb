@@ -192,6 +192,10 @@
   const visuals = new Set();  // every visual on the page, for refreshTools
   function applyContext(context) {
     if (!context) return;
+    if (typeof context.pheasantCanSaveArtifact === "boolean") {
+      hostContext.pheasantCanSaveArtifact = context.pheasantCanSaveArtifact;
+      for (const holder of [...visuals]) refreshTools(holder);
+    }
     if (context.theme === "dark" || context.theme === "light") {
       document.documentElement.dataset.theme = context.theme;
     }
@@ -913,7 +917,7 @@
         bar.append(el("span", { class: "declined" }, " " + (error.message || "could not save")));
       });
     });
-    bar.append(save);
+    if (hostContext.pheasantCanSaveArtifact !== false) bar.append(save);
     return bar;
   }
 

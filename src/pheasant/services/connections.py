@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pheasant.connections import google, oauth, providers, resolve, vault
+from pheasant.security.authorization import allowed
 from pheasant.services import ServiceContext
 from pheasant.services.errors import (
     ConnectionForbidden,
@@ -100,11 +101,7 @@ def _ready(context: ServiceContext, *, create: bool = True) -> vault.VaultKey:
 
 
 def _require_admin() -> None:
-    from pheasant.security.identity import current_identity
-
-    identity = current_identity()
-    roles = tuple(getattr(identity, "roles", ()) or ()) if identity is not None else ()
-    if roles and "Admin" not in roles:
+    if not allowed("security.manage"):
         raise ConnectionForbidden()
 
 
@@ -214,7 +211,6 @@ def _fields(method: providers.Method, supplied: dict[str, str]) -> dict[str, str
 
 def connect(context: ServiceContext, request: ConnectRequest) -> dict[str, Any]:
     """Check a secret with its service and store it as a connection."""
-
     _require_admin()
     try:
         provider = providers.provider(request.provider)
@@ -285,6 +281,7 @@ def _row(context: ServiceContext, name: str) -> vault.Connection:
 
 def check(context: ServiceContext, name: str) -> dict[str, Any]:
     """Ask the service again whether it accepts this connection."""
+    _require_admin()
 
     key = _ready(context, create=False)
     row = _row(context, name)
@@ -310,6 +307,7 @@ def check(context: ServiceContext, name: str) -> dict[str, Any]:
 
 def remove(context: ServiceContext, name: str, *, force: bool = False) -> dict[str, Any]:
     _require_admin()
+    _require_admin()
     _row(context, name)
     used = _used_by(context, name)
     if used and not force:
@@ -330,7 +328,6 @@ def _safe_return(value: str | None) -> str:
 
 def start_sign_in(context: ServiceContext, request: SignInRequest) -> dict[str, Any]:
     """Open a browser sign-in; returns the address to send the person to."""
-
     _require_admin()
     try:
         provider = providers.provider(request.provider)

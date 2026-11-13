@@ -45,7 +45,7 @@ export function ArchivedList({ source, path }: { source: string; path: string })
                 {document.path.slice(path ? path.length + 1 : 0)}
               </span>
               {document.reinstatable ? (
-                <button
+                <button data-permission="sources.manage"
                   type="button"
                   className="btn btn--small"
                   disabled={reinstate.isPending}

@@ -112,6 +112,7 @@ nav:
       - Graph model: graph_model.md
       - Parquet export schema: reference/export-schema.md
       - Security: security.md
+      - Roles and permissions: how-to/roles.md
   - Explanation:
       - Architecture: architecture.md
       - The memory system: memory-system.md

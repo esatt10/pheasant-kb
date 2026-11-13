@@ -1166,12 +1166,14 @@ shard into several regions.
 | `idp.sync_interval_minutes` | integer | `60` | How often the scheduler beat (or `POST /security/idp/sync`) refreshes the mapping. |
 | `idp.staleness_max_minutes` | integer | `1440` | SLA: a mapping older than this **fails closed** (grants nothing) until the next successful sync. |
 | `api_auth.token_env` | string | `PHEASANT_API_TOKEN` | Name of the env var holding a static shared bearer token; never the value. When it resolves, every route outside `public_paths` (and outside `/internal/*`, which enforces its own per-boundary tokens) needs `Authorization: Bearer <value>` or answers `401`. |
+| `api_auth.role_tokens` | map[string,string] | `{}` | Additional environment variable names mapped to `Admin`, `Contributor` or `Reader`. Values come from deployment secrets; credentials must be distinct. See [Roles](how-to/roles.md). |
 | `api_auth.behind_authenticating_proxy` | bool | `false` | "An ingress already authenticates callers." Satisfies the startup check below without a token of pheasant's own. |
 | `api_auth.public_paths` | list[str] | `[/health, /ready, /metrics]` | Answerable without a token. The probes must stay open or an orchestrator cannot tell a healthy pod from an unauthorized one. |
 | `entra.enabled` | bool | `false` | Sign-in with Microsoft Entra ID **beside** the shared token: Entra access tokens for this app, browser sign-in sessions, personal keys, and MCP OAuth. Off changes nothing. See [Sign-in with Microsoft](security.md#sign-in-with-microsoft-entra-id). |
 | `entra.tenant_id` / `entra.client_id` | string | `""` | The tenant and the app registration users sign in to (`client_id` is the audience of their tokens). |
 | `entra.audiences` | list[str] | `[]` | Further accepted token audiences, e.g. `api://<client id>`. |
-| `entra.allowed_roles` | list[str] | `[Reader, Admin]` | A sign-in or token must carry one of these app roles; empty admits anyone the app registration lets through. |
+| `entra.allowed_roles` | list[str] | `[Reader, Contributor, Admin]` | A sign-in or token must carry one of these app roles. Unknown application roles grant no operation permissions. |
+| `entra.role_assignments` | map[string,string] or null | `null` | Authoritative object-ID-to-role mapping from Terraform for the configured tenant. Caps all credentials, including previously issued keys. Empty denies all Entra identities; null uses verified claims without directory polling. Deploy updated assignments to all API replicas. |
 | `entra.public_url` | string | `""` | The externally reachable `https://host`. Required for the MCP OAuth server, whose metadata URLs are absolute. |
 | `entra.federated_identity_client_id` | string | `""` | A managed identity whose token is the client credential when redeeming a sign-in code (a federated credential on the app registration, no secret). Empty: the secret in `client_secret_env`. |
 | `entra.client_secret_env` | string | `PHEASANT_ENTRA_CLIENT_SECRET` | Env var holding the app registration's client secret, when no federated identity is used. |

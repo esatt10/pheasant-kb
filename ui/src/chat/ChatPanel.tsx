@@ -552,7 +552,7 @@ export function ChatPanel({
             ))}
           </select>
           {topicTurns.length > 0 ? (
-            <button
+            <button data-permission="artifacts.manage"
               type="button"
               className="btn btn--small"
               onClick={() => saveThread.mutate()}
@@ -861,7 +861,7 @@ function AnswerTurn({
       {answer.steps && answer.steps.length > 1 ? <AgentTrace steps={answer.steps} /> : null}
       {!answer.artifact && answer.mode === "llm" && answerId ? (
         <p className="msg__hint">
-          <button
+          <button data-permission="artifacts.manage"
             type="button"
             className="btn btn--small"
             onClick={() => saveReport.mutate()}

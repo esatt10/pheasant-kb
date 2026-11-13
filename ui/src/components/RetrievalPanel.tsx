@@ -149,7 +149,7 @@ export function RetrievalPanel() {
       ) : null}
 
       <div>
-        <button className="btn btn--primary" onClick={() => save.mutate()} disabled={save.isPending}>
+        <button data-permission="settings.manage" className="btn btn--primary" onClick={() => save.mutate()} disabled={save.isPending}>
           {save.isPending ? "Saving…" : "Save retrieval settings"}
         </button>
       </div>

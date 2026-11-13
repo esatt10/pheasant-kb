@@ -429,6 +429,8 @@ def _validate_serving_exposure(policy: RolePolicy, config: object) -> None:
     token_env = str(getattr(auth, "token_env", "") or "")
     if _env_value(token_env):
         return
+    if any(_env_value(name) for name in (getattr(auth, "role_tokens", {}) or {})):
+        return
     entra = getattr(getattr(config, "security", None), "entra", None)
     if (
         getattr(entra, "enabled", False)

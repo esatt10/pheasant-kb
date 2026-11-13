@@ -124,7 +124,7 @@ export function ArtifactLearningPanel() {
       </div>
 
       <div className="memory-panel__actions">
-        <button className="button button--primary" onClick={() => save.mutate()} disabled={save.isPending}>
+        <button data-permission="artifacts.manage" className="button button--primary" onClick={() => save.mutate()} disabled={save.isPending}>
           {save.isPending ? "Saving…" : "Save"}
         </button>
         {note && <span className="section__hint">{note}</span>}

@@ -40,6 +40,9 @@ class CancelSyncRequest:
 def cancel_sync(context: ServiceContext, request: CancelSyncRequest) -> dict[str, Any]:
     """Ask the running sync of one source to stop at its next item."""
 
+    from pheasant.security.authorization import require_permission
+
+    require_permission("sources.manage")
     kb_id = context.knowledge_base(request.knowledge_base)
     name = str(request.source_name or "").strip()
     if not name or not _registered(context, name):

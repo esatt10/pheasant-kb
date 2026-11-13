@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pheasant.search.ranking import RankingParameters
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 
 
 def save_base(context: ServiceContext, name: str) -> dict:
+    require_permission("tuning.manage")
     from pheasant.tuning.contracts import TuningBundle
     from pheasant.tuning.store import save_bundle
 

@@ -41,6 +41,9 @@ class Identity:
     subject: str = ""  # Entra object id, when there is one
     roles: tuple[str, ...] = field(default_factory=tuple)
     token_id: str = ""  # the issued credential's id, for revocation and audit
+    tenant_id: str = ""
+    permissions: tuple[str, ...] | None = None
+    expires_at: float | None = None
 
     @property
     def is_person(self) -> bool:
@@ -49,12 +52,18 @@ class Identity:
         return self.method in {ENTRA_TOKEN, ENTRA_SSO, PERSONAL_KEY, MCP_OAUTH}
 
     def as_dict(self) -> dict[str, object]:
+        from pheasant.security.authorization import permissions
+
         return {
             "principal": self.principal,
             "auth_method": self.method,
             "display_name": self.display_name or self.principal,
             "roles": list(self.roles),
             "person": self.is_person,
+            "subject": self.subject,
+            "tenant_id": self.tenant_id,
+            "permissions": sorted(permissions(self)),
+            "role": next((r for r in ("Admin", "Contributor", "Reader") if r in self.roles), None),
         }
 
 

@@ -100,6 +100,7 @@ RUN useradd --create-home --uid 10001 pheasant \
     && mkdir -p /state /exports /workspace /config /memory \
     && chown -R pheasant:pheasant /state /exports /app /config /memory
 USER pheasant
+LABEL org.opencontainers.image.pheasant.authorization="roles-v1"
 
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

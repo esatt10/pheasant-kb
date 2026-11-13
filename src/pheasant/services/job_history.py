@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 
 
 def delete_evaluation(context: ServiceContext, run_id: str) -> dict:
+    require_permission("evaluation.manage")
     state = context.state
     with state.conn:
         rows = state.conn.execute(
@@ -31,6 +33,7 @@ def delete_evaluation(context: ServiceContext, run_id: str) -> dict:
 
 
 def delete_tuning(context: ServiceContext, experiment_id: str) -> dict:
+    require_permission("tuning.manage")
     from pheasant.tuning.store import prune_experiment
 
     removed = prune_experiment(

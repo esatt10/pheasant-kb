@@ -72,6 +72,9 @@ def _audit(context: ServiceContext, request: AddTargetRequest, source: str, kind
 def add_targets(context: ServiceContext, request: AddTargetRequest) -> dict[str, Any]:
     """Classify, place, (clone,) and register ``request.target``'s sources."""
 
+    from pheasant.security.authorization import require_permission
+
+    require_permission("sources.manage")
     from pheasant.config.schema import PheasantConfig
     from pheasant.registry.placement import place_all
     from pheasant.registry.source_registry import SourceRegistry

@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound
 
@@ -46,6 +47,7 @@ class UrlEditRequest:
 
 def edit_urls(context: ServiceContext, request: UrlEditRequest) -> dict[str, Any]:
     """Apply ``add`` and ``remove`` to a source's URLs, register it, and sync it."""
+    require_permission("sources.manage")
 
     from pheasant.registry.source_registry import SourceRegistry
     from pheasant.targets import merged_urls
