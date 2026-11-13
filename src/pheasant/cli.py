@@ -548,7 +548,13 @@ class _QueueDrainer:
         from pheasant.sync.worker import WorkerBackedEngine
 
         worker = WorkerBackedEngine(engine, self.config_path)
-        jobs = JobRegistry(shared_path=engine.paths.state / "jobs", async_snapshots=True)
+        jobs = JobRegistry(
+            shared_path=engine.paths.state / "jobs",
+            async_snapshots=True,
+            state=engine.state,
+            kb_id=self.cfg.knowledge_base_id,
+            retention_days=self.cfg.artifacts.job_retention_days,
+        )
         owner = owner_id()
         visibility = float(self.cfg.sync.queue.visibility_seconds or 300)
         log.info("draining index queue as %s", owner)

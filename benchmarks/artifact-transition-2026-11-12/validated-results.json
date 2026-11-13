@@ -1,0 +1,50 @@
+{
+  "scope": "Artifact-first paths; batched writes; SQLite; no vectors/providers; sequential",
+  "results": [
+    {
+      "kind": "record",
+      "implementation": "artifact-first",
+      "records": 1000,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 15.219,
+        "p95_ms": 29.727
+      },
+      "index_seconds": 8.278,
+      "search_explain": {
+        "p50_ms": 39.713,
+        "p95_ms": 87.797
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.0248,
+      "render": null,
+      "state_bytes": 16691448,
+      "region_bytes_including_originals_and_wal": 16917678
+    },
+    {
+      "kind": "artifact",
+      "implementation": "artifact-first",
+      "records": 1000,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 5.873,
+        "p95_ms": 10.837
+      },
+      "index_seconds": 10.83,
+      "search_explain": {
+        "p50_ms": 32.489,
+        "p95_ms": 77.574
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.0236,
+      "render": {
+        "p50_ms": 0.094,
+        "p95_ms": 0.227
+      },
+      "state_bytes": 33422696,
+      "region_bytes_including_originals_and_wal": 33422608
+    }
+  ]
+}

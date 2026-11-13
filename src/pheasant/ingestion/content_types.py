@@ -124,7 +124,9 @@ MEMORY_ARTIFACT_TYPE = "memory_record"
 #: `image` and `audio` are deliberately absent, as they have been since 25.4:
 #: their captions and transcripts are indexed as text, but a caption is not a
 #: document that can resolve a link or anchor a similarity pair.
-ARTIFACT_TYPES = frozenset({"file", "markdown_note", "document", MEMORY_ARTIFACT_TYPE})
+ARTIFACT_TYPES = frozenset(
+    {"file", "markdown_note", "document", "artifact_record", MEMORY_ARTIFACT_TYPE}
+)
 
 
 def artifact_type(path: Path, source_type: str | None = None) -> str:
@@ -134,6 +136,8 @@ def artifact_type(path: Path, source_type: str | None = None) -> str:
     what it was before Step 33.7, which keeps every caller that classifies a
     bare path working unchanged.
     """
+    if source_type == "artifact":
+        return "artifact_record"
     if source_type == "memory":
         # Checked before the suffix, because a memory record *is* a `.md` file
         # and the point is that it is not merely one.

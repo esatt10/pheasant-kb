@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pheasant.services import retrieval as retrieval_service
 
@@ -55,7 +55,10 @@ class SearchCriteria(BaseModel):
     exclude_source_types: list[str] | None = None
     # How this region's agent memory takes part: "auto" (default), "off",
     # "only", "prefer", or an object with scopes/subject/current_only/as_of.
-    memory: dict | str | None = None
+    memory: dict | str | None = Field(
+        default=None, deprecated=True, description="Deprecated alias of artifact_policy"
+    )
+    artifact_policy: dict | str | None = None
     # Saved artifacts (the "artifacts" source): "include" (default),
     # "exclude" or "only"; true/false read as include/exclude.
     artifacts: str | bool | None = None
@@ -92,7 +95,7 @@ class SearchCriteria(BaseModel):
             exclude_documents=self.exclude_documents,
             principal=self.principal,
             principal_groups=self.principal_groups,
-            memory=self.memory,
+            memory=self.artifact_policy if self.artifact_policy is not None else self.memory,
             artifacts=self.artifacts,
             exclude_sources=self.exclude_sources,
             source_names=self.source_names,

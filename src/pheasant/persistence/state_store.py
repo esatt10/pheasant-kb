@@ -67,7 +67,8 @@ SCHEMA = schema_for(SQLITE)
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
 # 3: idx_sync_events_source. 4: idx_artifacts_source.
-SCHEMA_VERSION = "5"
+# 6: durable jobs and immutable artifact publications/source adoption.
+SCHEMA_VERSION = "6"
 
 
 class StateStore:
@@ -287,24 +288,17 @@ class StateStore:
     )
 
     #: Traceability and retention columns, added after the table shipped.
-    _SAVED_ARTIFACT_COLUMNS = (("session_id", "TEXT"), ("channel", "TEXT"), ("archived_at", "TEXT"))
+    _SAVED_ARTIFACT_COLUMNS = (
+        ("session_id", "TEXT"),
+        ("channel", "TEXT"),
+        ("archived_at", "TEXT"),
+        ("publication_state", "TEXT NOT NULL DEFAULT 'published'"),
+    )
 
     def _migrate_saved_artifacts(self) -> None:
-        """Add the session, channel and archive columns to a pre-existing ``saved_artifacts``.
+        from pheasant.persistence.artifact_migrations import migrate_saved_artifacts
 
-        Both migration paths call it, for `_migrate_evaluation_progress`'s reason.
-        """
-
-        existing = self.backend.table_columns("saved_artifacts")
-        if not existing:
-            return
-        for column, declaration in self._SAVED_ARTIFACT_COLUMNS:
-            if column not in existing:
-                self.conn.execute(f"ALTER TABLE saved_artifacts ADD COLUMN {column} {declaration}")
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_saved_artifacts_created "
-            "ON saved_artifacts(kb_id, created_at, owner)"
-        )
+        migrate_saved_artifacts(self)
 
     def _migrate_tuning_control(self) -> None:
         """Add the control columns to a pre-existing ``tuning_experiments``."""
@@ -382,7 +376,11 @@ class StateStore:
                 "auth_tokens": "last_used_at",
                 "oauth_clients": "data_json",
                 "answer_streams": "updated_at",
-                "saved_artifacts": "archived_at",
+                "saved_artifacts": "publication_state",
+                "durable_jobs": "payload_json",
+                "artifact_source_migrations": "original_config_json",
+                "artifact_versions": "payload_json",
+                "artifact_publications": "revision_id",
                 "region_settings": "updated_by",
                 "connections": "check_json",
             }
@@ -938,7 +936,7 @@ class StateStore:
         same way, by a near-duplicate write reinforcing this record instead
         of creating its own file, and are carried over identically.
         ``canon_key`` is the opposite: a pure function of the record's own
-        fields (see ``pheasant.memory.normalize``), so it is *not* carried
+        fields (see ``pheasant.artifacts.normalize``), so it is *not* carried
         over — ``records`` supplies a freshly computed one on every rebuild.
 
         ``tier``/``subsumed_by`` (Phase 3) are earned by a compaction pass

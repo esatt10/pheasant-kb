@@ -185,6 +185,29 @@
     }
     const frame = el("iframe", { sandbox: "allow-scripts", title: current ? current.name : "Artifact" });
     root.replaceChildren(...head, bar, frame);
+    frame.addEventListener("load", () => {
+      // The document keeps a pinned excerpt; this action opens today's indexed source.
+      const follow = (event) => {
+        if (event.source !== frame.contentWindow || !frame.isConnected) return;
+        const data = event.data;
+        if (!data || data.type !== "pheasant-evidence") return;
+        const citation = ((artifact.payload || {}).citations || []).find(
+          (c) => c.source === data.source && c.path === data.path);
+        if (!citation) return;
+        request("tools/call", { name: "get_file_summary", arguments: {
+          knowledge_base: artifact.knowledge_base, source_name: citation.source, path: citation.path,
+        }}).then((result) => {
+          const source = payloadOf(result || {});
+          root.querySelector(".live-evidence")?.remove();
+          const detail = el("details", { class: "live-evidence", open: "" },
+            el("summary", {}, citation.source + " · " + citation.path),
+            el("pre", {}, source.content || source.summary || "Source is no longer indexed."));
+          root.append(detail);
+        }).catch(() => { /* The pinned evidence remains available in the document. */ });
+      };
+      window.addEventListener("message", follow);
+      frame.addEventListener("load", () => window.removeEventListener("message", follow), { once: true });
+    }, { once: true });
     const args = { knowledge_base: artifact.knowledge_base, artifact_id: artifact.id };
     if (current) { args.file = current.name; args.mode = current.previewable ? mode : "code"; }
     if (theme) args.theme = theme;

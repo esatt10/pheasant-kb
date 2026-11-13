@@ -802,7 +802,7 @@ function QualityPill({ status, flags }: { status: string; flags: LedgerDocument[
 
 function labelType(type: string): string {
   return (
-    { web_collection: "Web", api: "API", repository: "Repository", document_folder: "Folder", markdown_folder: "Folder", memory: "Memory" }[type] ??
+    { web_collection: "Web", api: "API", repository: "Repository", document_folder: "Folder", markdown_folder: "Folder", artifact: "Artifacts", memory: "Artifacts (legacy)" }[type] ??
     type
   );
 }

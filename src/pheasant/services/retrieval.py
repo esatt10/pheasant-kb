@@ -186,6 +186,7 @@ class SearchRequest:
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
+    artifact_policy: Any = None
     #: ``include`` (default) / ``exclude`` / ``only``: saved artifacts in
     #: the results, like ``memory`` for memory records (`services.artifacts.scope`).
     artifacts: Any = None
@@ -257,6 +258,7 @@ class FilesRequest:
     principal: str | None = None
     principal_groups: list[str] | None = None
     memory: Any = None
+    artifact_policy: Any = None
 
 
 def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
@@ -271,7 +273,7 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
 
     kb_id = context.knowledge_base(request.knowledge_base)
     # A malformed expansion is refused before anything is retrieved.
-    request = replace(_scoped(request), expand=parse_expansion(request.expand))
+    request = replace(_scoped(request, context.state), expand=parse_expansion(request.expand))
     # Before the arms run, not after. A pinned search whose corpus has moved
     # must not spend the retrieval and then discard it: the caller is going to
     # attribute whatever comes back to the snapshot it named, so the only safe
@@ -280,13 +282,17 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     return _search(context, request, kb_id, snapshot)
 
 
-def _scoped(request: SearchRequest) -> SearchRequest:
+def _scoped(request: SearchRequest, state: Any = None) -> SearchRequest:
     """The request with its source scope in one spelling, artifacts toggle applied."""
 
     from pheasant.services import artifacts
 
     source_name, source_names, exclude_sources = artifacts.scope(
-        request.artifacts, request.source_name, request.source_names, request.exclude_sources
+        request.artifacts,
+        request.source_name,
+        request.source_names,
+        request.exclude_sources,
+        state=state,
     )
     source_name, source_names = scoped_sources(source_name, source_names)
     return replace(
@@ -338,7 +344,9 @@ def _search(
             principal_groups=request.principal_groups,
             security=context.config.security,
             section=request.section,
-            memory=request.memory,
+            memory=request.artifact_policy
+            if request.artifact_policy is not None
+            else request.memory,
             explain=request.explain,
             **(
                 {"path_prefix": scope.path_prefix, "exclude": scope.exclusion}
@@ -481,7 +489,7 @@ def relevant_files(context: ServiceContext, request: FilesRequest) -> dict[str, 
         principal_groups=request.principal_groups,
         security=context.config.security,
         section=request.section,
-        memory=request.memory,
+        memory=request.artifact_policy if request.artifact_policy is not None else request.memory,
     )
     seen: set[str] = set()
     files: list[dict[str, Any]] = []
@@ -550,7 +558,7 @@ def search_batch(context: ServiceContext, request: BatchSearchRequest) -> dict[s
     # of a batch overlap, and a walk per query would repeat the same
     # neighbourhoods up to 25 times over.
     expansion = parse_expansion(request.criteria.expand)
-    criteria = replace(_scoped(request.criteria), expand=None)
+    criteria = replace(_scoped(request.criteria, context.state), expand=None)
     snapshot = _require_snapshot(context, request.criteria.snapshot_id)
 
     started = time.perf_counter()
@@ -767,7 +775,7 @@ def memory_enabled(context: ServiceContext) -> bool:
     """
 
     try:
-        from pheasant.memory.store import memory_source
+        from pheasant.artifacts.store import memory_source
 
         return memory_source(context.config, context.state) is not None
     except Exception:  # noqa: BLE001 - lineage must never break a search

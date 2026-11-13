@@ -193,7 +193,7 @@ WHERE m.valid_until IS NULL;
 |---|---|---|
 | `record_id` | VARCHAR | Stable record identifier. |
 | `artifact_id` | VARCHAR | → `artifacts.id`; join to `chunks` for the text. |
-| `source_id` | VARCHAR | → `sources.id` (the `type: memory` source). |
+| `source_id` | VARCHAR | → `sources.id` (the canonical `type: artifact` source; legacy `memory` is accepted). |
 | `scope` | VARCHAR | `org`, `user` or `session`. Isolation is enforced in pheasant, **not** in the file. |
 | `subject` | VARCHAR | What the record is about, when given. |
 | `kind` | VARCHAR | `fact` (default), or the steering kinds `alias`, `preference`, `exclusion`. |
@@ -206,7 +206,7 @@ WHERE m.valid_until IS NULL;
 | `salience` | DOUBLE | Ranking weight. |
 | `uses` | BIGINT | Times recalled (only counted with `memory.usage_tracking` on). |
 | `last_used_at` | VARCHAR | ISO-8601 UTC — last time `uses` was bumped. |
-| `canon_key` | VARCHAR | Normalized-content dedup key (scope/subject/kind/ACL/text — see `pheasant.memory.normalize`); NULL for a record from before compaction. Derived, not earned: recomputed on every re-sync. |
+| `canon_key` | VARCHAR | Normalized-content dedup key (scope/subject/kind/ACL/text — see `pheasant.artifacts.normalize`); NULL for a record from before compaction. Derived, not earned: recomputed on every re-sync. |
 | `observations` | BIGINT | Times a write re-asserted this record — exactly or as a paraphrase — instead of creating a new file. |
 | `last_seen` | VARCHAR | ISO-8601 UTC — last time `observations` was bumped. |
 | `variants` | VARCHAR | JSON array of distinct surface forms (up to 8) that reinforced this record, when any differed from the stored text. |
@@ -279,6 +279,7 @@ indexed; this table is the record itself, with its trace.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | VARCHAR | Artifact ID (24 hex). Ends its folder name: `…--<id>`. |
+| `publication_state` | VARCHAR | `published` or `draft`. Age retention applies to drafts; published output versions survive job deletion. |
 | `kb_id` | VARCHAR | The knowledge base. |
 | `owner` | VARCHAR | Who kept it; NULL is shared. |
 | `kind` | VARCHAR | `files`, `report` or `thread`. |

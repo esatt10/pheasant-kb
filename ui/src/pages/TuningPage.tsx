@@ -21,7 +21,7 @@ const STAGE_HELP: Record<string, string> = {
   lexical_candidates: "The text arm did not return it within its fetch window.",
   vector_candidates: "The vector arm did not return it.",
   graph_candidates: "The graph arm did not return it.",
-  filters: "An arm had it and a filter removed it — ACL, memory policy, or section.",
+  filters: "An arm had it and a filter removed it — ACL, artifact policy, or section.",
   fusion: "It survived every filter and the merge ranked it below the cut.",
   truncation: "Fused above the cut, then deduplicated away.",
   served: "Returned. Nothing failed.",
@@ -47,6 +47,14 @@ const TERMINAL = new Set(["completed", "failed", "interrupted", "none"]);
  */
 export function TuningPage() {
   const queryClient = useQueryClient();
+  const [baselineName, setBaselineName] = useState("original-base");
+  const baseline = useMutation({
+    mutationFn: () => api.saveRetrievalBaseline(baselineName),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["tuning", "bundles"] });
+      void queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+    },
+  });
   const [showAllTrials, setShowAllTrials] = useState(false);
 
   const status = useQuery({
@@ -166,6 +174,12 @@ export function TuningPage() {
           </p>
         </div>
         <div className="page__actions">
+          <label>Baseline name <input className="text-input" value={baselineName}
+            onChange={event => setBaselineName(event.target.value)} /></label>
+          <button className="btn" disabled={!baselineName.trim() || baseline.isPending}
+            onClick={() => baseline.mutate()}>Save configured base</button>
+          {baseline.data ? <span className="muted small">Saved {baseline.data.bundle_id}; apply it from Bundles.</span> : null}
+          {baseline.isError ? <span className="error">{(baseline.error as Error).message}</span> : null}
           <button
             type="button"
             className="btn"

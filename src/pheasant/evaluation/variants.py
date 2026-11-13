@@ -62,7 +62,7 @@ def default_matrix(*, candidate_ids: tuple[str, ...] = ()) -> list[Variant]:
         ),
         Variant(
             variant_id="B1",
-            label="memory content",
+            label="artifact knowledge",
             memory_results="auto",
             steering_kinds=(),
             baseline_variant_id=CORPUS_BASELINE,
@@ -94,7 +94,7 @@ def default_matrix(*, candidate_ids: tuple[str, ...] = ()) -> list[Variant]:
         ),
         Variant(
             variant_id="B5",
-            label="full memory",
+            label="artifact knowledge and steering",
             memory_results="auto",
             steering_kinds=STEERING_KINDS,
             baseline_variant_id=CORPUS_BASELINE,

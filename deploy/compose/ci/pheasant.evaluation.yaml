@@ -89,7 +89,7 @@ sources:
     sync:
       on_startup: false
   - name: agent-memory
-    type: memory
+    type: artifact
     path: /state/memory
     sync:
       on_startup: false

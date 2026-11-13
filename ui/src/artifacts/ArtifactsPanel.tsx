@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { ArtifactSummary } from "../api/types";
 import { useSession } from "../state/session";
+import { artifactFolder } from "./folders";
 
 /** The source every kept artifact lives in (`services/artifacts.py`). */
 export const ARTIFACTS_SOURCE = "artifacts";
@@ -48,7 +50,7 @@ function ArtifactSettingsBar() {
   });
   const current = settings.data?.settings;
   if (!current) return null;
-  const number = (key: "index_interval_seconds" | "retention_days", value: string) => {
+  const number = (key: "index_interval_seconds" | "retention_days" | "job_retention_days", value: string) => {
     const parsed = Number.parseInt(value, 10);
     if (Number.isFinite(parsed) && parsed >= 0 && parsed !== current[key]) change.mutate({ [key]: parsed });
   };
@@ -95,7 +97,7 @@ function ArtifactSettingsBar() {
             Give way to content syncs
           </label>
           <label>
-            Archive after{" "}
+            Archive drafts after{" "}
             <input
               type="number"
               min={0}
@@ -104,6 +106,9 @@ function ArtifactSettingsBar() {
             />{" "}
             days (0 keeps)
           </label>
+          <label>Keep finished jobs for <input type="number" min={0}
+            defaultValue={current.job_retention_days}
+            onBlur={event => number("job_retention_days", event.target.value)} /> days (0 keeps)</label>
           <label>
             <input
               type="checkbox"
@@ -128,6 +133,7 @@ function ArtifactSettingsBar() {
  * view browses. Select several to delete or archive them together.
  */
 function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
+  const navigate = useNavigate();
   const [archived, setArchived] = useState(false);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
@@ -152,11 +158,12 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
       return next;
     });
   const items = list.data?.artifacts ?? [];
-  const groups = new Map<string, ArtifactSummary[]>();
+  const groups = new Map<string, { details: ReturnType<typeof artifactFolder>; members: ArtifactSummary[] }>();
   for (const item of items) {
-    const [year, month, day, who] = (item.folder ?? "").split("/");
-    const key = item.folder ? `${year}/${month}/${day}/${who}` : "unfiled";
-    groups.set(key, [...(groups.get(key) ?? []), item]);
+    const details = artifactFolder(item);
+    const group = groups.get(details.key) ?? { details, members: [] };
+    group.members.push(item);
+    groups.set(details.key, group);
   }
   return (
     <div className="artifacts__dir">
@@ -173,7 +180,7 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
         <button
           type="button"
           className="btn btn--small"
-          onClick={() => dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: "" })}
+          onClick={() => { dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: "" }); navigate("/"); }}
           title="Browse every artifact's files in the taxonomy view"
         >
           Browse all
@@ -195,7 +202,7 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
             type="button"
             className="btn btn--small btn--danger"
             onClick={() => {
-              if (window.confirm(`Delete ${chosen.size} artifact(s)? This cannot be undone.`)) bulk.mutate("delete");
+              if (window.confirm(`Remove ${chosen.size} artifact(s) from active knowledge? Published versions remain in history.`)) bulk.mutate("delete");
             }}
           >
             Delete
@@ -224,18 +231,18 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
           )}
         </div>
       ) : null}
-      {[...groups.entries()].map(([key, members]) => {
-        const [year, month, day, who] = key.split("/");
+      {[...groups.entries()].map(([key, { details, members }]) => {
         return (
           <section key={key} className="artifacts__group">
             <button
               type="button"
               className="artifacts__group-head"
-              onClick={() => dispatch({ type: "open-browser", source: ARTIFACTS_SOURCE, path: key === "unfiled" ? "" : key })}
+              disabled={!details.browsable}
+              onClick={() => { dispatch({ type: "open-browser", source: details.source, path: details.path }); navigate("/"); }}
               title="Open this folder in the taxonomy view"
             >
-              <span>{day ? `${year}-${month}-${day}` : "Unfiled"}</span>
-              {who ? <span className="muted small">{who === "shared" ? "Shared" : who}</span> : null}
+              <span>{details.label}</span>
+              {details.owner ? <span className="muted small">{details.owner === "shared" ? "Shared" : details.owner}</span> : null}
             </button>
             <ul className="artifacts__list">
               {members.map((item) => (
@@ -244,6 +251,8 @@ function ArtifactList({ onSelect }: { onSelect: (id: string) => void }) {
                     type="checkbox"
                     aria-label={`Select ${item.title}`}
                     checked={chosen.has(item.id)}
+                    disabled={item.bulk_supported === false}
+                    title={item.bulk_supported === false ? "Manage this artifact individually" : undefined}
                     onChange={() => toggle(item.id)}
                   />
                   <button type="button" className="artifacts__item" onClick={() => onSelect(item.id)}>
@@ -296,6 +305,8 @@ function useTheme(): "light" | "dark" {
 }
 
 function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
+  const navigate = useNavigate();
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const queryClient = useQueryClient();
   const { dispatch } = useSession();
   const theme = useTheme();
@@ -329,6 +340,18 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
     setFile(null);
     setCopied(false);
   }, [id]);
+  useEffect(() => {
+    const openEvidence = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const message = event.data;
+      if (message?.type !== "pheasant-evidence" || typeof message.source !== "string" || typeof message.path !== "string") return;
+      // The sandboxed report can only request a normal authenticated source read.
+      dispatch({ type: "open-file", file: { source: message.source, path: message.path } });
+      navigate("/");
+    };
+    window.addEventListener("message", openEvidence);
+    return () => window.removeEventListener("message", openEvidence);
+  }, [dispatch, navigate]);
 
   if (artifact.isError) {
     const gone = artifact.error instanceof ApiError && artifact.error.status === 404;
@@ -442,7 +465,7 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
           type="button"
           className="btn btn--small btn--ghost"
           onClick={() => {
-            if (window.confirm(`Delete "${data.title}" and remove its files from the index? It cannot be undone.`))
+            if (window.confirm(`Remove "${data.title}" from active knowledge and search? Published versions remain in history.`))
               remove.mutate();
           }}
           title="Delete this artifact"
@@ -454,6 +477,7 @@ function ArtifactViewer({ id, onBack }: { id: string; onBack: () => void }) {
       <div className="artifact__frame-wrap">
         {document_.data !== undefined ? (
           <iframe
+            ref={frameRef}
             className="artifact__frame"
             title={current ? current.name : data.title}
             sandbox="allow-scripts"

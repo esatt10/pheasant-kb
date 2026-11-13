@@ -116,7 +116,11 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
             "graph_nodes": taxonomy.graph_nodes,
             "split_on_sections": taxonomy.split_on_sections,
         }
-    if source_type == "memory":
+    if source_type in {"memory", "artifact"}:
+        if taxonomy.enabled and strategy == "auto":
+            # Outline-only upgrade: retain record/chunk IDs and re-derive the
+            # headings the auto record profile previously suppressed.
+            payload["artifact_outline"] = 1
         # Scoped to memory on purpose. Every other source's text pipeline is
         # unchanged, and adding this key unconditionally would invalidate every
         # fingerprint in every deployment — re-reading a 2,000-file repository

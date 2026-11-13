@@ -43,6 +43,8 @@ def scope(
     source_name: str | None,
     source_names: list[str] | None,
     exclude_sources: list[str] | None,
+    *,
+    state: Any = None,
 ) -> tuple[str | None, list[str] | None, list[str] | None]:
     """``(source_name, source_names, exclude_sources)`` with the artifacts toggle applied.
 
@@ -53,15 +55,20 @@ def scope(
     """
 
     mode = artifacts_mode(value)
+    from pheasant.artifacts.migration import retrieval_source_ids
+
+    sources = retrieval_source_ids(state)
     if mode == "exclude":
-        excluded = list(dict.fromkeys([*(exclude_sources or []), ARTIFACTS_SOURCE]))
+        excluded = list(dict.fromkeys([*(exclude_sources or []), *sources]))
         return source_name, source_names, excluded
     if mode == "only":
-        named = {n for n in [source_name, *(source_names or [])] if n} - {ARTIFACTS_SOURCE}
+        named = {n for n in [source_name, *(source_names or [])] if n} - set(sources)
         if named:
             raise InvalidRequest(
                 "artifacts: only searches the artifacts source and cannot be combined "
                 f"with a scope naming {', '.join(sorted(named))}"
             )
+        if len(sources) > 1:
+            return None, sources, exclude_sources
         return ARTIFACTS_SOURCE, None, exclude_sources
     return source_name, source_names, exclude_sources

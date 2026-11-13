@@ -131,6 +131,12 @@ TABLE_ORDER = (
     # Composed files and saved reports: what a person kept, and nothing on
     # the target could write them again.
     "saved_artifacts",
+    # Artifact content/publication truth and retained job history travel with
+    # the region. None can be reconstructed from an expired originating job.
+    "artifact_versions",
+    "artifact_publications",
+    "artifact_source_migrations",
+    "durable_jobs",
     "region_settings",
 )
 

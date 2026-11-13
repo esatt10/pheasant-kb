@@ -60,7 +60,7 @@ def normalize_acl(connector_type: str, raw: dict[str, Any] | None) -> dict[str, 
         return None
     allow: list[str] = []
     public = False
-    if connector_type == "memory":
+    if connector_type in {"memory", "artifact"}:
         # Step 33.11 — an agent-memory record's ACL follows its *scope*, which
         # is the only thing the store knows about who a memory was for.
         #

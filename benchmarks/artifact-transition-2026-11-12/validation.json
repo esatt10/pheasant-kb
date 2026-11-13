@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-12",
+  "final_persistence_citations_jobs_suite": {
+    "passed": 143,
+    "backends": [
+      "sqlite",
+      "postgresql17_pg_textsearch"
+    ]
+  },
+  "backend_copy_with_populated_new_tables": {
+    "passed": 1
+  },
+  "native_full_collection": {
+    "batches": 25,
+    "initial_passed": 3871,
+    "skipped": 148,
+    "initial_failed": 27,
+    "change_related_failures_corrected_and_rerun": 10,
+    "remaining_platform_or_checkout_failures": 17
+  },
+  "linux_platform_and_transition_suites": {
+    "passed_after_fixture_fix_rerun": 212,
+    "skipped": 18
+  },
+  "ui_build": "passed",
+  "strict_docs_build": "passed",
+  "ruff_lint_and_format": "passed",
+  "runtime_image": "pheasant:artifact-transition-local",
+  "offline_container_smoke": "passed",
+  "running_fleet_upgraded": false,
+  "performance_file": "validated-results.json",
+  "performance_latest_ms": {
+    "record": {
+      "search_p50": 39.713,
+      "search_p95": 87.797,
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true
+    },
+    "artifact": {
+      "search_p50": 32.489,
+      "search_p95": 77.574,
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true
+    }
+  },
+  "linux_final_followup": {
+    "passed": 4,
+    "skipped": 2
+  }
+}

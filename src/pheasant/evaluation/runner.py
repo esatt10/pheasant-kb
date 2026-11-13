@@ -1171,7 +1171,7 @@ def _replay_searcher(engine: Any, ranking: Any = None) -> Any:
 
 def _admit_hook() -> Any:
     try:
-        from pheasant.memory.formation import admit
+        from pheasant.artifacts.formation import admit
 
         return admit
     except Exception:  # noqa: BLE001 - formation is optional

@@ -52,7 +52,6 @@ from pheasant.ingestion.pipeline import utc_now
 from pheasant.job_snapshots import (
     SNAPSHOT_HEARTBEAT_SECONDS,
     STALL_AFTER_SECONDS,
-    JobSnapshotStore,
 )
 from pheasant.telemetry.interactions import inject_traceparent
 
@@ -397,6 +396,9 @@ class JobRegistry:
         *,
         shared_path: str | Path | None = None,
         async_snapshots: bool = False,
+        state: Any = None,
+        kb_id: str = "",
+        retention_days: int = 30,
     ) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
@@ -404,10 +406,11 @@ class JobRegistry:
         self._max_records = max_records
         self._subscribers: list[Queue] = []
         from pheasant.job_publication import configure
+        from pheasant.persistence.durable_jobs import store_for
 
         configure(
             self,
-            JobSnapshotStore(shared_path, max_records) if shared_path else None,
+            store_for(state, kb_id, retention_days, shared_path, max_records),
             async_snapshots,
             SNAPSHOT_HEARTBEAT_SECONDS,
             TERMINAL,
@@ -415,6 +418,8 @@ class JobRegistry:
 
     def close(self) -> None:
         self._closed.set()
+        if self._heartbeat is not None and self._heartbeat is not threading.current_thread():
+            self._heartbeat.join(timeout=2.0)
         if self._publisher is not None:
             self._publisher.close()
 
@@ -553,12 +558,9 @@ class JobRegistry:
     # -- reading ----------------------------------------------------------
 
     def get(self, job_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            local = job.as_dict() if job else None
-        if local is not None:
-            return local
-        return self._shared.get(job_id) if self._shared is not None else None
+        from pheasant.job_publication import lookup
+
+        return lookup(self, job_id)
 
     def list(self, *, active_only: bool = False, limit: int = 50) -> list[dict[str, Any]]:
         """Newest first. Running jobs always sort ahead of finished ones.
@@ -577,9 +579,10 @@ class JobRegistry:
                 for job_id in self._order
                 if job_id in self._jobs
             }
-        shared = self._shared.list() if self._shared is not None else []
-        merged = {str(record["id"]): record for record in shared}
-        merged.update(local)
+        from pheasant.job_publication import merge_visible, shared_listing
+
+        shared = shared_listing(self._shared, limit)
+        merged = merge_visible(self._shared, local, shared)
         records = list(merged.values())
         if active_only:
             records = [record for record in records if bool(record.get("active"))]
@@ -772,7 +775,7 @@ class JobRegistry:
         if self._shared is not None and self._publisher is None:
             try:
                 self._shared.write(payload)
-            except OSError:
+            except Exception:  # Observability must not fail a job on database errors either.
                 # Progress is observability, never a reason to fail indexing.
                 logger.debug("could not persist shared job snapshot", exc_info=True)
         for queue in subscribers:

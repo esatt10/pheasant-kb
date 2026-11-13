@@ -46,7 +46,7 @@ const COLUMN_OF_TYPE: Record<string, number> = {
   file: 2,
   document: 2,
   markdown_note: 2,
-  memory_record: 2,
+  artifact_record: 2,
   image: 2,
   audio: 2,
   heading: 3,

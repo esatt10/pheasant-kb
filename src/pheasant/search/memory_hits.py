@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pheasant.memory.policy import PREFER_SHARE, describe, resolve
+from pheasant.artifacts.policy import PREFER_SHARE, describe, resolve
 
 
 def annotate_memory(
@@ -31,7 +31,8 @@ def annotate_memory(
         record = resolve(item, memory_index)
         if record is None:
             continue
-        item["memory"] = describe(record)
+        item["memory"] = describe(record)  # deprecated result alias
+        item["artifact"] = {**item["memory"], "semantic_type": record.get("kind", "fact")}
         provenance = item.get("provenance")
         if isinstance(provenance, dict):
             provenance["memory"] = True

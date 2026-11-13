@@ -342,6 +342,9 @@ class SqlGraph:
     def iter_nodes(self) -> Iterator[tuple[str, dict[str, Any]]]:
         return self.rows.iter_nodes(self.kb_id)
 
+    def filtered_nodes(self, **criteria: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+        return self.rows.filtered_nodes(self.kb_id, **criteria)
+
     def iter_edges(self) -> Iterator[tuple[tuple[str, str], dict[int, dict]]]:
         return self.rows.iter_edges(self.kb_id)
 

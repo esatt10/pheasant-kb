@@ -24,7 +24,7 @@ pheasant's defaults are **pheasant-kb's configuration**: a key your config
 does not set takes the value [pheasant-kb](pheasant-kb/index.md) runs with,
 so an empty config *is* `deploy/compose/pheasant-kb.yaml`. That means
 PostgreSQL, NATS, the graph service and preparation workers at their
-pheasant-kb service names, LanceDB, OpenAI models (`OPENAI_API_KEY`), memory,
+pheasant-kb service names, LanceDB, OpenAI models (`OPENAI_API_KEY`), artifacts,
 the interaction ledger, and the evaluation, tuning and readiness planes. A
 process started on these defaults without that infrastructure refuses to
 start and says what is missing.
@@ -1228,14 +1228,14 @@ exactly like a router-less pheasant. Read
 
 ---
 
-## `memory` (agent memory, optional)
+## `memory` (deprecated compatibility settings)
 
-Governs the built-in `memory` source type: agents write records via MCP
-`memory_write` / `POST /memory`, which land as append-only frontmatter
-Markdown files indexed by the ordinary pipeline — recall is just search.
-This block controls **consolidation** (archiving), how memory takes part in
-**retrieval**, and how the store is **bounded**; it does not register the
-memory source itself. See [Agent memory](how-to/agent-memory.md).
+The canonical learning policy is now `artifacts.learning`. The keys below
+remain accepted under `memory` for existing deployments; both names resolve
+to the same policy object. New configurations and the UI use Artifacts.
+Legacy `type: memory` sources are adopted in place as `type: artifact` on
+registration, retaining paths, record IDs and audit history. See
+[Replace memory with artifacts](how-to/artifact-migration.md).
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
@@ -1708,7 +1708,7 @@ sentence that says what to turn on.
 
 ---
 
-## `artifacts` (what the region keeps of what it generates)
+## `artifacts` (durable knowledge and generated work)
 
 Composed files, saved reports and whole conversation threads, kept in the
 `artifacts` source and filed `<yyyy>/<mm>/<dd>/<user>/<session>/<title>--<id>/`.
@@ -1725,6 +1725,9 @@ artifacts:
   yield_to_content: true
   retention_days: 0
   retention_kinds: []
+  job_retention_days: 30
+  taxonomy_enabled: true
+  learning: {}  # Same policy fields listed under the deprecated memory section.
 ```
 
 | Key | Default | What it does |
@@ -1734,8 +1737,19 @@ artifacts:
 | `index_on_save` | `true` | Start the artifacts sync as soon as something is saved (on a fleet, a queued task for the indexer). Off, saving only lands the files and the schedule below indexes them. |
 | `index_interval_seconds` | `1800` | The artifacts source is indexed on the scheduler beat at most this often, never at save time; until then an artifact is readable and `pending`. *Run now* on the Syncs page indexes it at once. |
 | `yield_to_content` | `true` | Give way on the beat while content sources are syncing or queued (four intervals at most). |
-| `retention_days` | `0` | Archive artifacts older than this (`0` keeps them). Archived artifacts leave the index and can be restored. |
+| `retention_days` | `0` | Archive unpublished drafts older than this (`0` keeps them). Published outputs remain until explicitly deprecated or replaced. |
 | `retention_kinds` | `[]` | The kinds retention applies to (`files`, `report`, `thread`); empty is all. |
+| `job_retention_days` | `30` | Keep finished sync, evaluation and tuning jobs for this many days; `0` disables age cleanup. Active jobs are preserved. Deleting history never changes a published output. |
+| `taxonomy_enabled` | `true` | Build taxonomy viewpoints for typed artifact sources, including adopted legacy sources. |
+| `learning` | inherited legacy policy | Formation, evidence, reinforcement, steering, synthesis, compaction, validity and session retention policy. Edit through `/config/section/artifacts`. |
+
+Typed assertions use `POST /artifacts/records` or MCP `record_artifact`.
+Saved reports/files/threads use `POST /artifacts` or MCP `save_artifact`.
+They share the Artifacts inventory and ordinary search/graph surfaces.
+`published: false` saves a draft; `replaces: <id>` publishes a replacement.
+Evidence is captured at save time, with stable source-qualified links and
+compact numbering shared by HTML, Markdown and ZIP exports.
+
 
 A source's beat pacing is general: `sources[].sync.min_interval_seconds` and
 `sources[].sync.yield_to_content` hold any source to it.

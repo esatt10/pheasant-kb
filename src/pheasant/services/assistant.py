@@ -108,6 +108,7 @@ class AnswerRequest:
     workflow: str | None = None
     options: dict[str, Any] | None = None
     memory: Any = None
+    artifact_policy: Any = None
     #: ``include`` (default) / ``exclude`` / ``only``: whether saved
     #: artifacts are evidence for this answer (`services.artifacts.scope`).
     artifacts: Any = None
@@ -217,7 +218,7 @@ def answer(
     from pheasant.services import artifacts
 
     source_name, source_names, exclude_sources = artifacts.scope(
-        request.artifacts, request.source_name, request.source_names, None
+        request.artifacts, request.source_name, request.source_names, None, state=context.state
     )
     try:
         from pheasant.search.vector_store import collect_query_embedding_metrics
@@ -242,7 +243,9 @@ def answer(
                 options=request.options,
                 on_step=on_step,
                 on_draft=on_draft,
-                memory=request.memory,
+                memory=request.artifact_policy
+                if request.artifact_policy is not None
+                else request.memory,
                 source_types=request.source_types,
                 exclude_source_types=request.exclude_source_types,
                 history=normalize_history(request.history),

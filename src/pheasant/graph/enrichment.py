@@ -532,6 +532,15 @@ def _resolve_document_link(
     target: str,
     by_path: dict[str, list[_ArtifactRef]],
 ) -> list[_ArtifactRef]:
+    if target.startswith("pheasant://document/"):
+        from urllib.parse import unquote
+
+        source, _, path = target[len("pheasant://document/") :].partition("/")
+        return [
+            ref
+            for ref in by_path.get(_norm_rel(unquote(path)), [])
+            if ref.source_id == unquote(source)
+        ]
     if target.startswith(("http://", "https://", "mailto:")):
         return []
     cleaned = target.split("#", 1)[0].split("?", 1)[0].strip()

@@ -323,3 +323,19 @@ Use `search_context` first, prefer chunks with explicit provenance, avoid claims
 ### `use_pheasant_for_raw_retrieval`
 
 For a harness that judges evidence itself: `describe_retrieval` once, then `search_context` (hybrid) with `expand=true` or `search_context_batch` for several facets — never `ask_knowledge_base`. Judge each hit from its text, provenance and graph block; follow neighbours with `get_graph_neighbors` or `get_graph_slice`; read whole files with `get_file_summary`; pin repeated runs with `snapshot_id`.
+
+## Artifact-first knowledge
+
+The memory viewpoint is deprecated. Use `record_artifact`,
+`list_artifact_records`, `list_artifact_candidates`, `promote_artifact_candidate`,
+`reject_artifact_candidate`, `consolidate_artifacts` and `synthesize_artifacts`.
+Their legacy memory tools remain adapters with deprecation metadata. Search
+and answering accept `artifact_policy`; `memory` is the compatibility spelling.
+The resource `pheasant://knowledge-bases/{kb_id}/artifact-records` replaces the
+memory resource. `list_artifacts` includes typed knowledge and durable run
+outputs alongside saved reports, files and threads.
+
+`save_retrieval_baseline` keeps a named base ranking for later bundle promotion.
+`delete_evaluation_run` and `delete_tuning_experiment` remove terminal history
+without changing promoted outputs. See [Artifact migration](how-to/artifact-migration.md)
+for retention, evidence links and compatibility details.

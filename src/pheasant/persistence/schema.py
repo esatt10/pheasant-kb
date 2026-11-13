@@ -107,6 +107,42 @@ CREATE INDEX IF NOT EXISTS idx_answer_streams_created ON answer_streams(created_
 -- Composed files and saved reports, kept until their owner deletes them
 -- (`services/artifacts.py`). User data: a refresh, a restart and a backend
 -- migration all keep them.
+CREATE TABLE IF NOT EXISTS durable_jobs (
+  kb_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  active INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT,
+  PRIMARY KEY (kb_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_durable_jobs_retention ON durable_jobs(kb_id, active, finished_at);
+CREATE TABLE IF NOT EXISTS artifact_source_migrations (
+  source_id TEXT PRIMARY KEY,
+  original_config_json TEXT NOT NULL,
+  migrated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_versions (
+  artifact_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  kb_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (kb_id, artifact_id, revision_id)
+);
+CREATE TABLE IF NOT EXISTS artifact_publications (
+  artifact_id TEXT NOT NULL,
+  kb_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  replaces TEXT,
+  receipt_json TEXT NOT NULL,
+  published_at TEXT NOT NULL,
+  deprecated_at TEXT,
+  PRIMARY KEY (kb_id, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_publications_status
+  ON artifact_publications(kb_id, status);
 CREATE TABLE IF NOT EXISTS saved_artifacts (
   id TEXT PRIMARY KEY,
   kb_id TEXT NOT NULL,
@@ -118,7 +154,8 @@ CREATE TABLE IF NOT EXISTS saved_artifacts (
   updated_at TEXT NOT NULL,
   session_id TEXT,
   channel TEXT,
-  archived_at TEXT
+  archived_at TEXT,
+  publication_state TEXT NOT NULL DEFAULT 'published'
 );
 CREATE INDEX IF NOT EXISTS idx_saved_artifacts_owner ON saved_artifacts(kb_id, owner, created_at);
 -- Durable file projections. Coalesced per folder; acknowledgment never waits
@@ -331,7 +368,7 @@ CREATE TABLE IF NOT EXISTS memory_records (
   uses INTEGER NOT NULL DEFAULT 0,
   last_used_at TEXT,
   -- Phase 1 (agent-speed memory compaction): `canon_key` is a pure function
-  -- of the record's own fields (see pheasant.memory.normalize), so it is
+  -- of the record's own fields (see pheasant.artifacts.normalize), so it is
   -- recomputed on every projection rebuild like every other column above
   -- this line, never carried over. `observations`/`last_seen`/`variants`
   -- are earned by reinforcement (a near-duplicate write folding into this

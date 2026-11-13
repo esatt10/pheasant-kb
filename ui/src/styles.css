@@ -443,6 +443,10 @@ select.text-input {
   box-shadow: var(--shadow-sm);
 }
 
+.artifact-records { padding: 16px; margin-bottom: 16px; }
+.artifact-records__editor { min-height: 96px; resize: vertical; }
+.artifact-records__actions { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+
 .checkbox,
 .legend-row {
   display: flex;

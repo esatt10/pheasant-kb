@@ -1,5 +1,9 @@
 # Keep what pheasant generates: artifacts
 
+Artifacts also hold scoped assertions, retrieval rules and durable evaluation
+outputs. See [Replace memory with artifacts](artifact-migration.md) for learning,
+retention, citations and named base ranking configurations.
+
 An **artifact** is something pheasant generated that you decided to keep: the
 files a `@compose` answer wrote, an answer saved as a report (with its
 diagram), or a whole conversation saved as a thread. Kept artifacts are
@@ -114,7 +118,9 @@ physical cleanup are separate milestones.
 
 **Archive** is the reversible form: an archived artifact leaves search and the
 graph but is kept, listed under **Archived**, and **Restore** brings it back.
-Delete cannot be undone.
+Delete removes the active record and its searchable files. Immutable published
+versions and deprecation receipts remain available for audit; archive/restore
+is the reversible way to move an active record out of search.
 
 ## Settings
 
@@ -130,7 +136,7 @@ replica at once.
 | Index right after saving (`index_on_save`) | on | Start the `artifacts` sync when something is saved. |
 | Also index every (`index_interval_seconds`) | 30 min | The schedule that indexes artifacts as a backstop. |
 | Give way to content syncs (`yield_to_content`) | on | The scheduled artifacts sync waits while other sources sync (four intervals at most). |
-| Archive after (`retention_days`) | 0 (keep) | Archive artifacts older than this, on the scheduler's beat. |
+| Archive after (`retention_days`) | 0 (keep) | Archive unpublished drafts older than this, on the scheduler's beat. Published outputs remain until deprecated or replaced. |
 | `retention_kinds` | all | Which kinds retention archives: `files`, `report`, `thread`. |
 
 The config file's `artifacts:` section ([Configuration](../configuration.md))

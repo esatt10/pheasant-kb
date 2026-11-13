@@ -289,14 +289,14 @@ class GraphBuilder:
           against symbols/headings/entities extracted from *another
           memory*), and a subsumption is memory-to-memory by definition.
         * ``about`` — the record to what it is *about*, by the strongest signal
-          that fires (see :mod:`pheasant.memory.bridge`).
+          that fires (see :mod:`pheasant.artifacts.bridge`).
 
         A no-op returning zeros when the region has no memory records, so a
         graph without agent memory is byte-identical to before. Idempotent via
         ``upsert_edge``: re-running over unchanged content re-derives the same
         edges and changes nothing.
         """
-        from pheasant.memory.bridge import (
+        from pheasant.artifacts.bridge import (
             ABOUT_EDGE,
             DEFAULT_MAX_TARGETS,
             SUBSUMES_EDGE,
@@ -382,7 +382,7 @@ class GraphBuilder:
             from pheasant.graph.row_enrichment import memory_inputs
 
             return memory_inputs(self, state, records)
-        from pheasant.memory.bridge import BridgeInputs, normalize_label
+        from pheasant.artifacts.bridge import BridgeInputs, normalize_label
 
         memory_sources = {str(row.get("source_id") or "") for row in records}
         memory_artifacts = {str(row.get("artifact_id") or "") for row in records}

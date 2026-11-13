@@ -255,7 +255,7 @@ class SchedulerService:
                     # archive superseded/expired records, then a full re-sync
                     # of the (small) memory source drops them from the index.
                     # No-ops fast when no memory source is configured.
-                    from pheasant.memory.maintenance import run_memory_maintenance
+                    from pheasant.artifacts.maintenance import run_memory_maintenance
 
                     maintenance = run_memory_maintenance(self.engine)
                     # Step 32.4: the IdP group-sync refresh rides the same

@@ -103,7 +103,7 @@
   "sources": [
     {
       "name": "agent-memory",
-      "type": "memory",
+      "type": "artifact",
       "path": ".pheasant/memory",
       "description": "Durable local agent memory",
       "include": ["**/*.md"],

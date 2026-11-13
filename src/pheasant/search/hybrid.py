@@ -8,8 +8,7 @@ from contextvars import copy_context
 from functools import wraps
 from typing import Any
 
-from pheasant.graph.simple import SimpleMultiDiGraph
-from pheasant.memory.policy import (
+from pheasant.artifacts.policy import (
     MemoryPolicy,
     admits,
     load_memory_index,
@@ -17,6 +16,7 @@ from pheasant.memory.policy import (
     resolve,
     utc_now_iso,
 )
+from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.search import fusion
 from pheasant.search.criteria import (
     path_scope,
@@ -160,6 +160,7 @@ class HybridSearch:
         explain: bool = False,
         path_prefix: str | None = None,
         exclude: Any = None,
+        exclude_sources: list[str] | None = None,
     ) -> dict:
         """Run one query across the arms and fuse them.
 
@@ -221,7 +222,7 @@ class HybridSearch:
         steering = None
         steering_on = self.steering_enabled if steering_kinds is None else bool(steering_kinds)
         if steering_on and (memory_index or extra_steering_records):
-            from pheasant.memory.steering import load_steering, load_steering_records
+            from pheasant.artifacts.steering import load_steering, load_steering_records
 
             records = load_steering_records(self.store.state)
             records.extend(extra_steering_records or [])
@@ -243,7 +244,7 @@ class HybridSearch:
         sectioned = bool(section_needle(section))
         scoped = bool(path_scope(path_prefix)) or bool(exclude)
         ranking = self.ranking_parameters()
-        narrowed = enforced or sectioned or scoped or memory_filtered
+        narrowed = enforced or sectioned or scoped or memory_filtered or bool(exclude_sources)
         fetch_n = ranking.overfetch(max_results, filtering=narrowed)
         # Nothing is collected unless a caller asked or this search was
         # sampled, so the ordinary path allocates one `None` and does no extra
@@ -312,6 +313,7 @@ class HybridSearch:
                         memory_policy=policy if memory_index else None,
                         memory_now=memory_now,
                         steering=steering,
+                        **({"exclude_sources": exclude_sources} if exclude_sources else {}),
                         **({"path_prefix": path_prefix, "exclude": exclude} if scoped else {}),
                     )
                 finally:
@@ -397,6 +399,11 @@ class HybridSearch:
         all_hits = text_results + graph_results + vector_results
         state = getattr(self.store, "state", None)
         visible = admit(state, all_hits) if state is not None else all_hits
+        if exclude_sources:
+            from pheasant.search.criteria import source_of
+
+            excluded_sources = set(exclude_sources)
+            visible = [hit for hit in visible if source_of(hit) not in excluded_sources]
         admitted = {id(hit) for hit in visible}
         text_results = [h for h in all_hits[: counts[0]] if id(h) in admitted]
         graph_results = [h for h in all_hits[counts[0] : sum(counts)] if id(h) in admitted]

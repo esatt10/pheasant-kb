@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pheasant.api.artifact_routes import channel as artifact_channel
 from pheasant.assistant.workflows import step_payload
@@ -47,7 +47,10 @@ class ChatRequest(BaseModel):
     options: dict | None = None
     # How this region's agent memory takes part in the answer: "auto", "off",
     # "only", "prefer", or the full policy object (Step 33.10).
-    memory: dict | str | None = None
+    memory: dict | str | None = Field(
+        default=None, deprecated=True, description="Deprecated alias of artifact_policy"
+    )
+    artifact_policy: dict | str | None = None
     # Saved artifacts as evidence: "include" (default), "exclude", "only".
     artifacts: str | bool | None = None
     # Earlier turns of this conversation, oldest first: [{question, answer}].
@@ -95,7 +98,7 @@ class ChatRequest(BaseModel):
             principal_groups=self.principal_groups,
             workflow=self.workflow,
             options=self.options,
-            memory=self.memory,
+            memory=self.artifact_policy if self.artifact_policy is not None else self.memory,
             artifacts=self.artifacts,
             history=list(self.history or []),
             depth=self.depth,

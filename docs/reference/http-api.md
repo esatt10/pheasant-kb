@@ -390,3 +390,19 @@ curl -X POST http://localhost:8765/search \
   -H "content-type: application/json" \
   -d '{"query": "billing owner", "mode": "hybrid", "max_results": 5}'
 ```
+
+## Canonical artifacts and deprecated memory routes
+
+`POST`/`GET /artifacts/records` write/list scoped assertions and retrieval rules;
+`GET /artifacts/records/{id}` reads one. `POST /artifacts/records/enable` enables
+the source. Candidate review, consolidation and explicit synthesis use the
+corresponding `/artifacts/candidates`, `/artifacts/consolidate` and
+`/artifacts/synthesize` routes. `/memory` routes remain aliases marked
+deprecated in OpenAPI and emit `Deprecation` and successor `Link` headers.
+Search and answering accept `artifact_policy` with the former `memory` semantics.
+
+Saved artifacts accept `published` (default true), `replaces` and `scope`.
+`GET /artifacts/publications/{id}/versions/{revision}` reads an immutable version
+subject to visibility. `POST /tuning/baselines/{name}` saves a promotable named
+base; `DELETE /evaluation/runs/{run_id}` deletes terminal operational history.
+Outputs survive job deletion. [Migration and lifecycle](../how-to/artifact-migration.md).

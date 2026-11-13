@@ -366,6 +366,7 @@ export interface Citation {
    *  document, so the UI can say so instead of the reader having to infer it
    *  from a path that starts with a scope directory. */
   memory?: CitationMemory;
+  artifact?: CitationMemory & { semantic_type?: string };
 }
 
 export interface CitationMemory {
@@ -589,6 +590,8 @@ export interface ArtifactSettings {
   yield_to_content: boolean;
   retention_days: number;
   retention_kinds: string[];
+  job_retention_days: number;
+  taxonomy_enabled: boolean;
 }
 
 /** `GET /artifacts/settings`: in force, the config's defaults, and who changed what. */
@@ -601,7 +604,11 @@ export interface ArtifactSettingsView {
 }
 
 export interface ArtifactSummary {
+  revision_id?: string;
+  publication_status?: string;
   id: string;
+  bulk_supported?: boolean;
+  semantic_type?: string | null;
   kind: "files" | "report" | "thread";
   title: string;
   created_at: string;

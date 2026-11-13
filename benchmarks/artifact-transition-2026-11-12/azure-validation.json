@@ -1,0 +1,1425 @@
+{
+  "date_utc": "2026-11-13",
+  "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+  "revisions": [
+    {
+      "name": "pheasant-kb",
+      "revision": "pheasant-kb--0000068",
+      "ready_revision": "pheasant-kb--0000068",
+      "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+      "provisioning": "Succeeded",
+      "ready": true
+    },
+    {
+      "name": "pheasant-logger",
+      "revision": "pheasant-logger--0000062",
+      "ready_revision": "pheasant-logger--0000062",
+      "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+      "provisioning": "Succeeded",
+      "ready": true
+    },
+    {
+      "name": "pheasant-graph",
+      "revision": "pheasant-graph--0000062",
+      "ready_revision": "pheasant-graph--0000062",
+      "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+      "provisioning": "Succeeded",
+      "ready": true
+    },
+    {
+      "name": "pheasant-indexer",
+      "revision": "pheasant-indexer--0000064",
+      "ready_revision": "pheasant-indexer--0000064",
+      "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+      "provisioning": "Succeeded",
+      "ready": true
+    },
+    {
+      "name": "pheasant-worker",
+      "revision": "pheasant-worker--0000054",
+      "ready_revision": "pheasant-worker--0000054",
+      "image": "acrpheasantkbdevwus3001.azurecr.io/pheasant@sha256:93008a2c81ff1a7d98daee359bfb5286dcfad3d6af8d6c2e004293d3d90da05a",
+      "provisioning": "Succeeded",
+      "ready": true
+    }
+  ],
+  "functional": {
+    "success": true,
+    "checks": [
+      {
+        "name": "canonical API ready",
+        "passed": true
+      },
+      {
+        "name": "legacy source adopted without renaming",
+        "passed": true
+      },
+      {
+        "name": "legacy API deprecation",
+        "passed": true
+      },
+      {
+        "name": "artifact and job retention available",
+        "passed": true
+      },
+      {
+        "name": "promoted ranking preserved on upgrade",
+        "passed": true
+      },
+      {
+        "name": "read /evaluation/status",
+        "passed": true
+      },
+      {
+        "name": "read /evaluation/taxonomy",
+        "passed": true
+      },
+      {
+        "name": "read /evaluation/cohorts",
+        "passed": true
+      },
+      {
+        "name": "read /tuning/status",
+        "passed": true
+      },
+      {
+        "name": "read /tuning/health",
+        "passed": true
+      },
+      {
+        "name": "read /tuning/bundles",
+        "passed": true
+      },
+      {
+        "name": "read /config/sections",
+        "passed": true
+      },
+      {
+        "name": "read /artifacts/candidates",
+        "passed": true
+      },
+      {
+        "name": "named base saved without promotion",
+        "passed": true
+      },
+      {
+        "name": "search with graph expansion",
+        "passed": true
+      },
+      {
+        "name": "source-qualified search evidence",
+        "passed": true
+      },
+      {
+        "name": "dynamic first-use citation numbering",
+        "passed": true
+      },
+      {
+        "name": "pinned evidence and stable identity",
+        "passed": true
+      },
+      {
+        "name": "all rendered local citation links resolve",
+        "passed": true
+      },
+      {
+        "name": "Markdown has evidence targets",
+        "passed": true
+      },
+      {
+        "name": "ZIP preserves code and contains evidence",
+        "passed": true
+      },
+      {
+        "name": "typed artifact indexed and retrieved through artifact policy",
+        "passed": true
+      },
+      {
+        "name": "typed artifact taxonomy headings",
+        "passed": true
+      },
+      {
+        "name": "MCP canonical tool catalog",
+        "passed": true
+      },
+      {
+        "name": "MCP legacy deprecation",
+        "passed": true
+      },
+      {
+        "name": "MCP get_artifact",
+        "passed": true
+      },
+      {
+        "name": "MCP and API artifact content parity",
+        "passed": true
+      },
+      {
+        "name": "MCP view_artifact",
+        "passed": true
+      },
+      {
+        "name": "MCP rendered evidence",
+        "passed": true
+      },
+      {
+        "name": "MCP describe_retrieval",
+        "passed": true
+      },
+      {
+        "name": "MCP search_context",
+        "passed": true
+      },
+      {
+        "name": "MCP App resources",
+        "passed": true
+      },
+      {
+        "name": "MCP App renderable HTML",
+        "passed": true
+      },
+      {
+        "name": "evaluation job completed",
+        "passed": true
+      },
+      {
+        "name": "evaluation report artifact outlives deleted history",
+        "passed": true
+      },
+      {
+        "name": "retained report equals immutable published version",
+        "passed": true
+      },
+      {
+        "name": "evaluation report artifact outlives deleted history",
+        "passed": true
+      },
+      {
+        "name": "retained report equals immutable published version",
+        "passed": true
+      },
+      {
+        "name": "job deletion preserves evaluation publication",
+        "passed": true
+      },
+      {
+        "name": "artifact write audit retained",
+        "passed": true
+      },
+      {
+        "name": "interaction observation remains enabled",
+        "passed": true
+      },
+      {
+        "name": "tuning diagnostic completed",
+        "passed": true
+      },
+      {
+        "name": "diagnosis did not promote a configuration",
+        "passed": true
+      },
+      {
+        "name": "job deletion preserves saved artifact",
+        "passed": true
+      },
+      {
+        "name": "job deletion preserves named base",
+        "passed": true
+      },
+      {
+        "name": "active ranking unchanged after all checks",
+        "passed": true
+      }
+    ]
+  },
+  "evaluation": {
+    "run_id": "run-c2d110794613117c",
+    "snapshot_id": "kb-f9d45220744247c8",
+    "status": "truncated",
+    "gates_passed": true,
+    "skipped_reason": ""
+  },
+  "tuning_diagnostic": {
+    "experiment_id": "exp-07269d2c88b5e2a8",
+    "status": "completed",
+    "outcome": "no_change",
+    "bundle_id": "",
+    "applied": false,
+    "gates_passed": false,
+    "skipped_reason": ""
+  },
+  "retention_settings": {
+    "enabled": true,
+    "auto_save": false,
+    "index_on_save": true,
+    "index_interval_seconds": 1800,
+    "yield_to_content": false,
+    "retention_days": 0,
+    "retention_kinds": [],
+    "learning": null,
+    "job_retention_days": 30,
+    "taxonomy_enabled": true
+  },
+  "corpus_preservation": {
+    "original_count": 29294,
+    "current_count": 29316,
+    "original_ids_missing": 0,
+    "original_content_hashes_changed": 65,
+    "source_refresh_verified": true,
+    "refreshed_originals_by_source": {
+      "pheasant-kb": 50,
+      "guidepath": 15
+    },
+    "source_version": "882644584a05c12f2e66ecfab1a3cbc615729841"
+  },
+  "source_refresh_verification": {
+    "pheasant-kb": {
+      "checked": 72,
+      "matched": 72,
+      "missing": 0,
+      "mismatched": 0
+    },
+    "guidepath": {
+      "checked": 15,
+      "matched": 15,
+      "missing": 0,
+      "mismatched": 0
+    }
+  },
+  "health": {
+    "roles": [
+      {
+        "name": "pheasant-kb",
+        "revision": "pheasant-kb--0000068",
+        "ready_revision": "pheasant-kb--0000068",
+        "scaling_preserved": true,
+        "volumes_preserved": true,
+        "containers": [
+          {
+            "name": "pheasant",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          },
+          {
+            "name": "wake",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          }
+        ]
+      },
+      {
+        "name": "pheasant-logger",
+        "revision": "pheasant-logger--0000062",
+        "ready_revision": "pheasant-logger--0000062",
+        "scaling_preserved": true,
+        "volumes_preserved": true,
+        "containers": [
+          {
+            "name": "pheasant",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          }
+        ]
+      },
+      {
+        "name": "pheasant-graph",
+        "revision": "pheasant-graph--0000062",
+        "ready_revision": "pheasant-graph--0000062",
+        "scaling_preserved": true,
+        "volumes_preserved": true,
+        "containers": [
+          {
+            "name": "pheasant",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          }
+        ]
+      },
+      {
+        "name": "pheasant-indexer",
+        "revision": "pheasant-indexer--0000064",
+        "ready_revision": "pheasant-indexer--0000064",
+        "scaling_preserved": true,
+        "volumes_preserved": true,
+        "containers": [
+          {
+            "name": "pheasant",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          },
+          {
+            "name": "wake",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          }
+        ]
+      },
+      {
+        "name": "pheasant-worker",
+        "revision": "pheasant-worker--0000054",
+        "ready_revision": "pheasant-worker--0000054",
+        "scaling_preserved": true,
+        "volumes_preserved": true,
+        "containers": [
+          {
+            "name": "worker",
+            "ready": true,
+            "restartCount": 0,
+            "runningState": "Running"
+          }
+        ]
+      }
+    ],
+    "checks": {
+      "/health": 200,
+      "/ready": 200,
+      "/artifacts/settings": 200,
+      "/tuning/parameters": 200
+    },
+    "ranking_unchanged": true,
+    "success": true
+  },
+  "performance_before": [
+    {
+      "mode": "text",
+      "samples": 10,
+      "p50_ms": 100.46,
+      "p95_ms": 231.48,
+      "counts": [
+        3,
+        9,
+        10,
+        3,
+        9,
+        10,
+        3,
+        9,
+        10,
+        3
+      ]
+    },
+    {
+      "mode": "graph",
+      "samples": 10,
+      "p50_ms": 104.54,
+      "p95_ms": 518.67,
+      "counts": [
+        10,
+        10,
+        2,
+        10,
+        10,
+        2,
+        10,
+        10,
+        2,
+        10
+      ]
+    }
+  ],
+  "performance_final": {
+    "scope": "Azure public HTTPS, client-observed warm latency; production corpus, no answering model",
+    "cases": [
+      {
+        "name": "text",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 100.63,
+        "p95_ms": 154.43,
+        "max_ms": 397.46,
+        "min_hits": 3,
+        "max_hits": 10,
+        "warmup_max_ms": 940.14
+      },
+      {
+        "name": "graph",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 132.29,
+        "p95_ms": 185.84,
+        "max_ms": 194.39,
+        "min_hits": 2,
+        "max_hits": 10,
+        "warmup_max_ms": 2644.18
+      },
+      {
+        "name": "text_expand",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 516.36,
+        "p95_ms": 583.67,
+        "max_ms": 588.99,
+        "min_hits": 3,
+        "max_hits": 10,
+        "warmup_max_ms": 1379.3
+      },
+      {
+        "name": "artifact_only",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 98.96,
+        "p95_ms": 128.53,
+        "max_ms": 129.32,
+        "min_hits": 0,
+        "max_hits": 0,
+        "warmup_max_ms": 3850.1
+      },
+      {
+        "name": "hybrid",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 446.05,
+        "p95_ms": 502.39,
+        "max_ms": 502.39,
+        "min_hits": 10,
+        "max_hits": 10,
+        "warmup_max_ms": 711.66
+      },
+      {
+        "name": "vector",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 438.04,
+        "p95_ms": 504.6,
+        "max_ms": 504.6,
+        "min_hits": 10,
+        "max_hits": 10,
+        "warmup_max_ms": 502.29
+      },
+      {
+        "name": "text_concurrency_4",
+        "samples": 40,
+        "errors": 0,
+        "p50_ms": 102.7,
+        "p95_ms": 257.63,
+        "max_ms": 330.94
+      },
+      {
+        "name": "GET /ready",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 84.91,
+        "p95_ms": 90.72,
+        "max_ms": 90.72
+      },
+      {
+        "name": "GET /artifacts/records",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 69.57,
+        "p95_ms": 79.53,
+        "max_ms": 79.53
+      },
+      {
+        "name": "GET /artifacts/settings",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 70.63,
+        "p95_ms": 77.85,
+        "max_ms": 77.85
+      },
+      {
+        "name": "GET /tuning/parameters",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 66.14,
+        "p95_ms": 103.87,
+        "max_ms": 103.87
+      },
+      {
+        "name": "GET /jobs",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 77.28,
+        "p95_ms": 238.43,
+        "max_ms": 238.43
+      },
+      {
+        "name": "MCP search_context text",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 100.05,
+        "p95_ms": 108.78,
+        "max_ms": 108.96
+      }
+    ],
+    "success": true
+  },
+  "performance_during_evaluation": {
+    "scope": "Azure public HTTPS, client-observed warm latency; production corpus, no answering model",
+    "cases": [
+      {
+        "name": "text",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 95.87,
+        "p95_ms": 103.82,
+        "max_ms": 154.9,
+        "min_hits": 3,
+        "max_hits": 10,
+        "warmup_max_ms": 612.94
+      },
+      {
+        "name": "graph",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 114.93,
+        "p95_ms": 149.3,
+        "max_ms": 149.61,
+        "min_hits": 2,
+        "max_hits": 10,
+        "warmup_max_ms": 3891.46
+      },
+      {
+        "name": "text_expand",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 394.67,
+        "p95_ms": 521.65,
+        "max_ms": 525.76,
+        "min_hits": 3,
+        "max_hits": 10,
+        "warmup_max_ms": 2783.23
+      },
+      {
+        "name": "artifact_only",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 97.55,
+        "p95_ms": 137.49,
+        "max_ms": 148.03,
+        "min_hits": 0,
+        "max_hits": 1,
+        "warmup_max_ms": 2706.45
+      },
+      {
+        "name": "hybrid",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 525.24,
+        "p95_ms": 611.46,
+        "max_ms": 611.46,
+        "min_hits": 10,
+        "max_hits": 10,
+        "warmup_max_ms": 825.79
+      },
+      {
+        "name": "vector",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 503.46,
+        "p95_ms": 539.07,
+        "max_ms": 539.07,
+        "min_hits": 10,
+        "max_hits": 10,
+        "warmup_max_ms": 518.06
+      },
+      {
+        "name": "text_concurrency_4",
+        "samples": 40,
+        "errors": 0,
+        "p50_ms": 100.35,
+        "p95_ms": 299.61,
+        "max_ms": 370.94
+      },
+      {
+        "name": "GET /ready",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 80.53,
+        "p95_ms": 98.8,
+        "max_ms": 98.8
+      },
+      {
+        "name": "GET /artifacts/records",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 79.44,
+        "p95_ms": 89.81,
+        "max_ms": 89.81
+      },
+      {
+        "name": "GET /artifacts/settings",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 69.8,
+        "p95_ms": 81.66,
+        "max_ms": 81.66
+      },
+      {
+        "name": "GET /tuning/parameters",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 65.38,
+        "p95_ms": 195.49,
+        "max_ms": 195.49
+      },
+      {
+        "name": "GET /jobs",
+        "samples": 10,
+        "errors": 0,
+        "p50_ms": 82.0,
+        "p95_ms": 253.38,
+        "max_ms": 253.38
+      },
+      {
+        "name": "MCP search_context text",
+        "samples": 20,
+        "errors": 0,
+        "p50_ms": 100.08,
+        "p95_ms": 118.3,
+        "max_ms": 123.24
+      }
+    ],
+    "success": true
+  },
+  "ui": {
+    "chromium": {
+      "engine": "chromium",
+      "viewports": [
+        {
+          "name": "desktop",
+          "width": 1440,
+          "height": 1000,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 3299
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 6013,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2452
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2451
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2363
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2682
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2225
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2649
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone",
+          "width": 390,
+          "height": 844,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2984
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 5425,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2273
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2465
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2275
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2619
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2509
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2654
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone-wide",
+          "width": 412,
+          "height": 915,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 3246
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 5501,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2376
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2253
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2637
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2478
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2325
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2464
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone-landscape",
+          "width": 844,
+          "height": 390,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3032
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 4466,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2852
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2907
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2387
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2680
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2448
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2519
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        }
+      ],
+      "errors": [],
+      "failed_requests": [],
+      "unexpected_failed_requests": [],
+      "success": true
+    },
+    "webkit": {
+      "engine": "webkit",
+      "viewports": [
+        {
+          "name": "desktop",
+          "width": 1440,
+          "height": 1000,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 3900
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 7826,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 3400
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2949
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 3035
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 3981
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2795
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 1440,
+                "viewport": 1440
+              },
+              "settled_ms": 2944
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone",
+          "width": 390,
+          "height": 844,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 3417
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 7655,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 3299
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2917
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2880
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 3539
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 2950
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 390,
+                "viewport": 390
+              },
+              "settled_ms": 3103
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone-wide",
+          "width": 412,
+          "height": 915,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 3232
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 6961,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 3960
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2981
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 3012
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 3140
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2817
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 412,
+                "viewport": 412
+              },
+              "settled_ms": 2979
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        },
+        {
+          "name": "phone-landscape",
+          "width": 844,
+          "height": 390,
+          "pages": [
+            {
+              "route": "/artifacts",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3173
+            },
+            {
+              "route": "/config",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 6117,
+              "empty_diff": true
+            },
+            {
+              "route": "/evaluation",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3034
+            },
+            {
+              "route": "/tuning",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2657
+            },
+            {
+              "route": "/sources",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3031
+            },
+            {
+              "route": "/syncs",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 2718
+            },
+            {
+              "route": "/graph",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3188
+            },
+            {
+              "route": "/",
+              "dimensions": {
+                "width": 844,
+                "viewport": 844
+              },
+              "settled_ms": 3293
+            }
+          ],
+          "citation_opens_file": true,
+          "legacy_redirect": true,
+          "theme_persists": true
+        }
+      ],
+      "errors": [],
+      "failed_requests": [],
+      "unexpected_failed_requests": [],
+      "success": true
+    },
+    "baseline_forms": [
+      {
+        "engine": "chromium",
+        "width": 390,
+        "saved": true,
+        "bundle_list_refreshed": true,
+        "errors": []
+      },
+      {
+        "engine": "webkit",
+        "width": 1440,
+        "saved": true,
+        "bundle_list_refreshed": true,
+        "errors": []
+      }
+    ],
+    "scope_and_retirement": {
+      "browsers": [
+        {
+          "engine": "chromium",
+          "width": 390,
+          "qualified_scope_folder_opened": true,
+          "errors": []
+        },
+        {
+          "engine": "webkit",
+          "width": 1440,
+          "qualified_scope_folder_opened": true,
+          "errors": []
+        }
+      ],
+      "retirement_immediately_excluded_from_search": true,
+      "retired_record_unavailable": true,
+      "immutable_version_retained": true,
+      "success": true
+    }
+  },
+  "assistant": {
+    "http_status": 200,
+    "duration_ms": 3827,
+    "response_keys": [
+      "question",
+      "answer",
+      "answer_mode",
+      "mode",
+      "provider",
+      "model",
+      "reasoning_effort_requested",
+      "reasoning_effort_effective",
+      "reasoning_effort",
+      "credential_source",
+      "error",
+      "citations",
+      "facts",
+      "figures",
+      "focus_node_ids",
+      "search_mode",
+      "counts",
+      "workflow",
+      "route",
+      "visual",
+      "steps",
+      "provider_call_count",
+      "provider_retry_count",
+      "retrieved_evidence_ids",
+      "termination_reason",
+      "retrieval_arm_failures",
+      "degraded",
+      "query_embedding",
+      "admission_ms",
+      "runtime_timings",
+      "server_processing_ms",
+      "executor_wait_ms",
+      "server_queue_wait_ms",
+      "server_observed_ms"
+    ],
+    "answer_present": true,
+    "citation_count": 1,
+    "has_error": false,
+    "generated_answer_saved": true,
+    "saved_evidence_captured": true,
+    "saved_links_resolve": true,
+    "success": true
+  },
+  "cleanup": {
+    "active_test_artifacts_removed": true,
+    "test_search_hits_removed": true,
+    "evaluation_publication_retained": true,
+    "named_base_retained": true,
+    "ranking_unchanged": true,
+    "success": true
+  },
+  "interaction_ledger": [
+    [
+      "mcp",
+      "search_context",
+      1
+    ],
+    [
+      "ui",
+      "/assistant",
+      1
+    ],
+    [
+      "ui",
+      "/search",
+      108
+    ]
+  ],
+  "local_followups": {
+    "artifact_taxonomy_idempotency_backend_checks": 178,
+    "mcp_graph_checks": 53,
+    "artifact_api_publication_checks": 54,
+    "durable_jobs_checks": 118,
+    "archive_and_retirement_checks": 97,
+    "final_retirement_and_module_checks": 32,
+    "ui_unit_checks": 6,
+    "note": "Targeted suites overlap; these are execution counts, not distinct tests."
+  },
+  "scope_notes": [
+    "Phone viewports are emulated in Chromium/WebKit; physical devices were not used.",
+    "Warm latency summaries exclude listed warm-up requests. Scale-to-zero startup can temporarily return readiness 503.",
+    "The live evaluation report was truncated at its configured budget. No relevance-quality approval or ranking promotion is inferred."
+  ]
+}

@@ -224,7 +224,9 @@ def test_retention_archives_old_work_out_of_the_index_and_restore_brings_it_back
             engine=engine,
             indexing=Indexing(local=True, start_sync=lambda name: {}),
         )
-        old = artifacts.save(context, artifacts.SaveRequest(title="Old", markdown="# Old"))
+        old = artifacts.save(
+            context, artifacts.SaveRequest(title="Old", markdown="# Old", published=False)
+        )
         new = artifacts.save(context, artifacts.SaveRequest(title="New", markdown="# New"))
         engine.sync_source("artifacts", "incremental")
         long_ago = (datetime.now(UTC) - timedelta(days=40)).isoformat(timespec="seconds")
@@ -574,9 +576,9 @@ def test_a_thread_numbers_its_evidence_once_so_every_marker_names_one_source(
     readme = artifact_files.index_page(record)
     sources = readme.split("## Sources", 1)[1].strip().splitlines()
     assert sources == [
-        "1. [docs · a.md (turn 1, 2)](a.md)",
-        "2. [docs · b.md (turn 1)](b.md)",
-        "3. [docs · c.md (turn 2)](c.md)",
+        "1. [docs · a.md (turn 1, 2)](pheasant://document/docs/a.md)",
+        "2. [docs · b.md (turn 1)](pheasant://document/docs/b.md)",
+        "3. [docs · c.md (turn 2)](pheasant://document/docs/c.md)",
     ]
     page = client.get(f"/artifacts/{saved['id']}/view").text
     assert 'id="source-3"' in page and "turns 1, 2" in page

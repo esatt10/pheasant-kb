@@ -331,7 +331,9 @@ def cancel_requested(state: Any, experiment_id: str) -> str:
     return str(rows[0]["cancel_requested_by"] or "a caller")
 
 
-def prune_experiment(state: Any, kb_id: str, experiment_id: str) -> dict[str, int]:
+def prune_experiment(
+    state: Any, kb_id: str, experiment_id: str, *, exports_path: str | Path | None = None
+) -> dict[str, int]:
     """Delete one experiment and its trials. Returns what it removed.
 
     Bundles are deliberately **not** removed: a bundle may be the region's live
@@ -341,17 +343,35 @@ def prune_experiment(state: Any, kb_id: str, experiment_id: str) -> dict[str, in
     honest ("this came from a pruned experiment") rather than misleading.
     """
 
-    trials = _write(state, "DELETE FROM tuning_trials WHERE experiment_id = ?", (experiment_id,))
-    decisions = _write(
-        state,
-        "DELETE FROM tuning_decisions WHERE experiment_id = ? AND kb_id = ?",
-        (experiment_id, kb_id),
-    )
-    experiments = _write(
-        state,
-        "DELETE FROM tuning_experiments WHERE experiment_id = ? AND kb_id = ? AND status <> ?",
-        (experiment_id, kb_id, RUNNING),
-    )
+    with state.conn:
+        deleted = state.conn.execute(
+            "DELETE FROM tuning_experiments WHERE experiment_id=? AND kb_id=? AND status<>? "
+            "RETURNING experiment_id",
+            (experiment_id, kb_id, RUNNING),
+        ).fetchall()
+        if not deleted:
+            return {"experiments": 0, "trials": 0, "decisions": 0}
+        experiments = len(deleted)
+        trials = len(
+            state.conn.execute(
+                "DELETE FROM tuning_trials WHERE experiment_id=? RETURNING trial_id",
+                (experiment_id,),
+            ).fetchall()
+        )
+        decisions = len(
+            state.conn.execute(
+                "DELETE FROM tuning_decisions WHERE experiment_id=? AND kb_id=? "
+                "RETURNING decision_id",
+                (experiment_id, kb_id),
+            ).fetchall()
+        )
+        if exports_path:
+            import shutil
+
+            root = (Path(exports_path) / COLD_SUBDIR).resolve()
+            target = cold_dir(exports_path, kb_id, experiment_id).resolve()
+            if target.is_relative_to(root) and target != root and target.is_dir():
+                shutil.rmtree(target)
     return {"experiments": experiments, "trials": trials, "decisions": decisions}
 
 
@@ -661,24 +681,45 @@ def apply_bundle(state: Any, kb_id: str, bundle_id: str, *, applied_by: str) -> 
     if not rows:
         raise KeyError(f"Unknown tuning bundle for {kb_id}: {bundle_id}")
     now = utc_now()
-    previous = active_overlay(state, kb_id)
-    _write(
-        state,
-        """UPDATE tuning_bundles SET superseded_at = ?
-            WHERE kb_id = ? AND applied_at IS NOT NULL AND superseded_at IS NULL""",
-        (now, kb_id),
-    )
-    _write(
-        state,
-        """UPDATE tuning_bundles
-              SET applied_at = ?, applied_by = ?, superseded_at = NULL,
-                  replaces_json = ?
-            WHERE kb_id = ? AND bundle_id = ?""",
-        (now, applied_by, _json((previous or {}).get("parameters") or {}), kb_id, bundle_id),
-    )
     payload = json.loads(rows[0]["payload_json"])
-    payload["applied_at"] = now
-    payload["applied_by"] = applied_by
+    payload.update(applied_at=now, applied_by=applied_by)
+    from pheasant.artifacts.publications import publish
+
+    with state.conn:
+        if state.backend.dialect.is_postgres:
+            state.conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(?))", ("pheasant:tuning:" + kb_id,)
+            )
+        else:
+            # Acquire SQLite's writer slot before reading the incumbent.
+            state.conn.execute(
+                "UPDATE tuning_bundles SET applied_by=applied_by WHERE kb_id=? AND bundle_id=?",
+                (kb_id, bundle_id),
+            )
+        previous = active_overlay(state, kb_id)
+        state.conn.execute(
+            "UPDATE tuning_bundles SET superseded_at=? "
+            "WHERE kb_id=? AND applied_at IS NOT NULL AND superseded_at IS NULL",
+            (now, kb_id),
+        )
+        state.conn.execute(
+            "UPDATE tuning_bundles SET applied_at=?,applied_by=?,superseded_at=NULL,"
+            "replaces_json=? "
+            "WHERE kb_id=? AND bundle_id=?",
+            (now, applied_by, _json((previous or {}).get("parameters") or {}), kb_id, bundle_id),
+        )
+        publish(
+            state,
+            kb_id,
+            f"tuning:{bundle_id}",
+            payload,
+            receipt={
+                "experiment_id": payload.get("experiment_id"),
+                "decision_id": payload.get("decision_id"),
+                "retrieval_eligible": False,
+            },
+            transaction=False,
+        )
     return payload
 
 

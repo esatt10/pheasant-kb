@@ -333,6 +333,44 @@ def test_applying_an_unknown_bundle_is_a_refusal_not_a_silent_no_op(seeded: Any)
         tuning_store.apply_bundle(seeded.state, "kb", "bundle-nope", applied_by="test")
 
 
+def test_pruning_an_experiment_keeps_its_promoted_bundle_and_rollback(seeded: Any) -> None:
+    """Job history can go while its published search configuration survives."""
+
+    from pheasant.tuning.contracts import TuningBundle
+
+    outcome = run_tuning(seeded, budget=Budget(refusion_trials=8, requery_trials=2))
+    assert outcome.status == "completed"
+    parameters = {"rrf_k": 25.0, "vector_arm_weight": 0.5}
+    bundle = TuningBundle(
+        bundle_id=TuningBundle.identity(parameters),
+        kb_id="kb",
+        experiment_id=outcome.experiment_id,
+        decision_id=outcome.decision.decision_id,
+        snapshot_id="snap-prune-test",
+        parameters=parameters,
+    )
+    tuning_store.save_bundle(seeded.state, bundle)
+    tuning_store.apply_bundle(seeded.state, "kb", bundle.bundle_id, applied_by="test")
+    resolver = RankingResolver(base=DEFAULT_RANKING, state=seeded.state, kb_id="kb", ttl_seconds=0)
+    before = resolver.current().values()
+    overlay = tuning_store.active_overlay(seeded.state, "kb")
+    stored = tuning_store.load_bundle_row(seeded.state, "kb", bundle.bundle_id)
+
+    removed = tuning_store.prune_experiment(seeded.state, "kb", outcome.experiment_id)
+
+    assert removed["experiments"] == 1 and removed["trials"] > 0
+    assert tuning_store.experiment_status(seeded.state, outcome.experiment_id) is None
+    assert tuning_store.load_trials(seeded.state, outcome.experiment_id) == {}
+    assert tuning_store.load_bundle_row(seeded.state, "kb", bundle.bundle_id) == stored
+    assert tuning_store.active_overlay(seeded.state, "kb") == overlay
+    assert resolver.current().values() == before
+
+    tuning_store.revert_bundle(seeded.state, "kb", applied_by="test")
+    assert resolver.current().values() == DEFAULT_RANKING.values()
+    tuning_store.apply_bundle(seeded.state, "kb", bundle.bundle_id, applied_by="test")
+    assert resolver.current().values() == before
+
+
 # --------------------------------------------------------------------------
 # Resumption and durability
 # --------------------------------------------------------------------------
