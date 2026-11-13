@@ -170,7 +170,9 @@ def test_an_artifact_downloads_as_a_zip_markdown_html_or_one_file(
     archive = client.get(f"/artifacts/{kept['id']}/export", params={"format": "zip"})
     assert archive.headers["content-disposition"] == 'attachment; filename="counts.zip"'
     names = zipfile.ZipFile(io.BytesIO(archive.content)).namelist()
-    assert names == ["account_counts.js", "report.html", "README.md", "counts.html"]
+    assert names[:3] == ["account_counts.js", "report.html", "README.md"]
+    assert names[-1] == "counts.html"
+    assert any(name.startswith("evidence/ev-") and name.endswith(".md") for name in names)
     markdown = client.get(f"/artifacts/{kept['id']}/export", params={"format": "markdown"}).text
     assert "## `account_counts.js`" in markdown and "## Sources" in markdown
     one = client.get(f"/artifacts/{kept['id']}/export", params={"file": "account_counts.js"})

@@ -117,6 +117,10 @@ export function EvaluationPage() {
 
   const live = status.data;
   const finished = live && TERMINAL.has(live.status);
+  const removeRun = useMutation({
+    mutationFn: () => api.deleteEvaluationRun(live!.run_id!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["evaluation"] }),
+  });
   const data = report.data;
 
   // The metric id behind the open tile, which is not its display label.
@@ -161,7 +165,7 @@ export function EvaluationPage() {
         <section className="section eval-section">
           <h2 className="section__title">Evaluation is switched off</h2>
           <p>
-            A batch replays recorded queries against a corpus-only baseline and the memory
+            A batch replays recorded queries against a corpus-only baseline and the artifact
             system, then reports what changed with the evidence and the denominator attached.
             It is read-only: nothing it writes is ever indexed or retrievable as knowledge.
           </p>
@@ -184,6 +188,12 @@ export function EvaluationPage() {
       <header className="page__header">
         <h1>Knowledge effectiveness</h1>
         <div className="page__actions">
+          {finished && (
+            <button className="btn" onClick={() => removeRun.mutate()} disabled={removeRun.isPending}
+              title="Delete operational history; the published report remains in Artifacts">
+              Delete run history
+            </button>
+          )}
           <button
             className="btn btn--primary"
             onClick={() => start.mutate()}
@@ -195,6 +205,7 @@ export function EvaluationPage() {
       </header>
 
       <RunProgress status={live} />
+      {removeRun.error ? <p role="alert">{String(removeRun.error)}</p> : null}
 
       {data ? (
         <>

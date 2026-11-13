@@ -311,7 +311,7 @@ def okf_for_source(source: SourceConfig, relative_path: str, text: str) -> dict[
     Only ``.md`` is considered, which is the only suffix OKF defines.
     """
 
-    if getattr(source.type, "value", source.type) == "memory":
+    if getattr(source.type, "value", source.type) in {"memory", "artifact"}:
         return None
     if not relative_path.lower().endswith(".md"):
         return None
@@ -333,9 +333,9 @@ def _strip_memory_frontmatter(source: SourceConfig, text: str) -> tuple[str, int
     `memory_records` table where it can actually be queried. Leaving it in the
     text only diluted BM25 with high-cardinality tokens.
     """
-    if getattr(source.type, "value", source.type) != "memory":
+    if getattr(source.type, "value", source.type) not in {"memory", "artifact"}:
         return text, 0
-    from pheasant.memory.store import strip_frontmatter
+    from pheasant.artifacts.store import strip_frontmatter
 
     return strip_frontmatter(text)
 

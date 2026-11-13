@@ -43,7 +43,9 @@ class Selection:
     archived: bool | None = None
 
 
-def select(context: ServiceContext, selection: Selection) -> list[dict[str, Any]]:
+def select(
+    context: ServiceContext, selection: Selection, *, unpublished_only: bool = False
+) -> list[dict[str, Any]]:
     """The artifacts a selection names, oldest first; refused if it names nothing."""
 
     if not (
@@ -59,7 +61,18 @@ def select(context: ServiceContext, selection: Selection) -> list[dict[str, Any]
     if selection.ids and len(selection.ids) > MAX_BULK:
         raise InvalidRequest(f"at most {MAX_BULK} artifacts per call; split the ids")
     clauses, params = ["kb_id=?"], [context.config.knowledge_base_id]
+    if unpublished_only:
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM artifact_publications p WHERE "
+            "p.kb_id=saved_artifacts.kb_id AND p.artifact_id=saved_artifacts.id "
+            "AND p.status='published')"
+        )
     if selection.ids:
+        if any(
+            str(i).startswith(("mem-", "evaluation:", "tuning:", "baseline:"))
+            for i in selection.ids
+        ):
+            raise InvalidRequest("manage typed records and retrieval outputs individually")
         clauses.append(f"id IN ({','.join('?' for _ in selection.ids)})")
         params += [str(i) for i in selection.ids]
     for column, value in (
@@ -93,6 +106,8 @@ def delete_many(
     """Delete every artifact the selection names, or say which it would (``dry_run``)."""
 
     chosen = select(context, selection)
+    for record in chosen:
+        store._load(context, record["id"], principal)
     summaries = [store.summary_of(record) for record in chosen]
     if dry_run:
         return {"dry_run": True, "matched": len(chosen), "artifacts": summaries}
@@ -105,19 +120,28 @@ def _now() -> str:
 
 
 def archive(
-    context: ServiceContext, selection: Selection, *, principal: str | None = None
+    context: ServiceContext,
+    selection: Selection,
+    *,
+    principal: str | None = None,
+    _system: bool = False,
 ) -> dict[str, Any]:
     """Archive the selected live artifacts: stamped, and out of the index."""
 
     chosen = select(context, Selection(**{**selection.__dict__, "archived": False}))
     now = _now()
     for record in chosen:
+        if not _system:
+            store._load(context, record["id"], principal)
+        from pheasant.artifacts.publications import deprecate
+
         # Stamped first: removing its index page must not retire it
         # (`artifacts.forget_removed` keeps an archived row).
         context.state.execute(
             "UPDATE saved_artifacts SET archived_at=?, updated_at=? WHERE id=? AND kb_id=?",
             (now, now, record["id"], context.config.knowledge_base_id),
         )
+        deprecate(context.state, context.config.knowledge_base_id, record["id"])
         folder = (record.get("payload") or {}).get("folder")
         if folder:
             names = [name for name, _text in store.source_files(record)]
@@ -138,6 +162,16 @@ def restore(
     chosen = select(context, Selection(**{**selection.__dict__, "archived": True}))
     restored, waiting = [], []
     for record in chosen:
+        store._load(context, record["id"], principal)
+        from pheasant.artifacts import publications
+
+        publication = publications.status(
+            context.state, context.config.knowledge_base_id, record["id"]
+        )
+        if publication and publication["status"] == "superseded":
+            raise InvalidRequest(
+                "publish a new replacement instead of restoring superseded content"
+            )
         folder = (record.get("payload") or {}).get("folder") or ""
         pending = context.state.rows(
             "SELECT 1 AS x FROM archived_documents WHERE source_id=? AND relative_path LIKE ? "
@@ -153,6 +187,16 @@ def restore(
         )
         record["archived_at"] = None
         store._publish(context, record)
+        if publication and publication["status"] == "deprecated":
+            content = publications.version(
+                context.state,
+                context.config.knowledge_base_id,
+                record["id"],
+                publication["revision_id"],
+            )
+            publications.publish(
+                context.state, context.config.knowledge_base_id, record["id"], content
+            )
         restored.append(record["id"])
     result: dict[str, Any] = {"restored": restored}
     if waiting:
@@ -177,10 +221,24 @@ def run_retention(context: ServiceContext, *, now: datetime | None = None) -> di
     kinds = list(settings.retention_kinds or []) or [None]
     archived: list[str] = []
     for kind in kinds:
-        chosen = select(context, Selection(kind=kind, before=cutoff, archived=False))
-        ids = [r["id"] for r in chosen][: RETENTION_PER_BEAT - len(archived)]
+        chosen = select(
+            context, Selection(kind=kind, before=cutoff, archived=False), unpublished_only=True
+        )
+        protected = {
+            str(r["artifact_id"])
+            for r in context.state.rows(
+                "SELECT artifact_id FROM artifact_publications "
+                "WHERE kb_id=? AND status='published'",
+                (context.config.knowledge_base_id,),
+            )
+        }
+        ids = [r["id"] for r in chosen if r["id"] not in protected][
+            : RETENTION_PER_BEAT - len(archived)
+        ]
         if ids:
-            archived += archive(context, Selection(ids=ids), principal="retention")["archived"]
+            archived += archive(context, Selection(ids=ids), principal="retention", _system=True)[
+                "archived"
+            ]
         if len(archived) >= RETENTION_PER_BEAT:
             break
     return {"archived": len(archived), "enabled": True, "cutoff": cutoff}

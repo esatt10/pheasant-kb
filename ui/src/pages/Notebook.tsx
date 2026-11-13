@@ -166,7 +166,7 @@ export function Notebook() {
   // two open tiles left the chat its header and nothing else.
   const narrow = useMediaQuery("(max-width: 1180px)");
   const compact = useMediaQuery("(max-width: 860px)");
-  const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
+  const [mobileTab, setMobileTab] = useState<MobileTab>(() => state.browser.open ? "taxonomy" : "chat");
 
   /** Put text in the composer (unfolding the chat if it was folded) and focus it. */
   const askInChat = useCallback(

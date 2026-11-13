@@ -151,9 +151,9 @@ assistant:
     max_facts: 24
 sources:
   - name: agent-memory
-    type: memory
+    type: artifact
     path: /memory
-    description: Durable agent memory
+    description: Durable knowledge artifacts
     include:
       - '**/*.md'
     exclude:

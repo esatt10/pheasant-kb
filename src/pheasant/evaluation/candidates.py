@@ -252,7 +252,7 @@ def apply_decisions(
     letting any of them take effect.
 
     Admission itself goes through the caller's ``admit`` -- in practice
-    :func:`pheasant.memory.formation.admit`, which appends through
+    :func:`pheasant.artifacts.formation.admit`, which appends through
     ``MemoryStore.append`` like every other write. There is no second ingestion
     path here, and adding one would break memory's first invariant.
     """

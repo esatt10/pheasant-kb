@@ -107,7 +107,11 @@ class PheasantTools(
         # registry.  Keep the same progress contract on the tool facade so an
         # agent can start a long first index, retain the job id, and inspect it
         # without holding a tool call open for minutes.
-        self.jobs = JobRegistry()
+        self.jobs = JobRegistry(
+            state=self.state,
+            kb_id=config.knowledge_base_id,
+            retention_days=config.artifacts.job_retention_days,
+        )
         self._job_lock = threading.Lock()
         self.searcher = HybridSearch(
             SearchStore(self.state, ranking=resolver_for(config, self.state)),
@@ -556,100 +560,25 @@ class PheasantTools(
         itself. All three are optional and default to the pre-33.5 behavior
         (CLAUDE.md §4 rule 8: additive only).
         """
-        from pheasant.memory.reinforcement import StateReinforcementIndex
-        from pheasant.memory.store import MemoryStore, memory_source
+        from pheasant.services.artifact_records import WriteRequest, write
 
         self._require_knowledge_base(knowledge_base)
-        source = memory_source(self.config, self.state)
-        if source is None:
-            raise ValueError(
-                "no enabled memory source configured. Add one to pheasant.yaml:\n"
-                "  sources:\n"
-                "    - name: agent-memory\n"
-                "      type: memory\n"
-                "      path: memory"
-            )
-        # Phase 1: a write whose *normalized* text already matches a live
-        # record in the same (scope, subject, kind, ACL) bucket reinforces
-        # that record instead of creating a new one. `reinforcement_enabled`
-        # defaults on (see MemorySettings) but stays a real knob, and a
-        # cold/absent projection degrades `find()` to "no match" — never
-        # blocks the write.
-        reinforcement = (
-            StateReinforcementIndex(self.state)
-            if self.config.memory.reinforcement_enabled
-            else None
+        return write(
+            self.services,
+            WriteRequest(
+                text=text,
+                scope=scope,
+                subject=subject,
+                supersedes=supersedes,
+                tags=tags or (),
+                sync=sync,
+                kind=kind,
+                principal=principal,
+                valid_until=valid_until,
+                channel="mcp",
+            ),
+            legacy=True,
         )
-        store = MemoryStore(source.path)
-        record, created = store.append(
-            text,
-            scope=scope,
-            subject=subject,
-            supersedes=supersedes,
-            tags=tags or (),
-            kind=kind,
-            written_by=principal,
-            valid_until=valid_until,
-            reinforcement=reinforcement,
-        )
-        outcome = store.last_outcome or ("created" if created else "duplicate")
-
-        from pheasant.telemetry import metrics as _metrics
-
-        _metrics.record_memory_write(outcome, store.last_fold)
-        result: dict = {
-            "record": record.as_dict(),
-            "created": created,
-            "source": source.name,
-            # Additive (rule 8): "created" | "reinforced" | "duplicate".
-            # `created` is unchanged and still means exactly what it always
-            # has; `outcome` distinguishes the two ways `created=False` can
-            # now happen.
-            "outcome": outcome,
-        }
-        submitted = (text or "").strip()
-        if not created and submitted and submitted != record.text:
-            # Only possible for outcome="reinforced": an exact-digest match
-            # (outcome="duplicate") is byte-identical to `record.text` by
-            # construction. The caller gets back a record whose stored text
-            # is not what it wrote — worth surfacing rather than leaving
-            # implicit.
-            result["submitted_text"] = submitted
-        # The record is already durably on disk; this sync only makes it
-        # *searchable now*. Failing the whole request when it cannot run — most
-        # often because another writer holds the engine lease, which a live run
-        # hit immediately — reports "your memory was not saved" when it was.
-        # Degrade to deferred indexing instead: the scheduler and the next sync
-        # both pick it up.
-        if sync and created:
-            if self._remote_graph:
-                result["sync"] = self._publish_sync(source.name, "incremental")
-            else:
-                try:
-                    # Avoid making an interactive write pay the whole-graph
-                    # enrichment walk. The next ordinary sync clears the
-                    # persisted dirty marker and completes enrichment.
-                    result["sync"] = self.engine.sync_source(
-                        source.name, "incremental", enrich="deferred"
-                    ).__dict__
-                except Exception as exc:
-                    logger.warning("memory write indexed later: %s", exc)
-                    result["sync_deferred"] = str(exc)
-        self._audit(
-            source.name,
-            "memory_write",
-            principal or "mcp",
-            "mcp",
-            None,
-            utc_now(),
-            {
-                "record_id": record.record_id,
-                "scope": record.scope,
-                "kind": record.kind,
-                "created": created,
-            },
-        )
-        return result
 
     def memory_list(
         self, knowledge_base: str, scope: str | None = None, current_only: bool = True
@@ -662,7 +591,7 @@ class PheasantTools(
         supersedes chain to interpret them would be worse than handing it
         nothing.
         """
-        from pheasant.memory.store import MemoryStore, memory_source
+        from pheasant.artifacts.store import MemoryStore, memory_source
 
         self._require_knowledge_base(knowledge_base)
         source = memory_source(self.config, self.state)
@@ -733,7 +662,7 @@ class PheasantTools(
         ranking as anything else --- it simply was not typed by anyone.
         """
 
-        from pheasant.memory.formation import admit
+        from pheasant.artifacts.formation import admit
 
         self._require_knowledge_base(knowledge_base)
         return admit(self.engine, candidate_id, admitted_by=principal or "mcp")
@@ -746,7 +675,7 @@ class PheasantTools(
         The rule that proposed it will not suggest it again.
         """
 
-        from pheasant.memory.formation import reject
+        from pheasant.artifacts.formation import reject
 
         self._require_knowledge_base(knowledge_base)
         return reject(self.engine, candidate_id, rejected_by=principal or "mcp")
@@ -758,7 +687,7 @@ class PheasantTools(
         deleted) and re-syncs the memory source so they leave the index. The
         scheduler runs this automatically; this tool is the on-demand edge.
         """
-        from pheasant.memory.maintenance import run_memory_maintenance
+        from pheasant.artifacts.maintenance import run_memory_maintenance
 
         self._require_knowledge_base(knowledge_base)
         result = run_memory_maintenance(self.engine)
@@ -782,8 +711,8 @@ class PheasantTools(
         disabled, no `type: memory` source is configured, or no model is
         reachable.
         """
-        from pheasant.memory.store import MemoryStore, memory_source
-        from pheasant.memory.synthesis import run_synthesis
+        from pheasant.artifacts.store import MemoryStore, memory_source
+        from pheasant.artifacts.synthesis import run_synthesis
 
         self._require_knowledge_base(knowledge_base)
         source = memory_source(self.config, self.state)
@@ -810,6 +739,7 @@ class PheasantTools(
         node_types: list[str] | None = None,
         min_score: float | None = None,
         memory: Any = None,
+        artifact_policy: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
@@ -892,7 +822,7 @@ class PheasantTools(
                 exclude_documents=exclude_documents,
                 principal=principal,
                 principal_groups=principal_groups,
-                memory=memory,
+                memory=artifact_policy if artifact_policy is not None else memory,
                 exclude_sources=exclude_sources,
                 node_types=node_types,
                 min_score=min_score,
@@ -1569,6 +1499,7 @@ class PheasantTools(
         types = source_type_map(self.state)
         indexed = [str(row["source_id"]) for row in rows]
         source_types = sorted({types[name] for name in indexed if name in types})
+        learning = self._describe_memory()
         return {
             "knowledge_base": knowledge_base or self.config.knowledge_base_id,
             "default_mode": self.config.search.default_mode,
@@ -1581,7 +1512,13 @@ class PheasantTools(
             },
             "sources": indexed,
             "source_types": source_types,
-            "memory": self._describe_memory(),
+            "memory": learning,
+            "artifacts": {
+                "learning": learning,
+                "job_retention_days": self.config.artifacts.job_retention_days,
+                "taxonomy_enabled": self.config.artifacts.taxonomy_enabled,
+            },
+            "deprecated": {"memory": "artifacts.learning", "memory policy": "artifact_policy"},
             "retrieval": settings.model_dump(mode="json"),
             "workflow": self.config.assistant.workflow,
             "workflow_options": dict(self.config.assistant.workflow_options or {}),
@@ -1596,6 +1533,8 @@ class PheasantTools(
                     "node_types",
                     "min_score",
                     "memory",
+                    "artifact_policy",
+                    "artifacts",
                 ],
                 "ask_knowledge_base": ["workflow", "mode", "max_results", "options"],
             },
@@ -1611,8 +1550,8 @@ class PheasantTools(
         """
         if not self.config.memory.steering_enabled:
             return {"enabled": False}
-        from pheasant.memory.policy import MemoryPolicy, utc_now_iso
-        from pheasant.memory.steering import load_steering, load_steering_records
+        from pheasant.artifacts.policy import MemoryPolicy, utc_now_iso
+        from pheasant.artifacts.steering import load_steering, load_steering_records
 
         rules = load_steering(
             load_steering_records(self.state),
@@ -1630,7 +1569,7 @@ class PheasantTools(
         bridge that is working and one that silently connects nothing, and an
         operator has no other way to tell those apart.
         """
-        from pheasant.memory.bridge import ABOUT_EDGE
+        from pheasant.services.artifact_graph import coverage
 
         try:
             rows = self.state.rows("SELECT artifact_id FROM memory_records")
@@ -1640,27 +1579,7 @@ class PheasantTools(
         if not artifacts:
             return {"records": 0, "bridged": 0, "unbridged": 0, "by_signal": {}}
 
-        bridged: set[str] = set()
-        by_signal: dict[str, int] = {}
-        graph = self.graph
-        remote = getattr(graph, "remote_memory_coverage", None)
-        if callable(remote):
-            return remote(artifact_ids=sorted(artifacts))
-        with graph.reading():
-            for (source, _target), edge_map in graph.iter_edges():
-                if source not in artifacts:
-                    continue
-                for data in edge_map.values():
-                    if data.get("type") == ABOUT_EDGE:
-                        bridged.add(source)
-                        signal = str(data.get("match_signal") or "unknown")
-                        by_signal[signal] = by_signal.get(signal, 0) + 1
-        return {
-            "records": len(artifacts),
-            "bridged": len(bridged),
-            "unbridged": len(artifacts) - len(bridged),
-            "by_signal": by_signal,
-        }
+        return coverage(self.graph, sorted(artifacts))
 
     def _describe_memory(self) -> dict:
         """What this region remembers, and how a caller may ask for it.
@@ -1672,8 +1591,8 @@ class PheasantTools(
         memory" and "this region has memory *about deployments, written this
         week*", which is what decides whether to ask for it at all.
         """
-        from pheasant.memory.policy import VALID_MODES
-        from pheasant.memory.store import memory_source
+        from pheasant.artifacts.policy import VALID_MODES
+        from pheasant.artifacts.store import memory_source
 
         source = memory_source(self.config, self.state)
         if source is None:
@@ -1718,6 +1637,7 @@ class PheasantTools(
         node_types: list[str] | None = None,
         min_score: float | None = None,
         memory: Any = None,
+        artifact_policy: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
     ) -> dict:
@@ -1753,7 +1673,7 @@ class PheasantTools(
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=memory,
+            memory=artifact_policy if artifact_policy is not None else memory,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
         )
@@ -1808,6 +1728,7 @@ class PheasantTools(
         principal_groups: list[str] | None = None,
         section: str | None = None,
         memory: Any = None,
+        artifact_policy: Any = None,
     ) -> dict:
         """Files most relevant to a described task.
 
@@ -1833,7 +1754,7 @@ class PheasantTools(
                 section=section,
                 principal=principal,
                 principal_groups=principal_groups,
-                memory=memory,
+                memory=artifact_policy if artifact_policy is not None else memory,
             ),
         )
 

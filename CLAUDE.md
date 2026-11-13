@@ -153,8 +153,9 @@ pheasant-kb/
 │   │                            parameters, fleet-scoped), corpus_shape
 │   │                            (the facts a plan reads, held off the
 │   │                            question path), keep_warm
-│   ├── memory/                ← store, projection, policy, steering, salience,
-│   │                            bridge, maintenance, formation, benchmark
+│   ├── artifacts/             ← typed records, policy, projection, formation,
+│   │                            reinforcement, synthesis, versions/publications
+│   ├── memory/                ← deprecated import aliases to artifacts/
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
 │   │                            schema, lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
@@ -241,7 +242,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 208 pytest modules, offline by design
+└── tests/                     ← 209 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3119,3 +3120,22 @@ Each of these cost real time. They are listed because the shape recurs.
   capabilities this build declares it does not have
 - **Synapse region spec:** `docs/SYNAPSE_INTEGRATION.md`
 - **Deployment:** `docs/deployment.md`, `deploy/kubernetes/`
+
+
+### Artifact transition
+
+`artifacts/` is the canonical home of scoped assertions and retrieval policies.
+`memory/` modules and `/memory`/MCP memory tools are deprecated compatibility
+adapters. New calls use `/artifacts/records`, `record_artifact`, and
+`artifact_policy`; old persisted IDs and `memory_*` derived tables stay stable.
+`artifacts.learning` owns the prior formation, steering, compaction, synthesis
+and validity policies (`config.memory` aliases the same object).
+
+Legacy source adoption is additive and in place; the original definition is
+recorded once. Published versions/receipts live independently of durable jobs.
+The scheduler prunes terminal job history after `artifacts.job_retention_days`
+(default 30); published outputs survive until deprecated/replaced. Saved base
+ranking bundles can be applied after reconfiguration and job deletion. Evidence
+numbering/rendering is centralized in `services/artifact_evidence.py`; preserve
+original code file bytes and carry local-to-global maps. See
+`docs/how-to/artifact-migration.md` and the transition tests on SQLite/PostgreSQL.

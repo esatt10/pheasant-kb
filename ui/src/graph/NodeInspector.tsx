@@ -22,7 +22,7 @@ type Tab = "overview" | "relationships" | "content";
 type View = "rich" | "raw";
 
 /** Node types whose indexed text is Markdown worth rendering. */
-const MARKDOWN_TYPES = new Set(["markdown_note", "document", "memory_record"]);
+const MARKDOWN_TYPES = new Set(["markdown_note", "document", "memory_record", "artifact_record"]);
 
 /**
  * Render Markdown to sanitized HTML.
@@ -40,8 +40,8 @@ function renderMarkdown(text: string): string {
   return renderMath(DOMPurify.sanitize(html, { USE_PROFILES: { html: true } }));
 }
 
-const CONTENT_TYPES = new Set(["file", "document", "markdown_note", "memory_record", "chunk"]);
-const ARTIFACT_TYPES = new Set(["file", "document", "markdown_note", "memory_record"]);
+const CONTENT_TYPES = new Set(["file", "document", "markdown_note", "memory_record", "artifact_record", "chunk"]);
+const ARTIFACT_TYPES = new Set(["file", "document", "markdown_note", "memory_record", "artifact_record"]);
 /** Nodes that are a whole file the viewer can open. Memory records are listed by the memory page. */
 const OPENABLE_TYPES = new Set(["file", "document", "markdown_note", "image", "audio"]);
 

@@ -403,7 +403,7 @@ class ContractPublisher:
         # configured, so the router's `--modality memory` filter routes
         # remember/recall traffic to memory-capable regions. Existing wire
         # data — no schema bump (the 25.4 image/audio precedent).
-        from pheasant.memory.store import memory_source
+        from pheasant.artifacts.store import memory_source
 
         if memory_source(self.config, getattr(self, "state", None)) is not None:
             modalities.append("memory")

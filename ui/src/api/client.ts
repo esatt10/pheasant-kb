@@ -679,6 +679,7 @@ export const api = {
       workflow?: string | null;
       options?: Record<string, unknown>;
       memory?: string | null;
+      artifact_policy?: string | null;
       /** Saved artifacts as evidence: include (default), exclude, only. */
       artifacts?: string | null;
       /** Keep a composed answer as an artifact; unset follows the region's auto-save. */
@@ -1150,9 +1151,9 @@ export const api = {
 
   // Agent memory (Step 33.10). These endpoints have existed since 33.1;
   // nothing in the UI had ever called them.
-  memory: (params: { scope?: string; current_only?: boolean } = {}) =>
-    request<MemoryListResponse>(`/memory${qs(params)}`),
-  memoryWrite: (body: {
+  artifactRecords: (params: { scope?: string; current_only?: boolean } = {}) =>
+    request<MemoryListResponse>(`/artifacts/records${qs(params)}`),
+  recordArtifact: (body: {
     text: string;
     scope?: string;
     subject?: string | null;
@@ -1161,13 +1162,13 @@ export const api = {
     kind?: string;
     principal?: string | null;
     sync?: boolean;
-  }) => request<MemoryWriteResponse>("/memory", { method: "POST", body: JSON.stringify(body) }),
-  memoryConsolidate: () =>
-    request<MemoryConsolidateResponse>("/memory/consolidate", { method: "POST" }),
+  }) => request<MemoryWriteResponse>("/artifacts/records", { method: "POST", body: JSON.stringify(body) }),
+  consolidateArtifacts: () =>
+    request<MemoryConsolidateResponse>("/artifacts/consolidate", { method: "POST" }),
   // `type: memory` is deliberately absent from the generic source picker, so
   // this is the one way a person can turn memory on from the UI.
-  memoryEnable: () =>
-    request<{ status: string; source: SourceRecord }>("/memory/enable", {
+  enableArtifactRecords: () =>
+    request<{ status: string; source: SourceRecord }>("/artifacts/records/enable", {
       method: "POST",
       body: JSON.stringify({}),
     }),
@@ -1176,23 +1177,23 @@ export const api = {
   // retrievable, and nothing becomes retrievable until somebody promotes it.
   // That review step is what lets a region learn from how it is used without
   // a session's traffic quietly turning into knowledge.
-  memoryCandidates: (params: { status?: string; rule_id?: string } = {}) =>
-    request<MemoryCandidateListResponse>(`/memory/candidates${qs(params)}`),
+  artifactCandidates: (params: { status?: string; rule_id?: string } = {}) =>
+    request<MemoryCandidateListResponse>(`/artifacts/candidates${qs(params)}`),
   // Layers 2 and 3 of the review: the calls a proposal came from, and their
   // spans. Fetched per candidate, only when one is opened -- a hundred
   // proposals must not be a hundred evidence queries nobody asked for.
-  memoryCandidateEvidence: (id: string) =>
+  artifactCandidateEvidence: (id: string) =>
     request<MemoryCandidateEvidence>(
-      `/memory/candidates/${encodeURIComponent(id)}/evidence`,
+      `/artifacts/candidates/${encodeURIComponent(id)}/evidence`,
     ),
-  memoryCandidatePromote: (id: string) =>
+  promoteArtifactCandidate: (id: string) =>
     request<{ candidate_id: string; record_id: string }>(
-      `/memory/candidates/${encodeURIComponent(id)}/promote`,
+      `/artifacts/candidates/${encodeURIComponent(id)}/promote`,
       { method: "POST" },
     ),
-  memoryCandidateReject: (id: string) =>
+  rejectArtifactCandidate: (id: string) =>
     request<{ candidate_id: string; rejected: boolean }>(
-      `/memory/candidates/${encodeURIComponent(id)}/reject`,
+      `/artifacts/candidates/${encodeURIComponent(id)}/reject`,
       { method: "POST" },
     ),
 
@@ -1214,6 +1215,8 @@ export const api = {
     }),
   evaluationReport: (runId?: string) =>
     request<EvaluationReport>(`/evaluation/report${qs({ run: runId })}`),
+  deleteEvaluationRun: (runId: string) =>
+    request<{ deleted: string }>(`/evaluation/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
   evaluationRuns: (limit = 20) =>
     request<{ runs: EvaluationRunSummary[] }>(`/evaluation/runs${qs({ limit })}`),
   evaluationCohorts: (limit = 20) =>
@@ -1290,6 +1293,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ pinned }),
     }),
+  saveRetrievalBaseline: (name: string) =>
+    request<{name: string; bundle_id: string; revision_id: string}>(
+      `/tuning/baselines/${encodeURIComponent(name)}`, { method: "POST" },
+    ),
   tuningGlossary: () => request<TuningGlossary>("/tuning/glossary"),
   tuningObjectives: () => request<TuningObjectives>("/tuning/objectives"),
   tuningLineage: () => request<TuningLineage>("/tuning/lineage"),

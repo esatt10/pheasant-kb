@@ -68,7 +68,7 @@ def cross_source(builder: Any) -> int:
 
 
 def memory_inputs(builder: Any, state: Any, records: list[dict]) -> Any:
-    from pheasant.memory.bridge import BridgeInputs, normalize_label
+    from pheasant.artifacts.bridge import BridgeInputs, normalize_label
 
     graph = builder.graph
     memory_sources = {str(r.get("source_id") or "") for r in records}

@@ -100,9 +100,16 @@ def artifact_payload(result: dict) -> dict:
         "citations": [
             {
                 "index": citation.get("index"),
-                "source": citation.get("source_id"),
-                "path": citation.get("relative_path") or citation.get("title"),
-                "section": citation.get("heading_path"),
+                "source": citation.get("source_id") or citation.get("source"),
+                "path": citation.get("relative_path")
+                or citation.get("path")
+                or citation.get("title"),
+                "section": citation.get("heading_path") or citation.get("section"),
+                **{
+                    k: citation[k]
+                    for k in ("chunk_id", "revision", "node_id", "start_line", "end_line")
+                    if k in citation
+                },
             }
             for citation in result.get("citations") or []
             # Only the passages the artifact cites: the window holds 64 and a

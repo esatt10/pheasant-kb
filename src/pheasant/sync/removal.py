@@ -93,11 +93,11 @@ def _drop(engine: Any, ids: list[str]) -> None:
 def apply_source(engine: Any, source_name: str, on_progress: Any = None) -> Any:
     import shutil
 
-    from pheasant.ingestion.landing import owned_upload_directory
-    from pheasant.memory.source_removal import (
+    from pheasant.artifacts.source_removal import (
         reconcile_after_source_removal,
         retire_source_memories,
     )
+    from pheasant.ingestion.landing import owned_upload_directory
     from pheasant.sync.engine import SyncResult, _progress_reporter
 
     report = _progress_reporter(on_progress, source_name)

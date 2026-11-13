@@ -386,6 +386,7 @@ def test_a_default_dump_does_not_pin_the_derived_state_paths() -> None:
             data["storage"][key] is None for key in ("sqlite_path", "graph_path", "manifest_path")
         )
         data["pheasant"]["state_path"] = "/elsewhere"
-        assert str(PheasantConfig.model_validate(data).storage.sqlite_path) == (
-            "/elsewhere/pheasant.db"
+        assert (
+            PheasantConfig.model_validate(data).storage.sqlite_path
+            == Path("/elsewhere") / "pheasant.db"
         )

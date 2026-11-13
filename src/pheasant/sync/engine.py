@@ -1632,7 +1632,7 @@ class SyncEngine:
         and falls back to the region default, which is what it did before 33.11.
         """
         try:
-            from pheasant.memory.store import MemoryStore
+            from pheasant.artifacts.store import MemoryStore
 
             record = MemoryStore(Path(path).parent).load(Path(path))
         except Exception:
@@ -1669,33 +1669,9 @@ class SyncEngine:
             )
 
     def _project_memory_records(self, source: Any) -> None:
-        """Rebuild ``memory_records`` for a ``type: memory`` source (Step 33.5).
+        from pheasant.artifacts.projection import refresh
 
-        A no-op for every other source type, so a region without agent memory
-        is untouched. Rebuilding wholesale — rather than diffing — is what
-        keeps the table a *projection*: it cannot drift from the files, an
-        archived record disappears without needing its own delete path, and a
-        second sync over unchanged records writes identical rows.
-
-        Fail-soft, the same posture document extraction takes: one unreadable
-        record must not abort a sync that indexed everything else. The rows
-        from the previous pass survive (the write is a single transaction that
-        never runs), and the warning says so.
-        """
-        if getattr(source.type, "value", source.type) != "memory":
-            return
-        try:
-            from pheasant.memory.projection import project
-            from pheasant.memory.store import MemoryStore
-
-            records = MemoryStore(source.path).list_records()
-            self.state.replace_memory_records(source.name, project(source.name, records))
-        except Exception:
-            logger.warning(
-                "memory projection failed for %s; keeping the previous rows",
-                source.name,
-                exc_info=True,
-            )
+        refresh(self.state, self.config.knowledge_base_id, source)
 
     #: Scope key for the `sync_fingerprints` KV table (Phase 0). Presence of a
     #: row means "an `enrich=deferred` write landed here and the whole-graph
@@ -2210,13 +2186,20 @@ class SyncEngine:
 
                 acl_raw = (item.metadata or {}).get("acl")
                 acl_kind = connector.connector_type
-                if getattr(source.type, "value", source.type) == "memory":
+                if getattr(source.type, "value", source.type) in {"memory", "artifact"}:
                     # Step 33.11 — a memory record is served by the ordinary
                     # filesystem connector, so its connector type says nothing
                     # about who may read it. Its *scope* does, and that lives
                     # in the record, not in the file's metadata.
                     acl_kind = "memory"
                     acl_raw = self._memory_acl(parsed.path)
+                elif source.name == "artifacts":
+                    from pheasant.artifacts.access import saved_acl
+
+                    acl_kind = "artifact"
+                    acl_raw = saved_acl(
+                        self.state, self.config.knowledge_base_id, parsed.relative_path
+                    )
                 acl_doc = normalize_acl(acl_kind, acl_raw)
                 artifact_row = {
                     "acl": json.dumps(acl_doc, sort_keys=True) if acl_doc else None,

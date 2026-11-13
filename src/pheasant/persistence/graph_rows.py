@@ -663,6 +663,30 @@ class GraphRowStore:
         for row in self._stream("graph_nodes", ("node_id",), kb_id, _NODE_READ):
             yield str(row["node_id"]), node_attrs_dict(row)
 
+    def filtered_nodes(
+        self,
+        kb_id: str,
+        *,
+        node_type: str,
+        source_id: str | None = None,
+        relative_path: str | None = None,
+        limit: int = 2001,
+    ) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Bound a typed/qualified read in SQL, before decoding attributes."""
+        where = ["kb_id=?", "type=?"]
+        params: list[Any] = [kb_id, node_type]
+        for key, value in (("source_id", source_id), ("relative_path", relative_path)):
+            if value:
+                where.append(f"{key}=?")
+                params.append(value)
+        params.append(max(1, int(limit)))
+        for row in self.state.rows(
+            f"SELECT {','.join(_NODE_READ)} FROM graph_nodes WHERE {' AND '.join(where)} "
+            "ORDER BY node_id LIMIT ?",
+            tuple(params),
+        ):
+            yield str(row["node_id"]), node_attrs_dict(row)
+
     def iter_edges(self, kb_id: str) -> Iterator[tuple[tuple[str, str], dict[int, dict]]]:
         """Every edge, streamed and grouped by endpoint pair.
 

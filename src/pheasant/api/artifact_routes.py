@@ -36,6 +36,9 @@ class SaveArtifactBody(BaseModel):
     #: A diagram drawn after the answer, and its own citations.
     visual: dict[str, Any] | None = None
     citations: list[dict[str, Any]] | None = None
+    published: bool = True
+    replaces: str | None = None
+    scope: str = "org"
 
 
 class SelectionBody(BaseModel):
@@ -78,7 +81,16 @@ def _send(rendered: artifact_service.Rendered, *, attachment: bool) -> Response:
 def register_artifact_routes(app: FastAPI, *, services: Any) -> None:
     # Retention runs on the scheduler beat wherever this app's process runs
     # one; `cli.py` adds it to the beat (`services/artifact_lifecycle.py`).
-    app.state.scheduler_upkeep = [lambda: artifact_lifecycle.run_retention(services)]
+    from pheasant.services.job_history import retain
+
+    app.state.scheduler_upkeep = [
+        lambda: artifact_lifecycle.run_retention(services),
+        lambda: retain(services),
+    ]
+
+    from pheasant.api.artifact_record_routes import register_record_routes
+
+    register_record_routes(app, services)
 
     @app.get("/artifacts")
     def list_artifacts(
@@ -120,6 +132,9 @@ def register_artifact_routes(app: FastAPI, *, services: Any) -> None:
                 turns=body.turns,
                 visual=body.visual,
                 citations=body.citations,
+                published=body.published,
+                replaces=body.replaces,
+                scope=body.scope,
             ),
         )
 

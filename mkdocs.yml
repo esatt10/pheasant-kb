@@ -76,7 +76,8 @@ nav:
       - Customize the answering workflow: how-to/agent-workflows.md
       - Attach to a coding agent (MCP): how-to/attach-to-coding-agent.md
       - MCP for agents: mcp_client.md
-      - Agent memory: how-to/agent-memory.md
+      - Replace memory with artifacts: how-to/artifact-migration.md
+      - Agent memory (deprecated): how-to/agent-memory.md
       - Configure sources: how-to/sources.md
       - Add a site adapter (JavaScript-only pages): how-to/site-adapters.md
       - Ingest PDFs & Word documents: how-to/document-ingest.md

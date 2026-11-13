@@ -5,7 +5,7 @@ An **observation is not a memory record and must never become one.** A row here
 is never a file, never chunked, never indexed, and never returned by a search --
 a UI session's chat does not become knowledge because it was observed. The only
 path from here into memory is a *candidate* that something admits, and admission
-goes through :meth:`pheasant.memory.store.MemoryStore.append` like every other
+goes through :meth:`pheasant.artifacts.store.MemoryStore.append` like every other
 write, so memory's first invariant ("records are files, no second ingestion
 path") never bends. See ``docs/memory-formation.md``.
 

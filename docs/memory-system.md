@@ -6,7 +6,7 @@ subsystem must not break.
 
 This is the explanation. For the task-oriented version — enable it, write a
 record, recall it — see [Agent memory](how-to/agent-memory.md). For the config
-keys, see [Configuration](configuration.md#memory-agent-memory-optional).
+keys, see [Configuration](configuration.md#memory-deprecated-compatibility-settings).
 
 ---
 

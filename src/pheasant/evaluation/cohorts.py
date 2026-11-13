@@ -396,7 +396,7 @@ def build_control(
 
     triggers: set[str] = set()
     try:
-        from pheasant.memory.steering import load_steering_records, parse_rule
+        from pheasant.artifacts.steering import load_steering_records, parse_rule
 
         for record in load_steering_records(state):
             parsed = parse_rule(str(record.get("kind") or ""), str(record.get("text") or ""))

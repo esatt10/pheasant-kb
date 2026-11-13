@@ -7,7 +7,7 @@ notices when they have rotted.
 Deterministic and fully offline: a seeded generator writes a synthetic corpus
 and a synthetic ledger, then a **real** batch runs through the real search path
 — no mocked retrieval anywhere, for the same reason
-`pheasant.memory.benchmark` refuses to mock its own. A measurement taken
+`pheasant.artifacts.benchmark` refuses to mock its own. A measurement taken
 against a stand-in measures the stand-in.
 
 What comes out is three things:

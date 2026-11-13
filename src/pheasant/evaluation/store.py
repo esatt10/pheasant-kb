@@ -532,6 +532,22 @@ def close_run(
             run_id,
         ),
     )
+    if status in ("completed", "truncated", "invalid") and report:
+        from pheasant.artifacts.publications import publish
+
+        rows = state.rows("SELECT kb_id FROM evaluation_runs WHERE run_id=?", (run_id,))
+        if rows:
+            publish(
+                state,
+                rows[0]["kb_id"],
+                f"evaluation:{run_id}",
+                report,
+                receipt={
+                    "run_id": run_id,
+                    "gates_passed": gates_passed,
+                    "retrieval_eligible": False,
+                },
+            )
 
 
 def reclaim_stale_runs(

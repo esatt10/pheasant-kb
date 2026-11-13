@@ -53,7 +53,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         "pheasant",
         instructions=(
             "Use pheasant to sync configured knowledge sources, search indexed context, "
-            "inspect graph relationships, and record or recall agent memory. To offload "
+            "inspect graph relationships, and record or recall typed artifacts. To offload "
             "building a new artifact (a configuration, script or set of files) assembled "
             "from many documented parts, call compose_artifact and follow its job with "
             "get_job: the region plans, retrieves, writes and checks it against the sources. "
@@ -240,7 +240,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
 
         return tools.scan_source(knowledge_base, source_name, max_depth=max_depth)
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "record_artifact"})
     @anticipated
     def memory_write(
         knowledge_base: str,
@@ -255,21 +255,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         valid_until: str | None = None,
         session: str | None = None,
     ) -> dict:
-        """Persist one agent-memory record (session/user/org scope) and index it.
-
-        The memory becomes retrievable via search_context immediately when
-        sync=true (read-your-writes). Requires a `type: memory` source.
-
-        principal records who asserted the memory; pass it whenever you know
-        the caller's identity, since it is what keeps one agent's memories
-        distinct from another's. kind marks a record as retrieval policy
-        (alias/preference/exclusion) instead of a fact. valid_until gives the
-        record an expiry it declares itself.
-
-        session names the conversation this call belongs to: recorded, never
-        enforced, asserted by you like principal. A stable opaque string lets
-        the region keep one refined memory per session.
-        """
+        """Deprecated: use record_artifact. Typed artifact adapter."""
 
         return tools.memory_write(
             knowledge_base,
@@ -284,7 +270,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             valid_until,
         )
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "list_artifact_candidates"})
     @anticipated
     def list_memory_candidates(
         knowledge_base: str,
@@ -293,55 +279,39 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         principal: str | None = None,
         max_results: int = 50,
     ) -> dict:
-        """List memory this region has proposed but nothing has admitted yet.
-
-        These are NOT memories: nothing here is retrievable, and nothing
-        becomes retrievable until it is promoted. Each carries the evidence
-        behind it (which rule, how many observations, across how many
-        sessions) -- read that before promoting. A proposal is a suggestion,
-        not a finding.
-        """
+        """Deprecated: use list_artifact_candidates. Typed artifact adapter."""
 
         return tools.list_memory_candidates(knowledge_base, status, rule_id, principal, max_results)
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "promote_artifact_candidate"})
     @anticipated
     def promote_memory_candidate(
         knowledge_base: str, candidate_id: str, principal: str | None = None
     ) -> dict:
-        """Admit one proposed memory, making it an ordinary record.
-
-        It is written through the same path memory_write uses and indexed
-        identically, so it competes on the same ranking as anything else.
-        """
+        """Deprecated: use promote_artifact_candidate. Typed artifact adapter."""
 
         return tools.promote_memory_candidate(knowledge_base, candidate_id, principal)
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "reject_artifact_candidate"})
     @anticipated
     def reject_memory_candidate(
         knowledge_base: str, candidate_id: str, principal: str | None = None
     ) -> dict:
-        """Decline one proposed memory, permanently.
-
-        The rule that proposed it will not suggest it again.
-        """
+        """Deprecated: use reject_artifact_candidate. Typed artifact adapter."""
 
         return tools.reject_memory_candidate(knowledge_base, candidate_id, principal)
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "consolidate_artifacts"})
     @anticipated
     def memory_consolidate(knowledge_base: str) -> dict:
-        """Archive superseded/expired memory records and re-index the memory source."""
+        """Deprecated: use consolidate_artifacts. Typed artifact adapter."""
 
         return tools.memory_consolidate(knowledge_base)
 
-    @mcp.tool()
+    @mcp.tool(meta={"deprecated": True, "replacement": "synthesize_artifacts"})
     @anticipated
     def memory_synthesize(knowledge_base: str) -> dict:
-        """LLM-merge a near-duplicate memory cluster deterministic compaction
-        could not resolve into one canonical record. Off by default
-        (`memory.synthesis.enabled`) and never automatic."""
+        """Deprecated: use synthesize_artifacts. Typed artifact adapter."""
 
         return tools.memory_synthesize(knowledge_base)
 
@@ -375,6 +345,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         node_types: list[str] | None = None,
         min_score: float | None = None,
         memory: dict | str | None = None,
+        artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
@@ -472,7 +443,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=memory,
+            memory=artifact_policy if artifact_policy is not None else memory,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
@@ -501,6 +472,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         node_types: list[str] | None = None,
         min_score: float | None = None,
         memory: dict | str | None = None,
+        artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
         snapshot_id: str | None = None,
@@ -542,7 +514,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=memory,
+            memory=artifact_policy if artifact_policy is not None else memory,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
@@ -579,6 +551,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         node_types: list[str] | None = None,
         min_score: float | None = None,
         memory: dict | str | None = None,
+        artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
     ) -> dict:
@@ -599,7 +572,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=memory,
+            memory=artifact_policy if artifact_policy is not None else memory,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
         )
@@ -921,18 +894,13 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
 
         return _json(tools.get_graph_slice(kb_id, node_id, depth=2))
 
-    @mcp.resource("pheasant://knowledge-bases/{kb_id}/memory")
+    @mcp.resource(
+        "pheasant://knowledge-bases/{kb_id}/memory",
+        meta={"deprecated": True, "replacement": "artifact-records"},
+    )
     @anticipated_resource
     def memory_resource(kb_id: str) -> str:
-        """Return this region's current agent-memory records as JSON.
-
-        A *resource* rather than only a tool because "what does this region
-        remember" is context to read, not an action to take — an agent can
-        pull it into a conversation the way it pulls a file, without spending
-        a tool call on a search that may or may not surface the record it
-        needs. Corrected records are excluded; use `search_context` with an
-        `as_of` instant to see what was believed at a past time.
-        """
+        """Deprecated: use artifact-records resource. Typed artifact adapter."""
 
         return _json(tools.memory_list(kb_id, current_only=True))
 

@@ -158,6 +158,7 @@ class Passage:
     # infer it from a path that merely happens to start with a scope directory.
     memory: dict | None = None
     raw: dict = field(default_factory=dict, repr=False)
+    artifact: dict | None = None
 
     def key(self) -> str:
         return str(self.chunk_id or self.node_id or self.title)
@@ -425,7 +426,7 @@ class PheasantRetriever:
             return False
 
         if self.state is not None:
-            from pheasant.memory.policy import (
+            from pheasant.artifacts.policy import (
                 MemoryPolicy,
                 admits,
                 load_memory_index,
@@ -820,6 +821,7 @@ class PheasantRetriever:
             heading_path=(item.get("heading_path") or provenance.get("heading_path")) or None,
             source_type=(item.get("source_type") or provenance.get("source_type")) or None,
             memory=item.get("memory") or None,
+            artifact=item.get("artifact") or None,
             raw=item,
         )
 

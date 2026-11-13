@@ -1232,7 +1232,11 @@ def create_app(
     # /state read-only and merge those snapshots into the same HTTP/UI surface
     # as their process-local jobs.
     app.state.jobs = JobRegistry(
-        shared_path=paths.state / "jobs", async_snapshots=role_policy.drains_queue
+        shared_path=paths.state / "jobs",
+        async_snapshots=role_policy.drains_queue,
+        state=state,
+        kb_id=config.knowledge_base_id,
+        retention_days=config.artifacts.job_retention_days,
     )
     jobs = app.state.jobs
     # The API tier sees shared progress snapshots but mounts their directory
@@ -2038,7 +2042,6 @@ def create_app(
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
     register_region_routes(app, services=services)
-    register_artifact_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:
@@ -2644,131 +2647,33 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/memory")
+    @app.post("/memory", deprecated=True)
     def memory_write(req: MemoryWriteRequest) -> dict:
-        from pheasant.memory.reinforcement import StateReinforcementIndex
-        from pheasant.memory.store import MemoryStore, memory_source
+        """Deprecated: use POST /artifacts/records; the same artifact operation."""
+        from pheasant.services.artifact_records import WriteRequest, write
 
-        source = memory_source(config, state)
-        if source is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "no enabled memory source configured; add a `type: memory` "
-                    "source to pheasant.yaml"
-                ),
-            )
-        # Phase 1: see the matching comment in mcp_server/tools.py:memory_write.
-        reinforcement = (
-            StateReinforcementIndex(state) if config.memory.reinforcement_enabled else None
-        )
         try:
-            store = MemoryStore(source.path)
-            record, created = store.append(
-                req.text,
-                scope=req.scope,
-                subject=req.subject,
-                supersedes=req.supersedes,
-                tags=req.tags,
-                kind=req.kind,
-                written_by=req.principal,
-                valid_until=req.valid_until,
-                reinforcement=reinforcement,
-            )
+            return write(services, WriteRequest(**req.model_dump()), legacy=True)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except OSError as exc:
-            # A memory source pointed at somewhere unwritable — most often a
-            # read-only corpus mount — used to surface as a bare 500 with the
-            # traceback only in the container logs. The caller can act on this.
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"could not write the memory record to {source.path}: {exc}. "
-                    "The memory source needs a writable location; a read-only mount "
-                    "will not do."
-                ),
-            ) from exc
-        outcome = store.last_outcome or ("created" if created else "duplicate")
-        metrics.record_memory_write(outcome, store.last_fold)
-        payload: dict = {
-            "record": record.as_dict(),
-            "created": created,
-            "source": source.name,
-            "outcome": outcome,
-        }
-        submitted = (req.text or "").strip()
-        if not created and submitted and submitted != record.text:
-            payload["submitted_text"] = submitted
-        # The record is already durably on disk; this sync only makes it
-        # *searchable now*. Failing the whole request when it cannot run — most
-        # often because another writer holds the engine lease, which a live run
-        # hit immediately — reports "your memory was not saved" when it was.
-        # Degrade to deferred indexing instead: the scheduler and the next sync
-        # both pick it up.
-        if req.sync and created:
-            if role_policy.indexes_locally:
-                try:
-                    # Interactive writes skip whole-graph enrichment and leave
-                    # a durable dirty marker for the next ordinary sync.
-                    payload["sync"] = engine.sync_source(
-                        source.name, "incremental", enrich="deferred"
-                    ).__dict__
-                except Exception as exc:
-                    logger.warning("memory write indexed later: %s", exc)
-                    payload["sync_deferred"] = str(exc)
-            else:
-                _job_id, queued = _start_background_sync(source.name, "incremental")
-                payload["queued_tasks"] = queued
-        # Writing a memory is a mutation of what this region will later assert
-        # as fact, which is exactly what the audit log is for. The MCP path has
-        # always recorded it; this one silently did not, so the same action was
-        # traceable or not depending on which protocol the caller happened to
-        # use.
-        audit(
-            source.name,
-            "memory_write",
-            {
-                "record_id": record.record_id,
-                "scope": record.scope,
-                "kind": record.kind,
-                "created": created,
-            },
-        )
-        return payload
 
-    @app.get("/memory")
-    def memory_list(scope: str | None = None, current_only: bool = False) -> dict:
-        from pheasant.memory.store import MemoryStore, memory_source
+    @app.get("/memory", deprecated=True)
+    def memory_list(
+        scope: str | None = None, current_only: bool = False, principal: str | None = None
+    ) -> dict:
+        """Deprecated: use GET /artifacts/records."""
+        from pheasant.artifacts.store import artifact_source
+        from pheasant.services.artifact_records import list_records
 
-        source = memory_source(config, state)
-        if source is None:
+        if artifact_source(config, state) is None:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "no enabled memory source configured; add a `type: memory` "
-                    "source to pheasant.yaml"
-                ),
+                detail="no enabled memory source configured; use /artifacts/records/enable",
             )
-        try:
-            records = MemoryStore(source.path).list_records(scope, current_only=current_only)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        # Phase 3: see the matching comment in mcp_server/tools.py:memory_list.
-        try:
-            compaction = {str(row["record_id"]): row for row in state.memory_compaction_rows()}
-        except Exception:
-            compaction = {}
-        out = []
-        for record in records:
-            payload = record.as_dict()
-            row = compaction.get(record.record_id)
-            payload["tier"] = str(row["tier"]) if row and row.get("tier") else "hot"
-            payload["subsumed_by"] = row.get("subsumed_by") if row else None
-            out.append(payload)
-        return {"source": source.name, "records": out}
 
-    @app.post("/memory/enable")
+        return list_records(services, principal, scope=scope, current_only=current_only)
+
+    @app.post("/memory/enable", deprecated=True)
     def memory_enable(req: MemoryEnableRequest) -> dict:
         """Provision the agent-memory source (Step 33.11).
 
@@ -2783,7 +2688,7 @@ def create_app(
         the invariant (one well-known layout, created by us) while closing that
         gap. Idempotent — enabling twice returns the existing source.
         """
-        from pheasant.memory.store import memory_source
+        from pheasant.artifacts.store import memory_source
 
         existing = memory_source(config, state)
         if existing is not None:
@@ -2846,7 +2751,8 @@ def create_app(
         audit(source.name, "memory_enable", {"path": str(path)})
         return {"status": "enabled", "source": source.model_dump(mode="json")}
 
-    @app.get("/memory/candidates")
+    @app.get("/artifacts/candidates")
+    @app.get("/memory/candidates", deprecated=True)
     def memory_candidates(
         status: str = "pending",
         rule_id: str | None = None,
@@ -2871,7 +2777,8 @@ def create_app(
             "counts": state.memory_candidate_counts(),
         }
 
-    @app.get("/memory/candidates/{candidate_id}/evidence")
+    @app.get("/artifacts/candidates/{candidate_id}/evidence")
+    @app.get("/memory/candidates/{candidate_id}/evidence", deprecated=True)
     def memory_candidate_evidence(candidate_id: str) -> dict:
         """Why this was proposed: the calls behind it, and their spans.
 
@@ -2907,7 +2814,8 @@ def create_app(
             "found": len(interactions),
         }
 
-    @app.post("/memory/candidates/{candidate_id}/promote")
+    @app.post("/artifacts/candidates/{candidate_id}/promote")
+    @app.post("/memory/candidates/{candidate_id}/promote", deprecated=True)
     def memory_candidate_promote(candidate_id: str, principal: str | None = None) -> dict:
         """Admit one proposal. **This is the crossing** from evidence to memory.
 
@@ -2917,7 +2825,7 @@ def create_app(
         is for a record a person typed.
         """
 
-        from pheasant.memory.formation import admit
+        from pheasant.artifacts.formation import admit
 
         try:
             return admit(engine, candidate_id, admitted_by=principal or "ui")
@@ -2926,7 +2834,8 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post("/memory/candidates/{candidate_id}/reject")
+    @app.post("/artifacts/candidates/{candidate_id}/reject")
+    @app.post("/memory/candidates/{candidate_id}/reject", deprecated=True)
     def memory_candidate_reject(candidate_id: str, principal: str | None = None) -> dict:
         """Decline one proposal, permanently.
 
@@ -2935,7 +2844,7 @@ def create_app(
         way to make a review queue worth ignoring.
         """
 
-        from pheasant.memory.formation import reject
+        from pheasant.artifacts.formation import reject
 
         try:
             return reject(engine, candidate_id, rejected_by=principal or "ui")
@@ -3492,7 +3401,12 @@ def create_app(
 
         from pheasant.tuning import store as tuning_store
 
-        removed = tuning_store.prune_experiment(state, config.knowledge_base_id, experiment_id)
+        removed = tuning_store.prune_experiment(
+            state,
+            config.knowledge_base_id,
+            experiment_id,
+            exports_path=config.pheasant.exports_path,
+        )
         if not removed["experiments"]:
             raise HTTPException(
                 status_code=409,
@@ -3622,9 +3536,10 @@ def create_app(
             ),
         }
 
-    @app.post("/memory/consolidate")
+    @app.post("/artifacts/consolidate")
+    @app.post("/memory/consolidate", deprecated=True)
     def memory_consolidate() -> dict:
-        from pheasant.memory.maintenance import run_memory_maintenance
+        from pheasant.artifacts.maintenance import run_memory_maintenance
 
         result = run_memory_maintenance(engine)
         if result is None:
@@ -3642,7 +3557,8 @@ def create_app(
         audit(result["source"], "memory_consolidate", result["report"])
         return result
 
-    @app.post("/memory/synthesize")
+    @app.post("/artifacts/synthesize")
+    @app.post("/memory/synthesize", deprecated=True)
     def memory_synthesize() -> dict:
         """LLM-merge a near-duplicate memory cluster deterministic
         compaction could not resolve into one canonical record. Off by
@@ -3653,8 +3569,8 @@ def create_app(
         is a well-formed request the server declined by its own
         configuration, not a client error.
         """
-        from pheasant.memory.store import MemoryStore, memory_source
-        from pheasant.memory.synthesis import run_synthesis
+        from pheasant.artifacts.store import MemoryStore, memory_source
+        from pheasant.artifacts.synthesis import run_synthesis
 
         source = memory_source(config, state)
         if source is None:
@@ -3975,17 +3891,22 @@ def create_app(
             return remote(source=source, path=path, max_nodes=max_nodes)
         by_document: dict[str, list[SectionHeading]] = {}
         seen = 0
-        # `iter_nodes`, not `node_map()`: this is a whole-graph scan, and a
-        # store-backed graph's node map answers `get` and nothing else — by
-        # design, because iterating it would be a full scan wearing a dict's
-        # clothes. `iter_nodes` is the accessor that says so, and it streams on
-        # both backends, so the `break` below still stops the paging early.
-        #
-        # Under `reading()`, which both accessors have always required and this
-        # scan did not hold: on the in-memory graph it iterates the live node
-        # dict, so a concurrent sync mutating it mid-scan is a RuntimeError.
+        max_nodes = max(1, min(max_nodes, 20_000))
+        # Row-backed fleets narrow and bound the read before decoding nodes.
+        # An in-memory graph can iterate while its read lock excludes writes.
         with graph_obj.reading():
-            for _node_id, data in graph_obj.iter_nodes():
+            filtered = getattr(graph_obj, "filtered_nodes", None)
+            nodes = (
+                filtered(
+                    node_type="heading",
+                    source_id=source,
+                    relative_path=path,
+                    limit=max_nodes + 1,
+                )
+                if callable(filtered)
+                else graph_obj.iter_nodes()
+            )
+            for _node_id, data in nodes:
                 if data.get("type") != "heading":
                     continue
                 if source and data.get("source_id") != source:
@@ -4385,26 +4306,11 @@ def create_app(
                 int(parameters.get("limit") or 8),
             )
         elif operation == "memory_coverage":
-            from pheasant.memory.bridge import ABOUT_EDGE
+            from pheasant.services.artifact_graph import coverage
 
-            artifacts = {str(item) for item in parameters.get("artifact_ids") or []}
-            bridged: set[str] = set()
-            by_signal: dict[str, int] = {}
-            with graph_obj.reading():
-                for (source_id, _target), edge_map in graph_obj.iter_edges():
-                    if source_id not in artifacts:
-                        continue
-                    for data in edge_map.values():
-                        if data.get("type") == ABOUT_EDGE:
-                            bridged.add(source_id)
-                            signal = str(data.get("match_signal") or "unknown")
-                            by_signal[signal] = by_signal.get(signal, 0) + 1
-            result = {
-                "records": len(artifacts),
-                "bridged": len(bridged),
-                "unbridged": len(artifacts) - len(bridged),
-                "by_signal": by_signal,
-            }
+            result = coverage(
+                graph_obj, [str(item) for item in parameters.get("artifact_ids") or []]
+            )
         else:
             raise HTTPException(status_code=400, detail=f"unknown graph operation: {operation}")
         return {"result": result}
@@ -4813,6 +4719,8 @@ def create_app(
                     "id": name,
                     "values": effective.get(name, {}),
                     "live_applicable": live,
+                    "deprecated": name == "memory",
+                    "replacement": "artifacts.learning" if name == "memory" else None,
                 }
                 for name, live in LIVE_APPLICABLE_SECTIONS.items()
             ]
@@ -4840,6 +4748,8 @@ def create_app(
 
         current = config.model_dump(mode="json")
         candidate_data = deep_merge(current, {section: req.values})
+        if section == "memory":
+            candidate_data["artifacts"]["learning"] = candidate_data["memory"]
         try:
             candidate = PheasantConfig.model_validate(candidate_data)
         except (ConfigError, ValueError, TypeError) as exc:
@@ -4852,6 +4762,16 @@ def create_app(
             # one: a partial swap leaves the process in a state that is neither
             # the old config nor the new one, which is the worst of both.
             setattr(config, section, getattr(candidate, section))
+            if section in {"memory", "artifacts"}:
+                config.memory = candidate.memory
+                config.artifacts.learning = config.memory
+                search.steering_enabled = config.memory.steering_enabled
+                search.default_memory_policy = config.memory.default_policy
+                search.usage_tracking = config.memory.usage_tracking
+                if section == "artifacts" and "taxonomy_enabled" in req.values:
+                    from pheasant.services.artifact_settings import apply_taxonomy
+
+                    apply_taxonomy(services)
             applied = True
             if section == "search":
                 try:
@@ -5229,6 +5149,9 @@ def create_app(
             "queued_tasks": queued_tasks,
         }
 
+    # Register static artifact operations above before the artifact-id route.
+    register_artifact_routes(app, services=services)
+
     # Mounted *before* the UI so the SPA catch-all cannot swallow /mcp.
     if mcp_asgi_app is not None:
 
@@ -5299,7 +5222,7 @@ def _mcp_asgi_app(config: PheasantConfig, vector: Any = None):
 #: by the API and shown JSON. `tests/test_api_ui_routes.py` reads App.tsx and
 #: fails when this set and the router disagree.
 UI_ROUTES = frozenset(
-    {"/graph", "/memory", "/evaluation", "/tuning", "/sources", "/syncs", "/config"}
+    {"/graph", "/artifacts", "/memory", "/evaluation", "/tuning", "/sources", "/syncs", "/config"}
 )
 
 

@@ -711,7 +711,6 @@ export function citedChunkIn(file: OpenFile, answer: ChatAnswer): string | null 
     .filter(
       (citation) =>
         citation.chunk_id &&
-        !citation.memory &&
         citation.source_id === file.source &&
         citation.relative_path === file.path,
     )

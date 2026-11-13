@@ -22,7 +22,6 @@ of it, and a thread of forty turns must still fit in one row.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -97,36 +96,26 @@ def trace_of(
     }
 
 
-#: A citation marker in prose: ``[3]``, never a link's ``[text](url)``.
-_MARKER = re.compile(r"\[(\d{1,3})\](?!\()")
-#: Fenced blocks and inline code, where ``[3]`` is code (``a[3]``), not a citation.
-_CODE = re.compile(r"```.*?(?:```|$)|`[^`\n]*`", re.DOTALL)
 #: Marks a thread whose evidence carries one numbering (`renumber`).
 THREAD_NUMBERING = "thread"
 
 
-def _source_key(citation: dict[str, Any]) -> tuple[str, str, str]:
+def _source_key(citation: dict[str, Any]) -> tuple[str, ...]:
     return (
         str(citation.get("source") or ""),
         str(citation.get("path") or ""),
         str(citation.get("section") or ""),
+        str(citation.get("chunk_id") or ""),
+        str(citation.get("revision") or ""),
     )
 
 
 def _remap(text: str, mapping: dict[str, int]) -> str:
     """``text`` with each ``[n]`` in prose rewritten to ``[mapping[n]]``, in one pass."""
 
-    def prose(segment: str) -> str:
-        return _MARKER.sub(
-            lambda m: f"[{mapping[m.group(1)]}]" if m.group(1) in mapping else m.group(0), segment
-        )
+    from pheasant.services.artifact_evidence import remap
 
-    out, last = [], 0
-    for code in _CODE.finditer(text or ""):
-        out += [prose(text[last : code.start()]), code.group(0)]
-        last = code.end()
-    out.append(prose((text or "")[last:]))
-    return "".join(out)
+    return remap(text or "", {key: f"[{value}]" for key, value in mapping.items()})
 
 
 def renumber(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -144,7 +133,7 @@ def renumber(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     to the thread. Idempotent: it reads only what a turn kept as written.
     """
 
-    numbered: dict[tuple[str, str, str], dict[str, Any]] = {}
+    numbered: dict[tuple[str, ...], dict[str, Any]] = {}
     for turn in turns:
         mapping: dict[str, int] = {}
         cited = []
@@ -153,6 +142,7 @@ def renumber(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
             entry = numbered.setdefault(
                 _source_key(citation),
                 {
+                    **citation,
                     "index": len(numbered) + 1,
                     "source": citation.get("source"),
                     "path": citation.get("path"),
@@ -295,3 +285,17 @@ def thread_payload(
     # The transcript is what every viewer and export renders, as a report's
     # answer is; `turns` keeps each turn's own trace beside it.
     return renumbered(payload), title
+
+
+def trace_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
+    trace = payload.get("trace")
+    if not isinstance(trace, dict):
+        return None
+    confidence = trace.get("confidence") or {}
+    return {
+        "intent": trace.get("intent"),
+        "keywords": trace.get("keywords"),
+        "accepted": confidence.get("accepted"),
+        "degraded": confidence.get("degraded"),
+        "trace_id": trace.get("trace_id"),
+    }

@@ -79,6 +79,7 @@ LAYERS: dict[str, int] = {
     "search": 1,
     "graph": 1,
     "memory": 1,
+    "artifacts": 1,
     "sync": 1,
     "ingestion": 1,
     "evaluation": 1,
@@ -129,6 +130,7 @@ COMPOSITION_ROOTS = {
     "evaluation/benchmark.py",
     # Measures the MCP facade's latency, so it has to construct one.
     "memory/benchmark.py",
+    "artifacts/benchmark.py",  # The canonical home of the same end-to-end harness.
     # Drives both transports to establish that they expose what the capability
     # contract claims. Same justification as `memory/benchmark.py` and the one
     # this set's own docstring gives: a module whose subject *is* a transport

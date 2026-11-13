@@ -19,6 +19,7 @@ nothing an artifact holds runs in the view itself.
 from __future__ import annotations
 
 import base64
+import json
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,9 @@ class ArtifactTools:
         turns: list[dict] | None = None,
         visual: dict | None = None,
         citations: list[dict] | None = None,
+        published: bool = True,
+        replaces: str | None = None,
+        scope: str = "org",
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import artifacts
@@ -103,6 +107,9 @@ class ArtifactTools:
                 turns=turns,
                 visual=visual,
                 citations=citations,
+                published=published,
+                replaces=replaces,
+                scope=scope,
             ),
         )
 
@@ -188,6 +195,139 @@ class ArtifactTools:
 def register_artifact_tools(
     mcp: Any, tools: Any, anticipated: Any, anticipated_resource: Any
 ) -> None:
+    @mcp.resource("pheasant://knowledge-bases/{kb_id}/artifact-records")
+    @anticipated_resource
+    def artifact_records_resource(kb_id: str) -> str:
+        """The region's current typed artifact knowledge, visible to this caller."""
+        from pheasant.services.artifact_records import list_records
+
+        tools._require_knowledge_base(kb_id)
+        return json.dumps(list_records(tools.services), default=str)
+
+    @mcp.tool()
+    @anticipated
+    def save_retrieval_baseline(knowledge_base: str, name: str) -> dict:
+        """Keep the complete configured base as a named, immutable tuning bundle.
+
+        Re-enable it later with apply_tuning_bundle even after the mounted
+        configuration changes or the originating job history is deleted.
+        """
+        from pheasant.services.retrieval_configurations import save_base
+
+        tools._require_knowledge_base(knowledge_base)
+        return save_base(tools.services, name)
+
+    @mcp.tool()
+    @anticipated
+    def delete_evaluation_run(knowledge_base: str, run_id: str) -> dict:
+        """Delete a terminal evaluation job and its replay/metric history; outputs survive."""
+        from pheasant.services.job_history import delete_evaluation
+
+        tools._require_knowledge_base(knowledge_base)
+        return delete_evaluation(tools.services, run_id)
+
+    @mcp.tool()
+    @anticipated
+    def delete_tuning_experiment(knowledge_base: str, experiment_id: str) -> dict:
+        """Delete terminal tuning history and cold trials; promoted configurations survive."""
+        from pheasant.services.job_history import delete_tuning
+
+        tools._require_knowledge_base(knowledge_base)
+        return delete_tuning(tools.services, experiment_id)
+
+    @mcp.tool()
+    @anticipated
+    def record_artifact(
+        knowledge_base: str,
+        text: str,
+        scope: str = "user",
+        subject: str | None = None,
+        supersedes: str | None = None,
+        tags: list[str] | None = None,
+        sync: bool = True,
+        kind: str = "fact",
+        principal: str | None = None,
+        valid_until: str | None = None,
+    ) -> dict:
+        """Persist a typed artifact with scope, validity and replacement history.
+
+        Facts are searchable knowledge. Alias, preference and exclusion artifacts
+        steer retrieval. Repeated content reinforces an existing artifact; a
+        correction names supersedes. Uses ordinary deterministic indexing.
+        """
+        from pheasant.services.artifact_records import WriteRequest, write
+
+        tools._require_knowledge_base(knowledge_base)
+        return write(
+            tools.services,
+            WriteRequest(
+                text,
+                scope,
+                subject,
+                supersedes,
+                tags or (),
+                sync,
+                kind,
+                principal,
+                valid_until,
+                channel="mcp",
+            ),
+        )
+
+    @mcp.tool()
+    @anticipated
+    def list_artifact_records(
+        knowledge_base: str,
+        scope: str | None = None,
+        current_only: bool = True,
+        principal: str | None = None,
+    ) -> dict:
+        """List typed artifacts visible to this principal, optionally including history."""
+        from pheasant.services.artifact_records import list_records
+
+        tools._require_knowledge_base(knowledge_base)
+        return list_records(tools.services, principal, scope=scope, current_only=current_only)
+
+    @mcp.tool()
+    @anticipated
+    def list_artifact_candidates(
+        knowledge_base: str,
+        status: str = "pending",
+        rule_id: str | None = None,
+        principal: str | None = None,
+        max_results: int = 50,
+    ) -> dict:
+        """Review unadmitted artifact proposals and their observation evidence."""
+        return tools.list_memory_candidates(knowledge_base, status, rule_id, principal, max_results)
+
+    @mcp.tool()
+    @anticipated
+    def promote_artifact_candidate(
+        knowledge_base: str, candidate_id: str, principal: str | None = None
+    ) -> dict:
+        """Admit a reviewed proposal through the typed artifact write path."""
+        return tools.promote_memory_candidate(knowledge_base, candidate_id, principal)
+
+    @mcp.tool()
+    @anticipated
+    def reject_artifact_candidate(
+        knowledge_base: str, candidate_id: str, principal: str | None = None
+    ) -> dict:
+        """Reject an artifact proposal permanently; formation will not suggest it again."""
+        return tools.reject_memory_candidate(knowledge_base, candidate_id, principal)
+
+    @mcp.tool()
+    @anticipated
+    def consolidate_artifacts(knowledge_base: str) -> dict:
+        """Apply scope TTLs, supersession retention, reinforcement and compaction."""
+        return tools.memory_consolidate(knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def synthesize_artifacts(knowledge_base: str) -> dict:
+        """Explicitly synthesize a redundant artifact cluster when configured."""
+        return tools.memory_synthesize(knowledge_base)
+
     @mcp.resource(
         ARTIFACT_APP_URI,
         name="pheasant-artifact-view",
@@ -265,6 +405,9 @@ def register_artifact_tools(
         turns: list[dict] | None = None,
         visual: dict | None = None,
         citations: list[dict] | None = None,
+        published: bool = True,
+        replaces: str | None = None,
+        scope: str = "org",
     ) -> dict:
         """Keep a report, a set of files or a whole conversation as an artifact.
 
@@ -292,6 +435,9 @@ def register_artifact_tools(
             turns=turns,
             visual=visual,
             citations=citations,
+            published=published,
+            replaces=replaces,
+            scope=scope,
         )
 
     @mcp.tool()
@@ -342,7 +488,7 @@ def register_artifact_tools(
     def delete_artifact(
         knowledge_base: str, artifact_id: str, principal: str | None = None
     ) -> dict:
-        """Delete a kept artifact and remove its files from the index. It cannot be undone."""
+        """Retire an artifact from search; immutable published versions remain."""
 
         return tools.delete_artifact(knowledge_base, artifact_id, principal=principal)
 
@@ -362,7 +508,7 @@ def register_artifact_tools(
 
         dry_run defaults to true and lists what would go; call again with
         dry_run=false to delete. At most 500 per call. A selection naming
-        nothing is refused. Deleting cannot be undone; archive_artifacts can.
+        nothing is refused. This removes active content; published versions remain in history.
         """
 
         return tools.artifacts_lifecycle(

@@ -633,3 +633,15 @@ stop describing anything the region would serve.
 - HTTP: [`/tuning/*`](reference/http-api.md)
 - MCP: [`start_retrieval_tuning` and friends](mcp_tools.md)
 - The evaluation plane it builds on: [Knowledge effectiveness](knowledge-effectiveness.md)
+
+## Named bases and retained outputs
+
+Save the configured base from Tuning or `POST /tuning/baselines/{name}`
+(MCP `save_retrieval_baseline`) before reconfiguration. The returned bundle
+contains the full ranking configuration, including RRF weights; apply it with
+the ordinary bundle promotion action to restore that base later. Rollback to
+`default` selects the current mounted base. Terminal job retention defaults to
+30 days through `artifacts.job_retention_days`. Deleting experiments removes
+trial history/cold exports and leaves promoted bundles, immutable publication
+versions and the active overlay intact. Evaluation reports remain inspectable
+artifacts after run deletion and are excluded from their evidence corpus.

@@ -61,6 +61,7 @@ TYPE_PREFIXES = {
     "web": SourceType.web_collection,
     "api": SourceType.api,
     "memory": SourceType.memory,
+    "artifact": SourceType.artifact,
 }
 
 MARKDOWN_INCLUDES = ["**/*.md", "**/*.markdown"]

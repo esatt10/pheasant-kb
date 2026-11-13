@@ -32,6 +32,21 @@ from tests.conftest import CONFIG_TEMPLATE
 
 POLL_TIMEOUT_S = 30.0
 
+
+def test_pid_liveness_probe_does_not_signal_a_live_process() -> None:
+    from pheasant.sync.locks import _pid_is_running
+
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert _pid_is_running(process.pid)
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.wait(timeout=0.1)
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+    assert not _pid_is_running(process.pid)
+
+
 SYNC_DRIVER = """\
 import sys
 from pheasant.config.loader import load_config

@@ -23,12 +23,12 @@ from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest
 
 SECTION = "artifacts"
-_TYPES = {f.name: f.type for f in fields(ArtifactsSettings)}
+_TYPES = {f.name: f.type for f in fields(ArtifactsSettings) if f.name != "learning"}
 
 
 def _defaults(context: ServiceContext) -> dict[str, Any]:
     configured = getattr(context.config, "artifacts", None) or ArtifactsSettings()
-    return asdict(configured)
+    return {k: v for k, v in asdict(configured).items() if k in _TYPES}
 
 
 def _overlay(context: ServiceContext) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -124,4 +124,21 @@ def update(context: ServiceContext, changes: dict[str, Any], actor: str | None) 
         from pheasant.services import artifacts
 
         artifacts.apply_pacing(context)
+    if "taxonomy_enabled" in changes:
+        apply_taxonomy(context)
     return describe(context)
+
+
+def apply_taxonomy(context: ServiceContext) -> None:
+    from pheasant.config.schema import SourceConfig
+    from pheasant.registry.source_registry import SourceRegistry
+
+    registry = SourceRegistry(context.config, context.state)
+    configured = {source.name: source for source in context.config.sources}
+    for row in context.state.rows(
+        "SELECT config_json FROM sources WHERE type IN ('artifact','memory') OR id='artifacts'"
+    ):
+        payload = json.loads(row["config_json"])
+        source = configured.get(payload["name"]) or SourceConfig.model_validate(payload)
+        source.taxonomy.enabled = current(context).taxonomy_enabled
+        registry.register_source(source, revive=False)

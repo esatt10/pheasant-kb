@@ -1,17 +1,3 @@
-"""Agent memory as a region (Product Framework Step 33.1)."""
+"""Deprecated namespace. Typed artifact implementations live in pheasant.artifacts."""
 
-from pheasant.memory.store import (
-    MEMORY_RECORD_VERSION,
-    VALID_SCOPES,
-    MemoryRecord,
-    MemoryStore,
-    memory_source,
-)
-
-__all__ = [
-    "MEMORY_RECORD_VERSION",
-    "VALID_SCOPES",
-    "MemoryRecord",
-    "MemoryStore",
-    "memory_source",
-]
+from pheasant.artifacts import *  # noqa: F403

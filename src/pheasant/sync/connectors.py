@@ -506,6 +506,7 @@ def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConne
         "document_folder",
         "single_file",
         "memory",
+        "artifact",
     }:
         return FilesystemConnector(source, state)
     if source.type.value == "web_collection":

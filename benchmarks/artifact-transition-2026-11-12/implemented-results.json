@@ -1,0 +1,91 @@
+{
+  "scope": "Existing paths; batched writes; SQLite; no vectors/providers; sequential",
+  "results": [
+    {
+      "kind": "memory",
+      "records": 100,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 18.535,
+        "p95_ms": 51.541
+      },
+      "index_seconds": 2.848,
+      "search_explain": {
+        "p50_ms": 17.176,
+        "p95_ms": 69.214
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.0369,
+      "render": null,
+      "state_bytes": 5169007,
+      "region_bytes_including_originals_and_wal": 5191628
+    },
+    {
+      "kind": "artifact",
+      "records": 100,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 6.2,
+        "p95_ms": 13.394
+      },
+      "index_seconds": 1.279,
+      "search_explain": {
+        "p50_ms": 26.164,
+        "p95_ms": 94.049
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.0205,
+      "render": {
+        "p50_ms": 0.159,
+        "p95_ms": 0.198
+      },
+      "state_bytes": 5349346,
+      "region_bytes_including_originals_and_wal": 5349346
+    },
+    {
+      "kind": "memory",
+      "records": 1000,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 16.764,
+        "p95_ms": 38.904
+      },
+      "index_seconds": 26.495,
+      "search_explain": {
+        "p50_ms": 120.736,
+        "p95_ms": 288.045
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.038,
+      "render": null,
+      "state_bytes": 16670943,
+      "region_bytes_including_originals_and_wal": 16897173
+    },
+    {
+      "kind": "artifact",
+      "records": 1000,
+      "taxonomy_enabled": true,
+      "write_batched": {
+        "p50_ms": 8.922,
+        "p95_ms": 42.002
+      },
+      "index_seconds": 32.723,
+      "search_explain": {
+        "p50_ms": 142.058,
+        "p95_ms": 285.069
+      },
+      "exact_token_top5": 1.0,
+      "refusion_equivalent": true,
+      "refusion_ms_per_trial_1000": 0.0613,
+      "render": {
+        "p50_ms": 0.26,
+        "p95_ms": 4.8
+      },
+      "state_bytes": 33529439,
+      "region_bytes_including_originals_and_wal": 33529439
+    }
+  ]
+}

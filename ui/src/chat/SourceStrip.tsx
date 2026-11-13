@@ -20,7 +20,7 @@ export function sectionLabel(headingPath: string | undefined): string | undefine
 
 /** A citation the viewer can open: a document, not a remembered assertion. */
 export function openable(citation: Citation): boolean {
-  return Boolean(citation.relative_path && citation.source_id && !citation.memory);
+  return Boolean(citation.relative_path && citation.source_id);
 }
 
 function chipTooltip(citation: Citation): string {
@@ -63,6 +63,7 @@ export function SourceStrip({
     <div className="sources-strip">
       {visible.map((citation) => {
         const section = sectionLabel(citation.heading_path);
+        const knowledge = citation.artifact ?? citation.memory;
         return (
           <span key={citation.index} className="source-chip-wrap">
           <button
@@ -75,16 +76,16 @@ export function SourceStrip({
           >
             <span className="source-chip__n">{citation.index}</span>
             <span className="source-chip__label">
-              {citation.memory
-                ? (citation.memory.subject ?? "remembered")
+              {knowledge
+                ? (knowledge.subject ?? "knowledge artifact")
                 : (citation.relative_path ?? citation.title)}
             </span>
             {/* A reader who cannot tell a remembered assertion from a document
                 cannot catch a bad memory — and the path a memory cites is
                 `org/mem-2026….md`, which says nothing. */}
-            {citation.memory ? (
-              <span className="source-chip__memory" title={`asserted ${citation.memory.asserted_at ?? "unknown"}`}>
-                {citation.memory.scope ?? "memory"}
+            {knowledge ? (
+              <span className="source-chip__memory" title={`asserted ${knowledge.asserted_at ?? "unknown"}`}>
+                {knowledge.scope ?? "artifact"}
               </span>
             ) : null}
             {section ? <span className="source-chip__section">{section}</span> : null}

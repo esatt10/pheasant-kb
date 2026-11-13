@@ -9,7 +9,20 @@ from typing import Any
 from pheasant.persistence.state_store import StateStore
 
 # The section predicates live with the other criteria; re-exported for importers.
-from pheasant.search.criteria import path_scope_sql, section_matches, section_needle  # noqa: F401
+from pheasant.search.criteria import (  # noqa: F401
+    optional_row_value as _row_value,
+)
+from pheasant.search.criteria import (
+    path_scope_sql,
+    section_needle,
+    source_scope_sql,
+)
+from pheasant.search.criteria import (
+    section_matches as section_matches,
+)
+from pheasant.search.criteria import (
+    steering_exclusion_sql as _exclusion_sql,
+)
 from pheasant.search.observability import count_lexical
 from pheasant.search.pg_textsearch import (
     bm25_counts_for,
@@ -176,17 +189,6 @@ def _structural_prior(
         f"{prior} - {ranking.prefer_bonus} * (CASE {cases} ELSE 0 END))",
         params,
     )
-
-
-def _exclusion_sql(steering: Any) -> tuple[str, list[object]]:
-    """`AND relative_path NOT LIKE ?` per `exclusion` rule."""
-    if not steering or not steering.exclusions:
-        return "", []
-    clauses = "".join(
-        " AND COALESCE(artifacts.relative_path, '') NOT LIKE ?" for _ in steering.exclusions
-    )
-    params: list[object] = [f"%{pattern.strip('*').strip('/')}%" for pattern in steering.exclusions]
-    return clauses, params
 
 
 def _postgres_document_frequencies(
@@ -366,7 +368,7 @@ class SearchStore:
         """
         if policy is None or now is None:
             return "", "", []
-        from pheasant.memory.policy import sql_predicate
+        from pheasant.artifacts.policy import sql_predicate
 
         condition, params = sql_predicate(policy, now=now, alias="memory_records")
         join = "LEFT JOIN memory_records ON memory_records.artifact_id = chunks.artifact_id"
@@ -383,6 +385,7 @@ class SearchStore:
         steering: Any = None,
         path_prefix: str | None = None,
         exclude: Any = None,
+        exclude_sources: list[str] | None = None,
     ) -> list[dict]:
         # Natural-language queries ("where does the X service run") must not
         # fall to FTS5's implicit-AND — a single unmatched stopword would
@@ -410,8 +413,9 @@ class SearchStore:
         # send every scoped search down the corpus-wide LIKE fallback. It is
         # the one filter on `chunks_fts`'s own columns, so the BM25 statement
         # applies it inside its index scan and every other filter outside.
-        source_where = " AND chunks_fts.source_id = ?" if source_name else ""
-        source_params: list[object] = [source_name] if source_name else []
+        source_where, source_params = source_scope_sql(
+            "chunks_fts.source_id", source_name, exclude_sources
+        )
         filter_where = source_where
         filter_params: list[object] = list(source_params)
         # Restrict to one section of a document's taxonomy. Pushed into SQL
@@ -567,9 +571,11 @@ class SearchStore:
                 lexical = ("like", "query_failed")
                 fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
                 fallback_params: list[object] = [f"%{query}%", f"%{query}%"]
-                if source_name:
-                    fallback_where += " AND chunks.source_id = ?"
-                    fallback_params.append(source_name)
+                source_sql, source_args = source_scope_sql(
+                    "chunks.source_id", source_name, exclude_sources
+                )
+                fallback_where += source_sql
+                fallback_params.extend(source_args)
                 if section_needle(section):
                     fallback_where += " AND LOWER(COALESCE(chunks.heading_path, '')) LIKE ?"
                     fallback_params.append(f"%{section_needle(section)}%")
@@ -656,14 +662,6 @@ def _row_result(row, rank: int, score: float, reason: str) -> dict:
     if heading_path:
         result["heading_path"] = heading_path
     return result
-
-
-def _row_value(row, key: str):
-    """Read an optional column, tolerating a row that lacks it."""
-    try:
-        return row[key]
-    except (IndexError, KeyError):
-        return None
 
 
 # Words that carry no retrieval signal but wreck BM25 when they survive into

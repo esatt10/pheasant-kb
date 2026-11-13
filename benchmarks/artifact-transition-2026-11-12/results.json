@@ -1,0 +1,462 @@
+{
+  "recorded_at": "2026-11-12T12:43:10.624891+00:00",
+  "baseline_revision": "ad39a96c365b0765fc13ef58f5d1136aaeb19f70",
+  "host": {
+    "system": "Windows",
+    "python": "3.14.4"
+  },
+  "comparison_final": {
+    "scope": "Existing paths; batched writes; SQLite; no vectors/providers; sequential",
+    "results": [
+      {
+        "kind": "memory",
+        "records": 100,
+        "taxonomy_enabled": false,
+        "write_batched": {
+          "p50_ms": 8.757,
+          "p95_ms": 15.546
+        },
+        "index_seconds": 1.319,
+        "search_explain": {
+          "p50_ms": 15.666,
+          "p95_ms": 18.938
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0151,
+        "render": null,
+        "state_bytes": 5050056,
+        "region_bytes_including_originals_and_wal": 5072677
+      },
+      {
+        "kind": "artifact",
+        "records": 100,
+        "taxonomy_enabled": false,
+        "write_batched": {
+          "p50_ms": 3.241,
+          "p95_ms": 4.157
+        },
+        "index_seconds": 0.77,
+        "search_explain": {
+          "p50_ms": 11.337,
+          "p95_ms": 15.592
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0608,
+        "render": {
+          "p50_ms": 0.179,
+          "p95_ms": 0.452
+        },
+        "state_bytes": 5767499,
+        "region_bytes_including_originals_and_wal": 5767499
+      },
+      {
+        "kind": "memory",
+        "records": 1000,
+        "taxonomy_enabled": false,
+        "write_batched": {
+          "p50_ms": 27.172,
+          "p95_ms": 50.052
+        },
+        "index_seconds": 10.732,
+        "search_explain": {
+          "p50_ms": 88.836,
+          "p95_ms": 161.701
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0356,
+        "render": null,
+        "state_bytes": 18626424,
+        "region_bytes_including_originals_and_wal": 18852654
+      },
+      {
+        "kind": "artifact",
+        "records": 1000,
+        "taxonomy_enabled": false,
+        "write_batched": {
+          "p50_ms": 4.342,
+          "p95_ms": 7.164
+        },
+        "index_seconds": 8.841,
+        "search_explain": {
+          "p50_ms": 30.802,
+          "p95_ms": 52.481
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0138,
+        "render": {
+          "p50_ms": 0.062,
+          "p95_ms": 0.102
+        },
+        "state_bytes": 27249864,
+        "region_bytes_including_originals_and_wal": 27249864
+      }
+    ]
+  },
+  "comparison_initial": {
+    "scope": "Existing paths; batched writes; SQLite; no vectors/providers; sequential",
+    "results": [
+      {
+        "kind": "memory",
+        "records": 100,
+        "write_batched": {
+          "p50_ms": 6.574,
+          "p95_ms": 9.914
+        },
+        "index_seconds": 1.12,
+        "search_explain": {
+          "p50_ms": 17.122,
+          "p95_ms": 27.228
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0378,
+        "render": null,
+        "state_bytes": 5050056
+      },
+      {
+        "kind": "artifact",
+        "records": 100,
+        "write_batched": {
+          "p50_ms": 4.691,
+          "p95_ms": 7.256
+        },
+        "index_seconds": 0.944,
+        "search_explain": {
+          "p50_ms": 12.085,
+          "p95_ms": 26.264
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0479,
+        "render": {
+          "p50_ms": 0.124,
+          "p95_ms": 0.152
+        },
+        "state_bytes": 5767523
+      },
+      {
+        "kind": "memory",
+        "records": 1000,
+        "write_batched": {
+          "p50_ms": 23.506,
+          "p95_ms": 47.846
+        },
+        "index_seconds": 11.589,
+        "search_explain": {
+          "p50_ms": 81.986,
+          "p95_ms": 127.717
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0516,
+        "render": null,
+        "state_bytes": 18717040
+      },
+      {
+        "kind": "artifact",
+        "records": 1000,
+        "write_batched": {
+          "p50_ms": 5.498,
+          "p95_ms": 13.08
+        },
+        "index_seconds": 13.528,
+        "search_explain": {
+          "p50_ms": 42.12,
+          "p95_ms": 61.203
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.016,
+        "render": {
+          "p50_ms": 0.074,
+          "p95_ms": 0.16
+        },
+        "state_bytes": 27151296
+      }
+    ]
+  },
+  "taxonomy_artifacts": {
+    "scope": "Existing paths; batched writes; SQLite; no vectors/providers; sequential",
+    "results": [
+      {
+        "kind": "artifact",
+        "records": 1000,
+        "taxonomy_enabled": true,
+        "write_batched": {
+          "p50_ms": 4.507,
+          "p95_ms": 11.837
+        },
+        "index_seconds": 11.348,
+        "search_explain": {
+          "p50_ms": 66.221,
+          "p95_ms": 111.988
+        },
+        "exact_token_top5": 1.0,
+        "refusion_equivalent": true,
+        "refusion_ms_per_trial_1000": 0.0279,
+        "render": {
+          "p50_ms": 0.145,
+          "p95_ms": 0.206
+        },
+        "state_bytes": 32251152
+      }
+    ]
+  },
+  "evaluation_baseline": {
+    "coefficients": {
+      "SECONDS_PER_QUERY_VARIANT": 0.008
+    },
+    "ladder": [
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 576000,
+        "peak_checkpoint_mb": 0.5,
+        "projected_run_minutes": 0.1,
+        "projected_run_seconds": 5.8,
+        "queries_per_cohort": 20,
+        "recommended_memory": "0.5Gi",
+        "replays_per_run": 720,
+        "state_bytes_per_run": 6820800,
+        "state_bytes_per_year": 2489608800,
+        "state_gb_per_year": 2.49,
+        "state_mb_per_run": 6.5,
+        "variants": 6,
+        "warnings": []
+      },
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 1440000,
+        "peak_checkpoint_mb": 1.4,
+        "projected_run_minutes": 0.2,
+        "projected_run_seconds": 14.4,
+        "queries_per_cohort": 50,
+        "recommended_memory": "0.5Gi",
+        "replays_per_run": 1800,
+        "state_bytes_per_run": 14020800,
+        "state_bytes_per_year": 5117634000,
+        "state_gb_per_year": 5.12,
+        "state_mb_per_run": 13.4,
+        "variants": 6,
+        "warnings": []
+      },
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 2880000,
+        "peak_checkpoint_mb": 2.7,
+        "projected_run_minutes": 0.5,
+        "projected_run_seconds": 28.8,
+        "queries_per_cohort": 100,
+        "recommended_memory": "0.5Gi",
+        "replays_per_run": 3600,
+        "state_bytes_per_run": 26020800,
+        "state_bytes_per_year": 9497676000,
+        "state_gb_per_year": 9.5,
+        "state_mb_per_run": 24.8,
+        "variants": 6,
+        "warnings": []
+      },
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 5760000,
+        "peak_checkpoint_mb": 5.5,
+        "projected_run_minutes": 1.0,
+        "projected_run_seconds": 57.6,
+        "queries_per_cohort": 200,
+        "recommended_memory": "0.5Gi",
+        "replays_per_run": 7200,
+        "state_bytes_per_run": 50020800,
+        "state_bytes_per_year": 18257760000,
+        "state_gb_per_year": 18.26,
+        "state_mb_per_run": 47.7,
+        "variants": 6,
+        "warnings": []
+      },
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 14400000,
+        "peak_checkpoint_mb": 13.7,
+        "projected_run_minutes": 2.4,
+        "projected_run_seconds": 144.0,
+        "queries_per_cohort": 500,
+        "recommended_memory": "0.5Gi",
+        "replays_per_run": 18000,
+        "state_bytes_per_run": 50740800,
+        "state_bytes_per_year": 18520812000,
+        "state_gb_per_year": 18.52,
+        "state_mb_per_run": 48.4,
+        "variants": 6,
+        "warnings": []
+      },
+      {
+        "cohorts": 6,
+        "peak_checkpoint_bytes": 28800000,
+        "peak_checkpoint_mb": 27.5,
+        "projected_run_minutes": 4.8,
+        "projected_run_seconds": 288.0,
+        "queries_per_cohort": 1000,
+        "recommended_memory": "1Gi",
+        "replays_per_run": 36000,
+        "state_bytes_per_run": 51940800,
+        "state_bytes_per_year": 18959232000,
+        "state_gb_per_year": 18.96,
+        "state_mb_per_run": 49.5,
+        "variants": 6,
+        "warnings": []
+      }
+    ],
+    "measured": {
+      "cohort_variant_pairs": 36,
+      "cohorts": 6,
+      "metric_rows": 564,
+      "ms_per_replay": 14.299,
+      "peak_checkpoint_bytes": 622259,
+      "proof_rows": 5,
+      "queries": 20,
+      "replays": 246,
+      "run_seconds": 3.52,
+      "state_bytes": 3085464,
+      "variants": 6
+    },
+    "note": "Measured through the real search path on a synthetic corpus. The shape holds across machines; the constants move, so re-run this on your own hardware before trusting the ladder for provisioning.",
+    "projected": {
+      "cohorts": 6,
+      "peak_checkpoint_bytes": 576000,
+      "peak_checkpoint_mb": 0.5,
+      "projected_run_minutes": 0.1,
+      "projected_run_seconds": 5.8,
+      "queries_per_cohort": 20,
+      "recommended_memory": "0.5Gi",
+      "replays_per_run": 720,
+      "run_seconds": 5.76,
+      "state_bytes_per_run": 6820800,
+      "state_bytes_per_year": 2489608800,
+      "state_gb_per_year": 2.49,
+      "state_mb_per_run": 6.5,
+      "variants": 6,
+      "warnings": []
+    },
+    "spec": {
+      "files": 120,
+      "queries": 20,
+      "seed": 1337
+    },
+    "status": "completed",
+    "warnings": []
+  },
+  "live_existing_stack": {
+    "scope": "Running local fleet, sequential text and graph; no embedding or LLM calls",
+    "health": {
+      "status": "ok",
+      "service": "pheasant",
+      "role": "api",
+      "graph_generation": {
+        "loaded": "3680609aa8bcf2c9",
+        "source": "graph-service"
+      }
+    },
+    "ready": {
+      "status": "ready",
+      "knowledge_base": "pheasant-kb",
+      "role": "api",
+      "watcher": false,
+      "scheduler": false,
+      "drains_queue": false,
+      "drains_log_queue": false,
+      "indexes_locally": false,
+      "refreshes_graph": false,
+      "graph_generation": {
+        "loaded": "3680609aa8bcf2c9",
+        "source": "graph-service",
+        "published": "3680609aa8bcf2c9",
+        "current": true
+      }
+    },
+    "configuration": {
+      "evaluation_enabled": true,
+      "tuning_enabled": true,
+      "interactions_enabled": true,
+      "artifact_retention_days": 0
+    },
+    "latency": [
+      {
+        "case": "text",
+        "samples": 30,
+        "p50_ms": 21.74,
+        "p95_ms": 30.28,
+        "min_hits": 2,
+        "max_hits": 10
+      },
+      {
+        "case": "graph",
+        "samples": 30,
+        "p50_ms": 29.89,
+        "p95_ms": 57.08,
+        "min_hits": 10,
+        "max_hits": 10
+      },
+      {
+        "case": "text_expand",
+        "samples": 30,
+        "p50_ms": 206.87,
+        "p95_ms": 465.17,
+        "min_hits": 2,
+        "max_hits": 10
+      },
+      {
+        "case": "text_artifacts_only",
+        "samples": 30,
+        "p50_ms": 47.53,
+        "p95_ms": 60.58,
+        "min_hits": 0,
+        "max_hits": 2
+      }
+    ],
+    "corpus": {
+      "indexed_artifacts": 990,
+      "chunk_count": 10627,
+      "total_nodes": 27301,
+      "total_links": 48286,
+      "source_count": 10
+    },
+    "artifacts_taxonomy_enabled": false
+  },
+  "citation_probe": {
+    "source_entry_has_document_link": false,
+    "inline_code_rewritten": true,
+    "source_qualified_markdown_target": false,
+    "same_relative_path_targets": 2,
+    "sparse_number_preserved": true
+  },
+  "verification": {
+    "artifact_retention_refusion_durability": {
+      "passed": 60,
+      "skipped": 3
+    },
+    "evaluation_tuning_logging_taxonomy_jobs": {
+      "passed": 324,
+      "skipped": 5
+    },
+    "new_promoted_bundle_pruning": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "logger_retention": {
+      "passed": 24,
+      "skipped": 5
+    },
+    "lint": "passed",
+    "format": "passed"
+  },
+  "limitations": [
+    "Existing implementations, not an implemented migration",
+    "Synthetic short records; exact-token queries; no semantic-quality claim",
+    "SQLite comparison without vectors/providers or concurrent traffic",
+    "Live PostgreSQL retrieval only; no PostgreSQL migration-write validation",
+    "Point-in-time storage includes originals and SQLite/WAL",
+    "Timed re-fusion repeats one query at identical weights; not optimizer quality"
+  ]
+}

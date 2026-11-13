@@ -474,6 +474,8 @@ def test_migration_copies_state_and_never_destroys_the_original(tmp_path: Path) 
     than copied, because its tokenization is dialect-specific.
     """
 
+    from pheasant.artifacts.publications import publish, version
+    from pheasant.persistence.durable_jobs import DurableJobStore
     from pheasant.persistence.migrate import migrate_sqlite_to_postgres
 
     _reset(DSN)
@@ -485,6 +487,20 @@ def test_migration_copies_state_and_never_destroys_the_original(tmp_path: Path) 
         sqlite_path = Path(engine.state.path)
         before = sorted(str(r["id"]) for r in engine.state.rows("SELECT id FROM artifacts"))
         chunk_count = len(engine.state.rows("SELECT id FROM chunks"))
+        revision = publish(
+            engine.state, config.knowledge_base_id, "kept-output", {"text": "sealed"}
+        )
+        DurableJobStore(engine.state, config.knowledge_base_id).write(
+            {
+                "id": "retained-job",
+                "active": False,
+                "finished_at": "2026-01-01T00:00:00Z",
+            }
+        )
+        engine.state.execute(
+            "INSERT INTO artifact_source_migrations VALUES(?,?,?)",
+            ("legacy-records", '{"type":"memory"}', "2026-01-01T00:00:00Z"),
+        )
     finally:
         engine.close()
 
@@ -494,6 +510,13 @@ def test_migration_copies_state_and_never_destroys_the_original(tmp_path: Path) 
     assert report["tables"]["artifacts"] == len(before)
     # Derived cache, rebuilt not copied — one row per chunk.
     assert report["chunks_fts"] == chunk_count
+    for table in (
+        "artifact_versions",
+        "artifact_publications",
+        "artifact_source_migrations",
+        "durable_jobs",
+    ):
+        assert report["tables"][table] == 1
 
     # The original is renamed, never deleted.
     assert not sqlite_path.exists()
@@ -505,6 +528,10 @@ def test_migration_copies_state_and_never_destroys_the_original(tmp_path: Path) 
     try:
         after = sorted(str(r["id"]) for r in migrated.state.rows("SELECT id FROM artifacts"))
         assert after == before, "stable IDs changed across the migration"
+        assert version(migrated.state, config.knowledge_base_id, "kept-output", revision) == {
+            "text": "sealed"
+        }
+        assert DurableJobStore(migrated.state, config.knowledge_base_id).get("retained-job")
         # And the migrated index is searchable, not merely present.
         search = HybridSearch(SearchStore(migrated.state))
         hits = search.search_context(postgres_config.knowledge_base_id, "invoices", "text", 5)

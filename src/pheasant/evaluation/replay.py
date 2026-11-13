@@ -184,7 +184,7 @@ def shadow_records(candidates: list[dict[str, Any]], *, now: str) -> list[dict[s
     as ``not_shadow_replayable`` instead of quietly scoring them.
     """
 
-    from pheasant.memory.steering import STEERING_KINDS
+    from pheasant.artifacts.steering import STEERING_KINDS
 
     out: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -236,6 +236,11 @@ class ReplayEngine:
         # cannot propose a parameter without knowing which stage lost the
         # document.
         self.explain = bool(explain)
+        from pheasant.artifacts.migration import retrieval_source_ids
+
+        self.artifact_sources = retrieval_source_ids(
+            getattr(getattr(searcher, "store", None), "state", None)
+        )
 
     def _policy(self, variant: Variant, query: EvaluatedQuery) -> dict[str, Any]:
         """The memory policy for one (variant, query) pair.
@@ -274,6 +279,7 @@ class ReplayEngine:
                 security=self.security,
                 principal=expectation.get("principal"),
                 memory=self._policy(variant, query),
+                exclude_sources=self.artifact_sources if variant.memory_results == "off" else None,
                 steering_kinds=variant.steering_kinds,
                 explain=self.explain,
                 extra_steering_records=(

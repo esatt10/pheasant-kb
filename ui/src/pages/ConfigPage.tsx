@@ -4,11 +4,11 @@ import yaml from "js-yaml";
 import { api } from "../api/client";
 import { ObjectEditor } from "../config/ObjectEditor";
 import { EmbeddingsPanel } from "../components/EmbeddingsPanel";
-import { MemoryPanel } from "../components/MemoryPanel";
+import { ArtifactLearningPanel } from "../artifacts/ArtifactLearningPanel";
 import { WorkflowPanel } from "../components/WorkflowPanel";
 import { KnowledgeBasePanel } from "../components/KnowledgeBasePanel";
 import { RetrievalPanel } from "../components/RetrievalPanel";
-import { lineDiff } from "../util/diff";
+import { diffContext, lineDiff } from "../util/diff";
 
 type Mode = "form" | "yaml";
 
@@ -78,6 +78,7 @@ export function ConfigPage() {
     }
   }, [mode, configQuery.data]);
   const diff = useMemo(() => lineDiff(baseline, proposedYaml), [baseline, proposedYaml]);
+  const visibleDiff = useMemo(() => diffContext(diff), [diff]);
   const changedCount = diff.filter((d) => d.kind !== "same").length;
 
   const exportYaml = () => {
@@ -152,9 +153,9 @@ export function ConfigPage() {
       </section>
 
       <section className="section">
-        <h2 className="section__title">Agent memory</h2>
+        <h2 className="section__title">Artifact learning and retention</h2>
         <div className="card" style={{ padding: 16 }}>
-          <MemoryPanel />
+          <ArtifactLearningPanel />
         </div>
       </section>
 
@@ -208,7 +209,7 @@ export function ConfigPage() {
 
       {showDiff && (
         <pre className="diff">
-          {diff.map((line, i) => (
+          {visibleDiff.map((line, i) => (
             <div key={i} className={`diff-line diff-line--${line.kind}`}>
               <span className="diff-gutter">{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}</span>
               {line.text}

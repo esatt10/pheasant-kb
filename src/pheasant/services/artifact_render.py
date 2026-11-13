@@ -213,17 +213,9 @@ def markdown_html(text: str, citations: set[int] | None = None) -> str:
     """Markdown with raw HTML off, its ``[n]`` linked to the sources list."""
 
     if citations:
-        parts = str(text or "").split("```")
-        for index in range(0, len(parts), 2):  # prose, never inside a fence
-            parts[index] = _CITATION.sub(
-                lambda m: (
-                    f"[[{m.group(1)}]](#source-{m.group(1)})"
-                    if int(m.group(1)) in citations
-                    else m.group(0)
-                ),
-                parts[index],
-            )
-        text = "```".join(parts)
+        from pheasant.services.artifact_evidence import remap
+
+        text = remap(str(text or ""), {str(n): f"[[{n}]](#source-{n})" for n in citations})
     rendered = _MARKDOWN.render(str(text or ""))
     return rendered.replace("<pre><code", '<pre class="hl"><code')
 
@@ -266,14 +258,23 @@ def _sources(citations: list[dict[str, Any]]) -> str:
         return ""
     items = "".join(
         f'<li id="source-{_esc(c.get("index"))}" value="{_esc(c.get("index"))}">'
-        f"{_esc(c.get('source'))} · {_esc(c.get('path'))}"
+        f'<a href="#evidence-{_esc(c.get("evidence_id") or c.get("index"))}" '
+        f'data-source="{_esc(c.get("source"))}" data-path="{_esc(c.get("path"))}">'
+        f"{_esc(c.get('source'))} · {_esc(c.get('path'))}</a>"
         + (f" — {_esc(c.get('section'))}" if c.get("section") else "")
         + (f' <span class="muted">{_esc(_turns(c))}</span>' if c.get("turns") else "")
         + "</li>"
         for c in citations
         if c.get("index") is not None
     )
-    return f'<section class="sources"><h2>Sources</h2><ol>{items}</ol></section>'
+    evidence = "".join(
+        f'<details id="evidence-{_esc(c.get("evidence_id") or c.get("index"))}">'
+        f"<summary>[{_esc(c.get('index'))}] {_esc(c.get('path'))}</summary>"
+        f"<pre>{_esc(c.get('snapshot') or 'Evidence not captured; open the source.')}</pre>"
+        "</details>"
+        for c in citations
+    )
+    return f'<section class="sources"><h2>Sources</h2><ol>{items}</ol>{evidence}</section>'
 
 
 def _visual(payload: dict[str, Any]) -> tuple[str, str]:
@@ -308,7 +309,7 @@ def has_visual(payload: dict[str, Any]) -> bool:
     return isinstance(visual, dict) and visual.get("status") == "ok" and bool(visual.get("diagram"))
 
 
-def _file_section(file: dict[str, Any]) -> str:
+def _file_section(file: dict[str, Any], payload: dict[str, Any]) -> str:
     """One file in the whole-artifact page: drawn when it is a picture or a page.
 
     An HTML file is its page, running in a frame sandboxed to scripts alone
@@ -325,6 +326,7 @@ def _file_section(file: dict[str, Any]) -> str:
         f'<span class="file__lang">{_esc(file.get("language"))}</span></p>'
     )
     source = highlighted(content, name, file.get("language"))
+    head += _file_citations(payload, name)
     if suffix in (".html", ".htm"):
         drawn = (
             f'<iframe class="html-frame" sandbox="allow-scripts" title="{_esc(name)}" '
@@ -346,7 +348,9 @@ def _file_section(file: dict[str, Any]) -> str:
 def overview(artifact: dict[str, Any], *, theme: str | None = None) -> str:
     """The whole artifact as one document: the report, or every file in order."""
 
-    payload = artifact.get("payload") or {}
+    from pheasant.services.artifact_evidence import normalize
+
+    payload = normalize(artifact.get("payload") or {})
     citations = payload.get("citations") or []
     cited = {int(c["index"]) for c in citations if str(c.get("index", "")).isdigit()}
     parts = [_header(artifact)]
@@ -355,9 +359,27 @@ def overview(artifact: dict[str, Any], *, theme: str | None = None) -> str:
     elif payload.get("summary"):
         parts.append(markdown_html(payload["summary"], cited))
     visual, script = _visual(payload)
+    script += """
+document.addEventListener('click', event => {
+  const link = event.target.closest('a');
+  if (!link) return;
+  const href = link.getAttribute('href') || '';
+  if (!href.startsWith('#')) return;
+  const detail = document.getElementById(href.slice(1));
+  if (detail) {
+    // A srcdoc frame inherits its parent's base URL. Keep fragments inside
+    // this document instead of loading the application inside the sandbox.
+    event.preventDefault();
+    if (detail.tagName === 'DETAILS') detail.open = true;
+    detail.scrollIntoView({block:'start'});
+  }
+  if (link.dataset.source) parent.postMessage({type:'pheasant-evidence',
+    source:link.dataset.source, path:link.dataset.path}, '*');
+});
+"""
     parts.append(visual)
     for file in payload.get("files") or []:
-        parts.append(_file_section(file))
+        parts.append(_file_section(file, payload))
     if payload.get("not_covered"):
         parts.append(
             '<section class="gaps"><h2>Not covered by the sources</h2>'
@@ -407,10 +429,18 @@ def file_document(
     name = str(file.get("name") or "file")
     content = str(file.get("content") or "")
     suffix = suffix_of(name, file.get("language"))
+    from pheasant.services.artifact_evidence import file_mapping, normalize, remap
+
+    payload = normalize(artifact.get("payload") or {})
+    citations = payload.get("citations") or []
+    sources = _sources(citations)
     if mode == "preview" and suffix in (".html", ".htm"):
         return with_policy(content)
     if mode == "preview" and suffix in (".md", ".markdown"):
-        return _page(name, markdown_html(content), theme=theme)
+        mapping = {k: f"[{v}]" for k, v in file_mapping(payload, name).items()}
+        content = remap(content, mapping, unknown="[?]" if citations else None)
+        cited = {int(c["index"]) for c in citations}
+        return _page(name, markdown_html(content, cited) + sources, theme=theme)
     if mode == "preview" and suffix == ".svg":
         import base64
 
@@ -427,37 +457,81 @@ def file_document(
         f'<span class="file__lang">{_esc(file.get("language"))}</span></p>'
         f"{highlighted(content, name, file.get('language'))}"
     )
-    return _page(f"{name} — {artifact.get('title') or ''}", body, theme=theme)
+    return _page(
+        f"{name} — {artifact.get('title') or ''}",
+        body + _file_citations(payload, name) + sources,
+        theme=theme,
+    )
+
+
+def _file_citations(payload: dict, name: str) -> str:
+    from pheasant.services.artifact_evidence import file_mapping
+
+    mapping = file_mapping(payload, name)
+    if not mapping:
+        return ""
+    links = ", ".join(
+        f'[{_esc(local)}] → <a href="#source-{_esc(number)}">[{_esc(number)}]</a>'
+        for local, number in mapping.items()
+    )
+    return f'<p class="meta">File citations: {links}</p>'
 
 
 def markdown_export(artifact: dict[str, Any]) -> str:
     """The artifact as one Markdown file: what a reader pastes elsewhere."""
 
-    payload = artifact.get("payload") or {}
+    from pheasant.services.artifact_evidence import normalize, remap
+
+    payload = normalize(artifact.get("payload") or {})
+    links = {
+        str(c["index"]): f"[[{c['index']}]](#evidence-{c['evidence_id']})"
+        for c in payload.get("citations") or []
+    }
     parts = [f"# {artifact.get('title') or 'Artifact'}"]
     if payload.get("question"):
         parts.append(f"> {payload['question']}")
     if artifact.get("kind") in ("report", "thread"):
-        parts.append(str(payload.get("answer") or ""))
+        parts.append(remap(str(payload.get("answer") or ""), links))
     elif payload.get("summary"):
-        parts.append(str(payload["summary"]))
+        parts.append(remap(str(payload["summary"]), links))
     for file in payload.get("files") or []:
+        from pheasant.services.artifact_evidence import file_mapping
+
+        mapping = file_mapping(payload, str(file.get("name")))
+        content = str(file.get("content") or "")
+        fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", content))])
+        legend = (
+            "File citations: "
+            + ", ".join(
+                f"[{local}] → {links.get(str(number), f'[{number}]')}"
+                for local, number in mapping.items()
+            )
+            + "\n\n"
+            if mapping
+            else ""
+        )
         parts.append(
-            f"## `{file.get('name')}`\n\n```{file.get('language') or ''}\n"
-            f"{file.get('content') or ''}\n```"
+            f"## `{file.get('name')}`\n\n{legend}{fence}{file.get('language') or ''}\n"
+            f"{content}\n{fence}"
         )
     if payload.get("not_covered"):
-        parts.append(f"## Not covered by the sources\n\n{payload['not_covered']}")
+        parts.append("## Not covered by the sources\n\n" + remap(payload["not_covered"], links))
     citations = payload.get("citations") or []
     if citations:
         parts.append(
             "## Sources\n\n"
             + "\n".join(
-                f"{c.get('index')}. {c.get('source')} · {c.get('path')}"
+                f"{c.get('index')}. [{c.get('source')} · {c.get('path')}]"
+                f"(#evidence-{c.get('evidence_id')})"
                 + (f" — {c.get('section')}" if c.get("section") else "")
                 for c in citations
             )
         )
+        for citation in citations:
+            parts.append(
+                f"### evidence-{citation.get('evidence_id')}\n\n"
+                + str(citation.get("snapshot") or "Evidence unavailable; consult the region.")
+            )
     return "\n\n".join(part for part in parts if part.strip()) + "\n"
 
 
@@ -493,5 +567,13 @@ def zip_export(artifact: dict[str, Any]) -> bytes:
             taken.add(path)
             archive.writestr(path, str(file.get("content") or ""))
         archive.writestr("README.md", markdown_export(artifact))
+        from pheasant.services.artifact_evidence import normalize
+
+        for citation in normalize(payload).get("citations") or []:
+            archive.writestr(
+                f"evidence/{citation['evidence_id']}.md",
+                f"# {citation.get('source')} · {citation.get('path')}\n\n"
+                + str(citation.get("snapshot") or "Evidence is unavailable; consult the region."),
+            )
         archive.writestr(f"{slug(str(artifact.get('title')))}.html", overview(artifact))
     return buffer.getvalue()

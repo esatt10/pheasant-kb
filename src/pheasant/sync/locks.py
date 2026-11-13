@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_is_running(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -33,6 +35,35 @@ def _pid_is_running(pid: int) -> bool:
             return False
         raise
     return True
+
+
+def _windows_pid_is_running(pid: int) -> bool:
+    """Query a process handle: Windows ``os.kill(pid, 0)`` terminates it."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: no such PID
+            return False
+        if error == 5:  # ERROR_ACCESS_DENIED: a live protected process
+            return True
+        raise ctypes.WinError(error)
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def _lock_is_active(lock: Path) -> bool:
@@ -261,7 +292,16 @@ class EngineLease:
                 json.dump(payload, fh)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
+            for attempt in range(8):
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    # Windows can briefly deny replacement during another
+                    # heartbeat's rename/read. Keep the old complete lease.
+                    if os.name != "nt" or attempt == 7:
+                        raise
+                    time.sleep(0.005 * (attempt + 1))
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise

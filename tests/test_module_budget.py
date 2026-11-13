@@ -81,7 +81,7 @@ CEILINGS: dict[str, int] = {
     # are per-source settings, so they live on `SourceSyncSettings`.
     # + security.connections and connector.connection (the section itself is
     # `config/connections.py`).
-    "config/schema.py": 2366,  # + the artifacts section, the scheduler's default cadence
+    "config/schema.py": 2160,  # learning policies moved to config/artifact_learning.py
     "evaluation/metrics.py": 1450,
     "evaluation/runner.py": 1500,
     "evaluation/store.py": 950,
@@ -99,8 +99,9 @@ CEILINGS: dict[str, int] = {
     # Raised from 2050: the ConnectionTools mixin in the base list, and
     # register_source's `connection` (checked in `connection_tools.py`).
     "mcp_server/tools.py": 2059,
-    "memory/formation.py": 1150,
-    "memory/store.py": 950,
+    # Same domain implementations, relocated from memory; legacy modules are adapters.
+    "artifacts/formation.py": 1150,
+    "artifacts/store.py": 950,
     # Raised from 1050 for the readiness plane's two tables. Deliberate, and
     # the one raise that is not a smell: this file *is* the DDL, so 68 lines
     # of `CREATE TABLE` for `ingest_receipts` and `snapshot_seals` have
@@ -126,7 +127,8 @@ CEILINGS: dict[str, int] = {
     # Raised to 1183 for `saved_artifacts` (composed files and saved reports,
     # kept until deleted) and its owner index; its code lives in
     # `services/artifacts.py`.
-    "persistence/schema.py": 1224,  # + durable artifact projection outbox (DDL only)
+    # Durable jobs, immutable artifact versions, publication pointers and source adoption.
+    "persistence/schema.py": 1258,
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.

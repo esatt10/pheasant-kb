@@ -64,6 +64,9 @@ class SourceRegistry:
                 self.register_source(source, revive=False)
 
     def register_source(self, source: SourceConfig, *, revive: bool = True) -> None:
+        from pheasant.artifacts.migration import adopt_source
+
+        adopt_source(self.config, self.state, source)
         self.state.upsert_source(
             source.name,
             self.config.knowledge_base_id,

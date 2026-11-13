@@ -291,9 +291,9 @@ FLAGSHIP_DEFAULTS: dict[str, Any] = {
     "sources": [
         {
             "name": "agent-memory",
-            "type": "memory",
+            "type": "artifact",
             "path": "/memory",
-            "description": "Durable agent memory",
+            "description": "Durable knowledge artifacts",
             "include": ["**/*.md"],
             "exclude": ["**/*.archived"],
             "sync": {
@@ -348,6 +348,8 @@ def defaults_table() -> str:
     def cell(value: Any) -> str:
         if value is None:
             return "unset"
+        if isinstance(value, str) and value.startswith("\\"):
+            value = value.replace("\\", "/")  # Reference paths do not depend on the build host.
         text = json.dumps(value) if not isinstance(value, str) else value
         return f"`{text}`".replace("|", "\\|")
 

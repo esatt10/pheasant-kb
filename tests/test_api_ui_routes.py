@@ -945,7 +945,16 @@ def test_refreshing_a_tab_that_is_also_an_api_route_loads_the_ui(
     app = _app_with_ui(tmp_path, loaded_config, monkeypatch)
     client = TestClient(app)
     navigate = {"sec-fetch-mode": "navigate", "accept": "text/html,application/xhtml+xml,*/*"}
-    routes = ("/sources", "/graph", "/config", "/memory", "/evaluation", "/tuning", "/sources/")
+    routes = (
+        "/sources",
+        "/graph",
+        "/config",
+        "/artifacts",
+        "/memory",
+        "/evaluation",
+        "/tuning",
+        "/sources/",
+    )
     for route in routes:
         response = client.get(route, headers=navigate)
         assert response.status_code == 200, route

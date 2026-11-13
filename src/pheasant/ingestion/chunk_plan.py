@@ -188,8 +188,19 @@ def plan_chunks(source: Any, relative_path: str, text: str) -> ChunkPlan:
         )
     source_type = str(getattr(getattr(source, "type", None), "value", getattr(source, "type", "")))
     suffix = Path(relative_path).suffix.lower()
-    if source_type == "memory":
-        return _sized(source, "memory", "whole", 8000, 8000, 0, reason="one record per chunk")
+    if source_type in {"memory", "artifact"}:
+        return _sized(
+            source,
+            "memory",
+            "whole",
+            8000,
+            8000,
+            0,
+            rules=tuple(rules_for_source(source))
+            if getattr(getattr(source, "taxonomy", None), "enabled", False)
+            else (),
+            reason="one record per chunk",
+        )
     if suffix in TABULAR_SUFFIXES:
         return _sized(source, "tabular", "rows", 1500, 3000, 0, reason="rows with their header")
     if suffix in CODE_SUFFIXES:

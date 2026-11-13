@@ -140,7 +140,6 @@ export function ChatPanel({
   // disagree about what "off" means.
   // Off by default: an answer is grounded in the sources unless somebody asks
   // for remembered assertions too.
-  const [useMemory, setUseMemory] = useState(false);
   // Whether saved artifacts (composed answers and reports) may be evidence;
   // the `artifacts` field search and answers take on every surface.
   const [useArtifacts, setUseArtifacts] = useState(true);
@@ -232,7 +231,7 @@ export function ChatPanel({
             browser.open && browser.source ? (browser.path ? `${browser.source}/${browser.path}` : browser.source) : null,
           source_types: sourceTypeFilter ? [sourceTypeFilter] : null,
           workflow,
-          memory: useMemory ? null : "off",
+          artifact_policy: null,
           conversation_id: state.conversationId,
           artifacts: useArtifacts ? null : "exclude",
           history,
@@ -577,15 +576,7 @@ export function ChatPanel({
               </button>
             </span>
           ) : null}
-          <label className="composer__memory" title="Let remembered assertions inform the answer">
-            <input
-              type="checkbox"
-              checked={useMemory}
-              onChange={(event) => setUseMemory(event.target.checked)}
-            />
-            use memory
-          </label>
-          <label className="composer__memory" title="Let saved artifacts (composed answers and reports) inform the answer">
+          <label className="composer__memory" title="Let knowledge records, saved reports and composed work inform the answer">
             <input
               type="checkbox"
               checked={useArtifacts}

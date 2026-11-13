@@ -1,10 +1,10 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { JobsTray } from "./components/JobsTray";
 import { RegionBanner } from "./components/RegionBanner";
 import { Notebook } from "./pages/Notebook";
 import { GraphPage } from "./pages/GraphPage";
-import { MemoryPage } from "./pages/MemoryPage";
+import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { TuningPage } from "./pages/TuningPage";
 import { SourcesPage } from "./pages/SourcesPage";
@@ -31,7 +31,8 @@ export function App() {
           <Routes>
             <Route path="/" element={<Notebook />} />
             <Route path="/graph" element={<GraphPage />} />
-            <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/memory" element={<Navigate to="/artifacts" replace />} />
+            <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/evaluation" element={<EvaluationPage />} />
             <Route path="/tuning" element={<TuningPage />} />
             <Route path="/sources" element={<SourcesPage />} />

@@ -39,13 +39,13 @@ def apply_retrieval_criteria(
     # never arrives here: `scoped_sources` hands it to the arms as
     # `source_name`, which filters inside the index instead of after it.
     included = {str(name) for name in (source_names or [])}
-    wanted_types = {str(name) for name in (node_types or [])}
+    wanted_types = _compat_types(node_types, "memory_record", "artifact_record")
     # Source *type* (repository, gdrive, web_collection, ...) is a different axis from
     # node type (chunk, symbol, entity) and from source *name*. Scoping by name
     # needs you to know every source in the region; scoping by type is the
     # question an agent actually has — "only what came out of our wikis".
-    wanted_source_types = {str(name) for name in (source_types or [])}
-    excluded_source_types = {str(name) for name in (exclude_source_types or [])}
+    wanted_source_types = _compat_types(source_types, "memory", "artifact")
+    excluded_source_types = _compat_types(exclude_source_types, "memory", "artifact")
     kept: list[dict] = []
     for item in results:
         if excluded and source_of(item) in excluded:
@@ -68,6 +68,13 @@ def apply_retrieval_criteria(
                 continue
         kept.append(item)
     return kept
+
+
+def _compat_types(values: list[str] | None, old: str, canonical: str) -> set[str]:
+    names = {str(value) for value in values or []}
+    if names & {old, canonical}:
+        names.update((old, canonical))
+    return names
 
 
 def section_needle(section: str | None) -> str:
@@ -335,3 +342,33 @@ def type_of(item: dict) -> str:
     if isinstance(provenance, dict) and provenance.get("source_type"):
         return str(provenance["source_type"])
     return str(item.get("source_type") or "")
+
+
+def source_scope_sql(
+    column: str, source: str | None, excluded: list[str] | None
+) -> tuple[str, list]:
+    """The same source fence for primary and degraded lexical queries."""
+    sql, params = (f" AND {column} = ?", [source]) if source else ("", [])
+    if excluded:
+        sql += f" AND {column} NOT IN ({','.join('?' for _ in excluded)})"
+        params.extend(excluded)
+    return sql, params
+
+
+def steering_exclusion_sql(steering: Any) -> tuple[str, list[object]]:
+    """`AND relative_path NOT LIKE ?` per `exclusion` rule."""
+    if not steering or not steering.exclusions:
+        return "", []
+    clauses = "".join(
+        " AND COALESCE(artifacts.relative_path, '') NOT LIKE ?" for _ in steering.exclusions
+    )
+    params: list[object] = [f"%{pattern.strip('*').strip('/')}%" for pattern in steering.exclusions]
+    return clauses, params
+
+
+def optional_row_value(row, key: str):
+    """Read an optional column, tolerating a row that lacks it."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None

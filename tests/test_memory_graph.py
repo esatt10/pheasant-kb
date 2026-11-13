@@ -262,13 +262,13 @@ def test_memory_artifacts_are_typed_memory_record(tmp_path: Path) -> None:
                 if attrs.get("source_id") == "agent-memory"
                 and str(attrs.get("relative_path") or "").endswith(".md")
             }
-        assert types == {"memory_record"}
+        assert types == {"artifact_record"}
 
         # And the SQLite row agrees, so a caller reading either sees the same.
         rows = tools.engine.state.rows(
             "SELECT DISTINCT type FROM artifacts WHERE source_id='agent-memory'"
         )
-        assert [row["type"] for row in rows] == ["memory_record"]
+        assert [row["type"] for row in rows] == ["artifact_record"]
     finally:
         tools.engine.close()
 

@@ -49,7 +49,7 @@ def test_failed_snapshot_write_retries_latest_terminal_payload():
         def write(self, payload):
             written.append(payload)
             if len(written) == 1:
-                raise OSError("share unavailable")
+                raise RuntimeError("database temporarily unavailable")
 
     publisher = SnapshotPublisher(Store(), interval=0)
     try:

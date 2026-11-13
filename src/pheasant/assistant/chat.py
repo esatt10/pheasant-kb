@@ -478,6 +478,7 @@ def build_citations(results: list[dict], limit: int) -> list[dict]:
                 # remembered assertion, so a region without agent memory
                 # returns the citation shape it always did.
                 **({"memory": result["memory"]} if result.get("memory") else {}),
+                **({"artifact": result["artifact"]} if result.get("artifact") else {}),
                 "used": False,
             }
         )
@@ -516,6 +517,7 @@ def passages_to_citations(passages: list, limit: int) -> list[dict]:
                 **({"heading_path": passage.heading_path} if passage.heading_path else {}),
                 **({"source_type": passage.source_type} if passage.source_type else {}),
                 **({"memory": passage.memory} if passage.memory else {}),
+                **({"artifact": passage.artifact} if passage.artifact else {}),
                 "used": False,
             }
         )
