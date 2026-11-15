@@ -38,6 +38,8 @@ from pheasant.services.errors import InvalidRequest, ServiceError
 from pheasant.telemetry import usage as metering
 
 MAX_DAYS = 366
+#: A size ceiling is stated in gigabytes and measured in bytes.
+BYTES_PER_GB = 1024**3
 #: People listed by name; the rest are summed as one row, so a very large
 #: region's reply stays a page.
 MAX_PEOPLE = 200
@@ -147,7 +149,7 @@ def _size(context: ServiceContext) -> dict[str, Any]:
         "chunks": one("SELECT COUNT(*) FROM chunks"),
         "indexed_bytes": indexed,
         "limit_gb": float(limit) if limit else None,
-        "limit_used": round(indexed / (float(limit) * 1024**3), 4) if limit else None,
+        "limit_used": round(indexed / (float(limit) * BYTES_PER_GB), 4) if limit else None,
     }
 
 

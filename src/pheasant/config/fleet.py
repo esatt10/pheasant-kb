@@ -31,6 +31,7 @@ class FleetSettings(ModelMixin):
     enabled: bool = False
     #: This stack's slot: unique in the fleet, and fixed for the life of its
     #: data (it is what a claim, an admin list and a usage row are keyed on).
+    #: Enabled with no slot is not part of any fleet: no directory is opened.
     slot: str = ""
     #: The address people reach this stack at.
     url: str = ""
@@ -41,7 +42,3 @@ class FleetSettings(ModelMixin):
     #: A stack that is in use before anybody claims it: the first knowledge
     #: base of a deployment. ``false`` registers as a free slot.
     claimed: bool = False
-
-    def __post_init__(self) -> None:
-        if self.enabled and not str(self.slot).strip():
-            raise ValueError("fleet.enabled needs fleet.slot: this stack's name in the fleet")

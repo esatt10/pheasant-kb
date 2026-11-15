@@ -101,7 +101,7 @@ def open_store(config: Any) -> Any | None:
     """
 
     fleet = getattr(config, "fleet", None)
-    if fleet is None or not fleet.enabled:
+    if fleet is None or not fleet.enabled or not str(fleet.slot).strip():
         return None
     dsn = os.environ.get(str(fleet.dsn_env or ""), "") if not fleet.path else ""
     target = str(fleet.path) if fleet.path else dsn

@@ -148,7 +148,11 @@ class Exclusion:
         return bool(self.ids or self.pairs)
 
     def admits(self, hit: dict) -> bool:
-        if str(hit.get("node_id") or "") in self.ids:
+        # A hit is a document, or a part of one. The graph arm reaches a chunk
+        # or a heading as its own node, which names its file as `artifact_id`
+        # and carries no path: matched on node id and path alone, a passage of
+        # an excluded document was admitted and cited with no file beside it.
+        if {str(hit.get("node_id") or ""), str(hit.get("artifact_id") or "")} & self.ids:
             return False
         return (source_of(hit), path_of(hit)) not in self.pairs
 

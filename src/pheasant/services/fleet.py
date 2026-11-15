@@ -90,7 +90,7 @@ class FleetOperatorRequired(ServiceError):
 
 def _store(context: ServiceContext) -> Any:
     fleet = getattr(context.config, "fleet", None)
-    if fleet is None or not fleet.enabled:
+    if fleet is None or not fleet.enabled or not str(fleet.slot).strip():
         raise FleetNotEnabled()
     try:
         store = fleet_store.open_store(context.config)
@@ -210,7 +210,7 @@ def describe(context: ServiceContext) -> dict[str, Any]:
     """The fleet as the caller may see it: knowledge bases, capacity, requests."""
 
     require_permission("security.manage")
-    from pheasant.services.usage import is_operator
+    from pheasant.services.usage import BYTES_PER_GB, is_operator
 
     config = context.config
     store = _store(context)
@@ -227,7 +227,7 @@ def describe(context: ServiceContext) -> dict[str, Any]:
         if not operator and not (claimed and (slot["slot"] == mine or _administers(slot, caller))):
             continue
         used = slot.get("indexed_bytes")
-        limit = slot.get("limit_gb")
+        ceiling_gb = slot.get("limit_gb")
         listed.append(
             {
                 "slot": slot["slot"],
@@ -244,8 +244,10 @@ def describe(context: ServiceContext) -> dict[str, Any]:
                 "size": {
                     "documents": slot.get("documents"),
                     "indexed_bytes": used,
-                    "limit_gb": limit,
-                    "limit_used": round(used / (limit * 1024**3), 4) if used and limit else None,
+                    "limit_gb": ceiling_gb,
+                    "limit_used": round(used / (ceiling_gb * BYTES_PER_GB), 4)
+                    if used and ceiling_gb
+                    else None,
                 },
                 "usage": usage.get(str(slot["kb_id"])) if operator else None,
             }
