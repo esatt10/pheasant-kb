@@ -382,6 +382,12 @@ class StorageSettings(ModelMixin):
     graph_path: Path | None = None
     manifest_path: Path | None = None
     max_state_size_gb: float = 10
+    #: A ceiling on indexed content, in GB (the documents' sizes, summed).
+    #: At it the region keeps what it has and takes no more: syncs that add
+    #: content are skipped and submissions refused (KNOWLEDGE_BASE_FULL)
+    #: until content is removed or the limit raised. ``None``: no ceiling.
+    #: Not ``max_state_size_gb``, which bounds snapshot history by eviction.
+    knowledge_base_limit_gb: float | None = None
 
     # -- Phase 35.2: where state actually lives -------------------------------
     #: ``sqlite`` (default) or ``postgres``. SQLite is a file and permits one

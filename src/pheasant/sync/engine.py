@@ -37,6 +37,7 @@ from pheasant.ingestion.walk import (
     aggregate_depth_counts,
     walk_source,
 )
+from pheasant.persistence import size_limit
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
@@ -1986,6 +1987,8 @@ class SyncEngine:
             # not a failure, so a queued task for it finishes instead of retrying.
             logger.info("%s: sync skipped, its pipeline was deleted", source_name)
             return SyncResult(source_name, 0, 0, 0, 0, "skipped", {"reason": "pipeline deleted"})
+        if full := size_limit.blocks(self.config, self.state, mode, source_name):
+            return SyncResult(source_name, 0, 0, 0, 0, "skipped", full)
         self._ensure_modal_handlers(source)
         # A container restart must never re-index by itself, but a config edit
         # that changes what the content pipeline produces must. Compare what

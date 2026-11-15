@@ -51,7 +51,7 @@ def _config(tmp_path: Path, slot: str, *, claimed: bool, fleet: bool = True) -> 
             "exports_path": str(root / "exports"),
         },
         "observability": {"usage": True},
-        "storage": {"max_state_size_gb": 50},
+        "storage": {"knowledge_base_limit_gb": 50},
         "models": {
             "chat": [{"id": "m", "provider": "azure", "model": "m", "input_price": 2.0}],
         },

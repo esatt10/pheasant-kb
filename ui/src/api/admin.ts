@@ -94,6 +94,8 @@ export interface UsageReport {
     indexed_bytes: number;
     limit_gb: number | null;
     limit_used: number | null;
+    /** At its limit: syncs that add content are skipped until there is room. */
+    full?: boolean;
   };
 }
 
@@ -114,6 +116,7 @@ export interface FleetKnowledgeBase {
     indexed_bytes: number | null;
     limit_gb: number | null;
     limit_used: number | null;
+    full?: boolean;
   };
   /** The operator's view only: the last thirty days. */
   usage: {

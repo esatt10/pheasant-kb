@@ -187,6 +187,7 @@ function KnowledgeBases({ data }: { data: FleetReport }) {
                 {kb.size.limit_gb ? (
                   <div className="muted small">
                     {Math.round((kb.size.limit_used ?? 0) * 100)}% of {kb.size.limit_gb} GB
+                    {kb.size.full ? " · full" : ""}
                   </div>
                 ) : null}
               </td>

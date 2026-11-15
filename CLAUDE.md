@@ -250,7 +250,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 216 pytest modules, offline by design
+└── tests/                     ← 217 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1637,6 +1637,18 @@ operator provisions, the users decide.
   record the operator answers: nothing in pheasant provisions. Each stack
   mirrors its usage totals into the directory, which is how the operator
   reads the whole fleet at once. `tests/test_fleet.py`.
+- **A knowledge base can have a size limit, and one check holds it**
+  (`storage.knowledge_base_limit_gb`, unset by default;
+  `persistence/size_limit.py`, `services/size_guard.py`). The measure is
+  indexed content (`SUM(artifacts.size_bytes)`), not bytes on disk: Postgres
+  keeps a deleted row's space, so a disk limit could be reached and never
+  left. At it, `SyncEngine._sync_source` skips `incremental` and `full`
+  (`reason: knowledge base full`; skipped, so a queued task finishes rather
+  than retrying), which is the one place every way of starting a sync passes;
+  `submit` and quick add refuse with `KNOWLEDGE_BASE_FULL` (507) and say to
+  remove content or file a `storage` capacity request. Nothing is evicted. It
+  is not `storage.max_state_size_gb`, the snapshot-history cap the first cut
+  of the usage page reported as the limit. `tests/test_knowledge_base_limit.py`.
 - **The Admin page is the same services again** (`ui/src/pages/AdminPage.tsx`,
   `ui/src/admin/`): Access, Models, Usage, Knowledge bases. Each tab offers
   only what the server says the caller may do.

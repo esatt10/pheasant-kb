@@ -433,6 +433,7 @@ unchanged either way.
 | `graph_path` | absolute path | `/state/graphs` | Directory for graph snapshots. |
 | `manifest_path` | absolute path | `/state/manifests` | Directory for source manifests. Connector checkpoints are stored in SQLite. |
 | `max_state_size_gb` | integer | `10` | Soft state budget for cleanup/policy logic. |
+| `knowledge_base_limit_gb` | number | none | A ceiling on indexed content: the sizes of the documents held, summed. At it, a sync that would add content is skipped (`reason: knowledge base full`) and submitted content is refused with `507 KNOWLEDGE_BASE_FULL`; nothing held is evicted. Room returns when content is removed or the limit is raised. Unset: no ceiling. See [Hosted regions](how-to/hosted-regions.md#a-size-limit). |
 | `compression.enabled` | bool | `true` (example) | Optional compression toggle for persisted artifacts. |
 | `compression.algorithm` | string | `zstd` (example) | Compression codec name. |
 | `retention.keep_snapshots` | integer | `10` (example) | Snapshot retention count target. |

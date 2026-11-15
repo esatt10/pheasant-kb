@@ -30,7 +30,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pheasant.persistence import access_grants, usage_ledger
+from pheasant.persistence import access_grants, size_limit, usage_ledger
 from pheasant.security.authorization import require_permission
 from pheasant.security.identity import current_identity
 from pheasant.services import ServiceContext
@@ -38,8 +38,6 @@ from pheasant.services.errors import InvalidRequest, ServiceError
 from pheasant.telemetry import usage as metering
 
 MAX_DAYS = 366
-#: A size ceiling is stated in gigabytes and measured in bytes.
-BYTES_PER_GB = 1024**3
 #: People listed by name; the rest are summed as one row, so a very large
 #: region's reply stays a page.
 MAX_PEOPLE = 200
@@ -141,15 +139,11 @@ def _size(context: ServiceContext) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - a size is a nicety; usage must still answer
             return 0
 
-    indexed = one("SELECT COALESCE(SUM(size_bytes), 0) FROM artifacts")
-    limit = getattr(context.config.storage, "max_state_size_gb", None)
     return {
         "sources": one("SELECT COUNT(*) FROM sources WHERE enabled=1"),
         "documents": one("SELECT COUNT(*) FROM artifacts"),
         "chunks": one("SELECT COUNT(*) FROM chunks"),
-        "indexed_bytes": indexed,
-        "limit_gb": float(limit) if limit else None,
-        "limit_used": round(indexed / (float(limit) * BYTES_PER_GB), 4) if limit else None,
+        **size_limit.describe(context.config, context.state),
     }
 
 

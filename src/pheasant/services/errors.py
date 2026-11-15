@@ -326,6 +326,28 @@ class DecisionsUnavailable(ServiceError):
         self.reason = str(reason)
 
 
+class KnowledgeBaseFull(ServiceError):
+    """The knowledge base is at the size limit its operator set.
+
+    Not retryable: sending the same content again changes nothing. What does
+    is removing content, or the operator raising the limit -- which is theirs
+    to decide, so the message says how to ask.
+    """
+
+    status = 507
+    code = "KNOWLEDGE_BASE_FULL"
+
+    def __init__(self, indexed_bytes: int, limit_gb: float) -> None:
+        super().__init__(
+            f"This knowledge base holds {indexed_bytes / 1024**3:.2f} GB of indexed content, at "
+            f"its {limit_gb:g} GB limit, so nothing more is added. Remove a source or documents "
+            "to make room, or ask the operator for more (request_capacity with kind 'storage', "
+            "POST /fleet/requests)."
+        )
+        self.indexed_bytes = indexed_bytes
+        self.limit_gb = limit_gb
+
+
 class LandingZoneUnwritable(ServiceError):
     """Submitted bytes have nowhere to land in this deployment.
 

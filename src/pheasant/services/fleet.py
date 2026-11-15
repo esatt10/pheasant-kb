@@ -35,7 +35,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pheasant.persistence import fleet_store
+from pheasant.persistence import fleet_store, size_limit
 from pheasant.security.authorization import require_permission
 from pheasant.security.identity import current_identity
 from pheasant.services import ServiceContext
@@ -112,7 +112,7 @@ def register(config: Any, state: Any = None) -> bool:
         store = fleet_store.open_store(config)
         if store is None:
             return False
-        limit = getattr(config.storage, "max_state_size_gb", None)
+        limit = size_limit.limit_gb(config)
         fleet_store.register(
             store,
             slot=str(fleet.slot),
@@ -121,7 +121,7 @@ def register(config: Any, state: Any = None) -> bool:
             claimed=bool(fleet.claimed),
             name=config.pheasant.description or config.pheasant.name,
             version=__version__,
-            limit_gb=float(limit) if limit else None,
+            limit_gb=limit,
         )
         if state is not None:
             _beat(store, config, state)
@@ -210,7 +210,7 @@ def describe(context: ServiceContext) -> dict[str, Any]:
     """The fleet as the caller may see it: knowledge bases, capacity, requests."""
 
     require_permission("security.manage")
-    from pheasant.services.usage import BYTES_PER_GB, is_operator
+    from pheasant.services.usage import is_operator
 
     config = context.config
     store = _store(context)
@@ -245,9 +245,12 @@ def describe(context: ServiceContext) -> dict[str, Any]:
                     "documents": slot.get("documents"),
                     "indexed_bytes": used,
                     "limit_gb": ceiling_gb,
-                    "limit_used": round(used / (ceiling_gb * BYTES_PER_GB), 4)
+                    "limit_used": round(used / (ceiling_gb * size_limit.BYTES_PER_GB), 4)
                     if used and ceiling_gb
                     else None,
+                    "full": bool(
+                        used and ceiling_gb and used >= ceiling_gb * size_limit.BYTES_PER_GB
+                    ),
                 },
                 "usage": usage.get(str(slot["kb_id"])) if operator else None,
             }

@@ -197,7 +197,7 @@ tab) reads them back for an Admin:
 - **Response time**: answer and search p50 and p95, read off a fixed histogram
   (each figure is the upper bound of the range the percentile falls in).
 - **Size**: documents, chunks and indexed bytes against
-  `storage.max_state_size_gb`.
+  `storage.knowledge_base_limit_gb`, and whether the knowledge base is full.
 
 Cost is the operator's. It is shown to the local operator, the shared token and
 the admins the deployment pinned (`role_assignments`); an Admin a customer
@@ -206,6 +206,37 @@ granted sees the same activity and tokens with `cost: null`.
 Counting adds no database write to a request: totals are held in memory and
 written in one additive statement at most every 30 seconds, on shutdown, and
 before a read. A process that is killed loses at most that interval.
+
+## A size limit
+
+```yaml
+storage:
+  knowledge_base_limit_gb: 50
+```
+
+The limit is on **indexed content**: the sizes of the documents the knowledge
+base holds, summed. It is the figure a person adding content can reason about,
+and it falls the moment a document is removed. Unset, there is no limit.
+
+At the limit the knowledge base keeps everything it has and takes no more:
+
+| What | Happens |
+| --- | --- |
+| A sync that could add content (`incremental`, `full`), however it was started | Skipped, with `reason: knowledge base full`. Not a failure, so nothing retries it |
+| `validate_only` and `repair` | Run: they add nothing |
+| Submitted documents, the drop zone, quick add | Refused: `507 KNOWLEDGE_BASE_FULL`, with how to make room |
+| Search, answers, removing a source, archiving documents | Unchanged |
+
+A sync that is already running finishes what it began, so the limit can be
+passed by one sync's worth and no more. Room comes back two ways: an Admin
+removes a source or archives documents, or asks the operator for more
+(`request_capacity` with `kind: storage`), who raises the setting. While a
+knowledge base is full, a file deleted from a synced folder is not noticed
+until there is room again, because noticing it is a sync; archive the document
+instead.
+
+It is not `storage.max_state_size_gb`, which bounds the graph's snapshot
+history by evicting the oldest snapshot.
 
 ## Several knowledge bases
 

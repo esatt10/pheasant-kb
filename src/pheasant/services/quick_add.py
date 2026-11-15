@@ -24,6 +24,7 @@ from typing import Any
 
 from pheasant.services import ServiceContext
 from pheasant.services.errors import ConnectionNotFound, InvalidRequest
+from pheasant.services.size_guard import require_room
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ def add_targets(context: ServiceContext, request: AddTargetRequest) -> dict[str,
     target_text = (request.target or "").strip()
     if not target_text:
         raise InvalidRequest("name something to add: a path, a URL, or gdrive:")
+    require_room(context)
     connection = (request.connection or "").strip() or None
     if connection:
         from pheasant.connections import vault

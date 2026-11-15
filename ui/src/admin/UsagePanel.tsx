@@ -106,6 +106,12 @@ export function UsagePanel() {
           }
         />
       </div>
+      {size.full ? (
+        <div className="banner banner--warn">
+          This knowledge base is at its {size.limit_gb} GB limit. Syncs that add content are
+          skipped until documents or a source are removed, or the operator raises the limit.
+        </div>
+      ) : null}
       {data.unpriced_models.length ? (
         <div className="banner banner--warn">
           The cost total leaves out {data.unpriced_models.join(", ")}: no price is stated for{" "}
