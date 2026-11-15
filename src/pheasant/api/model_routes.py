@@ -1,4 +1,5 @@
-"""The model catalog over HTTP: ``GET /models`` and ``PUT /models/embedding``.
+"""The model catalog over HTTP: ``GET /models`` and ``PUT /models/embedding``,
+and what the models were used for: ``GET /usage``.
 
 One router per plane. Each handler calls `services.models`, which MCP
 ``list_models`` / ``select_embedding_model`` use too. Picking an answering
@@ -34,3 +35,13 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
         the index is back in one space."""
 
         return models.select_embedding(services, body.embedding)
+
+    @app.get("/usage")
+    def usage(days: int = 30) -> dict:
+        """Tokens by model, questions, searches, people, latency and size over
+        the last ``days`` days (Admin). Cost, at the prices the operator stated
+        in the catalog, is shown to the operator only."""
+
+        from pheasant.services import usage as usage_service
+
+        return usage_service.describe(services, days=days)

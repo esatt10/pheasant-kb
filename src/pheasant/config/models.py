@@ -46,6 +46,12 @@ class ChatModelSettings(ModelMixin):
     description: str = ""
     #: Overrides ``assistant.max_output_tokens`` for this model when set.
     max_output_tokens: int | None = None
+    #: What the operator pays per million tokens, in ``models.currency``:
+    #: stated, never looked up. Unset, usage reports this model's tokens and
+    #: no cost. ``cached_input_price`` defaults to ``input_price``.
+    input_price: float | None = None
+    output_price: float | None = None
+    cached_input_price: float | None = None
 
 
 @dataclass
@@ -69,6 +75,9 @@ class DecisionModelSettings(ModelMixin):
     sufficient_threshold: float | None = None
     relevant_threshold: float | None = None
     accept_threshold: float | None = None
+    input_price: float | None = None
+    output_price: float | None = None
+    cached_input_price: float | None = None
 
 
 @dataclass
@@ -84,6 +93,7 @@ class EmbeddingModelSettings(ModelMixin):
     api_key_env: str | None = None
     dimensions: int | None = None
     description: str = ""
+    input_price: float | None = None
 
 
 @dataclass
@@ -103,6 +113,8 @@ class ModelsSettings(ModelMixin):
     #: Whether a caller may pick per request. Off, everyone gets the defaults
     #: and naming a model is refused.
     selectable: bool = True
+    #: The currency every price above is stated in. A label, not a conversion.
+    currency: str = "USD"
 
     def __post_init__(self) -> None:
         for kind, entries, default in (

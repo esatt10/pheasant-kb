@@ -31,6 +31,12 @@ class ModelTools:
 
         return models.select_embedding(self.services, embedding)
 
+    def get_usage(self, knowledge_base: str, days: int = 30) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import usage
+
+        return usage.describe(self.services, days=days)
+
 
 def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
     @mcp.tool()
@@ -63,3 +69,20 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         search is partial and answers lean on the text and graph arms."""
 
         return tools.select_embedding_model(knowledge_base, embedding)
+
+    @mcp.tool()
+    @anticipated
+    def get_usage(knowledge_base: str, days: int = 30) -> dict:
+        """What the region was used for over the last ``days`` days (Admin only).
+
+        ``totals`` and ``by_day`` count questions, searches, model calls and
+        tokens; ``by_model`` splits tokens by model, ``people`` and
+        ``by_organization`` by who asked, ``by_channel`` by surface.
+        ``latency`` gives answer and search p50 / p95 in milliseconds (bucket
+        upper bounds, not exact). ``size`` is documents, chunks and indexed
+        bytes against the region's ceiling. ``cost`` is at the prices the
+        operator stated in the model catalog and is null unless you operate
+        the region; ``unpriced_models`` names models whose tokens are counted
+        with no price. USAGE_NOT_ENABLED means the region keeps no totals."""
+
+        return tools.get_usage(knowledge_base, days)

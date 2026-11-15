@@ -96,6 +96,7 @@ from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
 from pheasant.sync.vanished import prune_vanished
 from pheasant.telemetry.sync_trace import current as _current_sync_trace
+from pheasant.telemetry.usage import METER as usage_meter
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,7 @@ class SyncEngine:
         self.paths = paths or StatePaths.from_config(config)
         self.paths.ensure()
         self.state = state or StateStore.from_config(self.config, self.paths.sqlite)
+        usage_meter.bind_for(config, self.state)  # metering, wherever an engine runs
         self.state.migrate()
         # Every secret this process reads (a git token, a model key, a Drive
         # sign-in) can now come from a connection in this store.
@@ -345,6 +347,7 @@ class SyncEngine:
                 self.vectors.flush()
             except Exception as exc:  # pragma: no cover - shutdown must not raise
                 logger.warning("Could not flush vector store on shutdown: %s", exc)
+        usage_meter.unbind(self.state)
         self.lease.release()
         from pheasant.sync.history_publisher import close as close_history
 

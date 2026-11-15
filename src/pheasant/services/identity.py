@@ -186,7 +186,7 @@ class IdentityService(DelegatedAccess):
             "delegated_access": self.delegated,
             # Whether a person may sign in from an organization other than the
             # operator's. Which ones is not said to a caller with no credential.
-            "organizations": bool(self.delegated and self.grants().orgs),
+            "organizations": bool(self.admitted_tenants()),
         }
 
     def api_scope(self) -> str:
@@ -353,7 +353,7 @@ class IdentityService(DelegatedAccess):
 
         self._require_entra()
         tenant = self.settings.tenant_id
-        orgs = self.grants().orgs if self.delegated else {}
+        orgs = self.admitted_tenants()
         if org:
             tenant = self.organization_tenant(org)
         elif orgs:

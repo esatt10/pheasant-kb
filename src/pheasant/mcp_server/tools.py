@@ -26,6 +26,7 @@ from pheasant.mcp_server.access_tools import AccessTools
 from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.connection_tools import ConnectionTools
+from pheasant.mcp_server.fleet_tools import FleetTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
 from pheasant.mcp_server.model_tools import ModelTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
@@ -93,6 +94,7 @@ class PheasantTools(
     ConnectionTools,
     AccessTools,
     ModelTools,
+    FleetTools,
 ):
     def __init__(self, config: PheasantConfig, *, vector: Any = None):
         self.config = config

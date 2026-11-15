@@ -168,8 +168,79 @@ vector; `GET /models` reports `embedding.state` as `reindex_pending` until it
 is `ready`. Until then semantic search is partial and answers lean on the text
 and graph arms. Budget one embedding call per chunk.
 
-## What this does not do yet
+## What it was used for
 
-One region is still one knowledge base. Several knowledge bases for one
-customer group, sharing an admin and the operator's resources, are several
-regions; nothing here provisions one from inside another.
+```yaml
+observability:
+  usage: true
+models:
+  currency: USD
+  chat:
+    - id: claude-opus-5-5
+      # ...
+      input_price: 4          # per million tokens: stated by the operator,
+      output_price: 20        # never looked up
+      cached_input_price: 0.2
+```
+
+With `observability.usage` the region keeps daily totals: tokens by model
+(input, cached input, output), questions, searches, who asked and on which
+surface, and how long answers and searches took. Totals only, never a question
+or an answer. `GET /usage?days=30` (MCP `get_usage`, the Admin page's Usage
+tab) reads them back for an Admin:
+
+- **Activity**: questions, searches and active people, by day, by person and
+  by organization.
+- **Tokens and cost**: by model. Cost is tokens times the prices stated in the
+  catalog. A model with no stated price is counted and listed under
+  `unpriced_models`, so a total is never quietly short.
+- **Response time**: answer and search p50 and p95, read off a fixed histogram
+  (each figure is the upper bound of the range the percentile falls in).
+- **Size**: documents, chunks and indexed bytes against
+  `storage.max_state_size_gb`.
+
+Cost is the operator's. It is shown to the local operator, the shared token and
+the admins the deployment pinned (`role_assignments`); an Admin a customer
+granted sees the same activity and tokens with `cost: null`.
+
+Counting adds no database write to a request: totals are held in memory and
+written in one additive statement at most every 30 seconds, on shutdown, and
+before a read. A process that is killed loses at most that interval.
+
+## Several knowledge bases
+
+One region is one knowledge base, and stays so. A customer group that needs
+several gets several small stacks on the operator's shared resources, tied
+together by a **fleet directory** (a few tables in one database every stack can
+reach).
+
+```yaml
+fleet:
+  enabled: true
+  slot: kb-02                     # this stack's name in the fleet
+  url: https://kb-02.example.com
+  dsn_env: PHEASANT_FLEET_DATABASE_URL
+  claimed: false                  # true for a stack already in use
+```
+
+| Who | Does what | What it costs |
+| --- | --- | --- |
+| The operator | Provisions *slots*: stacks with nothing in them | A deployment. Idle slots run nothing |
+| An Admin of any knowledge base | Claims a free slot for a new one (`POST /fleet/knowledge-bases`, MCP `create_knowledge_base`, the Admin page) | Nothing new: one row changes |
+| An Admin | Files a capacity request when no slot is free, or one is filling up (`POST /fleet/requests`, MCP `request_capacity`) | Nothing: it is a record of an ask |
+| The operator | Answers the request (`PATCH /fleet/requests/{id}`): approved, declined, fulfilled | Whatever they then choose to provision |
+
+Whoever claims a slot becomes the new knowledge base's Admin, with anyone they
+name from their own organization. That is all two knowledge bases share: each
+has its own sources, documents, Contributors and Readers, granted inside it.
+`409 FLEET_NO_CAPACITY` is the answer when every slot is in use. Nothing in the
+region can add one.
+
+`GET /fleet` (MCP `list_fleet`) shows an Admin the knowledge bases they
+administer and how many slots are free. The operator also sees every slot and
+each knowledge base's last thirty days: questions, people, tokens, cost and
+answer p95, because every stack mirrors its usage totals into the directory.
+
+Stacks that share a database server share its login: they are kept apart by
+pheasant, not by database permissions. Releasing a slot is not automated,
+because its data has to be removed first.

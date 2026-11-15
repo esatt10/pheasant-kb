@@ -358,6 +358,8 @@ See [Vector self-search](../how-to/vector-search.md).
 | GET | `/models` | The answering, judgement and embedding models offered, the default of each, and the embedding in force (`embedding.state`: `ready` or `reindex_pending`). Never an endpoint or a variable name. |
 | PUT | `/models/embedding` | Switch the region's embedding model (application Admin). Every chunk already indexed is re-embedded; no source is re-read. |
 
+| GET | `/usage` | With `observability.usage`: tokens by model, questions, searches, people, organizations, surfaces, answer and search p50/p95, and size, over `?days=` (Admin). Cost, at the prices the operator stated, is `null` unless the caller operates the region. |
+
 `POST /assistant/chat` and its stream take `model` and `decision_model` (ids
 from `GET /models`); the answer's `models` reports which ran.
 
@@ -372,6 +374,17 @@ With `security.entra.delegated_access`; `404 ACCESS_NOT_DELEGATED` without.
 | DELETE | `/access/grants/{grant_id}` | Remove a grant; the person's credentials stop within seconds. |
 | POST | `/access/organizations` | Connect a customer's Microsoft Entra tenant (Admin). Returns its admin-consent and sign-in links. |
 | DELETE | `/access/organizations/{tenant_id}` | Disconnect it and remove its people's grants (Admin). |
+
+## Fleet (several knowledge bases)
+
+With `fleet.enabled`; `404 FLEET_NOT_ENABLED` without. All Admin.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/fleet` | The knowledge bases the caller administers, free slots, and capacity requests. The operator sees every slot and each one's last thirty days of usage. |
+| POST | `/fleet/knowledge-bases` | Claim a free slot for a new knowledge base; the caller and `admins` become its Admins. `409 FLEET_NO_CAPACITY` when none is free. |
+| POST | `/fleet/requests` | Ask the operator for more slots (`kind: slots`) or more room here (`kind: storage`). Provisions nothing. |
+| PATCH | `/fleet/requests/{id}` | The operator's answer: `approved`, `declined` or `fulfilled` (`403 FLEET_OPERATOR_REQUIRED` otherwise). |
 
 `GET /auth/login?org=<tenant id or domain>` signs in from a connected
 organization. See [Host a region for someone else](../how-to/hosted-regions.md).

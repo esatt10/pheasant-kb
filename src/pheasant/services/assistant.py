@@ -244,6 +244,10 @@ def answer(
     # The chosen models as a view of the config: every workflow reads
     # `config.assistant`, so none of them needs to know one was picked.
     config = models.config_for(context.config, request.model, request.decision_model)
+    from pheasant.telemetry import usage as metering
+
+    answered = False
+    surface = metering.enter_channel(request.channel or "api")
     try:
         from pheasant.search.vector_store import collect_query_embedding_metrics
 
@@ -286,6 +290,10 @@ def answer(
                 exclude_sources=exclude_sources,
                 intent=request.intent,
             )
+            from pheasant.assistant.citation_targets import locate_all
+
+            # After the answer exists: names where each citation can be opened.
+            locate_all(payload)
             payload["query_embedding"] = embedding_metrics.as_dict()
             payload["models"] = models.chosen(context.config, request.model, request.decision_model)
             # A composed answer is kept as an artifact the moment it exists,
@@ -304,6 +312,7 @@ def answer(
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000
+            answered = True
             return payload
     except Exception as exc:
         from pheasant.request_budget import DeadlineExceeded
@@ -312,6 +321,8 @@ def answer(
             raise AssistantDeadline() from exc
         raise
     finally:
+        metering.METER.operation(metering.ANSWER, time.perf_counter() - server_started, ok=answered)
+        metering.leave_channel(surface)
         if owns_permit:
             owned_permit.release()
 
@@ -438,13 +449,17 @@ def visualize(
     from pheasant.assistant.routing import record_visual
 
     record_visual(visual)
-    return {
-        "request": text,
-        "visual": visual,
-        "citations": citations,
-        "facts": facts,
-        "figures": figures,
-    }
+    from pheasant.assistant.citation_targets import locate_all
+
+    return locate_all(
+        {
+            "request": text,
+            "visual": visual,
+            "citations": citations,
+            "facts": facts,
+            "figures": figures,
+        }
+    )
 
 
 def _owning_artifact(context: ServiceContext, node_id: str) -> tuple[str, str | None]:

@@ -29,6 +29,7 @@ from pheasant.config.exclusions import (
     SECRET_EXCLUDES as SECRET_EXCLUDES,
 )
 from pheasant.config.flagship import with_table_defaults
+from pheasant.config.fleet import FleetSettings
 from pheasant.config.identity import ApiAuthSettings, EntraSettings, ServiceIdentitySettings
 from pheasant.config.model import ModelMixin
 from pheasant.config.models import ModelsSettings
@@ -1479,6 +1480,9 @@ class ObservabilitySettings(ModelMixin):
     sample_ratio: float = 1.0
     #: Bounded UI navigation/action spans, without DOM text or form values.
     ui_events: bool = False
+    #: Keep daily totals of tokens by model and caller, questions, searches and
+    #: answer latency (`telemetry/usage.py`; `GET /usage`). Totals only.
+    usage: bool = False
 
     interactions: InteractionSettings = field(default_factory=InteractionSettings)
 
@@ -1967,6 +1971,7 @@ class PheasantConfig(ModelMixin):
     readiness: ReadinessSettings = field(default_factory=ReadinessSettings)
     artifacts: ArtifactsSettings = field(default_factory=ArtifactsSettings)
     models: ModelsSettings = field(default_factory=ModelsSettings)
+    fleet: FleetSettings = field(default_factory=FleetSettings)
     sources: list[SourceConfig] = field(default_factory=list)
 
     def __post_init__(self) -> None:

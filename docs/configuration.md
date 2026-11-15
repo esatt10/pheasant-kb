@@ -1233,11 +1233,33 @@ are the only models and nothing here is consulted.
 | `embeddings` | list | `[]` | Embedding models the region can index with: `id`, `provider`, `model`, `base_url`, `api_key_env`, `dimensions`. |
 | `default_embedding` | string \| null | `null` | What a new region indexes with. A running region's choice is a row in `/state`, changed with `PUT /models/embedding`. |
 | `selectable` | bool | `true` | Whether a caller may pick per question. Off, naming anything but the default is refused. |
+| `currency` | string | `USD` | The currency the prices below are stated in. A label, not a conversion. |
+
+Every entry also takes `input_price`, `output_price` and `cached_input_price` (per
+million tokens; embeddings take `input_price` only). They are what the operator
+states they pay, never looked up, and are what `GET /usage` reports cost from.
 
 Ids must be unique within a list and a default must be one of them; a config
 that breaks either does not load. An entry on an Azure AI Foundry host with no
 key is called with the process's managed identity. See
 [Host a region for someone else](how-to/hosted-regions.md).
+
+---
+
+## `fleet` (several knowledge bases side by side, optional)
+
+One region is one knowledge base. A fleet is several stacks an operator
+provisioned on shared resources, tied together by a directory database.
+See [Host a region for someone else](how-to/hosted-regions.md).
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | Off, no second database is opened and nothing here is read. |
+| `slot` | string | `""` | This stack's name in the fleet. Required when enabled; fixed for the life of its data. |
+| `url` | string | `""` | The address people reach this stack at. Defaults to `security.entra.public_url`. |
+| `dsn_env` | string | `PHEASANT_FLEET_DATABASE_URL` | The *name* of the variable holding the directory's Postgres DSN. |
+| `path` | path \| null | `null` | A SQLite file for the directory instead (one host, or a test). |
+| `claimed` | bool | `false` | `true` for a stack already in use, such as a deployment's first knowledge base. `false` registers it as a free slot an Admin can claim. |
 
 ---
 
@@ -1355,6 +1377,12 @@ attached — `pytest` stays network-free by construction rather than by mocking.
 | `interactions.queue.nats_stream` | string | `PHEASANT_LOGS` | JetStream stream name. |
 | `interactions.queue.nats_subject` | string | `pheasant.logs.batches` | JetStream subject. |
 | `interactions.queue.nats_durable` | string | `pheasant-loggers` | Durable consumer name. |
+
+### `observability.usage`
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `usage` | bool | `false` | Keep daily totals of tokens by model and caller, questions, searches and answer latency (`usage_daily`; `GET /usage`). Totals only. Written at most every 30 seconds, never on a request. |
 
 ### What one interaction row holds
 

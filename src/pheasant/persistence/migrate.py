@@ -141,6 +141,9 @@ TABLE_ORDER = (
     # Who was granted access while the region ran. Dropping it would lock every
     # customer user out of the migrated region; only Terraform's admins remain.
     "access_grants",
+    # What the region spent, by day: the operator's record of usage, which
+    # nothing can recount once the calls are in the past.
+    "usage_daily",
 )
 
 #: Core tables deliberately left behind, and why.

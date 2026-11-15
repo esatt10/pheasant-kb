@@ -208,6 +208,9 @@ pheasant-kb/
 │   │                            identity_delegation (a grant as a role on a
 │   │                            request), models (the catalog: pick per
 │   │                            question, switch the embedding model),
+│   │                            usage (tokens, activity, latency and cost for
+│   │                            the operator), fleet (claim a slot for a new
+│   │                            knowledge base, capacity requests),
 │   │                            quick_add (one field to sources, for the UI's
 │   │                            Add box and MCP add_source)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
@@ -247,7 +250,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 213 pytest modules, offline by design
+└── tests/                     ← 216 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1608,6 +1611,44 @@ operator provisions, the users decide.
   remembering what was applied: the first version remembered, and the indexer
   noticing first left the same process's searcher embedding queries with the
   old model. `tests/test_model_catalog.py`.
+- **Usage is totals, counted where it happens** (`observability.usage`;
+  `telemetry/usage.py`, `persistence/usage_ledger.py`, table `usage_daily`;
+  `GET /usage`, MCP `get_usage`). Every reported model call is counted at the
+  one place its wire reads the provider's `usage` (`providers._record_usage`,
+  the embedding client), an answer or search with its duration in a fixed
+  histogram, each attributed to the verified caller. In memory, flushed as one
+  additive upsert at most every 30 s (and on shutdown and before a read): no
+  write on a request, and two replicas flushing one key both land. Stored
+  input is always the part *not* served from cache, because OpenAI's figure
+  contains its cached tokens and Anthropic's does not. Cost is tokens times
+  prices the operator *stated* in the catalog; a model with none is named, and
+  cost is withheld from an Admin a customer granted (`usage.is_operator`).
+  The engine binds the meter, so a sync child's embeddings count too.
+  `tests/test_usage_metering.py`.
+- **Several knowledge bases are several regions with a directory**
+  (`fleet.*`; `persistence/fleet_store.py`, `services/fleet.py`; `/fleet*`,
+  MCP `list_fleet` / `create_knowledge_base` / `request_capacity` /
+  `resolve_capacity_request`). The operator provisions *slots*; an Admin
+  claims a free one (one conditional `UPDATE` whose `status='free'` the
+  winner's write falsifies), becoming Admin of the new knowledge base, whose
+  Contributors and Readers are its own. The claimed stack learns its admins
+  from the directory (`identity_delegation._fleet_role`) and admits their
+  tenant. No free slot is `FLEET_NO_CAPACITY` and a capacity *request*, a
+  record the operator answers: nothing in pheasant provisions. Each stack
+  mirrors its usage totals into the directory, which is how the operator
+  reads the whole fleet at once. `tests/test_fleet.py`.
+- **The Admin page is the same services again** (`ui/src/pages/AdminPage.tsx`,
+  `ui/src/admin/`): Access, Models, Usage, Knowledge bases. Each tab offers
+  only what the server says the caller may do.
+
+**Every cited passage can be opened where it is**
+(`assistant/citation_targets.py`). A passage reached through the graph arm is
+cited by its chunk *node* and carried neither `chunk_id` nor `relative_path`,
+so its chip opened nothing and switched the panel off the document the reader
+had open. `locate` fills both from the chunk's stable id, on the finished
+answer only, so nothing retrieved or ranked moves. Found by clicking each chip
+of one answer in a browser: the first worked, the next two did not.
+`tests/test_citation_targets.py`.
 
 ### Retrieval telemetry
 

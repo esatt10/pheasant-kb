@@ -238,7 +238,13 @@ def _tenant(context: ServiceContext, settings: Any, caller: dict[str, Any], name
             tenant = next((t for t in orgs.orgs if t.lower() == wanted), "")
             if not tenant:
                 raise OrganizationNotConnected(str(named))
-    if tenant != settings.tenant_id and tenant not in orgs.orgs:
+    from pheasant.persistence import fleet_store
+
+    # A knowledge base's own admins may come from a tenant nobody "connected"
+    # here: the fleet claim that made them admins admits it.
+    if tenant != settings.tenant_id and tenant not in (
+        set(orgs.orgs) | fleet_store.admin_tenants(context.config)
+    ):
         raise OrganizationNotConnected(tenant)
     if caller["role"] != "Admin" and tenant != caller["tenant_id"]:
         raise AccessRoleNotGrantable("a Contributor grants access only in their own organization")

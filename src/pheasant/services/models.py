@@ -73,6 +73,8 @@ def _usable(entry: Any, env: dict[str, str], fallback_env: str | None) -> bool:
     from pheasant import foundry
     from pheasant.security import entra
 
+    if str(getattr(entry, "provider", "")).lower() == "stub":
+        return True  # the offline embedder asks nobody
     name = entry.api_key_env or fallback_env
     if name and env.get(str(name)):
         return True

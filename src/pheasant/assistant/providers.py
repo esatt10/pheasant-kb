@@ -47,6 +47,7 @@ from pheasant.assistant.catalog import (
 from pheasant.assistant.catalog import (
     resolve_auto_provider as catalog_resolve_auto_provider,
 )
+from pheasant.telemetry.usage import METER
 
 DEFAULT_TIMEOUT = 90.0
 
@@ -134,7 +135,13 @@ def collect_token_usage() -> Iterator[TokenUsage]:
         _active_usage.reset(token)
 
 
+#: The model the current call was made to, for the meter below: the wires
+#: name it when they call and report its usage once they have a reply.
+_called_model: ContextVar[str | None] = ContextVar("pheasant_called_model", default=None)
+
+
 def note_model_call(model: str | None = None) -> None:
+    _called_model.set(model)
     usage = _active_usage.get()
     if usage is not None:
         usage.calls += 1
@@ -171,7 +178,20 @@ def _record_usage(
     *,
     cached_input_tokens: object = None,
     reasoning_tokens: object = None,
+    kind: str = "chat",
+    cached_included: bool = False,
 ) -> None:
+    # The region's own meter (`telemetry/usage.py`), which counts every
+    # reported call whether or not a workflow node is collecting.
+    METER.model_call(
+        kind,
+        _called_model.get(),
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        reasoning_tokens,
+        cached_included=cached_included,
+    )
     usage = _active_usage.get()
     if usage is None:
         return
@@ -575,6 +595,7 @@ def _openai(
         reported.get("completion_tokens"),
         cached_input_tokens=prompt_details.get("cached_tokens"),
         reasoning_tokens=completion_details.get("reasoning_tokens"),
+        cached_included=True,  # OpenAI's prompt_tokens contains its cached ones
     )
     choices = data.get("choices") or []
     choice = choices[0] if choices else {}

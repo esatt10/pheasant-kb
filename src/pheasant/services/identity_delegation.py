@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pheasant.persistence import access_grants, auth_tokens
+from pheasant.persistence import access_grants, auth_tokens, fleet_store
 from pheasant.security import entra
 from pheasant.security.identity import Identity
 from pheasant.services.errors import SignInFailed
@@ -32,6 +32,7 @@ def higher_role(first: str | None, second: str | None) -> str | None:
 class DelegatedAccess:
     """Mixed into ``IdentityService``, which supplies the attributes below."""
 
+    config: Any
     settings: Any
     state: Any
     kb_id: str
@@ -55,10 +56,32 @@ class DelegatedAccess:
         snapshot = self.grants()
         tenant = identity.tenant_id
         org = snapshot.orgs.get(tenant)
-        if tenant != self.settings.tenant_id and org is None:
+        if tenant != self.settings.tenant_id and tenant not in self.admitted_tenants():
             return None  # an organization nobody connected, or one since removed
         grant = snapshot.user(tenant, identity.subject, identity.principal)
-        return higher_role(grant.get("role") if grant else None, org.get("role") if org else None)
+        role = higher_role(grant.get("role") if grant else None, org.get("role") if org else None)
+        return higher_role(role, self._fleet_role(identity))
+
+    def admitted_tenants(self) -> set[str]:
+        """Tenants whose people may sign in here besides the operator's: the
+        connected organizations, and the ones this knowledge base's own admins
+        come from (a fleet claim, ``services/fleet.py``)."""
+
+        if not self.delegated:
+            return set()
+        return set(self.grants().orgs) | fleet_store.admin_tenants(self.config)
+
+    def _fleet_role(self, identity: Identity) -> str | None:
+        """Admin, for someone the fleet directory names as this stack's admin."""
+
+        for admin in fleet_store.slot_admins(self.config):
+            if admin.get("tenant_id") != identity.tenant_id:
+                continue
+            if admin.get("subject") and admin["subject"] == identity.subject:
+                return "Admin"
+            if not admin.get("subject") and admin.get("email") == identity.principal:
+                return "Admin"
+        return None
 
     def _bind_grant(self, identity: Identity) -> None:
         """Pin a grant made by sign-in name to the object id that just proved it."""
@@ -82,7 +105,7 @@ class DelegatedAccess:
         home = tenant_id == self.settings.tenant_id
         if home and not id_token:
             return self.verifier
-        if not home and not (self.delegated and tenant_id in self.grants().orgs):
+        if not home and tenant_id not in self.admitted_tenants():
             return None
         with self._lock:
             verifier = self._verifiers.get((tenant_id, id_token))
@@ -102,13 +125,11 @@ class DelegatedAccess:
         named = str(org or "").strip().lower()
         if named in {self.settings.tenant_id.lower(), "home"}:
             return self.settings.tenant_id
-        snapshot = self.grants() if self.delegated else None
-        if snapshot is not None:
-            for tenant in snapshot.orgs:
-                if tenant.lower() == named:
-                    return tenant
-            if named in snapshot.domains:
-                return snapshot.domains[named]
+        for tenant in self.admitted_tenants():
+            if tenant.lower() == named:
+                return tenant
+        if self.delegated and named in self.grants().domains:
+            return self.grants().domains[named]
         raise SignInFailed("that organization is not connected to this knowledge base")
 
     def choice_request(self, credential: str) -> dict[str, Any] | None:
