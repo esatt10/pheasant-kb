@@ -8,6 +8,9 @@ catalog of models the operator provisions and the users pick from.
 Everything here is off by default. A region that sets none of it is exactly
 what it was.
 
+The people on the other side of that line have their own page:
+[Runbook: administer and use a hosted knowledge base](customer-runbook.md).
+
 | Decision | Who makes it | Where |
 | --- | --- | --- |
 | Which models exist, their capacity and region; scale; networking | The operator | Deployment (`models.*`, Terraform) |
