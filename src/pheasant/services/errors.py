@@ -609,6 +609,54 @@ class SignInExpired(ServiceError):
     code = "CONNECTION_SIGN_IN_EXPIRED"
 
 
+class AccessNotDelegated(ServiceError):
+    """Access was asked to be changed in a region whose operator holds it.
+
+    A 404, like a feature that is off: ``security.entra.delegated_access``
+    moves granting into the region, and without it a role comes from the
+    deployment (Terraform's assignments or a token's claims).
+    """
+
+    status = 404
+    code = "ACCESS_NOT_DELEGATED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Access to this region is managed by its operator's deployment "
+            "(security.entra.delegated_access is off)"
+        )
+
+
+class AccessRoleNotGrantable(ServiceError):
+    """A role above what the caller may hand out, or a grant above their own.
+
+    An Admin grants Admin, Contributor and Reader; a Contributor grants
+    Contributor and Reader, in their own organization; a Reader grants nothing.
+    """
+
+    status = 403
+    code = "ACCESS_ROLE_NOT_GRANTABLE"
+
+
+class AccessGrantNotFound(ServiceError):
+    status = 404
+    code = "UNKNOWN_ACCESS_GRANT"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"No access grant for: {name}")
+
+
+class OrganizationNotConnected(ServiceError):
+    status = 404
+    code = "ORGANIZATION_NOT_CONNECTED"
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"Organization {name} is not connected to this knowledge base; "
+            "an Admin connects it with its Microsoft Entra tenant id"
+        )
+
+
 def transient_refusal(exc: BaseException) -> ServiceError | None:
     """The retryable refusal ``exc`` amounts to, or ``None`` if it is not one.
 

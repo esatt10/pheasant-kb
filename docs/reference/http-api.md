@@ -351,6 +351,31 @@ these knobs decide how much it *fetches* per question.
 
 See [Vector self-search](../how-to/vector-search.md).
 
+## Models
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/models` | The answering, judgement and embedding models offered, the default of each, and the embedding in force (`embedding.state`: `ready` or `reindex_pending`). Never an endpoint or a variable name. |
+| PUT | `/models/embedding` | Switch the region's embedding model (application Admin). Every chunk already indexed is re-embedded; no source is re-read. |
+
+`POST /assistant/chat` and its stream take `model` and `decision_model` (ids
+from `GET /models`); the answer's `models` reports which ran.
+
+## Access
+
+With `security.entra.delegated_access`; `404 ACCESS_NOT_DELEGATED` without.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/access` | People with access, the roles the caller may grant, and the connected organizations. A Contributor sees their own organization. |
+| POST | `/access/grants` | Give a person a role by sign-in name, or change it. Above the caller's ceiling: `403 ACCESS_ROLE_NOT_GRANTABLE`. |
+| DELETE | `/access/grants/{grant_id}` | Remove a grant; the person's credentials stop within seconds. |
+| POST | `/access/organizations` | Connect a customer's Microsoft Entra tenant (Admin). Returns its admin-consent and sign-in links. |
+| DELETE | `/access/organizations/{tenant_id}` | Disconnect it and remove its people's grants (Admin). |
+
+`GET /auth/login?org=<tenant id or domain>` signs in from a connected
+organization. See [Host a region for someone else](../how-to/hosted-regions.md).
+
 ## MCP
 
 | Method | Path | Purpose |

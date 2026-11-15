@@ -1210,6 +1210,35 @@ value — two trust boundaries, and workers hold the second by necessity. And a
 the graph token, a source list, or a non-SQLite state backend, none of which it
 can use.
 
+### `security.entra.delegated_access`
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `entra.delegated_access` | bool | `false` | Access is granted while the region runs: an Admin grants any role, a Contributor grants Contributor or Reader, and an Admin connects a customer's own Entra tenant. `role_assignments` then names the operator's own admins, and a token's role claims are no longer consulted. See [Host a region for someone else](how-to/hosted-regions.md). |
+
+---
+
+## `models` (a catalog of models, optional)
+
+Several answering, judgement and embedding models, each with a default. Empty
+(the default), `assistant.*`, `assistant.decisions.*` and `search.embeddings.*`
+are the only models and nothing here is consulted.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `chat` | list | `[]` | Answering models: `id`, `label`, `family`, `provider` (`openai` \| `azure` \| `anthropic` \| `gemini`), `model`, `base_url`, `api_key_env`, `description`, `max_output_tokens`. |
+| `default_chat` | string \| null | `null` | The `id` used when a caller names none. Unset: `assistant.*` as configured. |
+| `decisions` | list | `[]` | Judgement models: `id`, `api` (`decisions` \| `systemone`), `model`, `base_url`, `api_key_env`, and its own `sufficient_threshold` / `relevant_threshold` / `accept_threshold`. |
+| `default_decision` | string \| null | `null` | The `id` used when a caller names none. |
+| `embeddings` | list | `[]` | Embedding models the region can index with: `id`, `provider`, `model`, `base_url`, `api_key_env`, `dimensions`. |
+| `default_embedding` | string \| null | `null` | What a new region indexes with. A running region's choice is a row in `/state`, changed with `PUT /models/embedding`. |
+| `selectable` | bool | `true` | Whether a caller may pick per question. Off, naming anything but the default is refused. |
+
+Ids must be unique within a list and a default must be one of them; a config
+that breaks either does not load. An entry on an Azure AI Foundry host with no
+key is called with the process's managed identity. See
+[Host a region for someone else](how-to/hosted-regions.md).
+
 ---
 
 ## `synapse` (federation into a Synapse fleet, optional)

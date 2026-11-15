@@ -43,6 +43,7 @@ AUTH_PUBLIC_PATHS = frozenset(
         "/auth/login",
         "/auth/callback",
         "/auth/consent",
+        "/auth/choose",
         "/authorize",
         "/token",
         "/register",
@@ -196,13 +197,56 @@ def build_router(service: IdentityService) -> APIRouter:
         return {"signed_out": True}
 
     @router.get("/auth/login")
-    def auth_login(request: Request, next: str | None = None) -> RedirectResponse:  # noqa: A002
+    def auth_login(
+        request: Request,
+        next: str | None = None,  # noqa: A002
+        org: str | None = None,
+    ) -> Any:
+        """Start a sign-in. ``org`` names a connected organization (its tenant
+        id or domain); without it, and with organizations connected, the
+        person is asked which."""
+
         try:
             url = service.begin_login(
-                flow="ui", base_url=_base_url(request, service), data={"next": _safe_next(next)}
+                flow="ui",
+                base_url=_base_url(request, service),
+                data={"next": _safe_next(next)},
+                org=org,
             )
         except ServiceError as exc:
+            if org:
+                return _message_page("Sign-in did not start", str(exc), status=exc.status)
             raise _refusal(exc) from exc
+        return RedirectResponse(url, status_code=302)
+
+    @router.get("/auth/choose")
+    def auth_choose_page(request: str) -> HTMLResponse:  # noqa: A002 - mirrors /auth/consent
+        if service.choice_request(request) is None:
+            return _message_page("This sign-in has expired", "Start signing in again.", 400)
+        body = f"""
+<p>Sign in with the organization your account belongs to.</p>
+<form method="post" action="/auth/choose" class="stack">
+  <input type="hidden" name="request" value="{html.escape(request)}">
+  <label for="org">Organization domain</label>
+  <input id="org" name="org" type="text" inputmode="url" autocomplete="organization"
+         placeholder="contoso.com" autofocus>
+  <p class="muted">Leave it empty if your account is in the operator's own directory.</p>
+  <button type="submit" class="primary">Continue</button>
+</form>"""
+        return _page("Sign in", body)
+
+    @router.post("/auth/choose")
+    def auth_choose(
+        http_request: Request,
+        request: str = Form(...),  # noqa: A002
+        org: str = Form(""),
+    ) -> Any:
+        try:
+            url = service.choose_organization(
+                request, org.strip(), base_url=_base_url(http_request, service)
+            )
+        except ServiceError as exc:
+            return _message_page("Sign-in did not start", str(exc), status=exc.status)
         return RedirectResponse(url, status_code=302)
 
     @router.get("/auth/callback")
@@ -212,7 +256,19 @@ def build_router(service: IdentityService) -> APIRouter:
         state: str | None = None,
         error: str | None = None,
         error_description: str | None = None,
+        admin_consent: str | None = None,
     ) -> Any:
+        if admin_consent is not None and not code:
+            # Where a customer's directory admin lands after approving the app
+            # for their organization (`services/access.connect_organization`).
+            if str(admin_consent).lower() == "true" and not error:
+                return _message_page(
+                    "Organization approved",
+                    "People in your organization can now sign in to this knowledge base.",
+                    status=200,
+                )
+            reason = error_description or error or "the approval was not granted"
+            return _message_page("Organization not approved", reason, status=400)
         if error or not code or not state:
             reason = error_description or error or "the sign-in returned no code"
             return _message_page("Sign-in did not complete", reason, status=400)
@@ -490,6 +546,9 @@ main {{ max-width:440px; width:100%; background:var(--card); border:1px solid va
   border-radius:12px; padding:24px; }}
 h1 {{ font-size:1.2rem; margin:0 0 12px; }} .muted {{ color:var(--muted); font-size:.9rem; }}
 form {{ display:flex; gap:8px; justify-content:flex-end; margin-top:20px; }}
+form.stack {{ flex-direction:column; align-items:stretch; }}
+input[type=text] {{ font:inherit; padding:8px 10px; border-radius:8px;
+  border:1px solid var(--line); background:transparent; color:var(--fg); }}
 button {{ font:inherit; padding:8px 16px; border-radius:8px; border:1px solid var(--line);
   background:transparent; color:var(--fg); cursor:pointer; }}
 button.primary {{ background:var(--accent); border-color:var(--accent); color:#fff; }}

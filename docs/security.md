@@ -169,6 +169,28 @@ working everywhere within a minute. The region redeems sign-in codes as a
 confidential client; with `federated_identity_client_id` its managed identity
 is the client assertion, so no client secret exists.
 
+### Access granted at runtime, and customer directories
+
+With `security.entra.delegated_access` the gate moves from the directory into
+the region: a role comes from a grant (`access_grants`) or from
+`role_assignments`, whichever is higher, and never from a token's claims. The
+ladder is fixed: an Admin grants any role, a Contributor grants Contributor or
+Reader inside their own organization, a Reader grants nothing; nobody changes
+their own access; changing a grant counts as removing the old one, so a
+Contributor cannot demote an Admin. Every credential is capped by the current
+grant on each request, from a per-process copy of the grants re-read at most
+every 15 seconds, so a revocation needs no restart and adds no database read to
+a warm request.
+
+A connected organization is a second tenant whose tokens are accepted. They
+are verified against *that* tenant's keys and issuer; the tenant a token claims
+only chooses which keys to check it against. A sign-in sent to one tenant
+accepts an identity token from that tenant alone. A grant by sign-in name is
+matched inside one tenant and bound to the object id that first proves it,
+because a name is something a directory's admin controls and an address can be
+reassigned. An organization-wide default role is Reader or Contributor, never
+Admin. See [Host a region for someone else](how-to/hosted-regions.md).
+
 ### Managed identity between tiers
 
 `security.service_identity` lets the api -> graph, indexer -> worker and

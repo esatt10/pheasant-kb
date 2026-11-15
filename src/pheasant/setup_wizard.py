@@ -1185,6 +1185,26 @@ def build_sections() -> list[Section]:
             ],
         ),
         Section(
+            id="models",
+            title="Model catalog",
+            blurb=(
+                "Optional. Lists several answering, judgement and embedding models "
+                "(`models.chat`, `models.decisions`, `models.embeddings`, each with a "
+                "default) so a caller can pick one per request and an admin can switch "
+                "the embedding model. The lists themselves are written in YAML or by a "
+                "deployment; empty, the single models configured above are the only ones."
+            ),
+            covers=("models",),
+            questions=[
+                Question(
+                    key="models.selectable",
+                    prompt="Let callers pick a model per request (when a catalog is listed)?",
+                    kind="bool",
+                    advanced=True,
+                ),
+            ],
+        ),
+        Section(
             id="synapse",
             title="Synapse federation",
             blurb=(

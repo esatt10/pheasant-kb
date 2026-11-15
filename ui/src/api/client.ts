@@ -49,6 +49,7 @@ import type {
   PipelineList,
   PipelineDefaults,
   PipelineSettings,
+  ModelCatalog,
 } from "./types";
 import type {
   Artifact,
@@ -596,6 +597,15 @@ export const api = {
       body: JSON.stringify({ query, mode, max_results: maxResults, ...criteria }),
     }),
 
+  /** The models this region offers, and the default of each kind. */
+  models: () => request<ModelCatalog>("/models"),
+  /** Switch the region's embedding model (application Admin); re-embeds everything. */
+  selectEmbedding: (embedding: string) =>
+    request<ModelCatalog & { status: string }>("/models/embedding", {
+      method: "PUT",
+      body: JSON.stringify({ embedding }),
+    }),
+
   // Assistant (grounded chat)
   assistantStatus: (sessionId?: string | null) =>
     request<AssistantStatus>(`/assistant/status${qs({ session_id: sessionId ?? undefined })}`),
@@ -701,6 +711,9 @@ export const api = {
       visual?: "none" | "diagram" | "image" | null;
       /** Keep the answer under this id for an hour (8-64 of `A-Za-z0-9_-`). */
       answer_id?: string | null;
+      /** The answering and judgement model, by `GET /models` id; unset is the default. */
+      model?: string | null;
+      decision_model?: string | null;
     },
     onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,

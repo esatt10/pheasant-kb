@@ -19,6 +19,14 @@ A signed-in identity must carry one of ``security.entra.allowed_roles`` --
 the app registration's "assignment required" is the gate that decides who
 can sign in at all, and the role is this region's own check that it held.
 
+With ``security.entra.delegated_access`` the gate moves into the region: a
+role comes from a grant somebody made while it runs
+(``persistence/access_grants.py``, ``services/access.py``) or from the
+operator's own ``role_assignments``, whichever is higher, and never from a
+token's claims. A customer's Entra tenant an Admin connected is then a second
+place people can sign in from: its tokens are verified against *its* keys and
+issuer, and a person names it at sign-in (``/auth/login?org=``).
+
 The sign-in itself is the OpenID Connect code flow with PKCE against the
 tenant, with the region as a confidential client: its managed identity's
 token is the client assertion (a federated credential on the app
@@ -56,6 +64,7 @@ from pheasant.services.errors import (
     PersonIdentityRequired,
     SignInFailed,
 )
+from pheasant.services.identity_delegation import DelegatedAccess, higher_role
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +96,7 @@ class LoginResult:
     data: dict[str, Any]
 
 
-class IdentityService:
+class IdentityService(DelegatedAccess):
     """The region's credentials, for one config and one state store."""
 
     def __init__(self, config: Any, state: Any) -> None:
@@ -128,6 +137,9 @@ class IdentityService:
                 self._role_tokens.append((value, name, role))
         audiences = [self.settings.client_id, *self.settings.audiences]
         self.verifier = entra.EntraVerifier(self.settings.tenant_id, audiences)
+        self.kb_id = str(getattr(config, "knowledge_base_id", "") or "")
+        #: Verifiers for connected customer tenants, made on first use.
+        self._verifiers: dict[tuple[str, bool], entra.EntraVerifier] = {}
         self._cache: dict[str, tuple[Identity, float]] = {}
         self._touched: dict[str, float] = {}
         self._lock = threading.Lock()
@@ -171,6 +183,10 @@ class IdentityService:
             "tenant_id": self.settings.tenant_id if self.entra_enabled else None,
             "client_id": self.settings.client_id if self.entra_enabled else None,
             "scope": self.api_scope() if self.entra_enabled else None,
+            "delegated_access": self.delegated,
+            # Whether a person may sign in from an organization other than the
+            # operator's. Which ones is not said to a caller with no credential.
+            "organizations": bool(self.delegated and self.grants().orgs),
         }
 
     def api_scope(self) -> str:
@@ -219,21 +235,35 @@ class IdentityService:
         return self._current_grant(identity) if identity is not None else None
 
     def _current_grant(self, identity: Identity) -> Identity | None:
-        """Terraform's current assignment caps every credential, including old keys.
+        """The current assignment caps every credential, including old keys.
 
         Permission intersection preserves explicit key restrictions through a
         role change; removing the subject denies sessions and OAuth refreshes.
-        No directory or database call is added to the cached request path.
+        The assignment is Terraform's map, a runtime grant (delegated access),
+        or the higher of the two. No directory call is added to the cached
+        request path, and at most one grants read per
+        ``access_grants.SNAPSHOT_SECONDS``.
         """
         from pheasant.security.authorization import ROLE_PERMISSIONS, permissions
 
         assignments = self.settings.role_assignments
-        if not identity.is_person or assignments is None:
+        delegated = self.delegated
+        if not identity.is_person or (assignments is None and not delegated):
             return identity
-        role = assignments.get(identity.subject)
-        if role not in ROLE_PERMISSIONS or identity.tenant_id != self.settings.tenant_id:
+        home = identity.tenant_id == self.settings.tenant_id
+        role = assignments.get(identity.subject) if home and assignments else None
+        if delegated:
+            role = higher_role(role, self._granted_role(identity))
+        elif not home:
             return None
-        ceiling = permissions(identity)
+        if role not in ROLE_PERMISSIONS:
+            return None
+        if delegated and identity.method in {ENTRA_SSO, ENTRA_TOKEN}:
+            # The person themself rather than a key they chose to restrict:
+            # their session follows their grant up as well as down.
+            ceiling = ROLE_PERMISSIONS[role]
+        else:
+            ceiling = permissions(identity)
         capped = ceiling & ROLE_PERMISSIONS[role]
         effective = next(
             (
@@ -270,13 +300,14 @@ class IdentityService:
                 else None,
             )
         if self.entra_enabled and entra.looks_like_jwt(bearer):
-            claims = self.verifier.verify(bearer)
+            verifier = self._verifier_for(entra.unverified_tenant(bearer))
+            claims = verifier.verify(bearer) if verifier is not None else None
             if claims is None:
                 return None
             roles = entra.roles_of(claims)
-            if not self._roles_admitted(roles):
+            if not self.delegated and not self._roles_admitted(roles):
                 return None
-            return Identity(
+            identity = Identity(
                 principal=entra.principal_of(claims),
                 method=ENTRA_TOKEN,
                 display_name=str(claims.get("name") or ""),
@@ -285,6 +316,8 @@ class IdentityService:
                 tenant_id=str(claims.get("tid") or ""),
                 expires_at=float(claims["exp"]) + entra.CLOCK_SKEW_SECONDS,
             )
+            self._bind_grant(identity)
+            return identity
         return None
 
     def _touch(self, token_id: str) -> None:
@@ -306,17 +339,35 @@ class IdentityService:
 
     # -- signing in through Entra ------------------------------------------
 
-    def begin_login(self, *, flow: str, base_url: str, data: dict[str, Any]) -> str:
-        """Start a sign-in and return the Entra URL to send the browser to."""
+    def begin_login(
+        self, *, flow: str, base_url: str, data: dict[str, Any], org: str | None = None
+    ) -> str:
+        """Start a sign-in and return the URL to send the browser to.
+
+        That is Entra, for the operator's tenant or for the connected
+        organization ``org`` names (its tenant id or one of its domains). With
+        organizations connected and none named, it is this region's own page
+        asking which (``/auth/choose``): an MCP client's authorization request
+        has no place to say.
+        """
 
         self._require_entra()
+        tenant = self.settings.tenant_id
+        orgs = self.grants().orgs if self.delegated else {}
+        if org:
+            tenant = self.organization_tenant(org)
+        elif orgs:
+            choice, _row = auth_tokens.issue(
+                self.state, kind="login_choice", lifetime=LOGIN_TTL, data={"flow": flow, **data}
+            )
+            return f"{self.public_url(base_url)}/auth/choose?request={choice}"
         verifier, challenge = _pkce_pair()
         nonce = secrets.token_urlsafe(16)
         state, _row = auth_tokens.issue(
             self.state,
             kind="login",
             lifetime=LOGIN_TTL,
-            data={"flow": flow, "nonce": nonce, "verifier": verifier, **data},
+            data={"flow": flow, "nonce": nonce, "verifier": verifier, "tenant": tenant, **data},
         )
         query = {
             "client_id": self.settings.client_id,
@@ -329,7 +380,7 @@ class IdentityService:
             "code_challenge": challenge,
             "code_challenge_method": "S256",
         }
-        return f"{entra.authorize_endpoint(self.settings.tenant_id)}?{urlencode(query)}"
+        return f"{entra.authorize_endpoint(tenant)}?{urlencode(query)}"
 
     def redirect_uri(self, base_url: str) -> str:
         return f"{self.public_url(base_url)}/auth/callback"
@@ -342,6 +393,7 @@ class IdentityService:
         if login is None:
             raise SignInFailed("the sign-in expired or was already used; start again")
         data = dict(login["data"])
+        tenant = str(data.pop("tenant", "") or self.settings.tenant_id)
         form = {
             "client_id": self.settings.client_id,
             "grant_type": "authorization_code",
@@ -352,18 +404,23 @@ class IdentityService:
             **self._client_credential(),
         }
         try:
-            reply = entra.token_request(self.settings.tenant_id, form)
+            reply = entra.token_request(tenant, form)
         except entra.EntraUnavailable as exc:
             logger.warning("Entra refused the sign-in code: %s", exc)
             raise SignInFailed("Microsoft did not accept the sign-in code") from exc
         id_token = str(reply.get("id_token") or "")
-        claims = entra.EntraVerifier(self.settings.tenant_id, [self.settings.client_id]).verify(
-            id_token, nonce=str(data.pop("nonce", ""))
+        # The tenant the sign-in was sent to is the only one whose token is
+        # accepted back: a code from another directory proves nothing here.
+        verifier = self._verifier_for(tenant, id_token=True)
+        claims = (
+            verifier.verify(id_token, nonce=str(data.pop("nonce", "")))
+            if verifier is not None
+            else None
         )
         if claims is None:
             raise SignInFailed("the identity token could not be verified")
         roles = entra.roles_of(claims)
-        if not self._roles_admitted(roles):
+        if not self.delegated and not self._roles_admitted(roles):
             raise SignInFailed("this account has not been granted access to this region")
         identity = Identity(
             principal=entra.principal_of(claims),
@@ -373,6 +430,7 @@ class IdentityService:
             roles=tuple(roles),
             tenant_id=str(claims.get("tid") or ""),
         )
+        self._bind_grant(identity)
         identity = self._current_grant(identity)
         if identity is None:
             raise SignInFailed("this account has not been granted access to this region")

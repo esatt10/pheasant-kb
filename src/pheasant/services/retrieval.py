@@ -272,6 +272,9 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     """
 
     kb_id = context.knowledge_base(request.knowledge_base)
+    from pheasant.services import models
+
+    models.follow(context)  # the embedding model an admin switched to, if it moved
     # A malformed expansion is refused before anything is retrieved.
     request = replace(_scoped(request, context.state), expand=parse_expansion(request.expand))
     # Before the arms run, not after. A pinned search whose corpus has moved

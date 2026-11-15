@@ -113,6 +113,7 @@ nav:
       - Parquet export schema: reference/export-schema.md
       - Security: security.md
       - Roles and permissions: how-to/roles.md
+      - Host a region for someone else: how-to/hosted-regions.md
   - Explanation:
       - Architecture: architecture.md
       - The memory system: memory-system.md

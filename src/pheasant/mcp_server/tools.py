@@ -22,10 +22,12 @@ from pheasant.graph.query_service import graph_for_config
 from pheasant.ingestion.pipeline import utc_now
 from pheasant.job_snapshots import FAILED_SYNC_STATUSES, sync_job_status
 from pheasant.jobs import JobRegistry
+from pheasant.mcp_server.access_tools import AccessTools
 from pheasant.mcp_server.archive_tools import ArchiveTools
 from pheasant.mcp_server.assistant_tools import AssistantTools
 from pheasant.mcp_server.connection_tools import ConnectionTools
 from pheasant.mcp_server.inventory_tools import InventoryTools
+from pheasant.mcp_server.model_tools import ModelTools
 from pheasant.mcp_server.readiness_tools import ReadinessTools
 from pheasant.mcp_server.source_url_tools import SourceUrlTools
 from pheasant.mcp_server.sync_control_tools import SyncControlTools
@@ -89,6 +91,8 @@ class PheasantTools(
     SourceUrlTools,
     SyncControlTools,
     ConnectionTools,
+    AccessTools,
+    ModelTools,
 ):
     def __init__(self, config: PheasantConfig, *, vector: Any = None):
         self.config = config

@@ -1,0 +1,175 @@
+# Host a region for someone else
+
+One party runs the region (its cloud resources, its models, its scale). Another
+uses it, and decides who else may. This page is how those two stay separate:
+access the users grant themselves, a customer's own directory signing in, and a
+catalog of models the operator provisions and the users pick from.
+
+Everything here is off by default. A region that sets none of it is exactly
+what it was.
+
+| Decision | Who makes it | Where |
+| --- | --- | --- |
+| Which models exist, their capacity and region; scale; networking | The operator | Deployment (`models.*`, Terraform) |
+| Who the operator's own admins are | The operator | `security.entra.role_assignments` |
+| Who else may use the region, and as what | Its Admins and Contributors | UI, `POST /access/grants`, MCP `grant_access` |
+| Which customer directories may sign in | Its Admins | `POST /access/organizations`, MCP `connect_organization` |
+| Which answering and judgement model answers a question | Whoever asks it | `model` / `decision_model` on the question |
+| Which embedding model the region indexes with | Its Admins | `PUT /models/embedding`, MCP `select_embedding_model` |
+
+## Access the users grant
+
+```yaml
+security:
+  entra:
+    enabled: true
+    delegated_access: true
+    role_assignments:            # the operator's admins; cannot be changed at runtime
+      "<entra object id>": Admin
+```
+
+With `delegated_access` a role comes from a grant made while the region runs,
+or from `role_assignments`, whichever is higher. A token's role claims are no
+longer consulted, so the app registration needs no "assignment required" and
+no app-role assignment per person.
+
+| Caller | May grant | May change or remove |
+| --- | --- | --- |
+| Admin | Admin, Contributor, Reader, in any connected organization | Any grant |
+| Contributor | Contributor, Reader, in their own organization | Grants of Contributor or Reader in their own organization |
+| Reader | Nothing (`PERMISSION_DENIED`) | Nothing; cannot list who has access |
+
+Nobody changes their own access. A role above the caller's ceiling is refused
+with `ACCESS_ROLE_NOT_GRANTABLE`, including demoting someone who holds one.
+
+A grant names a person by sign-in name. Until they first sign in it is
+`pending`; the first sign-in binds it to their immutable Entra object id, so a
+renamed account keeps its access and a recycled address does not inherit it.
+
+```bash
+curl -X POST "$URL/access/grants" -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"email": "kim@contoso.com", "role": "Contributor"}'
+```
+
+The same over MCP: `grant_access(email, role)`, `revoke_access(email)`,
+`list_access()`. Revoking, or lowering a role, reaches that person's sessions,
+personal keys and connected MCP clients within seconds: every credential is
+capped by the current grant on each request. Raising a role reaches their
+browser session at once; a personal key or an MCP client keeps what it was
+issued with until it is re-created.
+
+## A customer's own directory
+
+An Admin connects a customer's Microsoft Entra tenant once. From then on that
+customer's people sign in with their organization's accounts, and its own
+Admins and Contributors manage them. Nothing about the customer's directory is
+configured in the operator's.
+
+```bash
+curl -X POST "$URL/access/organizations" -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"tenant_id": "<their tenant id>", "name": "Contoso",
+       "domains": ["contoso.com"], "default_role": "Reader"}'
+```
+
+The reply carries two links:
+
+- `admin_consent_url`: the customer's directory admin opens it once to approve
+  the app for their organization.
+- `sign_in_url`: what their people use (`/auth/login?org=contoso.com`).
+
+`default_role` (Reader or Contributor, never Admin) gives every member that
+role. Without it, connecting admits nobody: members are granted one at a time.
+With organizations connected, a sign-in that names none asks which one; MCP
+clients get the same page during their authorization.
+
+What holds the boundary:
+
+- A token is verified against the keys and issuer of the tenant it claims, and
+  only for the operator's tenant or a connected one. A token from any other
+  directory is refused whatever it says.
+- A sign-in sent to one tenant accepts an identity token from that tenant only.
+- A grant is made in one tenant. The same sign-in name in another directory is
+  a different person.
+- Disconnecting an organization removes every grant made to its people.
+
+The app registration must be multi-tenant (`AzureADMultipleOrgs`) for another
+directory to sign in at all; the operator decides that at deployment.
+
+## A catalog of models
+
+```yaml
+models:
+  chat:
+    - id: gpt-6-luna
+      label: GPT-6 Luna
+      family: OpenAI
+      provider: azure                       # the OpenAI wire on a Foundry resource
+      model: gpt-6-luna                     # the deployment
+      base_url: https://<resource>.services.ai.azure.com/openai/v1
+      api_key_env: FOUNDRY_CHAT_API_KEY
+    - id: claude-opus-5-5
+      label: Claude Opus 5.5
+      family: Anthropic
+      provider: anthropic                   # Anthropic's Messages wire
+      model: claude-opus-5-5
+      base_url: https://<resource>.services.ai.azure.com/anthropic
+      api_key_env: FOUNDRY_CHAT_API_KEY
+  default_chat: gpt-6-luna
+  decisions:
+    - {id: ms-decision-1, api: systemone, model: ms-decision-1, base_url: https://<resource>.services.ai.azure.com,
+       sufficient_threshold: 0.16, relevant_threshold: 0.32, accept_threshold: 0.53}
+    - {id: gpt-6-luna, api: decisions, model: gpt-6-luna, base_url: https://<resource>.services.ai.azure.com}
+  default_decision: ms-decision-1
+  embeddings:
+    - {id: text-embedding-3-large, model: text-embedding-3-large, dimensions: 3072, base_url: https://<resource>.services.ai.azure.com/openai/v1}
+    - {id: text-embedding-3-small, model: text-embedding-3-small, dimensions: 1536, base_url: https://<resource>.services.ai.azure.com/openai/v1}
+  default_embedding: text-embedding-3-large
+```
+
+An entry is a wire and an address, not a vendor's client library: `provider`
+is one of the HTTP shapes pheasant already speaks (`openai`, `azure`,
+`anthropic`, `gemini`). Moving a model to another host is a `base_url` change.
+An entry with no key on a Foundry host is called with the process's managed
+identity.
+
+**Picking.** `GET /models` (MCP `list_models`) lists what is offered, without
+endpoints or variable names. A question names what it wants:
+
+```bash
+curl -X POST "$URL/assistant/chat" -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"question": "How is failover configured?", "model": "claude-opus-5-5"}'
+```
+
+`ask_knowledge_base(..., model=, decision_model=)` is the same over MCP. Unset,
+the defaults apply; the answer's `models` says which ran. An unknown id is
+`UNKNOWN_MODEL`. `models.selectable: false` makes everyone use the defaults.
+
+Settings tuned for the configured model (`assistant.reasoning_effort`, a
+`grader_model`) are not carried to a different one. Each judgement model has
+its own thresholds, because the two APIs' probabilities are not on one scale.
+On the OpenAI wire a deployment should be named after its model: Luna-only
+options are recognized by the name `gpt-6-luna`.
+
+**Switching the embedding model.** One embedding model is in force for the
+whole region, because a query is only comparable with passages embedded by the
+same model. An application Admin changes it:
+
+```bash
+curl -X PUT "$URL/models/embedding" -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"embedding": "text-embedding-3-small"}'
+```
+
+The choice is stored for every process. The indexer re-embeds every chunk it
+already holds, without re-reading a source, before its next sync writes a
+vector; `GET /models` reports `embedding.state` as `reindex_pending` until it
+is `ready`. Until then semantic search is partial and answers lean on the text
+and graph arms. Budget one embedding call per chunk.
+
+## What this does not do yet
+
+One region is still one knowledge base. Several knowledge bases for one
+customer group, sharing an admin and the operator's resources, are several
+regions; nothing here provisions one from inside another.

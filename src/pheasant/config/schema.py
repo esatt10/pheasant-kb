@@ -31,6 +31,7 @@ from pheasant.config.exclusions import (
 from pheasant.config.flagship import with_table_defaults
 from pheasant.config.identity import ApiAuthSettings, EntraSettings, ServiceIdentitySettings
 from pheasant.config.model import ModelMixin
+from pheasant.config.models import ModelsSettings
 from pheasant.config.retired import resolve_source_type
 from pheasant.ingestion.content_types import default_include_globs
 
@@ -179,6 +180,13 @@ def _build(annotation: Any, raw: Any) -> Any:
         )
     if raw is None:
         return None
+    if get_origin(annotation) is list:
+        # A list of sections (`models.chat`): each mapping is built as one.
+        item = _model_type(get_args(annotation)[0])
+        if item is not None:
+            return [
+                _build(item, entry) if isinstance(entry, dict) else entry for entry in raw or []
+            ]
     if _is_path(annotation):
         return Path(raw)
     if _is_path_list(annotation):
@@ -1958,6 +1966,7 @@ class PheasantConfig(ModelMixin):
     tuning: TuningSettings = field(default_factory=TuningSettings)
     readiness: ReadinessSettings = field(default_factory=ReadinessSettings)
     artifacts: ArtifactsSettings = field(default_factory=ArtifactsSettings)
+    models: ModelsSettings = field(default_factory=ModelsSettings)
     sources: list[SourceConfig] = field(default_factory=list)
 
     def __post_init__(self) -> None:

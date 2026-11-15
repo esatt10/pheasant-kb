@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.access_routes import register_access_routes
 from pheasant.api.archive_routes import register_archive_routes
 from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
@@ -23,6 +24,7 @@ from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.connection_routes import register_connection_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
+from pheasant.api.model_routes import register_model_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.region_routes import register_region_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
@@ -692,6 +694,10 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # started at boot, which is the question this table actually asks.
     "readiness": True,
     "artifacts": True,  # read per save and per beat (`services/artifact_settings.py`)
+    # The chat and judgement lists are read per answer. The embedding in
+    # force is not this config at all: it is a row every process follows
+    # (`search/embedding_selection.py`).
+    "models": True,
     "storage": False,
     "server": False,
     "pheasant": False,
@@ -2063,6 +2069,8 @@ def create_app(
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
     register_region_routes(app, services=services)
+    register_access_routes(app, services=services)
+    register_model_routes(app, services=services)
 
     @app.get("/contract")
     def contract() -> dict:

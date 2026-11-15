@@ -7,12 +7,14 @@ from typing import Any
 
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.exporter import node_link
+from pheasant.mcp_server.access_tools import register_access_tools
 from pheasant.mcp_server.archive_tools import register_archive_tools
 from pheasant.mcp_server.assistant_tools import register_assistant_tools
 from pheasant.mcp_server.compose_tools import register_compose_tools
 from pheasant.mcp_server.connection_tools import register_connection_tools
 from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.inventory_tools import register_inventory_tools
+from pheasant.mcp_server.model_tools import register_model_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.region_tools import register_region_tools
 from pheasant.mcp_server.source_url_tools import register_source_url_tools
@@ -941,6 +943,8 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_sync_control_tools(mcp, tools, anticipated)
     register_sync_pipeline_tools(mcp, tools, anticipated)
     register_region_tools(mcp, tools, anticipated)
+    register_access_tools(mcp, tools, anticipated)
+    register_model_tools(mcp, tools, anticipated)
 
     return mcp
 

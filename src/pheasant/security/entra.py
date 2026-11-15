@@ -90,6 +90,17 @@ def looks_like_jwt(token: str) -> bool:
     return token.count(".") == 2 and not token.startswith("pht_")
 
 
+def unverified_tenant(token: str) -> str:
+    """The ``tid`` a token *claims*, read before any check: which tenant's keys
+    to verify it against, never a fact about who sent it."""
+
+    try:
+        claims = json.loads(_b64url(token.split(".")[1]))
+    except (IndexError, ValueError):
+        return ""
+    return str(claims.get("tid") or "") if isinstance(claims, dict) else ""
+
+
 def issuers(tenant_id: str) -> tuple[str, str]:
     """The v2 and v1 issuers of ``tenant_id``'s tokens."""
 

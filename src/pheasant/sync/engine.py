@@ -42,6 +42,7 @@ from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.source_registry import SourceRegistry
+from pheasant.search import embedding_selection
 from pheasant.search.node_index import NodeIndex
 from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.search.vector_store import (
@@ -286,6 +287,7 @@ class SyncEngine:
         # Optional embed-on-sync (Synapse 21.4): None when
         # search.embeddings.enabled is false, leaving sync byte-identical
         # to pre-21.4 behavior (no vector dir, no embedder calls).
+        embedding_selection.apply_active(config, self.state)  # the admin's choice, if any
         self.vectors = (
             # `background`: embed off the commit loop -- see VectorIndexer.
             vector_indexer_from_config(config, background=True)
@@ -1919,6 +1921,7 @@ class SyncEngine:
 
         from pheasant.telemetry.sync_trace import traced
 
+        embedding_selection.ensure_space(self)  # re-embed first if the model was switched
         return traced(
             source_name,
             mode,

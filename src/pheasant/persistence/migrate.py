@@ -138,6 +138,9 @@ TABLE_ORDER = (
     "artifact_source_migrations",
     "durable_jobs",
     "region_settings",
+    # Who was granted access while the region ran. Dropping it would lock every
+    # customer user out of the migrated region; only Terraform's admins remain.
+    "access_grants",
 )
 
 #: Core tables deliberately left behind, and why.

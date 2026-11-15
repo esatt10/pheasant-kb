@@ -260,6 +260,38 @@ export interface AssistantSession {
   expires_at: string;
 }
 
+/** One model the region offers (`GET /models`). Never an endpoint or a key. */
+export interface CatalogModel {
+  id: string;
+  label: string;
+  family: string | null;
+  model: string;
+  description: string | null;
+  default: boolean;
+  /** False when the operator listed it and this process holds no credential for it. */
+  available: boolean;
+}
+
+/** The region's model catalog: what a question may be answered with. */
+export interface ModelCatalog {
+  /** Whether a caller may pick per question; off, the defaults answer. */
+  selectable: boolean;
+  chat: CatalogModel[];
+  default_chat: string | null;
+  decisions: (CatalogModel & { api: string })[];
+  default_decision: string | null;
+  embeddings: (CatalogModel & { dimensions: number | null; active: boolean })[];
+  embedding: {
+    active: string | null;
+    model: string | null;
+    dimensions: number | null;
+    /** `ready`, `reindex_pending` (being re-embedded), `not_indexed` or `fixed` (no catalog). */
+    state: string;
+    ready: boolean;
+    can_change: boolean;
+  };
+}
+
 export interface AssistantStatus {
   enabled: boolean;
   providers: AssistantProvider[];

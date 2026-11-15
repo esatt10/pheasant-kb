@@ -203,6 +203,11 @@ pheasant-kb/
 │   │                            region_status (what is still waking or
 │   │                            warming after a scale-to-zero wake),
 │   │                            connections (connect, check, sign in, remove),
+│   │                            access (who may use the region, granted by
+│   │                            its users; customer organizations) +
+│   │                            identity_delegation (a grant as a role on a
+│   │                            request), models (the catalog: pick per
+│   │                            question, switch the embedding model),
 │   │                            quick_add (one field to sources, for the UI's
 │   │                            Add box and MCP add_source)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
@@ -242,7 +247,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 211 pytest modules, offline by design
+└── tests/                     ← 213 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1555,6 +1560,54 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   fits, by moving the SVG `viewBox` — the same view state, and the same rule.
   `tests/test_mcp_app_expand.py` drives it in a real browser against the real
   validator.
+
+### Hosting a region for someone else
+
+Off by default; `docs/how-to/hosted-regions.md`. Two halves, one idea: the
+operator provisions, the users decide.
+
+- **Access is granted inside the region** (`security.entra.delegated_access`;
+  `services/access.py`, `persistence/access_grants.py`, table `access_grants`;
+  `/access*`, MCP `list_access` / `grant_access` / `revoke_access` /
+  `connect_organization` / `disconnect_organization`). An Admin grants any
+  role, a Contributor grants Contributor or Reader in their own organization, a
+  Reader grants nothing and sees nothing; nobody changes their own access, and
+  changing a grant counts as removing the old one. The ceiling is read off the
+  caller's *permissions* (`security.manage` / `settings.manage`), not a new
+  permission string: adding one would have mislabelled every credential issued
+  before it. `IdentityService._current_grant` takes the higher of
+  `role_assignments` (the operator's admins, not changeable at runtime) and the
+  grant, from a per-process snapshot re-read at most every 15 s, so a warm
+  request reads no table (`tests/test_delegated_access.py` holds that). A grant
+  by sign-in name binds to the object id that first proves it. Token role
+  claims are not consulted in this mode.
+- **A customer's Entra tenant is connected, not configured.** A row of kind
+  `org`; its tokens are verified against *its* keys and issuer
+  (`identity_delegation._verifier_for`), a sign-in names it
+  (`/auth/login?org=`, else `/auth/choose`, which MCP's authorize also gets),
+  and a sign-in sent to one tenant accepts that tenant's identity token only.
+  The app registration must be multi-tenant; a tenant nobody connected is
+  refused whatever its token says.
+- **Models are a catalog** (`config/models.py`, `services/models.py`; `GET
+  /models`, MCP `list_models`). `model` / `decision_model` on a question pick
+  from `models.chat` / `models.decisions`; `models.config_for` returns a
+  shallow copy of the config with `assistant` replaced, so no workflow knows a
+  model was picked, and settings tuned for the configured model
+  (`reasoning_effort`, `grader_model`) are not carried to another. Each entry
+  is a wire and an address: Claude on Foundry is `provider: anthropic` at
+  `<resource>/anthropic`. A Foundry entry with no key is called with the
+  managed identity (`chat.resolve_provider`), as embeddings and judgements
+  already were. Empty catalog: `config_for` returns the config it was given.
+- **One embedding model at a time, switched by an Admin**
+  (`search/embedding_selection.py`; `PUT /models/embedding`, MCP
+  `select_embedding_model`). The choice is a `region_settings` row every
+  process applies when its engine is built and follows on a 30 s limit; before
+  a sync writes a vector, `ensure_space` re-embeds every stored chunk under the
+  `__embeddings__` lease if the store is in another model's space. "Has this
+  stack moved?" compares the *running* embedder with the selection rather than
+  remembering what was applied: the first version remembered, and the indexer
+  noticing first left the same process's searcher embedding queries with the
+  old model. `tests/test_model_catalog.py`.
 
 ### Retrieval telemetry
 

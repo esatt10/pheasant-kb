@@ -85,6 +85,10 @@ class ChatRequest(BaseModel):
     # the region's auto_save. `conversation_id` files it under its thread.
     save: bool | None = None
     conversation_id: str | None = None
+    # The answering and judgement model for this question, by the ids
+    # `GET /models` lists. Unset: the region's default of each.
+    model: str | None = None
+    decision_model: str | None = None
 
     def service_request(self, channel: str = "api") -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
@@ -112,6 +116,8 @@ class ChatRequest(BaseModel):
             save=self.save,
             conversation_id=self.conversation_id,
             channel=channel,
+            model=self.model,
+            decision_model=self.decision_model,
         )
 
 
