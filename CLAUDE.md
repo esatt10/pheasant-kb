@@ -886,8 +886,8 @@ or more a post-filter with the shared over-fetch that the answering retriever
 also re-applies to graph neighbours and cached hits. `exclude_documents` names documents to
 leave out (a file name, path, `source/path` or id), resolved once per request
 under the inventory ACL by `services/scope.py` into an `Exclusion` of artifact
-ids (`NOT IN` in the text arm's SQL) and (source, path) pairs (the other
-arms); a name matching nothing is refused over the API and a note in a
+ids (`NOT IN` in the text arm's SQL; a hit's own node or its `artifact_id`
+elsewhere) and (source, path) pairs (the other arms); a name matching nothing is refused over the API and a note in a
 question. `path_prefix` (one file, or everything under one folder) is
 the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
@@ -3183,6 +3183,15 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **A missing field can be what is hiding a leak.** `Exclusion.admits`
+  matched a hit's node id and its (source, path). A chunk or heading the
+  graph arm reaches is its own node, with its file in `artifact_id` and no
+  path, so a passage of an `@exclude`d document was admitted and cited, and
+  the test asserting "no citation has that path" passed because the citation
+  had no path at all. Filling `relative_path` on citations
+  (`citation_targets.locate`) turned it red on CI. `admits` refuses a hit
+  whose `artifact_id` is excluded now. An assertion that something is absent
+  from a field needs the field to be present.
 
 ---
 
