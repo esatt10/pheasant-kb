@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -257,6 +258,12 @@ def test_a_folder_exports_alone_on_both_surfaces(region: dict[str, Any]) -> None
     archive's folder could only export the whole source, in parts."""
 
     tools = region["tools"]
+    # The archive test above reinstates records/customer.md with a sync that can
+    # still be running; comparing two surfaces across it compares two corpora.
+    deadline = time.monotonic() + 60
+    while "records/customer.md" not in _listed(region) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert "records/customer.md" in _listed(region)
     part = tools.export_source(region["kb"], "reference", "jsonl", path_prefix="records")
     paths = [json.loads(line)["path"] for line in part["content"].splitlines()]
     expected = [path for path in _listed(region) if path.startswith("records/")]
