@@ -26,6 +26,12 @@ document says. The documents are the ones the inventory lists: the same scope
 (``inventory.ARTIFACT_SCOPE``) and, under ``security.acl_enforced``, the same
 reader rule, so an export never holds a document the caller could not open.
 
+**A folder, or one file.** ``path_prefix`` narrows the export to everything
+under one folder (or to one file), with the rule the taxonomy view's "search
+only here" uses: the path itself, or anything beneath it. It is what exporting
+from inside a folder of the taxonomy view sends; a prefix matching nothing is
+refused rather than answered with an empty file.
+
 **Paged by size, not by count.** One part holds documents until their text
 passes :data:`MAX_PART_BYTES`; ``next_offset`` says where the next part
 starts and ``has_more`` whether there is one. A part always holds at least one
@@ -83,6 +89,8 @@ class ExportRequest:
     include_chunks: bool = False
     principal: str | None = None
     principal_groups: list[str] | None = None
+    #: One folder (everything beneath it) or one file; ``None`` is the whole source.
+    path_prefix: str | None = None
 
 
 def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, Any]:
@@ -103,8 +111,11 @@ def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, 
     offset = max(0, int(request.offset))
     source = str(_registered(context, request.source_name)["name"])
 
-    rows = _rows(context, source, request.principal, request.principal_groups)
+    prefix = str(request.path_prefix or "").strip().strip("/")
+    rows = _rows(context, source, request.principal, request.principal_groups, prefix)
     total = len(rows)
+    if prefix and not rows:
+        raise InvalidRequest(f"No document under {prefix!r} in {source!r}")
     if offset > total:
         raise InvalidRequest(f"offset {offset} is past the {total} documents in {source!r}")
 
@@ -123,7 +134,8 @@ def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, 
     next_offset = offset + len(records)
     has_more = next_offset < total
     whole = offset == 0 and not has_more
-    stem = source if whole else f"{source}-{offset:06d}"
+    named = f"{source}-{_slug(prefix)}" if prefix else source
+    stem = named if whole else f"{named}-{offset:06d}"
     payload = _write(fmt, source, kb_id, records, originals, request.include_chunks)
     if fmt == "jsonl":
         content, encoding = payload.decode("utf-8"), "utf-8"
@@ -147,18 +159,34 @@ def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, 
 
 
 def _rows(
-    context: ServiceContext, source: str, principal: str | None, groups: list[str] | None
+    context: ServiceContext,
+    source: str,
+    principal: str | None,
+    groups: list[str] | None,
+    prefix: str = "",
 ) -> list[Any]:
-    """Every document of ``source`` the caller may read, in path order."""
+    """Every document of ``source`` (under ``prefix``) the caller may read, in path order."""
 
     admit = reader(context, principal, groups)
     columns = _COLUMNS if admit is None else f"{_COLUMNS}, a.acl"
+    where, params = "", ()
+    if prefix:
+        # `substr`, not LIKE: SQLite's LIKE folds case and Postgres's does not.
+        where = " AND (a.relative_path = ? OR substr(a.relative_path, 1, ?) = ?)"
+        params = (prefix, len(prefix) + 1, f"{prefix}/")
     rows = context.state.rows(
-        f"SELECT {columns} FROM artifacts a WHERE {ARTIFACT_SCOPE} AND a.source_id = ? "
+        f"SELECT {columns} FROM artifacts a WHERE {ARTIFACT_SCOPE} AND a.source_id = ?{where} "
         "ORDER BY a.relative_path, a.id",
-        (MEMORY_ARTIFACT_TYPE, source),
+        (MEMORY_ARTIFACT_TYPE, source, *params),
     )
     return list(rows) if admit is None else admit(list(rows))
+
+
+def _slug(prefix: str) -> str:
+    """A folder as part of a file name: ``a.zip/files`` -> ``a.zip-files``."""
+
+    cleaned = "".join(c if c.isalnum() or c in "._-" else "-" for c in prefix.replace("/", "-"))
+    return cleaned.strip("-.")[:80] or "folder"
 
 
 def _record(

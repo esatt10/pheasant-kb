@@ -22,22 +22,45 @@ const FORMATS: { value: Format; label: string; hint: string }[] = [
  * the caller could not open.
  *
  * Two placements, one panel. The taxonomy view's header opens it under an
- * **Export source** pill beside **Search this source** (`ExportButton`); the
- * Sources page opens it as a row under the source, the way **outline** opens
- * (`ExportPanel`), because a floating panel is clipped by the table there and
- * runs off a phone's screen.
+ * **Export source** pill beside **Search this source** (`ExportButton`), and
+ * inside a folder as **Export folder**, which sends that folder as
+ * `path_prefix`; the Sources page opens it as a row under the source, the way
+ * **outline** opens (`ExportPanel`), because a floating panel is clipped by the
+ * table there and runs off a phone's screen.
+ *
+ * A large source comes back in several parts, one download each, and takes a
+ * while: the floating panel stays open while an export runs (`onBusy`). It
+ * used to close on any click outside it, which unmounted the progress line,
+ * and reopening it offered a fresh **Download** that started the whole export
+ * again.
  */
-export function ExportPanel({ source }: { source: string }) {
+export function ExportPanel({
+  source,
+  path = "",
+  onBusy,
+}: {
+  source: string;
+  /** A folder (or file) inside the source; empty for the whole source. */
+  path?: string;
+  onBusy?: (busy: boolean) => void;
+}) {
   const [format, setFormat] = useState<Format>("zip");
   const [chunks, setChunks] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
 
   const run = useMutation({
     mutationFn: () =>
-      api.downloadSourceExport(source, { format, includeChunks: chunks }, (part) =>
-        setProgress(`${part.done.toLocaleString()} of ${part.total.toLocaleString()} documents`),
+      api.downloadSourceExport(source, { format, includeChunks: chunks, path }, (part) =>
+        setProgress(
+          `${part.done.toLocaleString()} of ${part.total.toLocaleString()} documents` +
+            (part.done < part.total ? " · keep this page open" : ""),
+        ),
       ),
-    onMutate: () => setProgress("Preparing…"),
+    onMutate: () => {
+      onBusy?.(true);
+      setProgress("Preparing…");
+    },
+    onSettled: () => onBusy?.(false),
     onSuccess: (result) =>
       setProgress(
         `Saved ${result.files.length === 1 ? result.files[0] : `${result.files.length} files`} · ${result.documents.toLocaleString()} documents`,
@@ -48,7 +71,7 @@ export function ExportPanel({ source }: { source: string }) {
   return (
     <div className="export-control__body">
       <p className="export-control__title">
-        Export <strong>{source}</strong>
+        Export <strong>{path ? `${source} / ${path}` : source}</strong>
       </p>
       <div className="export-control__formats" role="radiogroup" aria-label="Format">
         {FORMATS.map((option) => (
@@ -94,12 +117,15 @@ export function ExportPanel({ source }: { source: string }) {
 }
 
 /** The taxonomy header's pill: the panel, floating under it. */
-export function ExportButton({ source }: { source: string }) {
+export function ExportButton({ source, path = "" }: { source: string; path?: string }) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
+  const what = path ? "folder" : "source";
 
   useEffect(() => {
-    if (!open) return;
+    // Nothing closes it while an export is running.
+    if (!open || busy) return;
     const onPointer = (event: PointerEvent) => {
       if (box.current && !box.current.contains(event.target as Node)) setOpen(false);
     };
@@ -110,7 +136,7 @@ export function ExportButton({ source }: { source: string }) {
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, busy]);
 
   return (
     <span className="export-control" ref={box}>
@@ -119,17 +145,21 @@ export function ExportButton({ source }: { source: string }) {
         className={`scope-toggle${open ? " scope-toggle--active" : ""}`}
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => setOpen((value) => !value)}
-        title={`Download every document of ${source} as one file`}
+        onClick={() => !busy && setOpen((value) => !value)}
+        title={`Download every document of ${path ? `${source} / ${path}` : source} as one file`}
       >
         <span className="scope-toggle__icon" aria-hidden>
           ⤓
         </span>
-        Export source
+        {busy ? "Exporting…" : `Export ${what}`}
       </button>
       {open ? (
-        <div className="export-control__panel" role="dialog" aria-label={`Export ${source}`}>
-          <ExportPanel source={source} />
+        <div
+          className="export-control__panel"
+          role="dialog"
+          aria-label={`Export ${path ? `${source} / ${path}` : source}`}
+        >
+          <ExportPanel key={`${source}/${path}`} source={source} path={path} onBusy={setBusy} />
         </div>
       ) : null}
     </span>

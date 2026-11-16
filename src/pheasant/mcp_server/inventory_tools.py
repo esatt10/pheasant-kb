@@ -234,6 +234,7 @@ class InventoryTools:
         include_chunks: bool = False,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import source_export
@@ -248,6 +249,7 @@ class InventoryTools:
                 include_chunks=include_chunks,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=path_prefix,
             ),
         )
 
@@ -512,8 +514,12 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         include_chunks: bool = False,
         principal: str | None = None,
         principal_groups: list[str] | None = None,
+        path_prefix: str | None = None,
     ) -> dict:
         """Export every document of one source as a single file to keep.
+
+        path_prefix narrows it to one folder (everything beneath it) or one
+        file, as browse_source names them.
 
         format is "zip" (each document at its path under files/, its original
         bytes while they are still the ones indexed, else the indexed text;
@@ -535,4 +541,5 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             include_chunks,
             principal,
             principal_groups,
+            path_prefix=path_prefix,
         )

@@ -249,3 +249,48 @@ def test_an_archived_document_is_not_exported(region: dict[str, Any]) -> None:
         assert paths == _listed(region)
     finally:
         tools.reinstate_documents(region["kb"], ["records/customer.md"], source_name="reference")
+
+
+def test_a_folder_exports_alone_on_both_surfaces(region: dict[str, Any]) -> None:
+    """The taxonomy view exports where the reader is: one folder, or one file.
+    Inside a folder it used to offer nothing, so a reader in an uploaded
+    archive's folder could only export the whole source, in parts."""
+
+    tools = region["tools"]
+    part = tools.export_source(region["kb"], "reference", "jsonl", path_prefix="records")
+    paths = [json.loads(line)["path"] for line in part["content"].splitlines()]
+    expected = [path for path in _listed(region) if path.startswith("records/")]
+    assert expected and paths == expected
+    assert part["total"] == len(expected) and part["filename"] == "reference-records.jsonl"
+
+    # A trailing slash names the same folder; a file names itself.
+    again = tools.export_source(region["kb"], "reference", "jsonl", path_prefix="/records/")
+    assert again["content"] == part["content"]
+    one = tools.export_source(
+        region["kb"], "reference", "jsonl", path_prefix="records/salesorder.md"
+    )
+    assert [json.loads(line)["path"] for line in one["content"].splitlines()] == [
+        "records/salesorder.md"
+    ]
+    # A folder is a path segment: "rec" is not a prefix of "records/...".
+    with pytest.raises(InvalidRequest, match="No document under 'rec'"):
+        tools.export_source(region["kb"], "reference", "jsonl", path_prefix="rec")
+
+    response = region["client"].get(
+        "/sources/reference/export", params={"format": "jsonl", "path_prefix": "records"}
+    )
+    assert response.status_code == 200 and response.json() == part
+    download = region["client"].get(
+        "/sources/reference/export",
+        params={"format": "zip", "path_prefix": "records", "download": "true"},
+    )
+    assert 'filename="reference-records.zip"' in download.headers["content-disposition"]
+    names = zipfile.ZipFile(io.BytesIO(download.content)).namelist()
+    assert {f"files/{path}" for path in expected} <= set(names)
+    assert not any(name.startswith("files/schema/") for name in names)
+
+    refused = region["client"].get(
+        "/sources/reference/export", params={"format": "jsonl", "path_prefix": "rec"}
+    )
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == "No document under 'rec' in 'reference'"
