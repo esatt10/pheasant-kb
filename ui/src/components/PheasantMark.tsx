@@ -1,12 +1,10 @@
 /**
  * The pheasant wordmark.
  *
- * The artwork is a full-colour illustration rather than a monochrome glyph, so
- * unlike the letter tile it replaced it does not inherit `currentColor` and the
- * surface behind it stays transparent — the same asset reads correctly on the
- * light and dark bar and on the browser's own tab strip. It is served from
- * `public/`, which is also where the favicon link in `index.html` points, so
- * the tab icon and the in-app mark can never drift apart.
+ * The full-colour illustration keeps the reference image's white background
+ * and does not inherit `currentColor`. It is served from `public/`, which is
+ * also where the favicon link in `index.html` points, so the tab icon and the
+ * in-app mark use the same artwork.
  */
 export function PheasantMark({ size = 30 }: { size?: number }) {
   return (
