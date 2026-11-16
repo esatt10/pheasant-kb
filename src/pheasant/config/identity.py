@@ -40,6 +40,13 @@ class EntraSettings(ModelMixin):
     #: Optional authoritative Terraform assignments, keyed by Entra object id.
     #: None uses verified claims; an empty map denies every Entra identity.
     role_assignments: dict[str, str] | None = None
+    #: Access is granted while the region runs (``services/access.py``): an
+    #: Admin grants any role, a Contributor grants Contributor or Reader, and
+    #: an Admin connects a customer's own Entra tenant so its people sign in
+    #: with their organization. ``role_assignments`` above then names the
+    #: operator's own admins, who cannot be changed at runtime, and a token's
+    #: role claims are no longer consulted. Off, nothing here changes.
+    delegated_access: bool = False
     #: The externally reachable base URL (``https://host``): redirect URIs and
     #: the MCP OAuth metadata are absolute and cannot be derived per request
     #: behind an ingress.

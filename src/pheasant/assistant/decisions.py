@@ -379,6 +379,8 @@ class Decider:
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
                 cached_input_tokens=details.get("cached_tokens"),
+                kind="decision",
+                cached_included=True,
             )
             if isinstance(usage.get("input_tokens"), int):
                 input_tokens = int(usage["input_tokens"])

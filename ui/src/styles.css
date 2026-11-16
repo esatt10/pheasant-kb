@@ -6722,3 +6722,42 @@ select.text-input {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+
+/* Administration (pages/AdminPage.tsx): access, models, usage, knowledge bases. */
+.admin-tabs, .admin-tabs--inline { flex: 0 0 auto; }
+.admin-tabs .tab, .admin-tabs--inline .tab { flex: 0 0 auto; white-space: nowrap; }
+.admin-toolbar__select { width: auto; }
+.admin-pill { margin-left: calc(6px * var(--sp)); }
+.admin-actions { text-align: right; white-space: nowrap; }
+.admin-actions .btn + .btn { margin-left: calc(6px * var(--sp)); }
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(12px * var(--sp));
+  margin-bottom: calc(12px * var(--sp));
+  flex-wrap: wrap;
+}
+.admin-stats { flex-wrap: wrap; }
+.admin-stats .stat { min-width: 130px; }
+.admin-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: calc(10px * var(--sp)) calc(12px * var(--sp));
+  align-items: end;
+  margin: calc(10px * var(--sp)) 0 calc(14px * var(--sp));
+}
+.admin-form__wide { grid-column: 1 / -1; margin: 0; }
+.admin-cards { display: grid; gap: calc(10px * var(--sp)); }
+.admin-card { padding: calc(14px * var(--sp)); display: grid; gap: calc(6px * var(--sp)); }
+.admin-card__head { display: flex; align-items: center; gap: calc(10px * var(--sp)); }
+.admin-card__head .btn { margin-left: auto; }
+.admin-card p { margin: calc(4px * var(--sp)) 0 0; }
+.usage-chart svg { width: 100%; height: auto; display: block; }
+.usage-chart__readout { min-height: 1.5em; }
+.usage-chart__axis { stroke: var(--border); stroke-width: 1; }
+.usage-chart__bar { fill: var(--accent); opacity: 0.78; }
+.usage-chart__bar--on { opacity: 1; }
+.usage-chart__ticks { display: flex; justify-content: space-between; margin-top: calc(4px * var(--sp)); }
+.usage-chart__table { margin-top: calc(8px * var(--sp)); }
+.usage-chart__table summary { cursor: pointer; margin-bottom: calc(8px * var(--sp)); }

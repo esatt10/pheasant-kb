@@ -150,6 +150,10 @@ class AnswerRequest:
     #: (``@compose`` in a question says the same). ``None``/``auto`` reads it
     #: off the question.
     intent: str | None = None
+    #: The answering and judgement model, by catalog id (`services.models`,
+    #: ``GET /models``). ``None`` is the region's default of each.
+    model: str | None = None
+    decision_model: str | None = None
 
 
 def admit(context: ServiceContext, request: AnswerRequest) -> None:
@@ -181,6 +185,10 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
 
     # A malformed artifacts toggle is refused before a stream opens.
     artifacts.scope(request.artifacts, request.source_name, request.source_names, None)
+    from pheasant.services import models
+
+    # An unknown model is refused here, before a stream opens.
+    models.resolve(context.config, request.model, request.decision_model)
     if request.intent and str(request.intent).strip().lower() not in {"auto", *chat.INTENTS}:
         raise InvalidRequest(
             f"intent must be one of auto, {', '.join(chat.INTENTS)}; got {request.intent!r}"
@@ -231,6 +239,15 @@ def answer(
     source_name, source_names, exclude_sources = artifacts.scope(
         request.artifacts, request.source_name, request.source_names, None, state=context.state
     )
+    from pheasant.services import models
+
+    # The chosen models as a view of the config: every workflow reads
+    # `config.assistant`, so none of them needs to know one was picked.
+    config = models.config_for(context.config, request.model, request.decision_model)
+    from pheasant.telemetry import usage as metering
+
+    answered = False
+    surface = metering.enter_channel(request.channel or "api")
     try:
         from pheasant.search.vector_store import collect_query_embedding_metrics
 
@@ -240,7 +257,7 @@ def answer(
                 request.question,
                 search=context.searcher,
                 knowledge_base=context.knowledge_base(request.knowledge_base),
-                config=context.config,
+                config=config,
                 graph=context.graph,
                 state=context.state,
                 credential=credential,
@@ -273,7 +290,12 @@ def answer(
                 exclude_sources=exclude_sources,
                 intent=request.intent,
             )
+            from pheasant.assistant.citation_targets import locate_all
+
+            # After the answer exists: names where each citation can be opened.
+            locate_all(payload)
             payload["query_embedding"] = embedding_metrics.as_dict()
+            payload["models"] = models.chosen(context.config, request.model, request.decision_model)
             # A composed answer is kept as an artifact the moment it exists,
             # for every surface: `services/artifacts.py`.
             kept = artifacts.keep_composed(
@@ -290,6 +312,7 @@ def answer(
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000
+            answered = True
             return payload
     except Exception as exc:
         from pheasant.request_budget import DeadlineExceeded
@@ -298,6 +321,8 @@ def answer(
             raise AssistantDeadline() from exc
         raise
     finally:
+        metering.METER.operation(metering.ANSWER, time.perf_counter() - server_started, ok=answered)
+        metering.leave_channel(surface)
         if owns_permit:
             owned_permit.release()
 
@@ -424,13 +449,17 @@ def visualize(
     from pheasant.assistant.routing import record_visual
 
     record_visual(visual)
-    return {
-        "request": text,
-        "visual": visual,
-        "citations": citations,
-        "facts": facts,
-        "figures": figures,
-    }
+    from pheasant.assistant.citation_targets import locate_all
+
+    return locate_all(
+        {
+            "request": text,
+            "visual": visual,
+            "citations": citations,
+            "facts": facts,
+            "figures": figures,
+        }
+    )
 
 
 def _owning_artifact(context: ServiceContext, node_id: str) -> tuple[str, str | None]:
@@ -537,8 +566,11 @@ def render_visual(
     """
 
     from pheasant.assistant.answering import attach_visual, resolve_llm, visual_documents
+    from pheasant.services import models
 
-    llm = resolve_llm(context.config, credential, env)
+    # Drawn by the model that wrote the answer it belongs to.
+    picked = payload.get("models") or {}
+    llm = resolve_llm(models.config_for(context.config, picked.get("chat")), credential, env)
     kb_id = context.knowledge_base(payload.get("knowledge_base"))
     return attach_visual(
         payload,

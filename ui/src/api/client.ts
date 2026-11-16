@@ -49,7 +49,16 @@ import type {
   PipelineList,
   PipelineDefaults,
   PipelineSettings,
+  ModelCatalog,
 } from "./types";
+import type {
+  AccessList,
+  AccessOrganization,
+  AccessPerson,
+  CapacityRequest,
+  FleetReport,
+  UsageReport,
+} from "./admin";
 import type {
   Artifact,
   ArtifactSettings,
@@ -596,6 +605,61 @@ export const api = {
       body: JSON.stringify({ query, mode, max_results: maxResults, ...criteria }),
     }),
 
+  // Administration (`pages/AdminPage.tsx`): access, usage, the fleet.
+  access: () => request<AccessList>("/access"),
+  grantAccess: (body: { email: string; role: string; organization?: string | null }) =>
+    request<{ status: string; grant: AccessPerson; sign_in_url: string | null }>("/access/grants", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokeAccess: (grantId: string) =>
+    request<{ status: string }>(`/access/grants/${encodeURIComponent(grantId)}`, {
+      method: "DELETE",
+    }),
+  connectOrganization: (body: {
+    tenant_id: string;
+    name?: string;
+    domains?: string[];
+    default_role?: string | null;
+  }) =>
+    request<{ status: string; organization: AccessOrganization }>("/access/organizations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  disconnectOrganization: (tenantId: string) =>
+    request<{ status: string; grants_removed: number }>(
+      `/access/organizations/${encodeURIComponent(tenantId)}`,
+      { method: "DELETE" },
+    ),
+  usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
+  fleet: () => request<FleetReport>("/fleet"),
+  createKnowledgeBase: (body: { name: string; description?: string; admins?: string[] }) =>
+    request<{
+      status: string;
+      knowledge_base: { slot: string; name: string; url: string | null };
+      sign_in_url: string | null;
+      slots_free: number;
+    }>("/fleet/knowledge-bases", { method: "POST", body: JSON.stringify(body) }),
+  requestCapacity: (body: { quantity: number; reason: string; kind: string }) =>
+    request<{ status: string; request: CapacityRequest }>("/fleet/requests", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  resolveCapacityRequest: (id: string, body: { status: string; note: string }) =>
+    request<{ status: string; request: CapacityRequest }>(
+      `/fleet/requests/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  /** The models this region offers, and the default of each kind. */
+  models: () => request<ModelCatalog>("/models"),
+  /** Switch the region's embedding model (application Admin); re-embeds everything. */
+  selectEmbedding: (embedding: string) =>
+    request<ModelCatalog & { status: string }>("/models/embedding", {
+      method: "PUT",
+      body: JSON.stringify({ embedding }),
+    }),
+
   // Assistant (grounded chat)
   assistantStatus: (sessionId?: string | null) =>
     request<AssistantStatus>(`/assistant/status${qs({ session_id: sessionId ?? undefined })}`),
@@ -701,6 +765,9 @@ export const api = {
       visual?: "none" | "diagram" | "image" | null;
       /** Keep the answer under this id for an hour (8-64 of `A-Za-z0-9_-`). */
       answer_id?: string | null;
+      /** The answering and judgement model, by `GET /models` id; unset is the default. */
+      model?: string | null;
+      decision_model?: string | null;
     },
     onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,

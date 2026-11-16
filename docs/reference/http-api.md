@@ -63,7 +63,7 @@ See [Attach to a Synapse fleet](../how-to/attach-to-synapse.md).
 | POST | `/connections/{name}/test` | Ask the service again; records and returns `check`. Same operation as MCP `test_connection`. |
 | DELETE | `/connections/{name}?force=false` | Remove a connection; 409 `CONNECTION_IN_USE` while a source reads with it, unless `force`. Same operation as MCP `remove_connection`. |
 | GET | `/sources/types` | Registerable source types — built-ins plus installed connector plugins — each with a `path_role` of `required` or `unused`. |
-| POST | `/sources/quick-add` | One-field setup: a path, URL, glob or connector name is detected, named, registered and (by default) synced. Same inference as `pheasant up`. `sync_now` (default `true`) gates syncing at all; `wait` (default `true`) gates whether the response blocks on it — see Sync below. `wait: false` returns `sync_results: []` and `syncing: [names]` immediately; poll `GET /sources` for progress. A URL joins the web collection already named after its site rather than replacing it; `extended` lists the collections a call added pages to. `connection` names a connected account the new sources read with (a private repository, a Drive); 404 `UNKNOWN_CONNECTION` for one that is not connected. Same registration as MCP `add_source`. |
+| POST | `/sources/quick-add` | One-field setup: a path, URL, glob or connector name is detected, named, registered and (by default) synced. `507 KNOWLEDGE_BASE_FULL` when the knowledge base is at `storage.knowledge_base_limit_gb` (so is `POST /ingest/submit`). Same inference as `pheasant up`. `sync_now` (default `true`) gates syncing at all; `wait` (default `true`) gates whether the response blocks on it — see Sync below. `wait: false` returns `sync_results: []` and `syncing: [names]` immediately; poll `GET /sources` for progress. A URL joins the web collection already named after its site rather than replacing it; `extended` lists the collections a call added pages to. `connection` names a connected account the new sources read with (a private repository, a Drive); 404 `UNKNOWN_CONNECTION` for one that is not connected. Same registration as MCP `add_source`. |
 | POST | `/sources/upload` | **multipart.** Upload documents; they land under `/state/uploads/<name>/`, which is registered as an ordinary `document_folder` source and indexed through the normal pipeline — no second ingestion path. Fields: `files` (repeatable), `source_name` (default `uploads`), `sync_now`, `wait`. A second upload into the same name adds to it. The default size limit is 1024 MiB (1 GiB) **per file**, not 4 MiB per request; one oversized or empty file is reported in `rejected[]` without losing the rest. An upstream proxy can still reject the whole request under its own body limit. |
 | POST | `/sources` | Register a runtime source (full schema). Accepts plugin types. A source whose connector never reads `path` — a plugin, `web_collection`, `api` — takes `"/unused"` (or an empty path) instead of a real directory. A `web_collection` takes its pages in `urls` and gets `connector.allow_experimental: true` unless the request sets it. Same `sync_now`/`wait` fields as quick-add. A name that exists is replaced; to change a web collection's pages use `/sources/{name}/urls`. |
 | POST | `/sources/{name}/urls` | Add pages to a web collection (or API source) or take them out: `{"add": [...], "remove": [...], "sync_now": true}`. Every other page stays as indexed. Returns `urls`, `added`, `removed`, `already_listed`, `not_listed` and the sync it started (`sync`). 422 when it would leave no URLs or the source holds none; 404 for an unknown source. Same operation as MCP `edit_source_urls`. |
@@ -350,6 +350,44 @@ these knobs decide how much it *fetches* per question.
 | POST | `/search/embeddings/reindex` | Embed already-indexed content without re-reading sources. Idempotent; `?drop_existing=true` discards vectors left in a stale embedding space. |
 
 See [Vector self-search](../how-to/vector-search.md).
+
+## Models
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/models` | The answering, judgement and embedding models offered, the default of each, and the embedding in force (`embedding.state`: `ready` or `reindex_pending`). Never an endpoint or a variable name. |
+| PUT | `/models/embedding` | Switch the region's embedding model (application Admin). Every chunk already indexed is re-embedded; no source is re-read. |
+
+| GET | `/usage` | With `observability.usage`: tokens by model, questions, searches, people, organizations, surfaces, answer and search p50/p95, and size, over `?days=` (Admin). Cost, at the prices the operator stated, is `null` unless the caller operates the region. |
+
+`POST /assistant/chat` and its stream take `model` and `decision_model` (ids
+from `GET /models`); the answer's `models` reports which ran.
+
+## Access
+
+With `security.entra.delegated_access`; `404 ACCESS_NOT_DELEGATED` without.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/access` | People with access, the roles the caller may grant, and the connected organizations. A Contributor sees their own organization. |
+| POST | `/access/grants` | Give a person a role by sign-in name, or change it. Above the caller's ceiling: `403 ACCESS_ROLE_NOT_GRANTABLE`. |
+| DELETE | `/access/grants/{grant_id}` | Remove a grant; the person's credentials stop within seconds. |
+| POST | `/access/organizations` | Connect a customer's Microsoft Entra tenant (Admin). Returns its admin-consent and sign-in links. |
+| DELETE | `/access/organizations/{tenant_id}` | Disconnect it and remove its people's grants (Admin). |
+
+## Fleet (several knowledge bases)
+
+With `fleet.enabled`; `404 FLEET_NOT_ENABLED` without. All Admin.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/fleet` | The knowledge bases the caller administers, free slots, and capacity requests. The operator sees every slot and each one's last thirty days of usage. |
+| POST | `/fleet/knowledge-bases` | Claim a free slot for a new knowledge base; the caller and `admins` become its Admins. `409 FLEET_NO_CAPACITY` when none is free. |
+| POST | `/fleet/requests` | Ask the operator for more slots (`kind: slots`) or more room here (`kind: storage`). Provisions nothing. |
+| PATCH | `/fleet/requests/{id}` | The operator's answer: `approved`, `declined` or `fulfilled` (`403 FLEET_OPERATOR_REQUIRED` otherwise). |
+
+`GET /auth/login?org=<tenant id or domain>` signs in from a connected
+organization. See [Host a region for someone else](../how-to/hosted-regions.md).
 
 ## MCP
 

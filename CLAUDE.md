@@ -203,6 +203,14 @@ pheasant-kb/
 │   │                            region_status (what is still waking or
 │   │                            warming after a scale-to-zero wake),
 │   │                            connections (connect, check, sign in, remove),
+│   │                            access (who may use the region, granted by
+│   │                            its users; customer organizations) +
+│   │                            identity_delegation (a grant as a role on a
+│   │                            request), models (the catalog: pick per
+│   │                            question, switch the embedding model),
+│   │                            usage (tokens, activity, latency and cost for
+│   │                            the operator), fleet (claim a slot for a new
+│   │                            knowledge base, capacity requests),
 │   │                            quick_add (one field to sources, for the UI's
 │   │                            Add box and MCP add_source)
 │   ├── mcp_server/            ← server.py (MCPServer), tools.py (PheasantTools),
@@ -242,7 +250,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 211 pytest modules, offline by design
+└── tests/                     ← 217 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -878,8 +886,8 @@ or more a post-filter with the shared over-fetch that the answering retriever
 also re-applies to graph neighbours and cached hits. `exclude_documents` names documents to
 leave out (a file name, path, `source/path` or id), resolved once per request
 under the inventory ACL by `services/scope.py` into an `Exclusion` of artifact
-ids (`NOT IN` in the text arm's SQL) and (source, path) pairs (the other
-arms); a name matching nothing is refused over the API and a note in a
+ids (`NOT IN` in the text arm's SQL; a hit's own node or its `artifact_id`
+elsewhere) and (source, path) pairs (the other arms); a name matching nothing is refused over the API and a note in a
 question. `path_prefix` (one file, or everything under one folder) is
 the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
@@ -1555,6 +1563,104 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   fits, by moving the SVG `viewBox` — the same view state, and the same rule.
   `tests/test_mcp_app_expand.py` drives it in a real browser against the real
   validator.
+
+### Hosting a region for someone else
+
+Off by default; `docs/how-to/hosted-regions.md`. Two halves, one idea: the
+operator provisions, the users decide.
+
+- **Access is granted inside the region** (`security.entra.delegated_access`;
+  `services/access.py`, `persistence/access_grants.py`, table `access_grants`;
+  `/access*`, MCP `list_access` / `grant_access` / `revoke_access` /
+  `connect_organization` / `disconnect_organization`). An Admin grants any
+  role, a Contributor grants Contributor or Reader in their own organization, a
+  Reader grants nothing and sees nothing; nobody changes their own access, and
+  changing a grant counts as removing the old one. The ceiling is read off the
+  caller's *permissions* (`security.manage` / `settings.manage`), not a new
+  permission string: adding one would have mislabelled every credential issued
+  before it. `IdentityService._current_grant` takes the higher of
+  `role_assignments` (the operator's admins, not changeable at runtime) and the
+  grant, from a per-process snapshot re-read at most every 15 s, so a warm
+  request reads no table (`tests/test_delegated_access.py` holds that). A grant
+  by sign-in name binds to the object id that first proves it. Token role
+  claims are not consulted in this mode.
+- **A customer's Entra tenant is connected, not configured.** A row of kind
+  `org`; its tokens are verified against *its* keys and issuer
+  (`identity_delegation._verifier_for`), a sign-in names it
+  (`/auth/login?org=`, else `/auth/choose`, which MCP's authorize also gets),
+  and a sign-in sent to one tenant accepts that tenant's identity token only.
+  The app registration must be multi-tenant; a tenant nobody connected is
+  refused whatever its token says.
+- **Models are a catalog** (`config/models.py`, `services/models.py`; `GET
+  /models`, MCP `list_models`). `model` / `decision_model` on a question pick
+  from `models.chat` / `models.decisions`; `models.config_for` returns a
+  shallow copy of the config with `assistant` replaced, so no workflow knows a
+  model was picked, and settings tuned for the configured model
+  (`reasoning_effort`, `grader_model`) are not carried to another. Each entry
+  is a wire and an address: Claude on Foundry is `provider: anthropic` at
+  `<resource>/anthropic`. A Foundry entry with no key is called with the
+  managed identity (`chat.resolve_provider`), as embeddings and judgements
+  already were. Empty catalog: `config_for` returns the config it was given.
+- **One embedding model at a time, switched by an Admin**
+  (`search/embedding_selection.py`; `PUT /models/embedding`, MCP
+  `select_embedding_model`). The choice is a `region_settings` row every
+  process applies when its engine is built and follows on a 30 s limit; before
+  a sync writes a vector, `ensure_space` re-embeds every stored chunk under the
+  `__embeddings__` lease if the store is in another model's space. "Has this
+  stack moved?" compares the *running* embedder with the selection rather than
+  remembering what was applied: the first version remembered, and the indexer
+  noticing first left the same process's searcher embedding queries with the
+  old model. `tests/test_model_catalog.py`.
+- **Usage is totals, counted where it happens** (`observability.usage`;
+  `telemetry/usage.py`, `persistence/usage_ledger.py`, table `usage_daily`;
+  `GET /usage`, MCP `get_usage`). Every reported model call is counted at the
+  one place its wire reads the provider's `usage` (`providers._record_usage`,
+  the embedding client), an answer or search with its duration in a fixed
+  histogram, each attributed to the verified caller. In memory, flushed as one
+  additive upsert at most every 30 s (and on shutdown and before a read): no
+  write on a request, and two replicas flushing one key both land. Stored
+  input is always the part *not* served from cache, because OpenAI's figure
+  contains its cached tokens and Anthropic's does not. Cost is tokens times
+  prices the operator *stated* in the catalog; a model with none is named, and
+  cost is withheld from an Admin a customer granted (`usage.is_operator`).
+  The engine binds the meter, so a sync child's embeddings count too.
+  `tests/test_usage_metering.py`.
+- **Several knowledge bases are several regions with a directory**
+  (`fleet.*`; `persistence/fleet_store.py`, `services/fleet.py`; `/fleet*`,
+  MCP `list_fleet` / `create_knowledge_base` / `request_capacity` /
+  `resolve_capacity_request`). The operator provisions *slots*; an Admin
+  claims a free one (one conditional `UPDATE` whose `status='free'` the
+  winner's write falsifies), becoming Admin of the new knowledge base, whose
+  Contributors and Readers are its own. The claimed stack learns its admins
+  from the directory (`identity_delegation._fleet_role`) and admits their
+  tenant. No free slot is `FLEET_NO_CAPACITY` and a capacity *request*, a
+  record the operator answers: nothing in pheasant provisions. Each stack
+  mirrors its usage totals into the directory, which is how the operator
+  reads the whole fleet at once. `tests/test_fleet.py`.
+- **A knowledge base can have a size limit, and one check holds it**
+  (`storage.knowledge_base_limit_gb`, unset by default;
+  `persistence/size_limit.py`, `services/size_guard.py`). The measure is
+  indexed content (`SUM(artifacts.size_bytes)`), not bytes on disk: Postgres
+  keeps a deleted row's space, so a disk limit could be reached and never
+  left. At it, `SyncEngine._sync_source` skips `incremental` and `full`
+  (`reason: knowledge base full`; skipped, so a queued task finishes rather
+  than retrying), which is the one place every way of starting a sync passes;
+  `submit` and quick add refuse with `KNOWLEDGE_BASE_FULL` (507) and say to
+  remove content or file a `storage` capacity request. Nothing is evicted. It
+  is not `storage.max_state_size_gb`, the snapshot-history cap the first cut
+  of the usage page reported as the limit. `tests/test_knowledge_base_limit.py`.
+- **The Admin page is the same services again** (`ui/src/pages/AdminPage.tsx`,
+  `ui/src/admin/`): Access, Models, Usage, Knowledge bases. Each tab offers
+  only what the server says the caller may do.
+
+**Every cited passage can be opened where it is**
+(`assistant/citation_targets.py`). A passage reached through the graph arm is
+cited by its chunk *node* and carried neither `chunk_id` nor `relative_path`,
+so its chip opened nothing and switched the panel off the document the reader
+had open. `locate` fills both from the chunk's stable id, on the finished
+answer only, so nothing retrieved or ranked moves. Found by clicking each chip
+of one answer in a browser: the first worked, the next two did not.
+`tests/test_citation_targets.py`.
 
 ### Retrieval telemetry
 
@@ -3089,6 +3195,27 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **"Never recorded" is not "never happened".** The embedding fingerprint is
+  written by the startup reconcile, and a fleet that scales to zero syncs
+  nothing at startup, so the Azure region had none over 11,544 embedded
+  chunks. `GET /models` said `not_indexed`, and worse, a switch to another
+  embedding model read as an *introduction*: old vectors kept, no re-embed,
+  new ones of another width written beside them. An unrecorded store was
+  built by `models.default_embedding`, so once another entry is in force that
+  is the space it is leaving (`embedding_selection.previous_space`, read by
+  `reconcile_embeddings` and `ensure_space`). The status compares against the
+  *selection*, not the process's config, which a replica that has not
+  followed a switch yet still has pointing at the old model. Found by the
+  first live check after deploying; every test region reconciles at startup.
+- **A missing field can be what is hiding a leak.** `Exclusion.admits`
+  matched a hit's node id and its (source, path). A chunk or heading the
+  graph arm reaches is its own node, with its file in `artifact_id` and no
+  path, so a passage of an `@exclude`d document was admitted and cited, and
+  the test asserting "no citation has that path" passed because the citation
+  had no path at all. Filling `relative_path` on citations
+  (`citation_targets.locate`) turned it red on CI. `admits` refuses a hit
+  whose `artifact_id` is excluded now. An assertion that something is absent
+  from a field needs the field to be present.
 
 ---
 

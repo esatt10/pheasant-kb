@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import re
 
+from pheasant.persistence.access_grants import ACCESS_GRANTS_SCHEMA
 from pheasant.persistence.sql import Dialect
+from pheasant.persistence.usage_ledger import USAGE_SCHEMA
 
 #: Tables and indexes, shared by every backend.
 CORE_SCHEMA = """\
@@ -1086,6 +1088,9 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_seals_kb
 """
 
 #: SQLite-only: WAL, plus the FTS5 virtual tables.
+# DDL kept beside the module that owns the table; core in every other sense.
+CORE_SCHEMA += ACCESS_GRANTS_SCHEMA + USAGE_SCHEMA
+
 SQLITE_EXTRAS = """\
 PRAGMA journal_mode=WAL;
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(

@@ -383,6 +383,8 @@ class StateStore:
                 "artifact_publications": "revision_id",
                 "region_settings": "updated_by",
                 "connections": "check_json",
+                "access_grants": "updated_at",
+                "usage_daily": "b9",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()

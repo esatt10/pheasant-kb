@@ -272,6 +272,9 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     """
 
     kb_id = context.knowledge_base(request.knowledge_base)
+    from pheasant.services import models
+
+    models.follow(context)  # the embedding model an admin switched to, if it moved
     # A malformed expansion is refused before anything is retrieved.
     request = replace(_scoped(request, context.state), expand=parse_expansion(request.expand))
     # Before the arms run, not after. A pinned search whose corpus has moved
@@ -279,7 +282,15 @@ def search(context: ServiceContext, request: SearchRequest) -> dict[str, Any]:
     # attribute whatever comes back to the snapshot it named, so the only safe
     # order is to establish that the name is still true first.
     snapshot = _require_snapshot(context, request.snapshot_id)
-    return _search(context, request, kb_id, snapshot)
+    from pheasant.telemetry import usage as metering
+
+    began, found = time.perf_counter(), False
+    try:
+        result = _search(context, request, kb_id, snapshot)
+        found = True
+        return result
+    finally:
+        metering.METER.operation(metering.SEARCH, time.perf_counter() - began, ok=found)
 
 
 def _scoped(request: SearchRequest, state: Any = None) -> SearchRequest:

@@ -113,6 +113,8 @@ nav:
       - Parquet export schema: reference/export-schema.md
       - Security: security.md
       - Roles and permissions: how-to/roles.md
+      - Host a region for someone else: how-to/hosted-regions.md
+      - "Runbook: a hosted knowledge base": how-to/customer-runbook.md
   - Explanation:
       - Architecture: architecture.md
       - The memory system: memory-system.md

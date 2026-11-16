@@ -306,6 +306,30 @@ def test_exclude_in_a_question_leaves_the_document_out(region: dict[str, Any]) -
     assert left["scope"]["excluded"] == ["docs/guide/deploy.md"]
 
 
+def test_an_excluded_document_is_left_out_by_every_road_to_its_passages() -> None:
+    """A chunk the graph arm reaches is its own node: no path, its file in
+    ``artifact_id``. Matched on node id and path alone it was admitted, and an
+    excluded document's passage was cited with no file beside it -- invisible
+    to the test above until citations began naming where they point."""
+
+    from pheasant.search.criteria import Exclusion
+
+    excluded = Exclusion(
+        ids=frozenset({"file:docs:guide/deploy.md:branch=none"}),
+        pairs=frozenset({("docs", "guide/deploy.md")}),
+    )
+    chunk_node = {
+        "node_id": "chunk:docs:guide/deploy.md:sha256=ab:chunk=0002",
+        "artifact_id": "file:docs:guide/deploy.md:branch=none",
+        "source_id": "docs",
+        "relative_path": None,
+    }
+    assert not excluded.admits(chunk_node)
+    assert not excluded.admits({"node_id": "file:docs:guide/deploy.md:branch=none"})
+    assert not excluded.admits({"source_id": "docs", "relative_path": "guide/deploy.md"})
+    assert excluded.admits({**chunk_node, "artifact_id": "file:docs:guide/other.md:branch=none"})
+
+
 def test_a_name_that_matches_nothing_is_said_and_the_question_answered(
     region: dict[str, Any],
 ) -> None:

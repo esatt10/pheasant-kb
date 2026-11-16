@@ -1185,6 +1185,52 @@ def build_sections() -> list[Section]:
             ],
         ),
         Section(
+            id="models",
+            title="Model catalog",
+            blurb=(
+                "Optional. Lists several answering, judgement and embedding models "
+                "(`models.chat`, `models.decisions`, `models.embeddings`, each with a "
+                "default) so a caller can pick one per request and an admin can switch "
+                "the embedding model. The lists themselves are written in YAML or by a "
+                "deployment; empty, the single models configured above are the only ones."
+            ),
+            covers=("models",),
+            questions=[
+                Question(
+                    key="models.selectable",
+                    prompt="Let callers pick a model per request (when a catalog is listed)?",
+                    kind="bool",
+                    advanced=True,
+                ),
+            ],
+        ),
+        Section(
+            id="fleet",
+            title="Fleet of knowledge bases",
+            blurb=(
+                "Optional, and normally written by a deployment rather than answered "
+                "here. Several stacks an operator provisioned side by side share a "
+                "directory: an admin claims a free one for a new knowledge base, and "
+                "asks the operator for more when none is free."
+            ),
+            covers=("fleet",),
+            questions=[
+                Question(
+                    key="fleet.enabled",
+                    prompt="Is this stack one slot of a fleet of knowledge bases?",
+                    kind="bool",
+                    advanced=True,
+                ),
+                Question(
+                    key="fleet.slot",
+                    prompt="This stack's slot name in the fleet",
+                    default="",
+                    when=lambda a: bool(a.get("fleet.enabled")),
+                    advanced=True,
+                ),
+            ],
+        ),
+        Section(
             id="synapse",
             title="Synapse federation",
             blurb=(

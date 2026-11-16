@@ -914,14 +914,24 @@ def resolve_provider(config: Any, credential: Any, env: dict[str, str]) -> dict 
         return None
     env_name = getattr(settings, "api_key_env", None) or spec.api_key_env
     api_key = env.get(env_name)
+    base_url = getattr(settings, "base_url", None)
+    source = "environment"
     if not api_key:
-        return None
+        # A Foundry resource is called with this process's managed identity
+        # where it has one, as embeddings and judgements already are: a model
+        # deployed in a second resource then needs no second key.
+        from pheasant import foundry
+        from pheasant.security import entra
+
+        if not (foundry.is_foundry_url(base_url) and entra.managed_identity_available()):
+            return None
+        api_key, source = "", "managed_identity"
     return {
         "provider": configured,
         "api_key": api_key,
         "model": getattr(settings, "model", None),
-        "base_url": getattr(settings, "base_url", None),
-        "source": "environment",
+        "base_url": base_url,
+        "source": source,
     }
 
 

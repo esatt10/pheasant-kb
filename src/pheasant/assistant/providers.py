@@ -47,6 +47,7 @@ from pheasant.assistant.catalog import (
 from pheasant.assistant.catalog import (
     resolve_auto_provider as catalog_resolve_auto_provider,
 )
+from pheasant.telemetry.usage import METER
 
 DEFAULT_TIMEOUT = 90.0
 
@@ -134,7 +135,13 @@ def collect_token_usage() -> Iterator[TokenUsage]:
         _active_usage.reset(token)
 
 
+#: The model the current call was made to, for the meter below: the wires
+#: name it when they call and report its usage once they have a reply.
+_called_model: ContextVar[str | None] = ContextVar("pheasant_called_model", default=None)
+
+
 def note_model_call(model: str | None = None) -> None:
+    _called_model.set(model)
     usage = _active_usage.get()
     if usage is not None:
         usage.calls += 1
@@ -171,7 +178,20 @@ def _record_usage(
     *,
     cached_input_tokens: object = None,
     reasoning_tokens: object = None,
+    kind: str = "chat",
+    cached_included: bool = False,
 ) -> None:
+    # The region's own meter (`telemetry/usage.py`), which counts every
+    # reported call whether or not a workflow node is collecting.
+    METER.model_call(
+        kind,
+        _called_model.get(),
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        reasoning_tokens,
+        cached_included=cached_included,
+    )
     usage = _active_usage.get()
     if usage is None:
         return
@@ -418,10 +438,11 @@ def complete(
         raise ProviderError(
             f"unknown provider {provider!r}; expected one of {', '.join(sorted(PROVIDERS))}"
         )
-    if not api_key:
-        raise ProviderError(f"no API key available for {spec.label}")
     model = model or spec.default_model
     base = (base_url or spec.default_base_url).rstrip("/")
+    if not api_key and not foundry.credential_headers(base, ""):
+        # No key is an identity's job on a Foundry host and an error elsewhere.
+        raise ProviderError(f"no API key available for {spec.label}")
     if provider == "azure":
         if not base:
             raise ProviderError(
@@ -464,7 +485,14 @@ def _anthropic(
         "system": system,
         "messages": [{"role": "user", "content": prompt}],
     }
-    headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    headers = {"anthropic-version": "2023-06-01"}
+    if foundry.is_foundry_url(base):
+        # Claude deployed on Azure AI Foundry (`<resource>/anthropic`) is this
+        # wire behind the resource's own credential: its key, or with none
+        # configured this process's managed identity.
+        headers.update(foundry.credential_headers(base, key))
+    if key:
+        headers["x-api-key"] = key
     note_model_call(model)
     data = _http_json(f"{base}/v1/messages", payload, headers, timeout)
     reported = data.get("usage") or {}
@@ -510,7 +538,7 @@ def _openai(
 ) -> str:
     # GPT-6 models reject the legacy cap. Other OpenAI-compatible endpoints
     # keep their existing spelling and the error-driven retry below.
-    token_field = "max_completion_tokens" if model.startswith("gpt-6-") else "max_tokens"
+    token_field = "max_completion_tokens" if model.startswith("gpt-6") else "max_tokens"
     payload: dict = {
         "model": model,
         "messages": [
@@ -530,7 +558,7 @@ def _openai(
     if on_delta is not None:
         payload["stream"] = True
         payload["stream_options"] = {"include_usage": True}
-    headers = foundry.auth_headers(base, key)
+    headers = foundry.credential_headers(base, key)
     url = f"{base}/chat/completions"
     # Each rejection names the one field an endpoint does not accept, and each
     # is adjusted at most once, so this is bounded by the number of fields.
@@ -567,6 +595,7 @@ def _openai(
         reported.get("completion_tokens"),
         cached_input_tokens=prompt_details.get("cached_tokens"),
         reasoning_tokens=completion_details.get("reasoning_tokens"),
+        cached_included=True,  # OpenAI's prompt_tokens contains its cached ones
     )
     choices = data.get("choices") or []
     choice = choices[0] if choices else {}

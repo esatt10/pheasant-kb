@@ -91,6 +91,13 @@ Its optional `--writes` creates uniquely named test sources/artifacts and remove
 them afterward. Reports never contain credentials. Compare baseline and candidate
 on the same corpus without concurrent image builds or indexing work.
 
+## Granting access from inside the region
+
+With `security.entra.delegated_access`, roles are granted by the people who use
+the region rather than by its deployment: an Admin grants any role, a
+Contributor grants Contributor or Reader, a Reader grants nothing. See
+[Host a region for someone else](hosted-regions.md).
+
 No source IDs, artifact IDs or persisted credential formats change. Back up the
 existing deployment before upgrading and retain its original Terraform state and
 role UUIDs. The added Contributor app role is additive; existing Reader/Admin

@@ -151,6 +151,13 @@ export function TopBar() {
         >
           Settings
         </NavLink>
+        <NavLink
+          to="/admin"
+          data-permission="settings.manage"
+          className={({ isActive }) => (isActive ? "navlink active" : "navlink")}
+        >
+          Admin
+        </NavLink>
       </nav>
 
       <div className="topbar__right">

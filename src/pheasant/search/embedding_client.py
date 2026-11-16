@@ -539,6 +539,15 @@ class OpenAISpecEmbedder:
                 raise
             else:
                 self._rate_gate.succeeded()
+                reported = payload.get("usage") if isinstance(payload, dict) else None
+                if isinstance(reported, dict):
+                    from pheasant.telemetry.usage import EMBEDDING, METER
+
+                    METER.model_call(
+                        EMBEDDING,
+                        self.model,
+                        reported.get("prompt_tokens") or reported.get("total_tokens"),
+                    )
                 return payload
             transient_attempt += 1
             logger.warning(

@@ -37,11 +37,13 @@ from pheasant.ingestion.walk import (
     aggregate_depth_counts,
     walk_source,
 )
+from pheasant.persistence import size_limit
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
 from pheasant.persistence.state_store import StateStore
 from pheasant.registry.source_registry import SourceRegistry
+from pheasant.search import embedding_selection
 from pheasant.search.node_index import NodeIndex
 from pheasant.search.node_index import reconcile as reconcile_node_index
 from pheasant.search.vector_store import (
@@ -95,6 +97,7 @@ from pheasant.sync.queue import queue_from_config
 from pheasant.sync.saturation import CommitAuthorityMeter
 from pheasant.sync.vanished import prune_vanished
 from pheasant.telemetry.sync_trace import current as _current_sync_trace
+from pheasant.telemetry.usage import METER as usage_meter
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +218,7 @@ class SyncEngine:
         self.paths = paths or StatePaths.from_config(config)
         self.paths.ensure()
         self.state = state or StateStore.from_config(self.config, self.paths.sqlite)
+        usage_meter.bind_for(config, self.state)  # metering, wherever an engine runs
         self.state.migrate()
         # Every secret this process reads (a git token, a model key, a Drive
         # sign-in) can now come from a connection in this store.
@@ -286,6 +290,7 @@ class SyncEngine:
         # Optional embed-on-sync (Synapse 21.4): None when
         # search.embeddings.enabled is false, leaving sync byte-identical
         # to pre-21.4 behavior (no vector dir, no embedder calls).
+        embedding_selection.apply_active(config, self.state)  # the admin's choice, if any
         self.vectors = (
             # `background`: embed off the commit loop -- see VectorIndexer.
             vector_indexer_from_config(config, background=True)
@@ -343,6 +348,7 @@ class SyncEngine:
                 self.vectors.flush()
             except Exception as exc:  # pragma: no cover - shutdown must not raise
                 logger.warning("Could not flush vector store on shutdown: %s", exc)
+        usage_meter.unbind(self.state)
         self.lease.release()
         from pheasant.sync.history_publisher import close as close_history
 
@@ -712,7 +718,8 @@ class SyncEngine:
         """
 
         current = embedding_fingerprint(self.config)
-        previous = self.state.get_fingerprint(EMBEDDING_SCOPE)
+        recorded = self.state.get_fingerprint(EMBEDDING_SCOPE)
+        previous = embedding_selection.previous_space(self.config, recorded, current)
         change = embedding_change(previous, current)
         report = {"change": change, "embedded": 0, "dropped": False}
 
@@ -1919,6 +1926,7 @@ class SyncEngine:
 
         from pheasant.telemetry.sync_trace import traced
 
+        embedding_selection.ensure_space(self)  # re-embed first if the model was switched
         return traced(
             source_name,
             mode,
@@ -1980,6 +1988,8 @@ class SyncEngine:
             # not a failure, so a queued task for it finishes instead of retrying.
             logger.info("%s: sync skipped, its pipeline was deleted", source_name)
             return SyncResult(source_name, 0, 0, 0, 0, "skipped", {"reason": "pipeline deleted"})
+        if full := size_limit.blocks(self.config, self.state, mode, source_name):
+            return SyncResult(source_name, 0, 0, 0, 0, "skipped", full)
         self._ensure_modal_handlers(source)
         # A container restart must never re-index by itself, but a config edit
         # that changes what the content pipeline produces must. Compare what

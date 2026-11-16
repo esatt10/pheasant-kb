@@ -128,7 +128,10 @@ CEILINGS: dict[str, int] = {
     # kept until deleted) and its owner index; its code lives in
     # `services/artifacts.py`.
     # Durable jobs, immutable artifact versions, publication pointers and source adoption.
-    "persistence/schema.py": 1258,
+    # Raised to 1263 for the hook that appends tables' DDL kept beside their
+    # own modules (`persistence/access_grants.py`, `usage_ledger.py`): new
+    # tables go there, not here.
+    "persistence/schema.py": 1263,
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.
@@ -141,7 +144,7 @@ CEILINGS: dict[str, int] = {
     # retry policy now live with the existing vector cache and embedder.
     # The OpenAI-spec HTTP client moved to `search/embedding_client.py`.
     "search/vector_store.py": 1300,
-    "setup_wizard.py": 2225,  # + the artifacts section (rule 11)
+    "setup_wizard.py": 2271,  # + the artifacts, models and fleet sections (rule 11)
     # Lowered from 2800 when the preparation types and the process worker's
     # entry point moved to `sync/preparation.py`. Raised from 2780 for the
     # removed-source tombstone guard in `_source`/the enabled-source walk.

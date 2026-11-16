@@ -16,13 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from pheasant.api.access_routes import register_access_routes
 from pheasant.api.archive_routes import register_archive_routes
 from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.connection_routes import register_connection_routes
+from pheasant.api.fleet_routes import register_fleet_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
+from pheasant.api.model_routes import register_model_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.region_routes import register_region_routes
 from pheasant.api.search_models import BatchSearchRequest, SearchRequest
@@ -692,6 +695,13 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # started at boot, which is the question this table actually asks.
     "readiness": True,
     "artifacts": True,  # read per save and per beat (`services/artifact_settings.py`)
+    # The chat and judgement lists are read per answer. The embedding in
+    # force is not this config at all: it is a row every process follows
+    # (`search/embedding_selection.py`).
+    "models": True,
+    # The directory is opened once per process and this stack's slot is
+    # what its rows are keyed on: changing either is a restart.
+    "fleet": False,
     "storage": False,
     "server": False,
     "pheasant": False,
@@ -2063,6 +2073,12 @@ def create_app(
     register_sync_pipeline_routes(app, services=services)
     register_sync_control_routes(app, services=services)
     register_region_routes(app, services=services)
+    register_access_routes(app, services=services)
+    register_model_routes(app, services=services)
+    register_fleet_routes(app, services=services)
+    from pheasant.services import fleet as fleet_service
+
+    fleet_service.register(config, state)  # this stack's row in the fleet directory
 
     @app.get("/contract")
     def contract() -> dict:
@@ -5257,8 +5273,18 @@ def _mcp_asgi_app(config: PheasantConfig, vector: Any = None):
 #: below never reaches them: a browser refreshing the Sources tab was answered
 #: by the API and shown JSON. `tests/test_api_ui_routes.py` reads App.tsx and
 #: fails when this set and the router disagree.
-UI_ROUTES = frozenset(
-    {"/graph", "/artifacts", "/memory", "/evaluation", "/tuning", "/sources", "/syncs", "/config"}
+UI_ROUTES = frozenset(  # every path App.tsx routes; `/admin` shares none with the API
+    {
+        "/graph",
+        "/artifacts",
+        "/memory",
+        "/evaluation",
+        "/tuning",
+        "/sources",
+        "/syncs",
+        "/config",
+        "/admin",
+    }
 )
 
 

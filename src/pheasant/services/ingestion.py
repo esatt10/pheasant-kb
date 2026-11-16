@@ -58,6 +58,7 @@ from pheasant.services.errors import (
     LandingServiceUnavailable,
     LandingZoneUnwritable,
 )
+from pheasant.services.size_guard import require_room
 
 #: Dispositions, in the order a receipt may travel through them. `accepted` and
 #: `indexed` are a barrier, not a status gradient: `rejected` and `failed` are
@@ -138,6 +139,7 @@ def submit(context: ServiceContext, request: SubmissionRequest) -> dict[str, Any
 
     if not request.items:
         raise InvalidRequest("A submission needs at least one item")
+    require_room(context)
     kb_id = context.knowledge_base(request.knowledge_base)
     submission_id = request.submission_id or f"sub-{uuid.uuid4().hex[:16]}"
     source_name = _safe_source_name(request.source_name)

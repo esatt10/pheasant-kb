@@ -11,6 +11,7 @@ import { TuningPage } from "./pages/TuningPage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { SyncsPage } from "./pages/SyncsPage";
 import { ConfigPage } from "./pages/ConfigPage";
+import { AdminPage } from "./pages/AdminPage";
 import { SessionProvider } from "./state/session";
 import { PermissionProvider, PermissionPage } from "./state/permissions";
 
@@ -42,6 +43,7 @@ export function App() {
             <Route path="/sources" element={<SourcesPage />} />
             <Route path="/syncs" element={<SyncsPage />} />
             <Route path="/config" element={<ConfigPage />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Routes>
         </main>
         <JobsTray />
