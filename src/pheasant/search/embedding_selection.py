@@ -22,6 +22,7 @@ every region that predates this, are unchanged.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import threading
@@ -88,20 +89,60 @@ def select(state: Any, kb_id: str, embedding_id: str, actor: str | None) -> None
     )
 
 
+def _point(settings: Any, entry: Any) -> None:
+    settings.enabled = True
+    for name in _FIELDS:
+        value = getattr(entry, name)
+        if value is not None or name == "dimensions":
+            setattr(settings, name, value)
+
+
 def apply_active(config: Any, state: Any) -> str | None:
     """Point ``config.search.embeddings`` at the entry in force; its id."""
 
     chosen = active_id(config, state)
     if chosen is None:
         return None
-    entry = next(e for e in catalog(config) if str(e.id) == chosen)
-    settings = config.search.embeddings
-    settings.enabled = True
-    for name in _FIELDS:
-        value = getattr(entry, name)
-        if value is not None or name == "dimensions":
-            setattr(settings, name, value)
+    _point(config.search.embeddings, next(e for e in catalog(config) if str(e.id) == chosen))
     return chosen
+
+
+def space_of(config: Any, entry_id: str | None) -> str | None:
+    """The fingerprint of the space one catalog entry embeds in."""
+
+    from pheasant.sync.fingerprint import embedding_fingerprint
+
+    entry = next((e for e in catalog(config) if str(e.id) == entry_id), None)
+    if entry is None:
+        return None
+    view = copy.copy(config)
+    view.search = copy.copy(config.search)
+    view.search.embeddings = copy.copy(config.search.embeddings)
+    _point(view.search.embeddings, entry)
+    return embedding_fingerprint(view)
+
+
+def default_space(config: Any) -> str | None:
+    """The fingerprint of the space ``models.default_embedding`` names."""
+
+    return space_of(config, getattr(getattr(config, "models", None), "default_embedding", None))
+
+
+def previous_space(config: Any, recorded: str | None, current: str) -> str | None:
+    """The space the stored vectors are in, when no fingerprint says.
+
+    A region records its space when it reconciles at startup, and one that
+    never syncs at startup (a fleet that scales to zero) never recorded one.
+    Read as "never embedded", a switch away from the default would then be an
+    *introduction*: the old vectors kept, and new ones of another width
+    written beside them. An unrecorded store was built by the default entry,
+    so once another entry is in force that is the space it is leaving.
+    """
+
+    if recorded is not None:
+        return recorded
+    default = default_space(config)
+    return default if default is not None and default != current else None
 
 
 def in_force(config: Any, embedder: Any) -> bool:
@@ -173,7 +214,8 @@ def ensure_space(engine: Any) -> dict | None:
     from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 
     current = embedding_fingerprint(config)
-    if engine.state.get_fingerprint(EMBEDDING_SCOPE) in {None, current}:
+    recorded = engine.state.get_fingerprint(EMBEDDING_SCOPE)
+    if previous_space(config, recorded, current) in {None, current}:
         return None
     from pheasant.sync.locks import SourceLease, SourceLeaseError
 
@@ -202,8 +244,14 @@ def status(config: Any, state: Any) -> dict[str, Any]:
 
     from pheasant.sync.fingerprint import EMBEDDING_SCOPE, embedding_fingerprint
 
+    # The selection, not this process's config: a process that has not followed
+    # a switch yet would otherwise compare the store with the model it left.
+    current = space_of(config, active_id(config, state)) or embedding_fingerprint(config)
     recorded = state.get_fingerprint(EMBEDDING_SCOPE)
-    current = embedding_fingerprint(config)
+    if recorded is None and default_space(config) == current:
+        # Never recorded, and still on the default: the space it was built in.
+        recorded = current
+    recorded = previous_space(config, recorded, current)
     if recorded == current:
         state_name = "ready"
     elif recorded is None:

@@ -3195,6 +3195,18 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **"Never recorded" is not "never happened".** The embedding fingerprint is
+  written by the startup reconcile, and a fleet that scales to zero syncs
+  nothing at startup, so the Azure region had none over 11,544 embedded
+  chunks. `GET /models` said `not_indexed`, and worse, a switch to another
+  embedding model read as an *introduction*: old vectors kept, no re-embed,
+  new ones of another width written beside them. An unrecorded store was
+  built by `models.default_embedding`, so once another entry is in force that
+  is the space it is leaving (`embedding_selection.previous_space`, read by
+  `reconcile_embeddings` and `ensure_space`). The status compares against the
+  *selection*, not the process's config, which a replica that has not
+  followed a switch yet still has pointing at the old model. Found by the
+  first live check after deploying; every test region reconciles at startup.
 - **A missing field can be what is hiding a leak.** `Exclusion.admits`
   matched a hit's node id and its (source, path). A chunk or heading the
   graph arm reaches is its own node, with its file in `artifact_id` and no

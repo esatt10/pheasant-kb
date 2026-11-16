@@ -718,7 +718,8 @@ class SyncEngine:
         """
 
         current = embedding_fingerprint(self.config)
-        previous = self.state.get_fingerprint(EMBEDDING_SCOPE)
+        recorded = self.state.get_fingerprint(EMBEDDING_SCOPE)
+        previous = embedding_selection.previous_space(self.config, recorded, current)
         change = embedding_change(previous, current)
         report = {"change": change, "embedded": 0, "dropped": False}
 

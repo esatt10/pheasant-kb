@@ -298,6 +298,37 @@ def test_an_admin_switches_the_embedding_model_and_the_index_follows(region):
     assert again["status"] == "unchanged" and "reindex" not in again
 
 
+def test_a_region_that_never_recorded_its_space_still_re_embeds_on_a_switch(region):
+    """A fleet that does not sync at startup never reconciles, so it never
+    records which model built its vectors. Read as "never embedded", a switch
+    was an introduction: the old vectors kept and no re-embed. Found on a live
+    region reporting ``not_indexed`` over eleven thousand embedded chunks."""
+
+    from pheasant.sync.fingerprint import EMBEDDING_SCOPE
+
+    app, client = region
+    engine = app.state.engine
+    assert client.post("/sync/notes", headers=ADMIN).status_code == 200
+    _wait(lambda: engine.vectors is not None and engine.vectors.store.count() > 0)
+    chunks = engine.vectors.store.count()
+    engine.state.execute("DELETE FROM sync_fingerprints WHERE scope=?", (EMBEDDING_SCOPE,))
+    assert engine.state.get_fingerprint(EMBEDDING_SCOPE) is None
+
+    # Unrecorded and still on the default: the space it was built in.
+    assert client.get("/models", headers=ADMIN).json()["embedding"]["state"] == "ready"
+
+    switched = client.put("/models/embedding", json={"embedding": "large"}, headers=ADMIN)
+    assert switched.status_code == 200, switched.text
+    _wait(lambda: client.get("/models", headers=ADMIN).json()["embedding"]["state"] == "ready")
+    assert engine.state.get_fingerprint(EMBEDDING_SCOPE) is not None
+    assert engine.config.search.embeddings.dimensions == 96
+    assert engine.vectors.store.count() == chunks
+    found = client.post(
+        "/search", json={"query": "roosting in trees", "mode": "vector"}, headers=READER
+    )
+    assert found.status_code == 200 and found.json()["results"], found.text
+
+
 def test_a_new_process_starts_on_the_selected_embedding(tmp_path, monkeypatch):
     from pheasant.search import embedding_selection
     from pheasant.sync.engine import SyncEngine
