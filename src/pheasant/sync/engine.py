@@ -1355,7 +1355,10 @@ class SyncEngine:
             connector.connector_type == "filesystem"
             and mode != "repair"
             and not bool(getattr(source.taxonomy, "enabled", False))
-            and not any("archive_member" in item.metadata for item in items)
+            and not any(
+                "archive_member" in item.metadata or "archive_error" in item.metadata
+                for item in items
+            )
             and all(_process_safe_text_path(item.relative_path) for item in items)
         )
         process_safe = requested_executor == "process" and plain_text_source

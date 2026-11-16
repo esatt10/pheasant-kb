@@ -1,0 +1,204 @@
+"""A ZIP inside a ZIP is a folder too.
+
+An upload of ``Remarkable_and_misc.zip`` holding a further archive came out as
+a README and two PDFs: the inner archive's extension is not an indexed type,
+so it was filtered out with every other unsupported member, and the sync
+reported itself healthy. What must hold now: nested archives are expanded
+(bounded in depth, size and entries), their members index and read back like
+any other member, an archive that cannot be opened is reported unreadable with
+its reason, and the listing says what it left out.
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from pheasant.config.schema import PheasantConfig
+from pheasant.persistence.state_store import StateStore
+from pheasant.sync import zip_archive
+from pheasant.sync.connectors import FilesystemConnector
+from pheasant.sync.engine import SyncEngine
+from pheasant.sync.zip_archive import ArchiveError, read_member, scan
+
+
+def _zip(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def _upload(tmp_path: Path) -> Path:
+    """An outer archive with a README, a folder of notes and two nested archives."""
+
+    inner_most = _zip({"deep.md": b"# Deep\n\nThree archives down.\n"})
+    notebooks = _zip(
+        {
+            "Notebook one.md": b"# Notebook one\n\nPheasants roost in trees.\n",
+            "pages/page-1.md": b"# Page 1\n\nQuail nest on the ground.\n",
+            "raw/0001.rm": b"\x00binary stroke data",
+            "deeper.zip": inner_most,
+        }
+    )
+    folder = tmp_path / "ws" / "uploads"
+    folder.mkdir(parents=True)
+    path = folder / "Remarkable_and_misc.zip"
+    path.write_bytes(
+        _zip(
+            {
+                "README.md": b"# Remarkable and misc\n\nNotebooks are in notebooks.zip.\n",
+                "files/notes.md": b"# Notes\n\nGrouse drum in spring.\n",
+                "files/notebooks.zip": notebooks,
+                "files/broken.zip": b"this is not an archive",
+                "files/sketch.rm": b"\x00more strokes",
+            }
+        )
+    )
+    return path
+
+
+def _connector(tmp_path: Path) -> FilesystemConnector:
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {"defaults": "standalone"},
+            "sources": [
+                {
+                    "name": "uploads",
+                    "type": "document_folder",
+                    "path": str(tmp_path / "ws" / "uploads"),
+                    "include": ["**/*.md", "**/*.pdf"],
+                }
+            ],
+        }
+    )
+    return FilesystemConnector(
+        config.effective_source(config.sources[0]), StateStore(tmp_path / "s.db")
+    )
+
+
+def test_nested_archives_are_folders_and_read_back(tmp_path: Path) -> None:
+    archive = _upload(tmp_path)
+    listing = scan(archive)
+    names = [name for name, _ in listing.members]
+    assert names == [
+        "README.md",
+        "files/broken.zip",
+        "files/notebooks.zip/Notebook one.md",
+        "files/notebooks.zip/deeper.zip/deep.md",
+        "files/notebooks.zip/pages/page-1.md",
+        "files/notes.md",
+    ]
+    assert listing.nested == 2
+    assert dict(listing.skipped) == {".rm": 2}
+    assert [name for name, _ in listing.unreadable] == ["files/broken.zip"]
+
+    info = dict(listing.members)["files/notebooks.zip/deeper.zip/deep.md"]
+    assert info.filename == "files/notebooks.zip//deeper.zip//deep.md"
+    assert read_member(archive, info.filename, 1_000_000) == b"# Deep\n\nThree archives down.\n"
+    assert zip_archive.find_member(archive, "files/notebooks.zip/pages/page-1.md") is not None
+    assert zip_archive.find_member(archive, "files/broken.zip") is None
+
+
+def test_the_connector_lists_nested_members_and_reports_what_it_cannot_open(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _upload(tmp_path)
+    connector = _connector(tmp_path)
+    with caplog.at_level(logging.INFO, logger="pheasant.sync.connectors"):
+        items = {item.relative_path: item for item in connector.list_items()}
+    assert set(items) == {
+        "Remarkable_and_misc.zip/README.md",
+        "Remarkable_and_misc.zip/files/notes.md",
+        "Remarkable_and_misc.zip/files/notebooks.zip/Notebook one.md",
+        "Remarkable_and_misc.zip/files/notebooks.zip/pages/page-1.md",
+        "Remarkable_and_misc.zip/files/notebooks.zip/deeper.zip/deep.md",
+        "Remarkable_and_misc.zip/files/broken.zip",
+    }
+    read = connector.read_item(items["Remarkable_and_misc.zip/files/notebooks.zip/Notebook one.md"])
+    assert read.content.startswith(b"# Notebook one")
+    with pytest.raises(ArchiveError, match="broken.zip: cannot open the nested archive"):
+        connector.read_item(items["Remarkable_and_misc.zip/files/broken.zip"])
+    summary = [
+        r.getMessage()
+        for r in caplog.records
+        if "archive Remarkable_and_misc.zip" in r.getMessage()
+    ]
+    assert summary and "2 nested archive(s) opened, 1 could not be opened" in summary[0]
+    assert "'.rm': 2" in summary[0]
+
+
+def test_depth_and_damage_are_bounded_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = _upload(tmp_path)
+    monkeypatch.setattr(zip_archive, "MAX_ARCHIVE_DEPTH", 2)
+    listing = scan(archive)
+    unreadable = dict(listing.unreadable)
+    assert "files/notebooks.zip/deeper.zip" in unreadable
+    assert "deep" in str(unreadable["files/notebooks.zip/deeper.zip"].error)
+    assert "files/notebooks.zip/pages/page-1.md" in dict(listing.members)
+
+    # A damaged outer archive is one unreadable item, not a failed listing.
+    (tmp_path / "ws" / "uploads" / "torn.zip").write_bytes(b"PK\x03\x04 torn")
+    monkeypatch.setattr(zip_archive, "MAX_ARCHIVE_DEPTH", 4)
+    items = {item.relative_path: item for item in _connector(tmp_path).list_items()}
+    assert "torn.zip" in items
+    with pytest.raises(ArchiveError, match="torn.zip"):
+        _connector(tmp_path).read_item(items["torn.zip"])
+
+
+def test_a_sync_indexes_nested_members_and_names_the_unreadable_one(tmp_path: Path) -> None:
+    _upload(tmp_path)
+    for name in ("state", "exports"):
+        (tmp_path / name).mkdir()
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "kb",
+                "defaults": "standalone",
+                "workspace_root": str(tmp_path / "ws"),
+                "state_path": str(tmp_path / "state"),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [
+                {
+                    "name": "uploads",
+                    "type": "document_folder",
+                    "path": "uploads",
+                    "include": ["**/*.md"],
+                }
+            ],
+        }
+    )
+    engine = SyncEngine(config)
+    try:
+        result = engine.sync_source("uploads")
+        paths = {
+            str(dict(r)["relative_path"])
+            for r in engine.state.rows("SELECT relative_path FROM artifacts")
+        }
+        assert {
+            "Remarkable_and_misc.zip/files/notebooks.zip/Notebook one.md",
+            "Remarkable_and_misc.zip/files/notebooks.zip/pages/page-1.md",
+            "Remarkable_and_misc.zip/files/notebooks.zip/deeper.zip/deep.md",
+        } <= paths
+        assert "Remarkable_and_misc.zip/files/broken.zip" not in paths
+        assert result.status != "failed"
+        reported = str(result.details)
+        assert "broken.zip" in reported and "cannot open the nested archive" in reported
+
+        # An unchanged re-sync reads nothing new and keeps the same documents.
+        again = engine.sync_source("uploads")
+        assert again.status != "failed"
+        assert {
+            str(dict(r)["relative_path"])
+            for r in engine.state.rows("SELECT relative_path FROM artifacts")
+        } == paths
+    finally:
+        engine.close()

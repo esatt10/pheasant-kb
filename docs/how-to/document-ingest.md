@@ -16,8 +16,17 @@ ZIP archives in filesystem-backed sources can contain any mix of supported
 text, code, documents, images and audio in nested directories. Each supported
 member is indexed separately under a path such as `bundle.zip/guides/start.pdf`;
 the archive itself is not a searchable document. ZIPs are read in place, without
-extracting files to disk. Nested ZIPs and unsupported extensions are skipped.
-The source's include/exclude patterns apply to member paths. Explicitly
+extracting files to disk.
+
+A ZIP inside a ZIP is a folder too: its members are indexed under
+`bundle.zip/notebooks.zip/page-1.md`, up to four archives deep. A nested
+archive is inflated in memory to be opened, so it may be at most 256 MiB.
+One that cannot be opened (damaged, encrypted, too large or too deep) is
+reported as an unreadable file with the reason, on the Syncs page and in
+`describe_source`'s `last_sync`, rather than left out. Members of an
+unsupported type (a reMarkable `.rm` stroke file, for example) are skipped,
+and each sync logs one line per archive saying how many members it listed and
+which extensions it skipped. The source's include/exclude patterns apply to member paths. Explicitly
 including `**/*.zip` admits every supported member in an archive; including
 only `**/*.pdf` admits PDF members. The configured individual file limit
 applies to both the compressed archive and every member; ZIP members retain a
