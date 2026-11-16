@@ -368,3 +368,35 @@ def test_missing_role_token_values_fail_closed(region):
     service = IdentityService(config, app.state.state)
     assert service.enforcing
     assert service.authenticate("anything") is None
+
+
+def test_a_reader_may_export_a_source_on_both_surfaces(region):
+    """A source export is reading, as `read_document` is: `knowledge.use`.
+
+    Over HTTP the Reader passes the permission gate and reaches the operation
+    (a 404 for a source that does not exist, never a 403). Over MCP the tool
+    named `export_source` is invoked rather than refused. Both read the one
+    manifest entry each, so they cannot drift apart.
+    """
+
+    _, client, _ = region
+    assert HTTP_PERMISSIONS[("GET", "/sources/{source_name}/export")] == "knowledge.use"
+    assert MCP_PERMISSIONS["export_source"] == "knowledge.use"
+    assert "knowledge.use" in ROLE_PERMISSIONS["Reader"]
+    refused = client.get("/sources/nowhere/export", headers=headers("Reader"))
+    assert refused.status_code == 404, refused.text
+    assert refused.json()["detail"] == "Unknown source: nowhere"
+    assert client.get("/sources/nowhere/export").status_code == 401
+
+    called = []
+
+    def export_source():
+        called.append(True)
+        return {}
+
+    token = bind_identity(Identity("reader", "personal_key", roles=("Reader",)))
+    try:
+        _anticipated_failures("tool")(export_source)()
+    finally:
+        reset_identity(token)
+    assert called == [True]

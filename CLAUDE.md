@@ -1319,7 +1319,13 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   `read_document` makes too, and the documents are the listing's scope and
   ACL. Paged by size (`MAX_PART_BYTES`), never empty, so a huge document
   still makes progress; HTTP's `download=true` is the adapter's own
-  difference. `tests/test_source_export.py`.
+  difference. `knowledge.use` on both surfaces, as reading a document is, so
+  the UI control (`ui/src/browser/ExportButton.tsx`) carries no
+  `data-permission`: **Export source** in the taxonomy header at a source's
+  root, and an **export** row under the source on the Sources page (a panel
+  floating in the table was clipped, and ran off a phone). Not the corpus
+  export: `/exports` stays off HTTP because it flattens ACLs; this one is
+  built per caller. `tests/test_source_export.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

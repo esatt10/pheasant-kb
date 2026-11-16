@@ -8,6 +8,7 @@ off retains its existing operator access.
 | Operation | Reader | Contributor | Admin |
 | --- | --- | --- | --- |
 | Search, chat, browse, graph, visuals, generate drafts, download | Yes | Yes | Yes |
+| Export a whole source (UI **Export source**, HTTP `GET /sources/{name}/export`, MCP `export_source`) | Yes | Yes | Yes |
 | Inspect existing evaluation/tuning status and metrics | Yes | Yes | Yes |
 | Register/edit/remove sources, upload, sync, archive documents | No | Yes | Yes |
 | Save/publish/remove artifacts or write knowledge records | No | Yes | Yes |
@@ -17,7 +18,9 @@ off retains its existing operator access.
 | Create and revoke personal keys within own permissions | Yes | Yes | Yes |
 
 Content ACLs still apply. A role grants operations, not an override of private
-content. Request parameters such as `principal` and `principal_groups` cannot
+content. A source export is reading, not managing: it needs `knowledge.use`,
+like `read_document` and downloads, and it holds only the documents the
+caller's ACL admits, so it never contains a document the caller could not open. Request parameters such as `principal` and `principal_groups` cannot
 impersonate someone else when a verified credential is present.
 
 ## Microsoft identities and Terraform
