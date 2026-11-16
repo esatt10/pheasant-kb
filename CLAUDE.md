@@ -185,7 +185,9 @@ pheasant-kb/
 │   │                            inventory_detail (one source, one document,
 │   │                            the links between documents), source_browser
 │   │                            (a source as folders and files, one file
-│   │                            read for a viewer), web_pages (a fetched
+│   │                            read for a viewer), source_export (a whole
+│   │                            source as one zip, JSONL or Parquet file,
+│   │                            paged by size), web_pages (a fetched
 │   │                            page's HTML as indexed), scope (a folder, a
 │   │                            file, minus excluded documents; @current
 │   │                            and @dir resolved), archive (remove a
@@ -250,7 +252,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 217 pytest modules, offline by design
+└── tests/                     ← 218 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1308,6 +1310,16 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   caller sends because the region keeps no UI state, and with nothing open
   the answer says so rather than searching everything.
   `tests/test_source_browser.py`.
+- **A whole source exports as one file** (`services/source_export.py`; MCP
+  `export_source`, `GET /sources/{name}/export`). An agent that wanted a
+  source's 2,600 documents made 2,600 `read_document` calls and carried every
+  one through its context. `zip` (originals while still the indexed bytes,
+  else the indexed text, plus a manifest), `jsonl` or `parquet` (DuckDB as a
+  writer, rule 12). The text is `source_browser._content`, the one choice
+  `read_document` makes too, and the documents are the listing's scope and
+  ACL. Paged by size (`MAX_PART_BYTES`), never empty, so a huge document
+  still makes progress; HTTP's `download=true` is the adapter's own
+  difference. `tests/test_source_export.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is
