@@ -25,8 +25,10 @@ One that cannot be opened (damaged, encrypted, too large or too deep) is
 reported as an unreadable file with the reason, on the Syncs page and in
 `describe_source`'s `last_sync`, rather than left out. Members of an
 unsupported type (a reMarkable `.rm` stroke file, for example) are skipped,
-and each sync logs one line per archive saying how many members it listed and
-which extensions it skipped. Removing every document an uploaded archive gave
+and each sync records, per archive, how many members it listed, which nested
+archives it opened or could not, and which extensions it skipped (the sync's
+`archives` detail, with the run on the Syncs page and in `describe_source`'s
+`last_sync`); when anything was left out, the same line is logged as a warning. Removing every document an uploaded archive gave
 (the taxonomy view's Remove folder on the archive, or each document) removes
 the archive itself: its file is deleted, and the same name can be uploaded
 again. The source's include/exclude patterns apply to member paths. Explicitly

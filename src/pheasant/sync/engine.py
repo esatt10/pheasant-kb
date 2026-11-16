@@ -1356,8 +1356,7 @@ class SyncEngine:
             and mode != "repair"
             and not bool(getattr(source.taxonomy, "enabled", False))
             and not any(
-                "archive_member" in item.metadata or "archive_error" in item.metadata
-                for item in items
+                {"archive_member", "archive_error"} & item.metadata.keys() for item in items
             )
             and all(_process_safe_text_path(item.relative_path) for item in items)
         )
@@ -2125,7 +2124,8 @@ class SyncEngine:
                 artifacts = manifest["artifacts"]
             # Archived documents are never read, on any mode (`sync/archived.py`).
             items, held = archived.admit(self.state, source.name, items)
-            details_extra.update({"archived_documents": len(held)} if held else {})
+            held_out = {"archived_documents": len(held)} if held else {}
+            details_extra.update(held_out, **getattr(connector, "listing_details", {}))
             indexed = 0
             skipped = 0
             fetched = 0

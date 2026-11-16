@@ -240,6 +240,11 @@ class FilesystemConnector(SourceConnector):
         if report.limit_hit:
             raise SyncBudgetExceeded(budget_message(self.source.name, report, budget), report)
         items: list[ConnectorItem] = []
+        archives: list[dict[str, Any]] = []
+        # What each archive turned into, for the sync's details (`sync_events`,
+        # `describe_source`'s last_sync): the documents that appear cannot show
+        # what did not, and a sync child's INFO lines reach no log.
+        self.listing_details: dict[str, Any] = {}
         expanded_total = report.total_bytes
         for path in report.files:
             relative = path.relative_to(root if root.is_dir() else root.parent).as_posix()
@@ -343,9 +348,18 @@ class FilesystemConnector(SourceConnector):
                             metadata=metadata,
                         )
                     )
-                # What an archive turned into is otherwise visible only as the
-                # documents that appeared, which cannot show what did not.
-                logger.info(
+                archives.append(
+                    {
+                        "archive": relative,
+                        "members": listed,
+                        "nested_archives": listing.nested,
+                        "could_not_open": [name for name, _ in listing.unreadable][:20],
+                        "skipped_by_type": dict(listing.skipped.most_common(20)),
+                    }
+                )
+                left_out = bool(listing.skipped or listing.unreadable)
+                logger.log(
+                    logging.WARNING if left_out else logging.INFO,
                     "%s: archive %s: %d member(s) listed, %d nested archive(s) opened, "
                     "%d could not be opened, skipped %s",
                     self.source.name,
@@ -372,6 +386,8 @@ class FilesystemConnector(SourceConnector):
                     metadata={"path": str(path)},
                 )
             )
+        if archives:
+            self.listing_details = {"archives": archives[:50]}
         return items
 
     def read_item(self, item: ConnectorItem) -> ConnectorPayload:

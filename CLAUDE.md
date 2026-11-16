@@ -3223,8 +3223,11 @@ Each of these cost real time. They are listed because the shape recurs.
   across levels), the entry chain joined by `//` in `archive_entry_name`; a
   nested archive it cannot open, and an outer one, is listed with
   `archive_error` so the sync names it unreadable (whatever `include` says,
-  since its contents are unknown); and the connector logs one line per
-  archive with what it skipped by extension. `tests/test_nested_zip_archives.py`.
+  since its contents are unknown); and each archive's summary (members,
+  nested archives opened or not, skipped extensions) goes into the sync's
+  `archives` detail and is logged at WARNING when something was left out,
+  because `pheasant sync` configures no logging, so a sync child's INFO lines
+  reach no log at all. `tests/test_nested_zip_archives.py`.
   Beside it: removing an uploaded archive's documents deleted nothing, since
   each member's row held it out "while the archive is there", so the archive
   stayed on the share for good and the first release to expand it would index

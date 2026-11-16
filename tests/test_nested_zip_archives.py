@@ -111,7 +111,7 @@ def test_the_connector_lists_nested_members_and_reports_what_it_cannot_open(
 ) -> None:
     _upload(tmp_path)
     connector = _connector(tmp_path)
-    with caplog.at_level(logging.INFO, logger="pheasant.sync.connectors"):
+    with caplog.at_level(logging.WARNING, logger="pheasant.sync.connectors"):
         items = {item.relative_path: item for item in connector.list_items()}
     assert set(items) == {
         "Remarkable_and_misc.zip/README.md",
@@ -193,6 +193,13 @@ def test_a_sync_indexes_nested_members_and_names_the_unreadable_one(tmp_path: Pa
         assert result.status != "failed"
         reported = str(result.details)
         assert "broken.zip" in reported and "cannot open the nested archive" in reported
+        # What the archive held is in the sync's own record, not only a log line:
+        # on a fleet the sync runs in a child whose INFO lines reach no log.
+        (summary,) = result.details["archives"]
+        assert summary["archive"] == "Remarkable_and_misc.zip"
+        assert summary["nested_archives"] == 2
+        assert summary["could_not_open"] == ["files/broken.zip"]
+        assert summary["skipped_by_type"] == {".rm": 2}
 
         # An unchanged re-sync reads nothing new and keeps the same documents.
         again = engine.sync_source("uploads")
