@@ -938,6 +938,55 @@ export const api = {
     if (!response.ok) throw new ApiError(`${response.status} ${response.statusText}`, response.status);
     return response.text();
   },
+  /**
+   * Save a whole source to disk (`GET /sources/{name}/export?download=true`),
+   * one file per part: a source past the server's part size comes back in
+   * several, and `X-Pheasant-Next-Offset` names where the next one starts.
+   * `onPart` reports each part as it lands, so the control can say how far it is.
+   */
+  downloadSourceExport: async (
+    source: string,
+    options: { format: "zip" | "jsonl" | "parquet"; includeChunks?: boolean },
+    onPart?: (part: { filename: string; documents: number; total: number; done: number }) => void,
+  ): Promise<{ files: string[]; documents: number }> => {
+    const files: string[] = [];
+    let offset: number | null = 0;
+    let done = 0;
+    while (offset !== null) {
+      const response = await fetch(
+        `${API_BASE}/sources/${encodeURIComponent(source)}/export${qs({
+          format: options.format,
+          offset,
+          include_chunks: options.includeChunks ? "true" : undefined,
+          download: "true",
+        })}`,
+        { headers: requestHeaders() },
+      );
+      if (response.status === 401) signalApiAuthRequired();
+      if (!response.ok) {
+        const detail = await response.json().then((body) => body?.detail).catch(() => null);
+        throw new ApiError(detail ? String(detail) : `${response.status} ${response.statusText}`, response.status);
+      }
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${source}.${options.format}`;
+      const documents = Number(response.headers.get("x-pheasant-documents") ?? 0);
+      const total = Number(response.headers.get("x-pheasant-total") ?? 0);
+      const next = response.headers.get("x-pheasant-next-offset");
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      files.push(name);
+      done += documents;
+      onPart?.({ filename: name, documents, total, done });
+      offset = next === null ? null : Number(next);
+    }
+    return { files, documents: done };
+  },
   /** Save an export to disk: `zip`, `html`, `markdown`, or one `file` as written. */
   downloadArtifact: async (
     id: string,

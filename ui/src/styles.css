@@ -5733,6 +5733,44 @@ select.text-input {
   background: var(--danger-soft);
   font-weight: 600;
 }
+/* "Export source": the taxonomy header's and the Sources row's download of a
+   whole source, a small panel under its button. */
+.export-control { position: relative; display: inline-flex; }
+.export-control__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: min(320px, calc(100vw - 24px));
+  padding: calc(12px * var(--sp));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  text-align: left;
+  white-space: normal;
+}
+.export-control__title { margin: 0; font-size: calc(13px * var(--fs)); }
+.export-control__body { display: grid; gap: calc(8px * var(--sp)); }
+.export-control__body input[type="radio"],
+.export-control__body input[type="checkbox"] { accent-color: var(--accent); }
+.row--export .export-control__body { max-width: 560px; padding: calc(4px * var(--sp)) 0; }
+.export-control__formats { display: grid; gap: calc(4px * var(--sp)); }
+.export-control__format {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: calc(8px * var(--sp));
+  align-items: center;
+  padding: calc(6px * var(--sp)) calc(8px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.export-control__format > .muted { grid-column: 2; }
+.export-control__format.is-selected { border-color: var(--accent-border); background: var(--accent-soft); }
+.export-control__label { font-weight: 600; font-size: calc(12.5px * var(--fs)); }
+.export-control__check { display: flex; gap: calc(6px * var(--sp)); align-items: center; }
+.export-control__actions { display: flex; flex-wrap: wrap; gap: calc(8px * var(--sp)); align-items: center; }
 .archived-list { margin: calc(6px * var(--sp)) calc(8px * var(--sp)); font-size: calc(12px * var(--fs)); }
 .archived-list__toggle { color: var(--text-soft); }
 .archived-list__rows { list-style: none; margin: calc(4px * var(--sp)) 0 0; padding: 0; display: grid; gap: calc(4px * var(--sp)); }

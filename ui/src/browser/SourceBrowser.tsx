@@ -8,6 +8,7 @@ import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileDock, TileFold, TileGrip } from "../components/Tiles";
 import { ArchivedList } from "./ArchivedList";
 import { DragHandle } from "./DragHandle";
+import { ExportButton } from "./ExportButton";
 import { RemoveButton } from "./RemoveButton";
 import { ScopeToggle } from "./ScopeToggle";
 import { FileViewer } from "./FileViewer";
@@ -118,6 +119,9 @@ export function SourceBrowser({
         <div className="pane__actions">
           {browser.source && first?.source === browser.source ? (
             <ScopeToggle source={browser.source} path={first.path} kind="folder" />
+          ) : null}
+          {browser.source && first?.source === browser.source && !first.path ? (
+            <ExportButton source={browser.source} />
           ) : null}
           {browser.source && first?.source === browser.source && first.path ? (
             <RemoveButton

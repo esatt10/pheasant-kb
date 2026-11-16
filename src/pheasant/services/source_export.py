@@ -1,0 +1,357 @@
+"""Exporting a whole source: every document it holds, as one file to keep.
+
+``services.source_browser`` reads one document at a time, which is right for a
+viewer and wrong for "give me everything in this source": an agent that wants
+a source's 2,600 documents would make 2,600 calls and carry every one through
+its own context. :func:`export_source` answers that question in one call (or a
+few, paged by size), in the format the caller will work with:
+
+* ``zip`` — every document at its own path under ``files/``, plus
+  ``manifest.jsonl`` (one row of metadata per document, no text),
+  ``chunks.jsonl`` when asked for, and a ``README.md`` saying what is where.
+  A document whose original bytes are still the ones indexed is written as
+  those bytes, so a PDF comes back a PDF; anything else is written as the text
+  the index holds, and a binary format's extracted text takes a ``.txt``
+  suffix so nothing pretends to be a file it is not.
+* ``jsonl`` — one JSON object per document: its metadata, its text and its
+  outline (and its chunks when asked for).
+* ``parquet`` — the same rows as one table, ``outline`` and ``chunks`` as JSON
+  text so the schema never depends on what a page happened to hold. Written
+  by DuckDB (the ``analytics`` extra), which here is what `analytics.py`
+  already uses it as: a Parquet writer over a read, never a state backend.
+
+Text comes from ``source_browser._content``, the one place a document's text
+is chosen, so an export and ``read_document`` cannot disagree about what a
+document says. The documents are the ones the inventory lists: the same scope
+(``inventory.ARTIFACT_SCOPE``) and, under ``security.acl_enforced``, the same
+reader rule, so an export never holds a document the caller could not open.
+
+**Paged by size, not by count.** One part holds documents until their text
+passes :data:`MAX_PART_BYTES`; ``next_offset`` says where the next part
+starts and ``has_more`` whether there is one. A part always holds at least one
+document, so a source with one huge document still makes progress. Binary
+formats come back base64-encoded (``encoding``), as ``export_artifact`` does.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import json
+import tempfile
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+from pheasant.ingestion.content_types import MEMORY_ARTIFACT_TYPE
+from pheasant.services import ServiceContext
+from pheasant.services.errors import CapabilityUnsupported, InvalidRequest
+from pheasant.services.inventory import ARTIFACT_SCOPE, extension_of, reader
+
+FORMATS = ("zip", "jsonl", "parquet")
+MEDIA_TYPES = {
+    "zip": "application/zip",
+    "jsonl": "application/x-ndjson",
+    "parquet": "application/vnd.apache.parquet",
+}
+#: Bytes of document text one part holds before it stops. Sized so a part
+#: base64-encoded stays a payload an MCP client can take in one result.
+MAX_PART_BYTES = 32 * 1024 * 1024
+#: Documents one part may hold whatever their size: the outline query is one
+#: statement per document, and a part is a request somebody is waiting on.
+MAX_PART_DOCUMENTS = 5000
+
+_COLUMNS = (
+    "a.id, a.source_id, a.relative_path, a.type, a.path, a.size_bytes, a.sha256, "
+    "a.mime_type, a.last_indexed_at"
+)
+
+
+@dataclass(frozen=True)
+class ExportRequest:
+    """Which source to export, how, and which part of it."""
+
+    source_name: str
+    knowledge_base: str | None = None
+    #: ``zip``, ``jsonl`` or ``parquet``.
+    format: str = "zip"
+    #: The first document of this part, in path order; ``next_offset`` of the
+    #: previous part.
+    offset: int = 0
+    #: Add every chunk (index, line span, heading path, text) per document.
+    include_chunks: bool = False
+    principal: str | None = None
+    principal_groups: list[str] | None = None
+
+
+def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, Any]:
+    """One part of ``request.source_name`` as a file: ``content`` plus how to read it.
+
+    Returns ``filename``, ``media_type``, ``encoding`` (``base64`` for zip and
+    parquet, ``utf-8`` for jsonl), ``content``, ``bytes`` (the decoded size),
+    ``documents`` (in this part), ``total`` (in the source), ``offset``,
+    ``next_offset`` and ``has_more``.
+    """
+
+    from pheasant.services.inventory_detail import _registered
+
+    kb_id = context.knowledge_base(request.knowledge_base)
+    fmt = str(request.format or "").strip().lower()
+    if fmt not in FORMATS:
+        raise InvalidRequest(f"format must be one of {', '.join(FORMATS)}; got {request.format!r}")
+    offset = max(0, int(request.offset))
+    source = str(_registered(context, request.source_name)["name"])
+
+    rows = _rows(context, source, request.principal, request.principal_groups)
+    total = len(rows)
+    if offset > total:
+        raise InvalidRequest(f"offset {offset} is past the {total} documents in {source!r}")
+
+    records: list[dict[str, Any]] = []
+    originals: dict[str, bytes] = {}
+    used = 0
+    for row in rows[offset:]:
+        if records and (used >= MAX_PART_BYTES or len(records) >= MAX_PART_DOCUMENTS):
+            break
+        record, original = _record(context, row, fmt, request.include_chunks)
+        used += len((record["content"] or "").encode("utf-8")) + len(original or b"")
+        records.append(record)
+        if original is not None:
+            originals[record["id"]] = original
+
+    next_offset = offset + len(records)
+    has_more = next_offset < total
+    whole = offset == 0 and not has_more
+    stem = source if whole else f"{source}-{offset:06d}"
+    payload = _write(fmt, source, kb_id, records, originals, request.include_chunks)
+    if fmt == "jsonl":
+        content, encoding = payload.decode("utf-8"), "utf-8"
+    else:
+        content, encoding = base64.b64encode(payload).decode("ascii"), "base64"
+    return {
+        "knowledge_base": kb_id,
+        "source": source,
+        "format": fmt,
+        "filename": f"{stem}.{fmt}",
+        "media_type": MEDIA_TYPES[fmt],
+        "encoding": encoding,
+        "content": content,
+        "bytes": len(payload),
+        "documents": len(records),
+        "total": total,
+        "offset": offset,
+        "next_offset": next_offset if has_more else None,
+        "has_more": has_more,
+    }
+
+
+def _rows(
+    context: ServiceContext, source: str, principal: str | None, groups: list[str] | None
+) -> list[Any]:
+    """Every document of ``source`` the caller may read, in path order."""
+
+    admit = reader(context, principal, groups)
+    columns = _COLUMNS if admit is None else f"{_COLUMNS}, a.acl"
+    rows = context.state.rows(
+        f"SELECT {columns} FROM artifacts a WHERE {ARTIFACT_SCOPE} AND a.source_id = ? "
+        "ORDER BY a.relative_path, a.id",
+        (MEMORY_ARTIFACT_TYPE, source),
+    )
+    return list(rows) if admit is None else admit(list(rows))
+
+
+def _record(
+    context: ServiceContext, row: Any, fmt: str, include_chunks: bool
+) -> tuple[dict[str, Any], bytes | None]:
+    """One document's row, and its original bytes when a zip should carry them."""
+
+    from pheasant.services.source_browser import _content, _indexed_bytes, _outline
+
+    artifact_id = str(row["id"])
+    relative = str(row["relative_path"] or "")
+    content, origin, viewer, language = _content(context, row)
+    record: dict[str, Any] = {
+        "id": artifact_id,
+        "source": row["source_id"],
+        "path": relative,
+        "name": PurePosixPath(relative).name or relative,
+        "type": row["type"],
+        "extension": extension_of(relative),
+        "mime_type": row["mime_type"],
+        "size_bytes": row["size_bytes"],
+        "sha256": row["sha256"],
+        "last_indexed_at": row["last_indexed_at"],
+        "viewer": viewer,
+        "language": language,
+        "content_origin": origin,
+        "content": content,
+        "outline": _outline(context, artifact_id),
+    }
+    if include_chunks:
+        record["chunks"] = _chunks(context, artifact_id)
+    # Only a zip has somewhere to put a file's own bytes; for a text file read
+    # from disk they are the content again, so they are not read twice.
+    original = None
+    if fmt == "zip" and origin != "file":
+        original = _indexed_bytes(row, limit=None)
+    return record, original
+
+
+def _chunks(context: ServiceContext, artifact_id: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": row["id"],
+            "chunk_index": row["chunk_index"],
+            "start_line": row["start_line"],
+            "end_line": row["end_line"],
+            "heading_path": row["heading_path"],
+            "text": row["text"],
+        }
+        for row in context.state.rows(
+            "SELECT id, chunk_index, start_line, end_line, heading_path, text FROM chunks "
+            "WHERE artifact_id=? ORDER BY chunk_index",
+            (artifact_id,),
+        )
+    ]
+
+
+def _write(
+    fmt: str,
+    source: str,
+    kb_id: str,
+    records: list[dict[str, Any]],
+    originals: dict[str, bytes],
+    include_chunks: bool,
+) -> bytes:
+    if fmt == "jsonl":
+        return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records).encode("utf-8")
+    if fmt == "parquet":
+        return _parquet(records, include_chunks)
+    return _zip(source, kb_id, records, originals, include_chunks)
+
+
+def _member(record: dict[str, Any], has_original: bool) -> str:
+    """Where a document goes in the zip: its own path, unless that would lie."""
+
+    path = record["path"] or record["id"]
+    from pheasant.services.source_browser import EXTRACTED_VIEWERS
+
+    if has_original or record["viewer"] not in EXTRACTED_VIEWERS:
+        return f"files/{path}"
+    # A PDF's extracted text is not a PDF.
+    return f"files/{path}.txt"
+
+
+def _zip(
+    source: str,
+    kb_id: str,
+    records: list[dict[str, Any]],
+    originals: dict[str, bytes],
+    include_chunks: bool,
+) -> bytes:
+    buffer = io.BytesIO()
+    manifest: list[str] = []
+    chunks: list[str] = []
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for record in records:
+            original = originals.get(record["id"])
+            member = _member(record, original is not None)
+            if original is not None:
+                archive.writestr(member, original)
+            elif record["content"] is not None:
+                archive.writestr(member, record["content"].encode("utf-8"))
+            else:
+                member = None
+            row = {k: v for k, v in record.items() if k not in ("content", "chunks")}
+            row["file"] = member
+            manifest.append(json.dumps(row, ensure_ascii=False))
+            for chunk in record.get("chunks") or []:
+                chunks.append(
+                    json.dumps({"document_id": record["id"], **chunk}, ensure_ascii=False)
+                )
+        archive.writestr("manifest.jsonl", "".join(line + "\n" for line in manifest))
+        if include_chunks:
+            archive.writestr("chunks.jsonl", "".join(line + "\n" for line in chunks))
+        archive.writestr("README.md", _readme(source, kb_id, len(records), include_chunks))
+    return buffer.getvalue()
+
+
+def _readme(source: str, kb_id: str, documents: int, include_chunks: bool) -> str:
+    lines = [
+        f"# {source}",
+        "",
+        f"{documents} documents exported from source `{source}` of knowledge base `{kb_id}`.",
+        "",
+        "- `files/` — each document at its own path: its original bytes while they are",
+        "  still the ones indexed, otherwise the text the index holds (a binary format's",
+        "  extracted text with a `.txt` suffix).",
+        "- `manifest.jsonl` — one row per document: id, path, type, size, sha256, last",
+        "  indexed, viewer, where its text came from (`content_origin`), its outline, and",
+        "  `file`, its member in this archive (null when the index holds no text).",
+    ]
+    if include_chunks:
+        lines.append(
+            "- `chunks.jsonl` — every chunk: `document_id`, index, line span, heading path, text."
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _parquet(records: list[dict[str, Any]], include_chunks: bool) -> bytes:
+    try:
+        import duckdb
+    except ModuleNotFoundError as exc:  # pragma: no cover - dep-gated
+        raise CapabilityUnsupported(
+            "parquet export", "needs DuckDB: pip install 'pheasant-kb[analytics]'"
+        ) from exc
+
+    flat = [
+        {
+            **{k: v for k, v in r.items() if k not in ("outline", "chunks")},
+            "outline": json.dumps(r["outline"], ensure_ascii=False),
+            "chunks": json.dumps(r["chunks"], ensure_ascii=False) if include_chunks else None,
+        }
+        for r in records
+    ]
+    columns = {
+        "id": "VARCHAR",
+        "source": "VARCHAR",
+        "path": "VARCHAR",
+        "name": "VARCHAR",
+        "type": "VARCHAR",
+        "extension": "VARCHAR",
+        "mime_type": "VARCHAR",
+        "size_bytes": "BIGINT",
+        "sha256": "VARCHAR",
+        "last_indexed_at": "VARCHAR",
+        "viewer": "VARCHAR",
+        "language": "VARCHAR",
+        "content_origin": "VARCHAR",
+        "content": "VARCHAR",
+        "outline": "VARCHAR",
+        "chunks": "VARCHAR",
+    }
+    with tempfile.TemporaryDirectory(prefix="pheasant-export-") as scratch:
+        rows_path = Path(scratch) / "rows.jsonl"
+        out_path = Path(scratch) / "out.parquet"
+        with rows_path.open("w", encoding="utf-8") as handle:
+            for row in flat:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        spec = ", ".join(f"'{name}': '{kind}'" for name, kind in columns.items())
+        # COPY takes no parameters; both paths are ours, inside a fresh
+        # temporary directory, and quoted anyway.
+        source_sql, target_sql = (_sql_string(rows_path), _sql_string(out_path))
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute(
+                f"COPY (SELECT * FROM read_json({source_sql}, format='newline_delimited', "
+                f"columns={{{spec}}}, maximum_object_size=1073741824)) "
+                f"TO {target_sql} (FORMAT PARQUET, COMPRESSION ZSTD)"
+            )
+        finally:
+            connection.close()
+        return out_path.read_bytes()
+
+
+def _sql_string(path: Path) -> str:
+    return "'" + str(path).replace("'", "''") + "'"

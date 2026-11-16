@@ -744,6 +744,9 @@ CONFORMED = {
     # chunks the two operations exist for.
     "browse": ("GET /documents/tree", "browse_source"),
     "read_document": ("GET /documents/content", "read_document"),
+    # Driven through both surfaces in tests/test_source_export.py, refusal text
+    # included, over a corpus with a binary original to carry.
+    "export_source": ("GET /sources/{name}/export", "export_source"),
     # Driven through both surfaces in tests/test_document_archive.py, refusal
     # text included: removing a document needs a corpus of its own to remove.
     "archive_documents": ("POST /documents/archive", "archive_documents"),
@@ -771,6 +774,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     from pheasant.services import media as media_service
     from pheasant.services import retrieval as retrieval_service
     from pheasant.services import source_browser as source_browser_service
+    from pheasant.services import source_export as source_export_service
     from pheasant.services import sync_control as sync_control_service
     from pheasant.services import voice as voice_service
     from pheasant.services import web_pages as web_pages_service
@@ -785,6 +789,7 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
         inventory_service,
         inventory_detail_service,
         source_browser_service,
+        source_export_service,
         web_pages_service,
         archive_service,
         sync_control_service,

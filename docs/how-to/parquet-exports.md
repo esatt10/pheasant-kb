@@ -473,6 +473,14 @@ HTTP delivery, put your own authenticated static file server or object-store
 presign in front of the volume — that keeps the authorization decision
 somewhere it can actually be made.
 
+That is also why **exporting one source** is a different operation. The
+taxonomy view's and Sources page's **Export source**, `GET
+/sources/{name}/export` and MCP `export_source` hand back one source's
+documents as a ZIP, JSONL or Parquet file, built per request from what the
+*caller* may read (the listing's scope and ACL, `knowledge.use`). It is the
+documents a person or agent wants to keep; this page's export is the whole
+corpus, every table, for analysis, and it stays on the volume.
+
 ### One constraint worth knowing before you design around it
 
 On **SQLite**, the export must run where `/state` is writable. SQLite creates

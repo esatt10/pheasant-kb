@@ -11,6 +11,7 @@ import { QuickAdd } from "../components/QuickAdd";
 import { ConnectionsPanel } from "../sources/Connections";
 import { SourceStatus } from "../components/SourceStatus";
 import { useSession } from "../state/session";
+import { ExportPanel } from "../browser/ExportButton";
 
 const SYNC_MODES = ["incremental", "full", "validate_only", "repair"];
 
@@ -47,6 +48,7 @@ export function SourcesPage() {
   const [editingSource, setEditingSource] = useState<SourceRecord | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
   const [outlineFor, setOutlineFor] = useState<string | null>(null);
+  const [exportFor, setExportFor] = useState<string | null>(null);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["sources"] });
@@ -250,6 +252,14 @@ export function SourcesPage() {
                 >
                   browse
                 </button>
+                <button
+                  className="btn btn--small"
+                  aria-expanded={exportFor === source.name}
+                  onClick={() => setExportFor(exportFor === source.name ? null : source.name)}
+                  title="Download every document of this source as one file"
+                >
+                  {exportFor === source.name ? "hide export" : "export"}
+                </button>
                 {hasTaxonomy(source) ? (
                   <button
                     className="btn btn--small"
@@ -279,6 +289,13 @@ export function SourcesPage() {
               <tr className="row--progress">
                 <td colSpan={5}>
                   <SourceSyncProgress row={source.progress} />
+                </td>
+              </tr>
+            ) : null}
+            {exportFor === source.name ? (
+              <tr className="row--export">
+                <td colSpan={5}>
+                  <ExportPanel source={source.name} />
                 </td>
               </tr>
             ) : null}

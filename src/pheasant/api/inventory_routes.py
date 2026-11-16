@@ -2,7 +2,8 @@
 source, one document, and the links between documents.
 
 Browsing a source as folders and reading one file for a viewer
-(`services.source_browser`) live here too: they are the same plane, the
+(`services.source_browser`), and exporting a whole source as one file
+(`services.source_export`), live here too: they are the same plane, the
 knowledge base described rather than searched.
 
 One router per plane, as `api/app.py`'s ceiling comment asks. Every handler
@@ -14,12 +15,20 @@ about the knowledge base itself.
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, Response
 
-from pheasant.services import inventory, inventory_detail, quality, source_browser, web_pages
+from pheasant.services import (
+    inventory,
+    inventory_detail,
+    quality,
+    source_browser,
+    source_export,
+    web_pages,
+)
 
 
 def ranged_bytes(
@@ -113,6 +122,52 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         """One source in detail: what it holds and what it links to."""
 
         return inventory_detail.source(services, source_name, None, principal, principal_groups)
+
+    @app.get("/sources/{source_name}/export", response_model=None)
+    def export_source(  # noqa: PLR0913 - one argument per option
+        source_name: str,
+        format: str = "zip",  # noqa: A002 - the public query parameter's name
+        offset: int = 0,
+        include_chunks: bool = False,
+        download: bool = False,
+        principal: str | None = None,
+        principal_groups: list[str] | None = Query(default=None),
+    ) -> Any:
+        """Every document of one source as one file, paged by size.
+
+        The JSON answer is MCP ``export_source``'s. ``download=true`` is this
+        adapter's own difference, on purpose: it sends the part's bytes as an
+        attachment, with the paging in ``X-Pheasant-*`` headers, so ``curl -O``
+        gets the file rather than a base64 string inside JSON.
+        """
+
+        part = source_export.export_source(
+            services,
+            source_export.ExportRequest(
+                source_name=source_name,
+                format=format,
+                offset=offset,
+                include_chunks=include_chunks,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
+        )
+        if not download:
+            return part
+        body = (
+            part["content"].encode("utf-8")
+            if part["encoding"] == "utf-8"
+            else base64.b64decode(part["content"])
+        )
+        headers = {
+            "Content-Disposition": f'attachment; filename="{part["filename"]}"',
+            "X-Pheasant-Documents": str(part["documents"]),
+            "X-Pheasant-Total": str(part["total"]),
+            "X-Pheasant-Has-More": "true" if part["has_more"] else "false",
+        }
+        if part["next_offset"] is not None:
+            headers["X-Pheasant-Next-Offset"] = str(part["next_offset"])
+        return Response(body, media_type=part["media_type"], headers=headers)
 
     @app.get("/documents/detail")
     def describe_document(

@@ -300,9 +300,52 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
     row = _resolve(context, request.path, request.source_name, request)
     artifact_id = str(row["id"])
     relative = str(row["relative_path"] or "")
-    suffix = PurePosixPath(relative).suffix.lower()
-    viewer, language = classify(relative)
+    fetched = is_fetched_page(row["path"], relative, row["mime_type"])
+    content, origin, viewer, language = _content(context, row)
+    truncated = bool(content and len(content) > MAX_CONTENT_CHARS)
+    if truncated and content is not None:
+        content = content[:MAX_CONTENT_CHARS]
+    raw_type = RAW_TYPES.get(PurePosixPath(relative).suffix.lower())
+    return {
+        "knowledge_base": kb_id,
+        "document": {
+            "id": artifact_id,
+            "source": row["source_id"],
+            "path": relative,
+            "name": PurePosixPath(relative).name or relative,
+            "type": row["type"],
+            "extension": extension_of(relative),
+            "size_bytes": row["size_bytes"],
+            "last_indexed_at": row["last_indexed_at"],
+            "sha256": row["sha256"],
+            "mime_type": row["mime_type"],
+        },
+        "breadcrumbs": _breadcrumbs(str(row["source_id"]), str(PurePosixPath(relative).parent)),
+        "viewer": viewer,
+        "language": language,
+        "content": content,
+        "content_origin": origin,
+        "truncated": truncated,
+        "outline": _outline(context, artifact_id),
+        "focus": _focus(context, artifact_id, request.chunk_id),
+        "raw": {"available": bool(raw_type) and _raw_available(row), "mime_type": raw_type},
+        # A fetched web page: its URL, and whether the HTML the parser read is
+        # held here to be shown beside the text (`web_pages.page_snapshot`).
+        "page": (
+            {"url": str(row["path"]), "available": snapshot_path(context, row) is not None}
+            if fetched
+            else None
+        ),
+    }
 
+
+def _content(context: ServiceContext, row: Any) -> tuple[str | None, str | None, str, str | None]:
+    """``(content, origin, viewer, language)`` for a row as :func:`_resolve` selects it,
+    uncut: the one choice of text ``read_document`` and ``source_export`` share."""
+
+    artifact_id = str(row["id"])
+    relative = str(row["relative_path"] or "")
+    viewer, language = classify(relative)
     fetched = is_fetched_page(row["path"], relative, row["mime_type"])
     content: str | None = None
     origin: str | None = None
@@ -334,45 +377,7 @@ def read_document(context: ServiceContext, request: ReadRequest) -> dict[str, An
         # Extracted text drawn as markup would be a preview of nothing; the
         # page itself is `page`.
         viewer, language = "text", None
-    truncated = bool(content and len(content) > MAX_CONTENT_CHARS)
-    if truncated and content is not None:
-        content = content[:MAX_CONTENT_CHARS]
-
-    raw_type = RAW_TYPES.get(suffix)
-    return {
-        "knowledge_base": kb_id,
-        "document": {
-            "id": artifact_id,
-            "source": row["source_id"],
-            "path": relative,
-            "name": PurePosixPath(relative).name or relative,
-            "type": row["type"],
-            "extension": extension_of(relative),
-            "size_bytes": row["size_bytes"],
-            "last_indexed_at": row["last_indexed_at"],
-            "sha256": row["sha256"],
-            "mime_type": row["mime_type"],
-        },
-        "breadcrumbs": _breadcrumbs(str(row["source_id"]), str(PurePosixPath(relative).parent)),
-        "viewer": viewer,
-        "language": language,
-        "content": content,
-        "content_origin": origin,
-        "truncated": truncated,
-        "outline": _outline(context, artifact_id),
-        "focus": _focus(context, artifact_id, request.chunk_id),
-        "raw": {
-            "available": bool(raw_type) and _raw_available(row),
-            "mime_type": raw_type,
-        },
-        # A fetched web page: its URL, and whether the HTML the parser read is
-        # held here to be shown beside the text (`web_pages.page_snapshot`).
-        "page": (
-            {"url": str(row["path"]), "available": snapshot_path(context, row) is not None}
-            if fetched
-            else None
-        ),
-    }
+    return content, origin, viewer, language
 
 
 def raw_document(context: ServiceContext, request: ReadRequest) -> dict[str, Any]:

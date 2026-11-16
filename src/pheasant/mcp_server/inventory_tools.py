@@ -17,7 +17,9 @@ bounded context. Two adapters over `services.inventory`:
   state and reasons (`services.quality`);
 * ``browse_source`` / ``read_document`` — a source as folders and files, one
   level at a time, and one file's content classified for a viewer
-  (`services.source_browser`).
+  (`services.source_browser`);
+* ``export_source`` — every document of one source as one zip, JSONL or
+  Parquet file, paged by size (`services.source_export`).
 
 ``ask_knowledge_base`` answers "list the sources" from these same functions
 (``assistant.inventory``), so an agent that calls the tool and a person who
@@ -218,6 +220,32 @@ class InventoryTools:
                 knowledge_base=knowledge_base,
                 source_name=source_name,
                 chunk_id=chunk_id,
+                principal=principal,
+                principal_groups=principal_groups,
+            ),
+        )
+
+    def export_source(  # noqa: PLR0913 - one argument per option
+        self,
+        knowledge_base: str,
+        source_name: str,
+        format: str = "zip",  # noqa: A002 - the tool's public argument name
+        offset: int = 0,
+        include_chunks: bool = False,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import source_export
+
+        return source_export.export_source(
+            self.services,
+            source_export.ExportRequest(
+                source_name=source_name,
+                knowledge_base=knowledge_base,
+                format=format,
+                offset=offset,
+                include_chunks=include_chunks,
                 principal=principal,
                 principal_groups=principal_groups,
             ),
@@ -472,4 +500,39 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
 
         return tools.read_document(
             knowledge_base, path, source_name, chunk_id, principal, principal_groups
+        )
+
+    @mcp.tool()
+    @anticipated
+    def export_source(  # noqa: PLR0913 - one argument per option
+        knowledge_base: str,
+        source_name: str,
+        format: str = "zip",  # noqa: A002 - the tool's public argument name
+        offset: int = 0,
+        include_chunks: bool = False,
+        principal: str | None = None,
+        principal_groups: list[str] | None = None,
+    ) -> dict:
+        """Export every document of one source as a single file to keep.
+
+        format is "zip" (each document at its path under files/, its original
+        bytes while they are still the ones indexed, else the indexed text;
+        plus manifest.jsonl and a README), "jsonl" (one object per document:
+        metadata, text, outline) or "parquet" (the same rows as one table).
+        include_chunks adds every chunk with its line span and heading path.
+        Returns filename, media_type, encoding ("base64" for zip and parquet,
+        "utf-8" for jsonl) and content. Paged by size: when has_more is true,
+        call again with offset=next_offset for the next part. The documents
+        are the ones list_documents lists; with security.acl_enforced on,
+        only those the principal may read.
+        """
+
+        return tools.export_source(
+            knowledge_base,
+            source_name,
+            format,
+            offset,
+            include_chunks,
+            principal,
+            principal_groups,
         )
