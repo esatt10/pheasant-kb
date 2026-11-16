@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from pheasant.config.schema import PheasantConfig
+from pheasant.persistence import archive as archive_rows
 from pheasant.persistence.state_store import StateStore
 from pheasant.sync import zip_archive
 from pheasant.sync.connectors import FilesystemConnector
@@ -200,5 +201,127 @@ def test_a_sync_indexes_nested_members_and_names_the_unreadable_one(tmp_path: Pa
             str(dict(r)["relative_path"])
             for r in engine.state.rows("SELECT relative_path FROM artifacts")
         } == paths
+    finally:
+        engine.close()
+
+
+def _upload_engine(tmp_path: Path) -> SyncEngine:
+    state = tmp_path / "state"
+    root = state / "uploads" / "uploads"
+    root.mkdir(parents=True)
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "kb",
+                "defaults": "standalone",
+                "state_path": str(state),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [{"name": "uploads", "type": "document_folder", "path": str(root)}],
+        }
+    )
+    return SyncEngine(config)
+
+
+def _upload_paths(engine: SyncEngine) -> set[str]:
+    return {
+        str(dict(row)["relative_path"])
+        for row in engine.state.rows(
+            "SELECT relative_path FROM artifacts WHERE source_id='uploads'"
+        )
+    }
+
+
+def test_removing_every_document_of_an_uploaded_archive_removes_the_archive(tmp_path: Path) -> None:
+    """Removing what an archive gave used to delete nothing: each member's row
+    held it out "while the archive is there", so the archive stayed on the share
+    for good. Expanding nested archives would then have indexed the inner
+    members of an archive the person believed they had removed."""
+
+    from pheasant.services import ServiceContext
+    from pheasant.services import archive as service
+
+    engine = _upload_engine(tmp_path)
+    try:
+        archive_file = engine.config.sources[0].path / "Remarkable_and_misc.zip"
+        _upload(tmp_path).replace(archive_file)
+        engine.sync_source("uploads")
+        indexed = {p for p in _upload_paths(engine) if p.startswith("Remarkable_and_misc.zip/")}
+        assert "Remarkable_and_misc.zip/files/notebooks.zip/Notebook one.md" in indexed
+
+        context = ServiceContext(
+            config=engine.config, state=engine.state, searcher=None, engine=engine, indexing=None
+        )
+        service.archive_documents(
+            context,
+            service.ArchiveRequest(source_name="uploads", folders=["Remarkable_and_misc.zip"]),
+        )
+        assert not archive_file.exists()
+        assert archive_rows.for_source(engine.state, "uploads") == []
+        assert not (_upload_paths(engine) & indexed)
+
+        # The same name can be uploaded again and is read in full.
+        _upload(tmp_path / "again").replace(archive_file)
+        engine.sync_source("uploads")
+        assert indexed <= _upload_paths(engine)
+    finally:
+        engine.close()
+
+
+def test_an_archive_left_behind_by_an_earlier_release_is_removed_by_the_next_sync(
+    tmp_path: Path,
+) -> None:
+    """The state the Azure region is in: the archive's indexed members were
+    removed under a release that kept the file, and its nested members were
+    never indexed, so no row names them."""
+
+    engine = _upload_engine(tmp_path)
+    try:
+        archive_file = engine.config.sources[0].path / "Remarkable_and_misc.zip"
+        _upload(tmp_path).replace(archive_file)
+        for relative in (
+            "Remarkable_and_misc.zip/README.md",
+            "Remarkable_and_misc.zip/files/notes.md",
+        ):
+            archive_rows.add(
+                engine.state,
+                source_id="uploads",
+                relative_path=relative,
+                artifact_id=f"file:uploads:{relative}:branch=none",
+                kind="removed",
+                now="2026-11-16T18:46:05Z",
+            )
+        engine.sync_source("uploads")
+        assert not any(p.startswith("Remarkable_and_misc.zip/") for p in _upload_paths(engine))
+        assert not archive_file.exists()
+        assert archive_rows.for_source(engine.state, "uploads") == []
+    finally:
+        engine.close()
+
+
+def test_removing_part_of_an_archive_keeps_the_rest(tmp_path: Path) -> None:
+    from pheasant.services import ServiceContext
+    from pheasant.services import archive as service
+
+    engine = _upload_engine(tmp_path)
+    try:
+        archive_file = engine.config.sources[0].path / "Remarkable_and_misc.zip"
+        _upload(tmp_path).replace(archive_file)
+        engine.sync_source("uploads")
+        context = ServiceContext(
+            config=engine.config, state=engine.state, searcher=None, engine=engine, indexing=None
+        )
+        service.archive_documents(
+            context, service.ArchiveRequest(documents=["uploads/Remarkable_and_misc.zip/README.md"])
+        )
+        engine.sync_source("uploads")
+        assert archive_file.exists()
+        paths = _upload_paths(engine)
+        assert "Remarkable_and_misc.zip/README.md" not in paths
+        assert "Remarkable_and_misc.zip/files/notes.md" in paths
+        assert [r["relative_path"] for r in archive_rows.for_source(engine.state, "uploads")] == [
+            "Remarkable_and_misc.zip/README.md"
+        ]
     finally:
         engine.close()

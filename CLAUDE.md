@@ -3225,6 +3225,13 @@ Each of these cost real time. They are listed because the shape recurs.
   `archive_error` so the sync names it unreadable (whatever `include` says,
   since its contents are unknown); and the connector logs one line per
   archive with what it skipped by extension. `tests/test_nested_zip_archives.py`.
+  Beside it: removing an uploaded archive's documents deleted nothing, since
+  each member's row held it out "while the archive is there", so the archive
+  stayed on the share for good and the first release to expand it would index
+  inner members of an upload the person had removed. An uploaded archive with
+  a removed member and no other document indexed is removed whole now
+  (`sync/archived.emptied_archives`, read from rows so `admit` drops it before
+  listing and `_delete_uploads` deletes the file after).
 - **"Never recorded" is not "never happened".** The embedding fingerprint is
   written by the startup reconcile, and a fleet that scales to zero syncs
   nothing at startup, so the Azure region had none over 11,544 embedded

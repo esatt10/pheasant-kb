@@ -26,7 +26,10 @@ reported as an unreadable file with the reason, on the Syncs page and in
 `describe_source`'s `last_sync`, rather than left out. Members of an
 unsupported type (a reMarkable `.rm` stroke file, for example) are skipped,
 and each sync logs one line per archive saying how many members it listed and
-which extensions it skipped. The source's include/exclude patterns apply to member paths. Explicitly
+which extensions it skipped. Removing every document an uploaded archive gave
+(the taxonomy view's Remove folder on the archive, or each document) removes
+the archive itself: its file is deleted, and the same name can be uploaded
+again. The source's include/exclude patterns apply to member paths. Explicitly
 including `**/*.zip` admits every supported member in an archive; including
 only `**/*.pdf` admits PDF members. The configured individual file limit
 applies to both the compressed archive and every member; ZIP members retain a

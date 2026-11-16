@@ -43,13 +43,65 @@ DELETE_BATCH = 500
 
 
 def admit(state: Any, source_name: str, items: list[Any]) -> tuple[list[Any], list[dict]]:
-    """``items`` less every path held out of ``source_name``, and the held rows."""
+    """``items`` less every path held out of ``source_name``, and the held rows.
+
+    An uploaded archive every indexed document of which was removed is
+    removed whole: nothing in it is admitted, including members no row names
+    (a nested archive's, which a release that did not expand them never
+    indexed, so nobody could have removed them).
+    """
 
     held = archive.for_source(state, source_name)
     if not held:
         return items, held
     paths = {row["relative_path"] for row in held}
-    return [item for item in items if item.relative_path not in paths], held
+    emptied = emptied_archives(state, source_name, held)
+
+    def admitted(path: str) -> bool:
+        return path not in paths and not any(
+            path == name or path.startswith(f"{name}/") for name in emptied
+        )
+
+    return [item for item in items if admitted(item.relative_path)], held
+
+
+def archive_of(relative_path: str) -> str | None:
+    """The uploaded archive a member's path is inside (its first ``.zip`` folder)."""
+
+    parts = relative_path.split("/")
+    for index, part in enumerate(parts[:-1]):
+        if part.lower().endswith(".zip"):
+            return "/".join(parts[: index + 1])
+    return None
+
+
+def emptied_archives(state: Any, source_name: str, held: list[dict]) -> set[str]:
+    """Uploaded archives with a removed member and no other document still indexed.
+
+    Removing every document an archive gave is removing the archive: the
+    person cannot see anything else in it to remove. Read from rows alone, so
+    a sync decides it before it lists, and the byte deletion after it removes.
+    """
+
+    candidates = {
+        name
+        for row in held
+        if row["kind"] == "removed" and (name := archive_of(str(row["relative_path"])))
+    }
+    if not candidates:
+        return set()
+    held_paths = {str(row["relative_path"]) for row in held}
+    emptied: set[str] = set()
+    for name in candidates:
+        prefix = f"{name}/"
+        rows = state.rows(
+            "SELECT relative_path FROM artifacts WHERE source_id=? "
+            "AND substr(relative_path, 1, ?) = ?",
+            (source_name, len(prefix), prefix),
+        )
+        if all(str(row["relative_path"]) in held_paths for row in rows):
+            emptied.add(name)
+    return emptied
 
 
 def prune(
@@ -169,6 +221,32 @@ def _delete_uploads(engine: Any, source_name: str, rows: list[dict]) -> None:
     if root is None:
         return
     base = root.resolve()
+    held = archive.for_source(engine.state, source_name)
+    for name in sorted(emptied_archives(engine.state, source_name, held)):
+        target = base / name
+        try:
+            if not target.resolve().is_relative_to(base) or target.is_symlink():
+                continue
+            if target.is_file():
+                target.unlink()
+                _prune_empty_parents(target.parent, base)
+                logger.info(
+                    "source %s: deleted uploaded archive %s, every document in it was removed",
+                    source_name,
+                    name,
+                )
+        except OSError:
+            logger.warning("could not delete removed upload %s", target, exc_info=True)
+            continue
+        archive.remove(
+            engine.state,
+            source_name,
+            [
+                str(row["relative_path"])
+                for row in held
+                if str(row["relative_path"]).startswith(f"{name}/")
+            ],
+        )
     for row in rows:
         relative = str(row["relative_path"])
         target = base / relative
