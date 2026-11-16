@@ -58,7 +58,12 @@ def test_zip_members_respect_filters_and_unsafe_paths(tmp_path: Path) -> None:
         exclude=["nested/private/*"],
     )
     items = connector.list_items()
-    assert [item.relative_path for item in items] == ["mixed.ZIP/nested/a.pdf"]
+    # The damaged nested archive is listed whatever `include` says: what it
+    # holds is unknown, so it is reported unreadable rather than filtered.
+    assert [item.relative_path for item in items] == [
+        "mixed.ZIP/nested/a.pdf",
+        "mixed.ZIP/nested/c.zip",
+    ]
     assert connector.read_item(items[0]).content == b"pdf"
 
     all_items = _connector(tmp_path).list_items()
@@ -68,8 +73,14 @@ def test_zip_members_respect_filters_and_unsafe_paths(tmp_path: Path) -> None:
         "mixed.ZIP/nested/b.md",
         "mixed.ZIP/nested/relative.md",
         "mixed.ZIP/nested/windows.md",
+        # Not a ZIP at all: listed, so the sync can say it could not be opened.
+        "mixed.ZIP/nested/c.zip",
     }
-    assert {connector.read_item(item).content for item in all_items} == {
+    damaged = next(item for item in all_items if item.relative_path.endswith("c.zip"))
+    with pytest.raises(ArchiveError, match="cannot open the nested archive"):
+        connector.read_item(damaged)
+    readable = [item for item in all_items if item is not damaged]
+    assert {connector.read_item(item).content for item in readable} == {
         b"pdf",
         b"secret",
         b"markdown",

@@ -240,17 +240,41 @@ class FilesystemConnector(SourceConnector):
         if report.limit_hit:
             raise SyncBudgetExceeded(budget_message(self.source.name, report, budget), report)
         items: list[ConnectorItem] = []
+        archives: list[dict[str, Any]] = []
+        # What each archive turned into, for the sync's details (`sync_events`,
+        # `describe_source`'s last_sync): the documents that appear cannot show
+        # what did not, and a sync child's INFO lines reach no log.
+        self.listing_details: dict[str, Any] = {}
         expanded_total = report.total_bytes
         for path in report.files:
             relative = path.relative_to(root if root.is_dir() else root.parent).as_posix()
             stat = path.stat()
             if path.suffix.lower() == ".zip":
-                from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, members
+                from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, ArchiveError, scan
 
                 archive_selected = _match_any(
                     relative.lower(), [pattern.lower() for pattern in self.source.include]
                 )
-                for member_name, info in members(path):
+                try:
+                    listing = scan(path)
+                except ArchiveError as exc:
+                    # The archive itself, listed so the sync names it unreadable
+                    # with the reason; a damaged upload used to fail the listing.
+                    logger.warning("%s: cannot list %s: %s", self.source.name, relative, exc)
+                    items.append(
+                        ConnectorItem(
+                            identity=f"filesystem:{self.source.name}:{relative}",
+                            relative_path=relative,
+                            uri=_path_uri(path),
+                            mime_type="application/zip",
+                            size_bytes=stat.st_size,
+                            mtime=_timestamp(stat.st_mtime),
+                            metadata={"path": str(path), "archive_error": str(exc)},
+                        )
+                    )
+                    continue
+                listed = 0
+                for member_name, info in listing.members:
                     virtual = f"{relative}/{member_name}"
                     if not within_max_depth(virtual, self.source.max_depth):
                         continue
@@ -258,11 +282,32 @@ class FilesystemConnector(SourceConnector):
                         member_name, self.source.exclude
                     ):
                         continue
-                    if self.source.include and not (
-                        archive_selected
-                        or _match_any(virtual, self.source.include)
-                        or _match_any(member_name, self.source.include)
+                    # A nested archive that could not be opened is reported like the
+                    # archive it is in, which the walk finds whatever `include`
+                    # says: its members are unknown, so no pattern can rule on it.
+                    if (
+                        self.source.include
+                        and not info.error
+                        and not (
+                            archive_selected
+                            or _match_any(virtual, self.source.include)
+                            or _match_any(member_name, self.source.include)
+                        )
                     ):
+                        continue
+                    if info.error:
+                        listed += 1
+                        items.append(
+                            ConnectorItem(
+                                identity=f"filesystem:{self.source.name}:{virtual}",
+                                relative_path=virtual,
+                                uri=f"{_path_uri(path)}#{quote(member_name, safe='/')}",
+                                mime_type="application/zip",
+                                size_bytes=info.file_size,
+                                mtime=_timestamp(stat.st_mtime),
+                                metadata={"archive_path": str(path), "archive_error": info.error},
+                            )
+                        )
                         continue
                     max_bytes = min(
                         budget.max_file_size_bytes or MAX_ARCHIVE_MEMBER_BYTES,
@@ -286,6 +331,12 @@ class FilesystemConnector(SourceConnector):
                             budget_message(self.source.name, report, budget), report
                         )
                     expanded_total += info.file_size
+                    metadata = {
+                        "archive_path": str(path),
+                        "archive_member": member_name,
+                        "archive_entry_name": info.filename,
+                    }
+                    listed += 1
                     items.append(
                         ConnectorItem(
                             identity=f"filesystem:{self.source.name}:{virtual}",
@@ -294,13 +345,30 @@ class FilesystemConnector(SourceConnector):
                             mime_type=mimetypes.guess_type(member_name)[0],
                             size_bytes=info.file_size,
                             mtime=_timestamp(stat.st_mtime),
-                            metadata={
-                                "archive_path": str(path),
-                                "archive_member": member_name,
-                                "archive_entry_name": info.filename,
-                            },
+                            metadata=metadata,
                         )
                     )
+                archives.append(
+                    {
+                        "archive": relative,
+                        "members": listed,
+                        "nested_archives": listing.nested,
+                        "could_not_open": [name for name, _ in listing.unreadable][:20],
+                        "skipped_by_type": dict(listing.skipped.most_common(20)),
+                    }
+                )
+                left_out = bool(listing.skipped or listing.unreadable)
+                logger.log(
+                    logging.WARNING if left_out else logging.INFO,
+                    "%s: archive %s: %d member(s) listed, %d nested archive(s) opened, "
+                    "%d could not be opened, skipped %s",
+                    self.source.name,
+                    relative,
+                    listed,
+                    listing.nested,
+                    len(listing.unreadable),
+                    dict(listing.skipped.most_common()) or "nothing",
+                )
                 continue
             if not self._allows_relative_path(relative):
                 continue
@@ -318,9 +386,15 @@ class FilesystemConnector(SourceConnector):
                     metadata={"path": str(path)},
                 )
             )
+        if archives:
+            self.listing_details = {"archives": archives[:50]}
         return items
 
     def read_item(self, item: ConnectorItem) -> ConnectorPayload:
+        if item.metadata.get("archive_error"):
+            from pheasant.sync.zip_archive import ArchiveError
+
+            raise ArchiveError(f"{item.relative_path}: {item.metadata['archive_error']}")
         if "archive_member" in item.metadata:
             from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, read_member
 

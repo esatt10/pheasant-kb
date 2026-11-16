@@ -252,7 +252,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 218 pytest modules, offline by design
+└── tests/                     ← 219 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3213,6 +3213,28 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **A filter by type silently drops the container types.** A ZIP member was
+  listed only if its extension was an indexed type, and `.zip` is not one, so
+  an archive inside an uploaded archive vanished with every unsupported file:
+  `Remarkable_and_misc.zip` on Azure became a README and two PDFs, and the
+  sync reported itself healthy. `sync/zip_archive.scan` now expands nested
+  archives as folders (`outer.zip/inner.zip/a.pdf`, `MAX_ARCHIVE_DEPTH` 4,
+  each inflated in memory up to `MAX_NESTED_ARCHIVE_BYTES`, entries counted
+  across levels), the entry chain joined by `//` in `archive_entry_name`; a
+  nested archive it cannot open, and an outer one, is listed with
+  `archive_error` so the sync names it unreadable (whatever `include` says,
+  since its contents are unknown); and each archive's summary (members,
+  nested archives opened or not, skipped extensions) goes into the sync's
+  `archives` detail and is logged at WARNING when something was left out,
+  because `pheasant sync` configures no logging, so a sync child's INFO lines
+  reach no log at all. `tests/test_nested_zip_archives.py`.
+  Beside it: removing an uploaded archive's documents deleted nothing, since
+  each member's row held it out "while the archive is there", so the archive
+  stayed on the share for good and the first release to expand it would index
+  inner members of an upload the person had removed. An uploaded archive with
+  a removed member and no other document indexed is removed whole now
+  (`sync/archived.emptied_archives`, read from rows so `admit` drops it before
+  listing and `_delete_uploads` deletes the file after).
 - **"Never recorded" is not "never happened".** The embedding fingerprint is
   written by the startup reconcile, and a fleet that scales to zero syncs
   nothing at startup, so the Azure region had none over 11,544 embedded
