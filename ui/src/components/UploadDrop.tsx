@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { startUpload, useBackground } from "../state/background";
 
 /**
  * Drop supported files or ZIP archives here and they become a real source.
@@ -11,9 +10,13 @@ import { api } from "../api/client";
  * `document_folder` source — so they flow through the same connector → chunk →
  * graph pipeline as everything else and can be removed by deleting the source.
  *
- * Indexing is handed to the background (`wait: false`) for the same reason
- * quick-add does it: a large drop can take longer than a browser or reverse
- * proxy will hold a request open. Progress shows up in the jobs tray.
+ * In the background, all of it: the bytes are sent by the page (`startUpload`),
+ * not by this component, so closing it or moving to another page does not
+ * cancel anything; the server answers as soon as they arrive with an `upload`
+ * job that lands, registers and indexes them. The jobs tray shows the upload,
+ * then that job. The same files dropped again while they are sending are not
+ * sent twice, and a file the source already holds byte for byte is not stored
+ * twice.
  */
 export function UploadDrop({
   onUploaded,
@@ -23,16 +26,21 @@ export function UploadDrop({
   sourceName?: string;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const upload = useMutation({
-    mutationFn: (files: File[]) => api.uploadDocuments(files, sourceName),
-    onSuccess: () => onUploaded?.(),
-  });
+  const { transfers } = useBackground();
+  const sending = transfers.filter((t) => t.source === sourceName && t.status === "uploading");
 
   const send = (list: FileList | null) => {
     const files = Array.from(list ?? []);
-    if (files.length > 0) upload.mutate(files);
+    if (files.length === 0) return;
+    const started = startUpload(files, sourceName);
+    setNote(
+      started
+        ? `Uploading ${files.length} file${files.length === 1 ? "" : "s"} in the background — progress is in the jobs tray. You can keep working.`
+        : "Those files are already uploading.",
+    );
+    if (started) onUploaded?.();
   };
 
   return (
@@ -67,7 +75,11 @@ export function UploadDrop({
             event.target.value = "";
           }}
         />
-        <strong>{upload.isPending ? "Uploading…" : "Drop files or ZIP archives here"}</strong>
+        <strong>
+          {sending.length > 0
+            ? `Uploading ${sending.reduce((n, t) => n + t.names.length, 0)} file(s)… drop more any time`
+            : "Drop files or ZIP archives here"}
+        </strong>
         <span className="muted small">
           Markdown, PDF, Office, images, audio, code, configs, or a ZIP containing
           any mix of supported files in folders — or click to choose. ZIP members
@@ -75,26 +87,9 @@ export function UploadDrop({
         </span>
       </div>
 
-      {upload.isError ? (
-        <div className="banner banner--error" style={{ marginBottom: 0 }}>
-          {(upload.error as Error).message}
-        </div>
-      ) : null}
-
-      {upload.isSuccess ? (
-        <div className="banner" style={{ marginBottom: 0 }}>
-          Stored {upload.data.stored.length} file
-          {upload.data.stored.length === 1 ? "" : "s"} in <code>{upload.data.source_name}</code>
-          {upload.data.syncing ? " — indexing now, progress is in the jobs tray." : "."}
-          {upload.data.rejected.length > 0 ? (
-            <ul className="small" style={{ margin: "0.5rem 0 0" }}>
-              {upload.data.rejected.map((item) => (
-                <li key={item.filename}>
-                  {item.filename}: {item.error}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+      {note ? (
+        <div className="banner" role="status" style={{ marginBottom: 0 }}>
+          {note}
         </div>
       ) : null}
     </div>

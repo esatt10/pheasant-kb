@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import type { ExportJobResult, JobRecord } from "../api/types";
+import { exportJobFor, takeExport, wantExport } from "../state/background";
 
 type Format = "zip" | "jsonl" | "parquet";
 
@@ -11,10 +13,16 @@ const FORMATS: { value: Format; label: string; hint: string }[] = [
 ];
 
 /**
- * "Export this source": every document of one source as one file to keep —
- * `GET /sources/{name}/export?download=true`, the operation MCP
- * `export_source` calls. It downloads as one file holding the whole tree; only
- * a selection past the server's one-file ceiling (2 GiB) continues in a second.
+ * "Export this source": every document of one source as one file to keep.
+ *
+ * A background job (`POST /sources/{name}/exports`, MCP `start_source_export`):
+ * **Download** starts it and returns at once, the panel shows its progress
+ * while it is open, and the file downloads when it is ready -- whether the
+ * panel is still open or not, because the page (`state/background`) remembers
+ * what this tab asked for and the jobs tray, always mounted, fetches it. So the
+ * person can close the panel and keep working; the tray says how far it is and
+ * offers the file again afterwards. Asking again is idempotent: the server
+ * returns the job already running, or the finished file when nothing changed.
  *
  * Reading, not managing: it needs `knowledge.use`, as reading a document or
  * downloading an artifact does, so it carries no `data-permission` gate. The
@@ -27,12 +35,6 @@ const FORMATS: { value: Format; label: string; hint: string }[] = [
  * `path_prefix`; the Sources page opens it as a row under the source, the way
  * **outline** opens (`ExportPanel`), because a floating panel is clipped by the
  * table there and runs off a phone's screen.
- *
- * A large source takes a while to prepare: the floating panel stays open
- * while an export runs (`onBusy`). It
- * used to close on any click outside it, which unmounted the progress line,
- * and reopening it offered a fresh **Download** that started the whole export
- * again.
  */
 export function ExportPanel({
   source,
@@ -46,27 +48,52 @@ export function ExportPanel({
 }) {
   const [format, setFormat] = useState<Format>("zip");
   const [chunks, setChunks] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
+  const key = `${source}/${path}/${format}/${chunks}`;
+  const [jobId, setJobId] = useState<string | undefined>(() => exportJobFor(key));
+  useEffect(() => setJobId(exportJobFor(key)), [key]);
 
-  const run = useMutation({
-    mutationFn: () =>
-      api.downloadSourceExport(source, { format, includeChunks: chunks, path }, (part) =>
-        setProgress(
-          `${part.done.toLocaleString()} of ${part.total.toLocaleString()} documents` +
-            (part.done < part.total ? " · keep this page open" : ""),
-        ),
-      ),
-    onMutate: () => {
-      onBusy?.(true);
-      setProgress("Preparing…");
+  const start = useMutation({
+    mutationFn: () => api.startSourceExport(source, { format, includeChunks: chunks, path }),
+    onSuccess: (job) => {
+      setJobId(job.job_id);
+      if (job.reused === "ready") {
+        // Finished earlier and nothing changed: the same file, saved now.
+        wantExport(key, job.job_id);
+        takeExport(job.job_id);
+        const ready = job.result as unknown as ExportJobResult | null;
+        for (const file of ready?.files ?? []) {
+          void api.downloadJobFile(job.job_id, file.part, file.filename);
+        }
+        return;
+      }
+      // Running (new, or the same request already under way): the tray saves
+      // it when it finishes, wherever the person is by then.
+      wantExport(key, job.job_id);
     },
-    onSettled: () => onBusy?.(false),
-    onSuccess: (result) =>
-      setProgress(
-        `Saved ${result.files.length === 1 ? result.files[0] : `${result.files.length} files`} · ${result.documents.toLocaleString()} documents`,
-      ),
-    onError: () => setProgress(null),
   });
+
+  const job = useQuery({
+    queryKey: ["job", jobId],
+    queryFn: () => api.job(jobId!),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => (query.state.data?.active === false ? false : 1000),
+  });
+  const record: JobRecord | undefined = job.data;
+  const running = Boolean(record?.active) || start.isPending;
+  useEffect(() => onBusy?.(running), [running, onBusy]);
+
+  const result = record?.status === "succeeded" ? (record.result as unknown as ExportJobResult) : null;
+  const status = start.isPending
+    ? "Starting…"
+    : record?.active
+      ? record.progress.total
+        ? `Exporting ${record.progress.current.toLocaleString()} of ${record.progress.total.toLocaleString()} documents · you can close this and keep working`
+        : "Preparing… you can close this and keep working"
+      : result
+        ? `Ready · ${result.documents.toLocaleString()} documents in ${result.files.length === 1 ? result.files[0].filename : `${result.files.length} files`}`
+        : record?.status === "failed"
+          ? null
+          : null;
 
   return (
     <div className="export-control__body">
@@ -96,20 +123,35 @@ export function ExportPanel({
         <button
           type="button"
           className="btn btn--small btn--primary"
-          disabled={run.isPending}
-          onClick={() => run.mutate()}
+          disabled={running}
+          onClick={() => start.mutate()}
         >
-          {run.isPending ? "Exporting…" : `Download ${FORMATS.find((f) => f.value === format)!.label}`}
+          {running ? "Exporting…" : `Download ${FORMATS.find((f) => f.value === format)!.label}`}
         </button>
-        {progress ? (
+        {result
+          ? result.files.map((file) => (
+              <button
+                key={file.part}
+                type="button"
+                className="btn btn--small"
+                onClick={() => {
+                  takeExport(jobId!);
+                  void api.downloadJobFile(jobId!, file.part, file.filename);
+                }}
+              >
+                Save {file.filename} again
+              </button>
+            ))
+          : null}
+        {status ? (
           <span className="muted small" role="status">
-            {progress}
+            {status}
           </span>
         ) : null}
       </div>
-      {run.isError ? (
+      {start.isError || record?.status === "failed" ? (
         <p className="error small" role="alert">
-          {(run.error as Error).message}
+          {start.isError ? (start.error as Error).message : record?.error}
         </p>
       ) : null}
     </div>
@@ -124,8 +166,7 @@ export function ExportButton({ source, path = "" }: { source: string; path?: str
   const what = path ? "folder" : "source";
 
   useEffect(() => {
-    // Nothing closes it while an export is running.
-    if (!open || busy) return;
+    if (!open) return;
     const onPointer = (event: PointerEvent) => {
       if (box.current && !box.current.contains(event.target as Node)) setOpen(false);
     };
@@ -136,7 +177,7 @@ export function ExportButton({ source, path = "" }: { source: string; path?: str
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, busy]);
+  }, [open]);
 
   return (
     <span className="export-control" ref={box}>
@@ -145,13 +186,13 @@ export function ExportButton({ source, path = "" }: { source: string; path?: str
         className={`scope-toggle${open ? " scope-toggle--active" : ""}`}
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => !busy && setOpen((value) => !value)}
+        onClick={() => setOpen((value) => !value)}
         title={`Download every document of ${path ? `${source} / ${path}` : source} as one file`}
       >
         <span className="scope-toggle__icon" aria-hidden>
           ⤓
         </span>
-        {busy ? "Exporting…" : `Export ${what}`}
+        {busy && open ? "Exporting…" : `Export ${what}`}
       </button>
       {open ? (
         <div

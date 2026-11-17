@@ -50,6 +50,8 @@ import type {
   PipelineDefaults,
   PipelineSettings,
   ModelCatalog,
+  ExportJobStart,
+  UploadAccepted,
 } from "./types";
 import type {
   AccessList,
@@ -989,6 +991,49 @@ export const api = {
     }
     return { files, documents: done };
   },
+  /**
+   * Start exporting a source (or one folder) as a background job:
+   * `POST /sources/{name}/exports`. Idempotent: the same request over unchanged
+   * content returns the job already running, or the finished one (`reused`).
+   */
+  startSourceExport: (
+    source: string,
+    options: { format: "zip" | "jsonl" | "parquet"; includeChunks?: boolean; path?: string },
+  ) =>
+    request<ExportJobStart>(`/sources/${encodeURIComponent(source)}/exports`, {
+      method: "POST",
+      body: JSON.stringify({
+        format: options.format,
+        include_chunks: Boolean(options.includeChunks),
+        path_prefix: options.path || null,
+      }),
+    }),
+  /** Save a finished export job's file (`GET /jobs/{id}/download?part=n`). */
+  downloadJobFile: async (jobId: string, part: number, fallbackName: string): Promise<string> => {
+    const response = await fetch(
+      `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download${qs({ part })}`,
+      { headers: requestHeaders(undefined, false) },
+    );
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) {
+      const detail = await response.json().then((body) => body?.detail).catch(() => null);
+      throw new ApiError(detail ? String(detail) : `${response.status} ${response.statusText}`, response.status);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const name =
+      /filename\*=utf-8''([^;]+)/i.exec(disposition)?.[1] ??
+      /filename="?([^";]+)"?/.exec(disposition)?.[1] ??
+      fallbackName;
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = decodeURIComponent(name);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return link.download;
+  },
   /** Save an export to disk: `zip`, `html`, `markdown`, or one `file` as written. */
   downloadArtifact: async (
     id: string,
@@ -1243,6 +1288,43 @@ export const api = {
     }
     return (await response.json()) as UploadResponse;
   },
+
+  /**
+   * Upload in the background: an XHR, so the bytes' progress can be reported,
+   * with `background=true`, so the server answers as soon as they are received
+   * with an `upload` job that lands, registers and syncs them.
+   */
+  uploadInBackground: (
+    files: File[],
+    sourceName: string,
+    onProgress: (loaded: number, total: number) => void,
+  ): Promise<UploadAccepted> =>
+    new Promise((resolve, reject) => {
+      const form = new FormData();
+      for (const file of files) form.append("files", file, file.name);
+      form.append("source_name", sourceName);
+      form.append("sync_now", "true");
+      form.append("background", "true");
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_BASE}/sources/upload`);
+      requestHeaders(undefined, false).forEach((value, key) => xhr.setRequestHeader(key, value));
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(event.loaded, event.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status === 401) signalApiAuthRequired();
+        let body: unknown = null;
+        try {
+          body = JSON.parse(xhr.responseText);
+        } catch {
+          /* not JSON */
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body as UploadAccepted);
+        else reject(new Error(errorDetail(body, `${xhr.status} ${xhr.statusText}`)));
+      };
+      xhr.onerror = () => reject(new Error("The upload could not reach the server."));
+      xhr.send(form);
+    }),
 
   // Host paths — "can pheasant see this, and if not, exactly how do I fix it".
   hostPath: (path: string) => request<HostPathReport>(`/fs/host-path${qs({ path })}`),

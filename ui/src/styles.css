@@ -5763,6 +5763,7 @@ select.text-input {
   overflow-y: auto;
 }
 .export-control__title { margin: 0; font-size: calc(13px * var(--fs)); }
+.job__actions { display: flex; flex-wrap: wrap; gap: calc(6px * var(--sp)); margin-top: calc(6px * var(--sp)); }
 .export-control__body { display: grid; gap: calc(8px * var(--sp)); }
 .export-control__body input[type="radio"],
 .export-control__body input[type="checkbox"] { accent-color: var(--accent); }

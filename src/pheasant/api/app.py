@@ -25,6 +25,7 @@ from pheasant.api.connection_routes import register_connection_routes
 from pheasant.api.fleet_routes import register_fleet_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
+from pheasant.api.job_routes import register_job_routes
 from pheasant.api.model_routes import register_model_routes
 from pheasant.api.readiness_routes import register_readiness_routes
 from pheasant.api.region_routes import register_region_routes
@@ -2076,6 +2077,7 @@ def create_app(
     register_access_routes(app, services=services)
     register_model_routes(app, services=services)
     register_fleet_routes(app, services=services)
+    register_job_routes(app, services=services, jobs=jobs)
     from pheasant.services import fleet as fleet_service
 
     fleet_service.register(config, state)  # this stack's row in the fleet directory
@@ -2647,6 +2649,7 @@ def create_app(
         index=_index,
         start_background_sync=_start_background_sync,
         source_from_payload=_source_from_payload,
+        jobs=jobs,
     )
 
     @app.get("/fs/host-path")

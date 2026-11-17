@@ -57,6 +57,7 @@ import json
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
@@ -185,7 +186,10 @@ def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, 
 
 
 def export_source_file(
-    context: ServiceContext, request: ExportRequest, target: BinaryIO
+    context: ServiceContext,
+    request: ExportRequest,
+    target: BinaryIO,
+    on_document: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """The whole selection (from ``offset``) written to ``target`` as one file.
 
@@ -193,12 +197,13 @@ def export_source_file(
     the bytes are in ``target``. One file holds everything unless it passes
     :data:`MAX_FILE_BYTES`, when ``next_offset`` says where the next starts.
     HTTP's ``download=true`` is its caller; MCP, which carries the file inside
-    its result, pages with :func:`export_source` instead.
+    its result, pages with :func:`export_source` instead. ``on_document(done,
+    total)`` is called after each document, for a job's progress.
     """
 
     selection = _select(context, request)
     documents = _write_into(
-        context, selection, request.include_chunks, target, MAX_FILE_BYTES, None
+        context, selection, request.include_chunks, target, MAX_FILE_BYTES, None, on_document
     )
     return _describe(selection, documents, target.tell())
 
@@ -210,6 +215,7 @@ def _write_into(  # noqa: PLR0913 - the selection, the budget and where to write
     target: BinaryIO,
     max_bytes: int,
     max_documents: int | None,
+    on_document: Callable[[int, int], None] | None = None,
 ) -> int:
     """Write documents from ``selection.offset`` into ``target`` until a budget is
     spent (always at least one); return how many went in.
@@ -228,6 +234,8 @@ def _write_into(  # noqa: PLR0913 - the selection, the budget and where to write
             record, original = _record(context, row, selection.fmt, include_chunks)
             used += len((record["content"] or "").encode("utf-8")) + len(original or b"")
             yield record, original
+            if on_document is not None:
+                on_document(selection.offset + count + 1, len(selection.rows))
 
     if selection.fmt == "jsonl":
         written = 0

@@ -43,6 +43,7 @@ def register_ingestion_routes(
     index: Callable[..., dict],
     start_background_sync: Callable[[str | None, str], tuple[str | None, list[str]]],
     source_from_payload: Callable[[dict], Any],
+    jobs: Any = None,
 ) -> None:
     """Register the drop zone and the internal landing endpoint on ``app``."""
 
@@ -137,6 +138,7 @@ def register_ingestion_routes(
                 "path": placement.stored.path,
                 "filename": placement.stored.filename,
                 "size_bytes": placement.stored.size_bytes,
+                "unchanged": placement.stored.unchanged,
             }
 
         try:
@@ -154,6 +156,7 @@ def register_ingestion_routes(
         source_name: Annotated[str, Form()] = "uploads",
         sync_now: Annotated[bool, Form()] = True,
         wait: Annotated[bool, Form()] = False,
+        background: Annotated[bool, Form()] = False,
     ) -> dict:
         """Index documents dropped into the UI, with no filesystem setup.
 
@@ -164,7 +167,14 @@ def register_ingestion_routes(
         the source. There is deliberately no second ingestion path.
 
         Uploading again into the same source name adds to it rather than
-        replacing it, which is what "drop a few more files in" should mean.
+        replacing it, which is what "drop a few more files in" should mean. A
+        file whose name already holds the same bytes is not stored twice: it is
+        reported ``unchanged``.
+
+        ``background=true`` answers as soon as the files are received, with an
+        ``upload`` job that lands them, registers the source and starts its
+        sync; the person carries on and the jobs tray shows the progress. The
+        same files dropped again while that job runs return the same job.
         """
         import anyio.to_thread
 
@@ -201,17 +211,25 @@ def register_ingestion_routes(
         # (wait=True) syncing are blocking too; keeping the whole sequence off
         # the event loop lets concurrent readiness requests finish promptly.
 
-        def _finish_upload() -> dict:
+        def _finish_upload(
+            items: list[tuple[str | None, int | None, Callable[[int], bytes]]] | None = None,
+            progress: Callable[[int, int, str], None] | None = None,
+        ) -> dict:
             stored: list[dict] = []
             rejected: list[dict] = []
-            for upload in files:
-                filename = upload.filename
-                if max_bytes is not None and upload.size is not None and upload.size > max_bytes:
+            unchanged: list[dict] = []
+            entries = items or [
+                (upload.filename, upload.size, upload.file.read) for upload in files
+            ]
+            for position, (filename, size, read) in enumerate(entries):
+                if progress is not None:
+                    progress(position, len(entries), filename or "upload")
+                if max_bytes is not None and size is not None and size > max_bytes:
                     rejected.append(
                         {
                             "filename": filename,
                             "error": (
-                                f"{filename or 'upload'} is {upload.size // (1024 * 1024)} MB, "
+                                f"{filename or 'upload'} is {size // (1024 * 1024)} MB, "
                                 f"over the {max_bytes // (1024 * 1024)} MB per-file limit "
                                 "(sync.limits.max_file_size_mb)"
                             ),
@@ -221,7 +239,7 @@ def register_ingestion_routes(
                 # Some UploadFile implementations do not report size. In that
                 # case, stop at one byte over the limit; landing.write will
                 # apply the usual per-file refusal without reading the rest.
-                data = upload.file.read(max_bytes + 1 if max_bytes is not None else -1)
+                data = read(max_bytes + 1 if max_bytes is not None else -1)
                 try:
                     placement = landing.write(
                         name,
@@ -253,8 +271,11 @@ def register_ingestion_routes(
                     raise HTTPException(status_code=502, detail=str(exc)) from exc
                 finally:
                     del data
-                stored.append(placement.stored.__dict__)
-            if not stored:
+                if placement.stored.unchanged:
+                    unchanged.append(placement.stored.__dict__)
+                else:
+                    stored.append(placement.stored.__dict__)
+            if not stored and not unchanged:
                 raise HTTPException(
                     status_code=400,
                     detail="; ".join(item["error"] for item in rejected) or "Nothing stored",
@@ -288,7 +309,8 @@ def register_ingestion_routes(
             job_id = None
             queued: list[str] = []
             sync_result = None
-            if sync_now:
+            # Nothing new landed: the source already holds these exact files.
+            if sync_now and stored:
                 if wait:
                     try:
                         sync_result = index(name, "incremental")["results"][0]
@@ -298,10 +320,11 @@ def register_ingestion_routes(
                     job_id, queued = start_background_sync(name, "incremental")
                     syncing = job_id is not None or bool(queued)
             return {
-                "status": "stored",
+                "status": "stored" if stored else "unchanged",
                 "source_name": name,
                 "path": str(directory),
                 "stored": stored,
+                "unchanged": unchanged,
                 "rejected": rejected,
                 "syncing": syncing,
                 "job_id": job_id,
@@ -309,4 +332,11 @@ def register_ingestion_routes(
                 "sync_result": sync_result,
             }
 
-        return await anyio.to_thread.run_sync(_finish_upload)
+        if not background or jobs is None:
+            return await anyio.to_thread.run_sync(_finish_upload)
+
+        from pheasant.api.upload_jobs import start_upload_job
+
+        return await anyio.to_thread.run_sync(
+            lambda: start_upload_job(jobs, name, files, max_bytes, _finish_upload)
+        )
