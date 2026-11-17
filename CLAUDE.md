@@ -252,7 +252,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 219 pytest modules, offline by design
+└── tests/                     ← 220 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3213,6 +3213,35 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **Work that takes minutes must not hold the page that started it.** A
+  source export and an upload were requests the browser waited on, so the
+  person waited too, and closing the panel or leaving the page lost the
+  progress. Both are jobs now: `services/export_jobs.py` (`POST
+  /sources/{name}/exports`, MCP `start_source_export`) writes the file to
+  `/exports` -- the volume every api replica mounts read-write, so any
+  replica serves `GET /jobs/{id}/download` -- and `api/upload_jobs.py`
+  (`/sources/upload` with `background=true`) lands, registers and syncs
+  after the files are received. Both are idempotent: an export is keyed by
+  what it would contain (every selected document's id and sha256), so the
+  same request returns the running or finished job, and an `O_EXCL` claim
+  file keeps two replicas from writing one; an upload is keyed by its files'
+  hashes while it runs, and `landing.store_upload` returns an existing file
+  holding the same bytes under that name instead of writing `-2`. Watched
+  through the jobs tray, `/jobs/{id}/events` (SSE), and
+  `services/job_wait.py` (`GET /jobs/{id}/wait`, MCP `wait_for_job`, 55 s a
+  call -- MCP progress notifications need an async tool, and every pheasant
+  tool runs through the synchronous `anticipated` wrapper). The UI keeps
+  uploads in flight and exports to save in `ui/src/state/background.ts`,
+  which outlives every panel. `tests/test_export_and_upload_jobs.py`.
+- **A page size for one transport is not a file size for another.** Source
+  export pages by 32 MB because MCP carries the file inside its result, and
+  HTTP's `download=true` sent each page as its own attachment: an uploads
+  source of 48 documents arrived as seven zips, each holding a slice of the
+  tree, and every test passed because the fixture fits one page. A download
+  is one file now (`source_export.export_source_file`, written to a temporary
+  file a document at a time and streamed, `MAX_FILE_BYTES` 2 GiB before a
+  second), and the JSON answer keeps its pages; one writer serves both, so a
+  source that fits one page gives the same bytes either way.
 - **A filter by type silently drops the container types.** A ZIP member was
   listed only if its extension was an indexed type, and `.zip` is not one, so
   an archive inside an uploaded archive vanished with every unsupported file:

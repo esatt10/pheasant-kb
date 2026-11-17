@@ -176,6 +176,8 @@ class StoredUpload:
     filename: str
     path: str
     size_bytes: int
+    #: The same name already held these exact bytes, so nothing was written.
+    unchanged: bool = False
 
 
 def check_submission_bytes(name: str, data: bytes, max_bytes: int | None) -> None:
@@ -208,9 +210,39 @@ def store_upload(
     *,
     max_bytes: int | None = None,
 ) -> StoredUpload:
-    """Write one uploaded file, refusing anything over ``max_bytes``."""
+    """Write one uploaded file, refusing anything over ``max_bytes``.
+
+    Idempotent by name and content: when ``filename`` (or a ``-2``, ``-3`` copy
+    of it) already holds exactly these bytes, that file is the answer and
+    nothing is written, so dropping the same file twice -- or a retry of a drop
+    whose reply was lost -- stores it once. Different bytes under a name still
+    take the next free suffix, as before.
+    """
     check_submission_bytes(filename, data, max_bytes)
     directory.mkdir(parents=True, exist_ok=True)
+    existing = identical_upload(directory, safe_filename(filename), data)
+    if existing is not None:
+        return StoredUpload(
+            filename=existing.name, path=str(existing), size_bytes=len(data), unchanged=True
+        )
     target = unique_path(directory, safe_filename(filename))
     target.write_bytes(data)
     return StoredUpload(filename=target.name, path=str(target), size_bytes=len(data))
+
+
+def identical_upload(directory: Path, filename: str, data: bytes) -> Path | None:
+    """The file named ``filename`` (or a numbered copy) already holding ``data``."""
+
+    candidate = directory / filename
+    names = [candidate] + [
+        directory / f"{candidate.stem}-{index}{candidate.suffix}" for index in range(2, 10_000)
+    ]
+    for path in names:
+        if not path.exists():
+            return None
+        try:
+            if path.is_file() and path.stat().st_size == len(data) and path.read_bytes() == data:
+                return path
+        except OSError:
+            continue
+    return None

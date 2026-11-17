@@ -325,9 +325,14 @@ schema and the HTTP API can express is reachable from it.
   source's root and **Export folder** inside a folder (that folder alone),
   beside **Search this source**; and **export** on the
   source's row on the Sources page, which opens the panel as a row under it
-  the way **outline** does (on a phone, a card under the source's card). A
-  large source arrives as several numbered files, and the panel counts them
-  in and stays open until the last one has arrived. Readers can export too; the server keeps out what the caller's ACL
+  the way **outline** does (on a phone, a card under the source's card). It
+  downloads as one file holding the source's (or folder's) tree; only a
+  selection past 2 GiB continues in a second. It runs as a background job: close
+  the panel and carry on, the jobs tray shows its progress, and the file
+  downloads when it is ready. Asking again returns the same job, or the same
+  finished file when nothing changed. Uploads work the same way: the files
+  send in the background (the tray shows how far), the server lands and
+  indexes them as a job, and dropping the same files again stores nothing twice. Readers can export too; the server keeps out what the caller's ACL
   does not admit (`GET /sources/{name}/export`, MCP `export_source`; see
   [Roles](roles.md)).
 - **Settings → Semantic search** configures `search.embeddings` and

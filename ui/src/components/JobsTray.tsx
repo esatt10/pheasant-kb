@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { JobRecord, QueueTask, SourceProgress } from "../api/types";
+import type { ExportJobResult, JobRecord, QueueTask, SourceProgress } from "../api/types";
+import { dismissTransfer, takeExport, useBackground, type Transfer } from "../state/background";
 import {
   OPEN_JOBS_EVENT,
   QUEUE_STATE_LABEL,
@@ -59,6 +60,24 @@ export function JobsTray() {
   const unlisted = unlistedWaiting(queue.data);
   const waiting = preClaim.length + unlisted;
 
+  // Uploads still sending from this tab, before the server has a job for them.
+  const { transfers } = useBackground();
+
+  // An export this tab asked for downloads once it is ready, wherever the
+  // person is by then: the panel that started it may be long closed.
+  const finishedExports = (jobs.data?.jobs ?? []).filter(
+    (job) => job.kind === "export" && job.status === "succeeded",
+  );
+  useEffect(() => {
+    for (const job of finishedExports) {
+      if (!takeExport(job.id)) continue;
+      const result = job.result as unknown as ExportJobResult | null;
+      for (const file of result?.files ?? []) {
+        void api.downloadJobFile(job.id, file.part, file.filename);
+      }
+    }
+  }, [finishedExports]);
+
   useEffect(() => {
     const open = () => setExpanded(true);
     window.addEventListener(OPEN_JOBS_EVENT, open);
@@ -71,7 +90,15 @@ export function JobsTray() {
   const failed = recent.filter((job) => job.status === "failed");
   const stalled = active.some((job) => job.stalled);
 
-  if (active.length === 0 && failed.length === 0 && queued.length === 0 && unlisted === 0 && !expanded) {
+  const sending = transfers.filter((transfer) => transfer.status === "uploading");
+  if (
+    active.length === 0 &&
+    failed.length === 0 &&
+    queued.length === 0 &&
+    unlisted === 0 &&
+    transfers.length === 0 &&
+    !expanded
+  ) {
     return null;
   }
 
@@ -87,7 +114,7 @@ export function JobsTray() {
         aria-expanded={expanded}
         title={expanded ? "Hide background work" : "Show background work"}
       >
-        {active.length > 0 || (waiting === 0 && queued.some((task) => task.state === "claimed")) ? (
+        {active.length > 0 || sending.length > 0 || (waiting === 0 && queued.some((task) => task.state === "claimed")) ? (
           <span className="spinner" />
         ) : waiting > 0 ? (
           <span className="queue-glyph" aria-hidden>
@@ -95,8 +122,10 @@ export function JobsTray() {
           </span>
         ) : null}
         <span className="jobs-tray__summary">
-          {active.length > 0
-            ? `${summarize(active[0])}${active.length > 1 ? ` +${active.length - 1}` : ""}`
+          {sending.length > 0 && active.length === 0
+            ? `${transferLabel(sending[0])}${sending.length > 1 ? ` +${sending.length - 1}` : ""}`
+            : active.length > 0
+            ? `${summarize(active[0])}${active.length + sending.length > 1 ? ` +${active.length + sending.length - 1}` : ""}`
             : preClaim.length > 0 && unlisted === 0
               ? `${preClaim.length === 1 ? `Sync ${preClaim[0].source}` : `${preClaim.length} syncs`} queued · awaiting an indexer`
               : waiting > 0
@@ -105,7 +134,11 @@ export function JobsTray() {
                 ? `Sync ${queued[0].source} · ${QUEUE_STATE_LABEL[queued[0].state]}${queued[0].claimed_by ? ` (${queued[0].claimed_by})` : ""}${queued.length > 1 ? ` +${queued.length - 1}` : ""}`
                 : failed.length > 0
                   ? `${failed.length} job${failed.length === 1 ? "" : "s"} failed`
-                  : "Background work"}
+                  : transfers.length > 0
+                    ? transfers[0].status === "failed"
+                      ? `Upload to ${transfers[0].source} failed`
+                      : `Upload to ${transfers[0].source} received · indexing next`
+                    : "Background work"}
         </span>
         {active.length > 0 && waiting > 0 ? (
           <span className="pill pill--warn">+{waiting} queued</span>
@@ -141,7 +174,10 @@ export function JobsTray() {
               so which ones is shown once an indexer claims each.
             </p>
           ) : null}
-          {records.length === 0 && queued.length === 0 && unlisted === 0 ? (
+          {transfers.map((transfer) => (
+            <TransferRow key={transfer.id} transfer={transfer} />
+          ))}
+          {records.length === 0 && queued.length === 0 && unlisted === 0 && transfers.length === 0 ? (
             <p className="muted small" style={{ margin: 0 }}>
               Nothing running. Syncs, uploads and re-indexes show up here with
               live progress.
@@ -213,6 +249,8 @@ function JobRow({ job, onClear }: { job: JobRecord; onClear: () => void }) {
         )}
       </div>
 
+      {job.kind === "export" && job.status === "succeeded" ? <ExportFiles job={job} /> : null}
+
       {perSource ? (
         <div className="job__sources">
           {sources.map((row) => (
@@ -275,6 +313,72 @@ function SourceRow({ row }: { row: SourceProgress }) {
       </div>
       <ProgressBar fraction={row.fraction} stalled={row.stalled} compact />
       <div className="job-source__meta muted small">{progressCaption(row)}</div>
+    </div>
+  );
+}
+
+/** A finished export's file(s), to save (again). */
+function ExportFiles({ job }: { job: JobRecord }) {
+  const result = job.result as unknown as ExportJobResult | null;
+  if (!result?.files?.length) return null;
+  return (
+    <div className="job__actions">
+      {result.files.map((file) => (
+        <button
+          key={file.part}
+          type="button"
+          className="button button--ghost"
+          onClick={() => void api.downloadJobFile(job.id, file.part, file.filename)}
+          title={`${(file.bytes / (1024 * 1024)).toFixed(1)} MB · ${file.documents} documents`}
+        >
+          ⤓ {file.filename}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function transferLabel(transfer: Transfer): string {
+  const count = transfer.names.length;
+  const what = count === 1 ? transfer.names[0] : `${count} files`;
+  const percent = transfer.total ? Math.floor((transfer.loaded / transfer.total) * 100) : 0;
+  return `Uploading ${what} to ${transfer.source} — ${percent}%`;
+}
+
+/** An upload still leaving this tab: its bytes' progress, before the server's job. */
+function TransferRow({ transfer }: { transfer: Transfer }) {
+  const fraction = transfer.total ? transfer.loaded / transfer.total : null;
+  return (
+    <div className={`job job--${transfer.status === "failed" ? "failed" : "running"}`}>
+      <div className="job__head">
+        <span className="job__label">
+          Upload {transfer.names.length === 1 ? transfer.names[0] : `${transfer.names.length} files`} to{" "}
+          {transfer.source}
+        </span>
+        <span className="job__status">
+          {transfer.status === "uploading" ? "sending" : transfer.status === "accepted" ? "received" : "failed"}
+        </span>
+        {transfer.status === "failed" ? (
+          <button
+            className="job__clear"
+            onClick={() => dismissTransfer(transfer.id)}
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      <ProgressBar fraction={transfer.status === "uploading" ? fraction : 1} active={transfer.status === "uploading"} />
+      <div className="job__detail muted small">
+        {transfer.error ? (
+          <span className="job__error">{transfer.error}</span>
+        ) : transfer.status === "accepted" ? (
+          "Received; landing and indexing continue as a job below."
+        ) : (
+          `${(transfer.loaded / (1024 * 1024)).toFixed(1)} of ${(transfer.total / (1024 * 1024)).toFixed(1)} MB · keep this tab open until it is received`
+        )}
+      </div>
     </div>
   );
 }

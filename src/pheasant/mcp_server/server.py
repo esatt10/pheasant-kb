@@ -15,6 +15,7 @@ from pheasant.mcp_server.connection_tools import register_connection_tools
 from pheasant.mcp_server.fleet_tools import register_fleet_tools
 from pheasant.mcp_server.graph_tools import register_graph_tools
 from pheasant.mcp_server.inventory_tools import register_inventory_tools
+from pheasant.mcp_server.job_tools import register_job_tools
 from pheasant.mcp_server.model_tools import register_model_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.region_tools import register_region_tools
@@ -947,6 +948,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_access_tools(mcp, tools, anticipated)
     register_model_tools(mcp, tools, anticipated)
     register_fleet_tools(mcp, tools, anticipated)
+    register_job_tools(mcp, tools, anticipated)
 
     return mcp
 

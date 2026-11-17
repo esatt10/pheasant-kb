@@ -348,6 +348,42 @@ class KnowledgeBaseFull(ServiceError):
         self.limit_gb = limit_gb
 
 
+class UnknownJob(ServiceError):
+    status = 404
+    code = "UNKNOWN_JOB"
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"Unknown job: {job_id}")
+        self.job_id = job_id
+
+
+class ExportNotReady(ServiceError):
+    """The export is still being written. Retryable: wait for its job."""
+
+    status = 409
+    code = "EXPORT_NOT_READY"
+    retryable = True
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            f"{detail}; follow it with GET /jobs/{{id}}/wait or MCP wait_for_job, then download it."
+        )
+
+
+class ExportExpired(ServiceError):
+    """The export's file is gone (failed, or cleaned up): start it again."""
+
+    status = 410
+    code = "EXPORT_EXPIRED"
+
+    def __init__(self, job_id: str, why: object) -> None:
+        super().__init__(
+            f"Export {job_id} has no file to download ({why}). Start the export again; "
+            "an unchanged one is rebuilt from the index."
+        )
+        self.job_id = job_id
+
+
 class LandingZoneUnwritable(ServiceError):
     """Submitted bytes have nowhere to land in this deployment.
 

@@ -1025,6 +1025,33 @@ export interface UploadResponse {
   job_id: string | null;
 }
 
+/** `POST /sources/upload` with `background=true`: the job that lands the files. */
+export interface UploadAccepted extends Omit<JobRecord, "status"> {
+  status: "accepted";
+  job_id: string;
+  source_name: string;
+  files: string[];
+  reused: "running" | null;
+}
+
+/** `POST /sources/{name}/exports`: the export's job, new or reused. */
+export interface ExportJobStart extends JobRecord {
+  job_id: string;
+  reused: "running" | "ready" | null;
+}
+
+/** A finished export job's `result`. */
+export interface ExportJobResult {
+  key: string;
+  source: string;
+  format: string;
+  path_prefix: string | null;
+  documents: number;
+  total: number;
+  files: { part: number; filename: string; bytes: number; documents: number; media_type: string }[];
+  download: string;
+}
+
 export interface MountRemedy {
   host_path: string;
   container_path: string;

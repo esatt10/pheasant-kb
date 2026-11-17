@@ -155,6 +155,8 @@ class RemoteLandingZone:
                 filename=str(payload["filename"]),
                 path=str(payload["path"]),
                 size_bytes=int(payload["size_bytes"]),
+                # An older writer does not say; it always wrote.
+                unchanged=bool(payload.get("unchanged", False)),
             ),
         )
 
