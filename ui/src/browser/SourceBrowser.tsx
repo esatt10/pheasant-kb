@@ -120,8 +120,8 @@ export function SourceBrowser({
           {browser.source && first?.source === browser.source ? (
             <ScopeToggle source={browser.source} path={first.path} kind="folder" />
           ) : null}
-          {browser.source && first?.source === browser.source && !first.path ? (
-            <ExportButton source={browser.source} />
+          {browser.source && first?.source === browser.source ? (
+            <ExportButton key={`export:${browser.source}/${first.path}`} source={browser.source} path={first.path} />
           ) : null}
           {browser.source && first?.source === browser.source && first.path ? (
             <RemoveButton

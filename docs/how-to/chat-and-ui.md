@@ -321,12 +321,13 @@ schema and the HTTP API can express is reachable from it.
   ones indexed, plus `manifest.jsonl`), **JSONL** (one line per document:
   metadata, text, outline) or **Parquet** (the same rows as one table), with
   every chunk's line span and heading path optionally included. It sits in
-  two places, one panel: the taxonomy view's header at a source's root,
-  **Export source** beside **Search this source**, and **export** on the
+  two places, one panel: the taxonomy view's header, **Export source** at a
+  source's root and **Export folder** inside a folder (that folder alone),
+  beside **Search this source**; and **export** on the
   source's row on the Sources page, which opens the panel as a row under it
   the way **outline** does (on a phone, a card under the source's card). A
   large source arrives as several numbered files, and the panel counts them
-  in. Readers can export too; the server keeps out what the caller's ACL
+  in and stays open until the last one has arrived. Readers can export too; the server keeps out what the caller's ACL
   does not admit (`GET /sources/{name}/export`, MCP `export_source`; see
   [Roles](roles.md)).
 - **Settings → Semantic search** configures `search.embeddings` and

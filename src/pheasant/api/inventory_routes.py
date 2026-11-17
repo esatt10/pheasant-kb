@@ -132,8 +132,9 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         download: bool = False,
         principal: str | None = None,
         principal_groups: list[str] | None = Query(default=None),
+        path_prefix: str | None = None,
     ) -> Any:
-        """Every document of one source as one file, paged by size.
+        """Every document of one source (or of one folder in it) as one file, paged by size.
 
         The JSON answer is MCP ``export_source``'s. ``download=true`` is this
         adapter's own difference, on purpose: it sends the part's bytes as an
@@ -150,6 +151,7 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
                 include_chunks=include_chunks,
                 principal=principal,
                 principal_groups=principal_groups,
+                path_prefix=path_prefix,
             ),
         )
         if not download:

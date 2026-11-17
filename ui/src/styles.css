@@ -5750,6 +5750,18 @@ select.text-input {
   text-align: left;
   white-space: normal;
 }
+/* In the taxonomy header the panel hangs from the header, not the pill: the
+   pill sits wherever the other actions leave it (inside a folder, Remove
+   folder pushes it left), and a 320px panel right-aligned to it ran past the
+   pane's left edge, clipped, with Download under the column resizer. */
+.browser__header { position: relative; }
+.browser__header .export-control { position: static; }
+.browser__header .export-control__panel {
+  right: calc(8px * var(--sp));
+  width: min(320px, calc(100% - 16px * var(--sp)));
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+}
 .export-control__title { margin: 0; font-size: calc(13px * var(--fs)); }
 .export-control__body { display: grid; gap: calc(8px * var(--sp)); }
 .export-control__body input[type="radio"],

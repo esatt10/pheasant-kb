@@ -946,7 +946,7 @@ export const api = {
    */
   downloadSourceExport: async (
     source: string,
-    options: { format: "zip" | "jsonl" | "parquet"; includeChunks?: boolean },
+    options: { format: "zip" | "jsonl" | "parquet"; includeChunks?: boolean; path?: string },
     onPart?: (part: { filename: string; documents: number; total: number; done: number }) => void,
   ): Promise<{ files: string[]; documents: number }> => {
     const files: string[] = [];
@@ -958,6 +958,7 @@ export const api = {
           format: options.format,
           offset,
           include_chunks: options.includeChunks ? "true" : undefined,
+          path_prefix: options.path || undefined,
           download: "true",
         })}`,
         { headers: requestHeaders() },
