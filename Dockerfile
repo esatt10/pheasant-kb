@@ -6,8 +6,8 @@
 #    of them, so any config a user writes actually works — semantic search
 #    (lancedb), the agentic answer loop (langgraph), sandboxed connectors
 #    (wasmtime), signed contracts (cryptography), and the Phase-35 scale-out
-#    backends — Postgres state (psycopg), the gRPC worker transport and the
-#    NATS index queue. The scaled manifests under deploy/kubernetes/scaled/
+#    backends — Postgres state (pg8000 + SQLAlchemy's pool), the gRPC
+#    worker transport and the NATS index queue. The scaled manifests under deploy/kubernetes/scaled/
 #    select all three, so leaving them out shipped an image that could not run
 #    the topology this repo publishes. The old default of "mcp"
 #    meant a perfectly valid pheasant.yaml could fail at runtime in the

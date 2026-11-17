@@ -399,11 +399,11 @@ POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 def test_an_exclusion_resolves_and_applies_alike_on_both_backends(tmp_path: Path) -> None:
     """Resolution is hand-written SQL (`LOWER … LIKE … ESCAPE`, `NOT IN`)."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
     lite = _region(tmp_path / "sqlite")
     storage = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}
     lexical = os.environ.get("PHEASANT_TEST_LEXICAL_INDEX")

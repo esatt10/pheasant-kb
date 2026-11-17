@@ -6,32 +6,35 @@ Container Apps that was every connection idle a few minutes: five MCP calls in
 a row raised "server closed the connection unexpectedly", one per dead
 connection, while Postgres itself logged nothing.
 
-Two defences, both at the pool. TCP keepalives keep an idle flow alive and let
-the kernel notice a dead peer. And :class:`IdleCheck` is the pool's ``check``:
-a connection that sat in the pool long enough to have been dropped is pinged
-on checkout, and one that fails is discarded and another handed over. A
-connection back within :data:`IDLE_CHECK_SECONDS` is not pinged, so a busy
-thread pays no extra round trip.
+Two defences, in :mod:`pheasant.persistence.pg_dsn` and
+:mod:`pheasant.persistence.pg_pool`. TCP keepalives
+(idle 60 s, interval 10 s, count 3) keep an idle flow alive and let the
+kernel notice a dead peer. And the pool pings a connection that sat idle long
+enough to have been dropped (:data:`IDLE_CHECK_SECONDS`) before handing it
+out, replacing one that fails. A connection back sooner is not pinged, so a
+busy thread pays no extra round trip.
+
+This module keeps the one question every layer above asks: was that failure
+the connection, or the server answering?
 """
 
 from __future__ import annotations
 
-import time
-import weakref
-from typing import Any
+from pheasant.persistence.pg_dsn import (
+    KEEPALIVE_COUNT,
+    KEEPALIVE_IDLE_SECONDS,
+    KEEPALIVE_INTERVAL_SECONDS,
+)
+from pheasant.persistence.pg_pool import IDLE_CHECK_SECONDS
 
-#: A pooled connection idle at least this long is pinged before it is handed
-#: out. Shorter than any idle timeout seen between pheasant and its server.
-IDLE_CHECK_SECONDS = 30.0
+__all__ = ["IDLE_CHECK_SECONDS", "TCP_KEEPALIVES", "is_disconnect", "is_pool_timeout"]
 
-#: libpq TCP keepalives, so an idle connection keeps its network flow alive
-#: (Azure expires idle flows after four minutes by default) and a dead peer is
-#: detected rather than found by the next statement.
+#: The keepalive settings every connection carries, for logs and docs.
 TCP_KEEPALIVES = {
     "keepalives": 1,
-    "keepalives_idle": 60,
-    "keepalives_interval": 10,
-    "keepalives_count": 3,
+    "keepalives_idle": KEEPALIVE_IDLE_SECONDS,
+    "keepalives_interval": KEEPALIVE_INTERVAL_SECONDS,
+    "keepalives_count": KEEPALIVE_COUNT,
 }
 
 
@@ -43,34 +46,30 @@ def is_disconnect(exc: BaseException) -> bool:
     ``57P``, and a connection exception class ``08``. None of those says
     anything about the statement, so they are worth repeating on another
     connection. Every other SQLSTATE (a constraint, bad SQL, ``57014`` a
-    cancelled statement) is the server answering, and is not.
+    cancelled statement) is the server answering, and is not. A pool that had
+    no free connection is not a disconnect either (:func:`is_pool_timeout`).
     """
 
-    try:
-        import psycopg
-    except ModuleNotFoundError:  # pragma: no cover - dep-gated
+    from pheasant.persistence import pg_driver
+
+    if isinstance(exc, pg_driver.Error):
+        error: BaseException = exc
+    elif type(exc).__module__.startswith("pg8000"):
+        error = pg_driver.translate_error(exc)
+    else:
+        # Not the database's: an OSError from a file is not a dropped connection.
         return False
-    if not isinstance(exc, psycopg.OperationalError):
+    if not isinstance(error, pg_driver.OperationalError) or isinstance(
+        error, (pg_driver.PoolTimeout, pg_driver.QueryCanceled)
+    ):
         return False
-    sqlstate = str(getattr(exc, "sqlstate", None) or "")
+    sqlstate = str(error.sqlstate or "")
     return not sqlstate or sqlstate.startswith(("57P", "08"))
 
 
-class IdleCheck:
-    """The pool's ``check`` callback, and the record of when each connection came back."""
+def is_pool_timeout(exc: BaseException) -> bool:
+    """Whether ``exc`` says no pooled connection became free in time."""
 
-    def __init__(self) -> None:
-        self._returned_at: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDictionary()
+    from pheasant.persistence import pg_driver
 
-    def returned(self, conn: Any) -> None:
-        """Note that ``conn`` is going back to the pool now."""
-
-        self._returned_at[conn] = time.monotonic()
-
-    def __call__(self, conn: Any) -> None:
-        returned = self._returned_at.get(conn)
-        if returned is not None and time.monotonic() - returned < IDLE_CHECK_SECONDS:
-            return
-        from psycopg_pool import ConnectionPool
-
-        ConnectionPool.check_connection(conn)
+    return isinstance(exc, pg_driver.PoolTimeout)

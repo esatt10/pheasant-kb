@@ -594,11 +594,11 @@ def test_the_tree_and_reads_agree_across_backends(tmp_path: Path) -> None:
     removed-source anti-join, the outline's `GROUP BY`): one corpus, both
     backends, the same folders, files and text."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
     lite = _region(tmp_path / "sqlite")
     storage = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}
     # CI's Postgres preloads pg_textsearch, the default; a stock server (a

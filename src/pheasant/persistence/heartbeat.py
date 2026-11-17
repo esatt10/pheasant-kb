@@ -28,8 +28,6 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from pheasant.persistence.pg_liveness import TCP_KEEPALIVES
-
 logger = logging.getLogger(__name__)
 
 #: How long one heartbeat statement may run before it is a failed beat.
@@ -58,27 +56,25 @@ class HeartbeatWriter:
             return []
         conn = self._connect(backend)
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(backend.dialect.translate(sql), params or None)
-                if cursor.description is None:
-                    return []
-                names = [column.name for column in cursor.description]
-                return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+            compiled = backend.dialect.compile(sql)
+            result = conn.execute(compiled.text, compiled.bind(params))
+            if result.columns is None:
+                return []
+            return [dict(zip(result.columns, row, strict=True)) for row in result.rows]
         except Exception:
             self.reset()
             raise
 
     def _connect(self, backend: Any) -> Any:
         if self._conn is None or self._conn.closed:
-            import psycopg
+            from pheasant.persistence import pg_driver
 
-            self._conn = psycopg.connect(
+            self._conn = pg_driver.connect(
                 backend.dsn,
                 autocommit=True,
                 connect_timeout=10,
                 application_name="pheasant-heartbeat",
-                options=f"-c statement_timeout={BEAT_TIMEOUT_MS}",
-                **TCP_KEEPALIVES,
+                settings={"statement_timeout": str(BEAT_TIMEOUT_MS)},
             )
         return self._conn
 

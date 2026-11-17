@@ -168,10 +168,9 @@ def test_both_transports_answer_the_wait(tmp_path: Path) -> None:
 
 
 def _dropped() -> Exception:
-    psycopg = pytest.importorskip("psycopg")
-    return psycopg.OperationalError(
-        "consuming input failed: server closed the connection unexpectedly"
-    )
+    from pheasant.persistence import pg_driver
+
+    return pg_driver.ConnectionLost("server closed the connection unexpectedly (network error)")
 
 
 def test_a_dropped_connection_is_a_retryable_refusal_with_its_reason() -> None:
@@ -184,8 +183,12 @@ def test_a_dropped_connection_is_a_retryable_refusal_with_its_reason() -> None:
 
 
 def test_a_server_error_is_not_called_temporary() -> None:
-    psycopg = pytest.importorskip("psycopg")
-    assert transient_refusal(psycopg.errors.UniqueViolation("duplicate key")) is None
+    from pheasant.persistence import pg_driver
+
+    duplicate = pg_driver.IntegrityError("duplicate key", sqlstate="23505")
+    assert transient_refusal(duplicate) is None
+    assert transient_refusal(pg_driver.QueryCanceled("timeout", sqlstate="57014")) is None
+    assert transient_refusal(FileNotFoundError("not a database")) is None
     assert transient_refusal(RuntimeError("boom")) is None
 
 

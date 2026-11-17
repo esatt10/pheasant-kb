@@ -186,11 +186,11 @@ def _index(
 def _reset(dsn: str) -> None:
     """Drop everything this suite creates, so a re-run starts clean."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(dsn, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
 
 
 @postgres
@@ -307,8 +307,7 @@ def test_corpus_size_comes_from_the_planner_estimate_once_it_exists(tmp_path: Pa
     score to nothing), after it the estimate must be.
     """
 
-    import psycopg
-
+    from pheasant.persistence import pg_driver
     from pheasant.search.sqlite_store import _postgres_total_chunks
 
     _reset(DSN)
@@ -320,12 +319,12 @@ def test_corpus_size_comes_from_the_planner_estimate_once_it_exists(tmp_path: Pa
         assert real > 0
 
         # No statistics yet: the sentinel is negative, so the exact count wins.
-        with psycopg.connect(DSN, autocommit=True) as conn:
-            conn.execute("UPDATE pg_class SET reltuples = -1 WHERE oid = 'chunks_fts'::regclass")
+        with pg_driver.connect(DSN, autocommit=True) as conn:
+            conn.query("UPDATE pg_class SET reltuples = -1 WHERE oid = 'chunks_fts'::regclass")
         assert _postgres_total_chunks(engine.state) == real
 
-        with psycopg.connect(DSN, autocommit=True) as conn:
-            conn.execute("ANALYZE chunks_fts")
+        with pg_driver.connect(DSN, autocommit=True) as conn:
+            conn.query("ANALYZE chunks_fts")
         estimate = _postgres_total_chunks(engine.state)
         assert estimate == real, f"planner estimate {estimate} disagrees with {real}"
 
@@ -588,8 +587,7 @@ def test_a_half_copied_table_fails_verification_instead_of_being_skipped(tmp_pat
     excluded the one table at risk.
     """
 
-    import psycopg
-
+    from pheasant.persistence import pg_driver
     from pheasant.persistence.migrate import MigrationError, migrate_sqlite_to_postgres
 
     _reset(DSN)
@@ -609,9 +607,9 @@ def test_a_half_copied_table_fails_verification_instead_of_being_skipped(tmp_pat
     # Simulate the interruption: drop some chunks, leaving the table non-empty
     # (so the re-run skips it) but short (so it is wrong). `chunks` is the
     # table that actually takes long enough to be interrupted in.
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        conn.execute("DELETE FROM chunks WHERE id IN (SELECT id FROM chunks LIMIT 2)")
-        short = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+    with pg_driver.connect(DSN, autocommit=True) as conn:
+        conn.query("DELETE FROM chunks WHERE id IN (SELECT id FROM chunks LIMIT 2)")
+        short = conn.query("SELECT count(*) FROM chunks").fetchone()[0]
     assert short > 0, "the table must stay non-empty or it would simply be re-copied"
 
     with pytest.raises(MigrationError) as caught:
@@ -728,7 +726,7 @@ def test_the_parquet_export_is_identical_on_both_backends(tmp_path: Path) -> Non
 def test_export_reports_an_unsynced_postgres_database_actionably(tmp_path: Path) -> None:
     """The failure an operator hits when the export runs before the sync.
 
-    Without this the error is ``psycopg.errors.UndefinedTable: relation
+    Without this the error is ``UndefinedTable`` (42P01): ``relation
     "sources" does not exist``, raised four frames inside the driver — which
     is a true statement about a database and a useless one about pheasant.
     """
@@ -739,13 +737,13 @@ def test_export_reports_an_unsynced_postgres_database_actionably(tmp_path: Path)
     # DSN is safe: the tables are dropped and recreated per run by _index, and
     # this only reads.
     config = _config(tmp_path, tmp_path / "docs", "postgres")
-    with psycopg_dropped_tables(config):
+    with postgres_dropped_tables(config):
         with pytest.raises(StateUnavailable, match="Run `pheasant sync` first"):
             open_state(config, tmp_path / "unused.db")
 
 
 @contextlib.contextmanager
-def psycopg_dropped_tables(config: Any):
+def postgres_dropped_tables(config: Any):
     """Drop pheasant's tables for the duration of the block, then leave them
     dropped — the next test that needs them calls ``migrate()`` itself."""
 
@@ -1139,7 +1137,7 @@ def test_a_killed_batch_frees_its_lease_on_postgres(tmp_path: Path) -> None:
         )
         state.conn.execute(
             "INSERT INTO source_leases(source_id, owner, acquired_at, heartbeat_at) "
-            "VALUES(%s,%s,%s,%s) ON CONFLICT(source_id) DO UPDATE SET "
+            "VALUES(?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET "
             "owner=excluded.owner, acquired_at=excluded.acquired_at, "
             "heartbeat_at=excluded.heartbeat_at",
             (EVALUATION_LEASE, "dead-host:1", stopped, stopped),
@@ -1151,7 +1149,7 @@ def test_a_killed_batch_frees_its_lease_on_postgres(tmp_path: Path) -> None:
         # The statement under test: on SQLite this row is gone. It has to be
         # gone here too, or the resume the reclaim just advertised is a lie.
         assert not state.rows(
-            "SELECT owner FROM source_leases WHERE source_id=%s", (EVALUATION_LEASE,)
+            "SELECT owner FROM source_leases WHERE source_id=?", (EVALUATION_LEASE,)
         )
     finally:
         engine.close()

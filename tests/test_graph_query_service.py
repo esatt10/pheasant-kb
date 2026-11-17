@@ -553,16 +553,15 @@ def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path
     """A database restart drops pooled connections; the next read must reconnect.
 
     Every graph-service read carries a deadline now, and a read under one on a
-    dropped connection discarded it with ``putconn(conn, close=True)``, an
-    argument psycopg_pool does not take: ``TypeError`` instead of the
-    disconnect ``rows`` retries on. Watched on Azure after a Postgres restart.
+    dropped connection once failed on its way back to the pool (a
+    ``TypeError``) instead of reaching the disconnect ``rows`` retries on.
+    Watched on Azure after a Postgres restart.
     """
 
     import os
     import time
 
-    import psycopg
-
+    from pheasant.persistence import pg_driver
     from pheasant.request_budget import activate
 
     config = _config(tmp_path)
@@ -571,8 +570,8 @@ def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path
     engine = SyncEngine(config)
     try:
         engine.state.rows("SELECT 1 AS one")  # a pooled connection, now idle
-        with psycopg.connect(os.environ["PHEASANT_TEST_POSTGRES_DSN"], autocommit=True) as admin:
-            admin.execute(
+        with pg_driver.connect(os.environ["PHEASANT_TEST_POSTGRES_DSN"], autocommit=True) as admin:
+            admin.query(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE datname = current_database() AND pid <> pg_backend_pid()"
             )

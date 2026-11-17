@@ -16,7 +16,7 @@ exits 0, and the deployment starts the api in its place.
 
     python -m pheasant.deployment.wake_gate && exec pheasant serve ...
 
-Standard library only (and psycopg, which the image has), so it starts in a
+Standard library only (and pg8000, which the image has), so it starts in a
 fraction of a second. It reveals nothing about the region but that it is
 waking, which is why it asks for no credential.
 """
@@ -207,9 +207,9 @@ def database_answers(dsn: str) -> Callable[[], bool]:
 
     def ready() -> bool:
         try:
-            import psycopg
+            from pheasant.persistence.pg_driver import connect
 
-            psycopg.connect(dsn, connect_timeout=5).close()
+            connect(dsn, connect_timeout=5).close()
         except Exception:  # noqa: BLE001 - any failure is "not yet"
             return False
         return True

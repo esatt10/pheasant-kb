@@ -98,8 +98,8 @@ def documents(context: ServiceContext, request: DocumentsRequest) -> dict[str, A
         where.append("a.source_id = ?")
         params.append(request.source_name)
     if extensions:
-        # The patterns go in as parameters. A literal `%` in the statement text
-        # is a placeholder to psycopg.
+        # The patterns go in as parameters, which keeps a user's text out of
+        # the statement whatever the driver does with it.
         where.append("(" + " OR ".join("LOWER(a.relative_path) LIKE ?" for _ in extensions) + ")")
         params.extend(f"%{extension}" for extension in extensions)
     scope = None

@@ -198,7 +198,8 @@ def pg_textsearch_sql(
     ``'idx:…'::bm25query``: different trees when parsed, one constant once
     folded. That is also why the terms are a literal rather than a bound
     parameter: a generic plan does not fold parameters, and the text varying
-    per query keeps psycopg from preparing one. A plan without the index
+    per query keeps the driver from preparing one (`pg_driver` prepares a text
+    after its fifth run). A plan without the index
     scan (a small table) gets no swap and scores standalone, which is slower
     and gives the same numbers; ``tests/test_pg_textsearch.py`` holds both.
 

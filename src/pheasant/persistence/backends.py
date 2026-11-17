@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from pheasant.persistence.pg_liveness import TCP_KEEPALIVES, IdleCheck, is_disconnect
+from pheasant.persistence.pg_liveness import is_disconnect
 from pheasant.persistence.sql import POSTGRES, SQLITE, Dialect, Row
 from pheasant.telemetry.spans import instrument
 
@@ -48,17 +48,16 @@ STATEMENT_TIMEOUT_MS = 0  # 0 = no limit; indexing commits can be long.
 SCHEMA_LOCK_KEY = 0x5048454153414E54
 
 
-def _result_rows(cursor: Any) -> list[Row]:
-    """Every row of a psycopg result, with one column order shared by all of them.
+def _result_rows(columns: list[str], rows: list[list[Any]]) -> list[Row]:
+    """Every row of a result, with one column order shared by all of them.
 
     ``dict.fromkeys`` because a statement may name a column twice
     (``SELECT a.id, b.id``): the dict keeps the first position and the last
     value, and positional access has always followed the dict.
     """
 
-    columns = [column.name for column in cursor.description]
     order = list(dict.fromkeys(columns))
-    return [Row(zip(columns, values, strict=True), order) for values in cursor.fetchall()]
+    return [Row(zip(columns, values, strict=True), order) for values in rows]
 
 
 class StateBackend(ABC):
@@ -330,10 +329,11 @@ class _PgConnection:
 class PostgresBackend(StateBackend):
     """A pooled Postgres connection, one checked out per thread in use.
 
-    Uses ``psycopg`` 3 with a connection pool rather than a connection per
-    thread: unlike a SQLite file handle, a Postgres connection is a server-side
-    process, so one per thread across an API server's threadpool plus the
-    search fan-out would open dozens for a workload that needs a handful.
+    Uses :mod:`pheasant.persistence.pg_driver` (pg8000 underneath) with a
+    connection pool rather than a connection per thread: unlike a SQLite file
+    handle, a Postgres connection is a server-side process, so one per thread
+    across an API server's threadpool plus the search fan-out would open
+    dozens for a workload that needs a handful.
 
     Autocommit is **off**: the indexing path relies on transactional commits
     (``replace_artifact_chunks`` deletes then re-inserts, and a crash between
@@ -345,29 +345,24 @@ class PostgresBackend(StateBackend):
 
     def __init__(self, dsn: str, *, pool_size: int = 10, application_name: str = "pheasant"):
         try:
-            from psycopg_pool import ConnectionPool
+            import pg8000  # noqa: F401
+            import sqlalchemy  # noqa: F401
         except ModuleNotFoundError as exc:  # pragma: no cover - dep-gated
             raise RuntimeError(
-                "storage.backend is 'postgres' but psycopg is not installed. "
+                "storage.backend is 'postgres' but the PostgreSQL driver is not installed. "
                 "Install pheasant with the postgres extra: pip install 'pheasant-kb[postgres]'"
             ) from exc
+        from pheasant.persistence.pg_driver import ConnectionPool
 
         self.dsn = dsn
         self._local = threading.local()
-        self._idle_check = IdleCheck()
-        # min_size=1 so a container that never queries does not hold a pool of
-        # idle server processes; the pool grows on demand up to pool_size.
+        # Lazy: a container that never queries holds no server process, and
+        # the pool grows on demand up to pool_size (and never past it).
         self._pool = ConnectionPool(
             dsn,
-            min_size=1,
             max_size=max(1, int(pool_size)),
-            kwargs={
-                "application_name": application_name,
-                "autocommit": False,
-                **TCP_KEEPALIVES,
-            },
-            check=self._idle_check,
-            open=True,
+            application_name=application_name,
+            autocommit=False,
         )
 
     @property
@@ -501,9 +496,9 @@ class PostgresBackend(StateBackend):
         # A read with nothing pending on this thread was always its own
         # transaction: `_finish` hands the connection back straight after it.
         # With autocommit off that transaction cost two extra round trips the
-        # read never needed -- psycopg sends `BEGIN` before the statement and
-        # `release()` sends `ROLLBACK` after it, so every serving-path read was
-        # three trips to the server. Measured with pg_stat_statements: 200
+        # read never needed -- the driver sends `BEGIN` before the statement
+        # and `release()` sends `ROLLBACK` after it, so every serving-path read
+        # was three trips to the server. Measured with pg_stat_statements: 200
         # reads, 200 BEGIN + 200 ROLLBACK. Autocommit for exactly that read
         # sends the statement alone, and `rollback()` on an idle connection
         # sends nothing. Toggling the flag on an idle connection is local.
@@ -522,22 +517,15 @@ class PostgresBackend(StateBackend):
         try:
             if timeout_installed:
                 milliseconds = max(1, int(remaining * 1000))
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT set_config('statement_timeout', %s, false)",
-                        (f"{milliseconds}ms",),
-                    )
-            with conn.cursor() as cursor:
-                cursor.execute(self.dialect.translate(sql), params or None)
-                if cursor.description is None:
-                    result: list[Row] = []
-                else:
-                    result = _result_rows(cursor)
+                conn.execute(
+                    "SELECT set_config('statement_timeout', $1, false)",
+                    (f"{milliseconds}ms",),
+                )
+            result = self._run(conn, sql, params)
         except Exception as exc:
             if timeout_installed and standalone:
                 try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("RESET statement_timeout")
+                    conn.execute("RESET statement_timeout")
                 except Exception as reset_exc:
                     logger.warning(
                         "Could not restore PostgreSQL statement_timeout; discarding connection",
@@ -565,8 +553,7 @@ class PostgresBackend(StateBackend):
             raise
         if timeout_installed:
             try:
-                with conn.cursor() as cursor:
-                    cursor.execute("RESET statement_timeout")
+                conn.execute("RESET statement_timeout")
             except Exception as exc:
                 logger.warning(
                     "Could not restore PostgreSQL statement_timeout; discarding connection",
@@ -591,11 +578,21 @@ class PostgresBackend(StateBackend):
             raise DeadlineExceeded("assistant request deadline exceeded during a PostgreSQL read")
         return result
 
+    def _run(self, conn: Any, sql: str, params: Any) -> list[Row]:
+        """One statement through the driver; its rows (none without a result set)."""
+
+        compiled = self.dialect.compile(sql)
+        result = conn.execute(compiled.text, compiled.bind(params))
+        self._local.rowcount = result.rowcount
+        if result.columns is None:
+            return []
+        return _result_rows(result.columns, result.rows)
+
     def _discard(self, conn: Any) -> None:
         """Close this thread's connection and hand it back; the pool replaces it.
 
-        ``putconn`` takes no ``close`` flag: passing one turned a dropped
-        connection under a deadline into ``TypeError`` rather than a retry.
+        A dropped connection under a deadline has to reach the retry in
+        :meth:`rows`, not fail again on its way back to the pool.
         """
 
         try:
@@ -630,31 +627,24 @@ class PostgresBackend(StateBackend):
 
         Unlike :meth:`rows`, this keeps pending work until commit. StateStore
         writes and UPDATE RETURNING must not auto-release the connection.
-        Read rowcount before psycopg closes the cursor; a bare UPDATE/DELETE
-        has no returned rows to tell us how much it changed.
+        ``rowcount`` arrives with the result; a bare UPDATE/DELETE has no
+        returned rows to tell us how much it changed.
         """
 
         conn = self._conn()
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(self.dialect.translate(sql), params or None)
-                if cursor.description is None:
-                    result: list[Row] = []
-                else:
-                    result = _result_rows(cursor)
-                rowcount = cursor.rowcount
+            result = self._run(conn, sql, params)
         except Exception:
             self._abort()
             raise
         self._local.dirty = True
-        return result, rowcount
+        return result, int(self._local.rowcount)
 
     @instrument("postgresql.execute", attributes={"db.system": "postgresql"}, require_parent=True)
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         conn = self._conn()
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(self.dialect.translate(sql), params or None)
+            self._run(conn, sql, params)
         except Exception:
             self._abort()
             raise
@@ -667,9 +657,9 @@ class PostgresBackend(StateBackend):
         if not seq:
             return
         conn = self._conn()
+        compiled = self.dialect.compile(sql)
         try:
-            with conn.cursor() as cursor:
-                cursor.executemany(self.dialect.translate(sql), seq)
+            conn.executemany(compiled.text, [compiled.bind(row) for row in seq])
         except Exception:
             self._abort()
             raise
@@ -681,8 +671,7 @@ class PostgresBackend(StateBackend):
     def executescript(self, script: str) -> None:
         conn = self._conn()
         try:
-            with conn.cursor() as cursor:
-                cursor.execute(script)
+            conn.execute_script(script)
             conn.commit()
         except Exception:
             self._abort()
@@ -733,7 +722,6 @@ class PostgresBackend(StateBackend):
             conn.rollback()
         except Exception:  # pragma: no cover - already-broken connection
             pass
-        self._idle_check.returned(conn)
         try:
             self._pool.putconn(conn)
         except Exception:  # pragma: no cover
@@ -762,8 +750,7 @@ class PostgresBackend(StateBackend):
         conn = self._conn()
         acquired = False
         try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_LOCK_KEY,))
+            conn.execute("SELECT pg_advisory_lock($1)", (SCHEMA_LOCK_KEY,))
             acquired = True
             yield
         except Exception:
@@ -775,8 +762,7 @@ class PostgresBackend(StateBackend):
         finally:
             if acquired:
                 try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_KEY,))
+                    conn.execute("SELECT pg_advisory_unlock($1)", (SCHEMA_LOCK_KEY,))
                     conn.commit()
                 except Exception:  # pragma: no cover - connection loss releases it
                     logger.warning("Could not explicitly release the schema advisory lock")
