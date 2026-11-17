@@ -203,7 +203,7 @@ class HttpTransport:
         version = str(decoded.get("reader_version") or "")
         if version != pdf_reader_version(math):
             raise TaskRejected(
-                f"worker reads PDFs with pymupdf {version or '(none)'}, "
+                f"worker reads PDFs with {version or '(no reader)'}, "
                 f"this process with {pdf_reader_version(math) or '(none)'}"
             )
         pages = decoded.get("pages")

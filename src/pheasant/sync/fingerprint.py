@@ -66,7 +66,51 @@ MEMORY_TEXT_PIPELINE = "33.5-frontmatter-stripped"
 WEB_TEXT_PIPELINE = "listed-urls-html-by-content-type"
 
 
-def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
+#: What reads a PDF's or EPUB's text. PDF text came from MuPDF and comes from
+#: PDFium now (`ingestion/pdf_pages.py`), and EPUB from the builtin reader, so
+#: text stored by the old reader is re-read once. Deliberately a revision
+#: rather than the package versions: a patch release of pypdfium2 that does
+#: not change what pheasant reads must not re-read every document source, and
+#: one that does is reviewed and bumps `pdf_pages.ADAPTER_REVISION`.
+def document_text_pipeline() -> str:
+    from pheasant.ingestion.pdf_pages import ADAPTER_REVISION
+
+    return f"pdf:pdfium-r{ADAPTER_REVISION};epub:builtin"
+
+
+def holds_documents(state: Any, source: SourceConfig) -> bool:
+    """Whether ``source`` can hold, or already stores, a PDF's or an EPUB's text.
+
+    The store is asked only when the configuration does not admit one, so a
+    source of code reads no extra row; one bounded seek finds a web page served
+    as a PDF from a URL with no ``.pdf``. A store that cannot answer says no.
+    """
+
+    return source_includes_documents(source) or _stores_documents(state, source)
+
+
+def _stores_documents(state: Any, source: SourceConfig) -> bool:
+    try:
+        return bool(
+            state.rows(
+                "SELECT 1 FROM artifacts WHERE source_id=? AND ("
+                "mime_type IN ('application/pdf', 'application/epub+zip') "
+                "OR LOWER(relative_path) LIKE '%.pdf' OR LOWER(relative_path) LIKE '%.epub'"
+                ") LIMIT 1",
+                (source.name,),
+            )
+        )
+    except Exception:  # noqa: BLE001 - "no" re-reads nothing it should not
+        return False
+
+
+def source_fingerprint(
+    source: SourceConfig,
+    extractor: Any = None,
+    *,
+    holds_documents: bool = False,
+    state: Any = None,
+) -> str:
     """Fingerprint the settings that decide *what text* a source produces.
 
     ``extractor`` is ``ingestion.extractor``; its ``html_text`` switch is
@@ -75,6 +119,13 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
     fingerprint, so flipping it does not re-read every repository in the
     region. Its ``math`` switch is folded in, when on, for sources whose
     ``include`` admits a document, for the same reason.
+
+    The document reader (:func:`document_text_pipeline`) is folded in for a
+    source that can carry a PDF or EPUB -- its ``include`` or URLs admit one,
+    or it already stores one (``holds_documents``, or asked of ``state``:
+    :func:`holds_documents`), which is how a web page served as a PDF from a
+    URL without the suffix is found. A source of code and Markdown keeps its
+    fingerprint.
     """
 
     chunking = getattr(source, "chunking", None)
@@ -144,7 +195,14 @@ def source_fingerprint(source: SourceConfig, extractor: Any = None) -> str:
             # turns it on; bumping HTML_CHROME_VERSION re-reads exactly the
             # collections that strip.
             payload["html_chrome"] = HTML_CHROME_VERSION
-    if math_enabled(extractor) and source_includes_documents(source):
+    documents = source_includes_documents(source)
+    if not documents and not holds_documents and state is not None:
+        holds_documents = _stores_documents(state, source)
+    if documents or holds_documents:
+        # Changing the PDF engine changes the text of documents already
+        # indexed; a source that can hold none keeps its fingerprint.
+        payload["document_reader"] = document_text_pipeline()
+    if math_enabled(extractor) and documents:
         # Equations as LaTeX change the text of every document holding one.
         # Off is omitted, so no stored fingerprint moves until someone turns it
         # on, and only sources that can carry a document re-read; bumping

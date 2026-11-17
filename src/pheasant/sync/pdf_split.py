@@ -3,7 +3,7 @@
 Remote preparation parallelizes *across files*: a file is one task on one
 worker. One 8,000-page PDF is therefore one task, read on one thread wherever
 it lands. Extraction is where such a file's
-time goes (pymupdf reads ~600 pages a second; section detection and chunking
+time goes (PDFium reads a few hundred pages a second; section detection and chunking
 the result take a fraction of a second), and it is the one step that does not
 need the whole document, because a page's text depends only on that page.
 
@@ -17,10 +17,11 @@ chunking stay on the indexer, because they need the whole document.
 property of the construction rather than a hope. A worker reads its range
 with :func:`~pheasant.ingestion.pdf_pages.pdf_page_texts`, the same function
 the native extractor reads a whole PDF with, and returns pages untidied; a
-worker on a different pymupdf release is refused rather than trusted. Every
+worker on a different PDF reader (`pdf_reader_version`) is refused rather
+than trusted. Every
 range the fleet cannot read -- a worker down, a deadline, an old worker
 answering UNIMPLEMENTED or 404 -- is read here by that same function. A PDF
-pymupdf cannot read fails the same way both ways and takes the native
+PDFium cannot read fails the same way both ways and takes the native
 extractor's builtin fallback.
 
 Sending whole bytes per range rather than carving a sub-PDF per range costs

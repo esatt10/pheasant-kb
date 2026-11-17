@@ -274,14 +274,14 @@ def test_build_extractor_provider_selection() -> None:
         build_extractor(ExtractorSettings(provider="bogus"))
 
 
-def test_native_falls_back_to_builtin_when_pymupdf_is_missing(monkeypatch: Any) -> None:
+def test_native_falls_back_to_builtin_when_pdfium_is_missing(monkeypatch: Any) -> None:
     """A missing optional wheel must degrade that format, not fail the sync."""
     import builtins
 
     real_import = builtins.__import__
 
     def blocked(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name in {"pymupdf", "fitz"}:
+        if name == "pypdfium2" or name.startswith("pypdfium2."):
             raise ModuleNotFoundError(name)
         return real_import(name, *args, **kwargs)
 

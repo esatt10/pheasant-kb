@@ -108,7 +108,7 @@ def test_the_entrypoint_preserves_roles_and_dispatches_grpc_workers() -> None:
 def test_the_sandboxed_pdf_extractor_is_not_swept_in_with_the_accelerators() -> None:
     """It is a fidelity trade, not an acceleration one.
 
-    The default (`auto`, which prefers pymupdf/python-docx) reads encrypted
+    The default (`auto`, which prefers PDFium/python-docx) reads encrypted
     PDFs, LZW/CCITT and Type0/CID CMaps that the sandboxed tokenizer does not,
     so a fresh container must not silently downgrade extraction while claiming
     only to have turned on acceleration.

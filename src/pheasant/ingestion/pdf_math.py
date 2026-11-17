@@ -326,7 +326,7 @@ class _Line:
     def continued_by(self, other: _Line) -> bool:
         """Whether a reader split one visual line around an equation.
 
-        pymupdf breaks a line where a stacked fraction interrupts it, leaving
+        A reader breaks a line where a stacked fraction interrupts it, leaving
         "." or "for data …" on a line of its own; a line that carries inline
         math and the line read after it, on the same baseline and to its
         right, are one line.

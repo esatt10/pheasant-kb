@@ -427,11 +427,12 @@ def decode_glyph(char: str, font: str, reads_codes: bool) -> str:
                 return command + "{" + char + "}"
     family = tex_font_family(font)
     # A control character is never Unicode text: it is a code the reader could
-    # not map (MuPDF hands one back for a glyph name it does not know), and in
+    # not map (PDFium, like MuPDF before it, hands one back for a glyph name it
+    # does not know), and in
     # a TeX font its encoding says what it is even when the font's other
     # glyphs were mapped.
     # The extension font holds no text at all, so any byte-range character in
-    # it is a code: MuPDF maps the glyph names it knows (⎡) and hands back the
+    # it is a code: the native reader maps the glyph names it knows (⎡) and hands back the
     # code for those it does not (`P` for a text-style ∑), in one font.
     if family is not None and (
         reads_codes

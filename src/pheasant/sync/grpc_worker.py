@@ -298,7 +298,7 @@ class GrpcTransport:
 
         if response.reader_version != pdf_reader_version(math):
             raise TaskRejected(
-                f"worker reads PDFs with pymupdf {response.reader_version or '(none)'}, "
+                f"worker reads PDFs with {response.reader_version or '(no reader)'}, "
                 f"this process with {pdf_reader_version(math) or '(none)'}"
             )
         return list(response.pages)
@@ -521,7 +521,7 @@ class PreparationWorkerServicer:
             # here sends it straight to the local read.
             for page in pages:
                 page.encode("utf-8")
-        except Exception as exc:  # noqa: BLE001 - any pymupdf failure is the task's
+        except Exception as exc:  # noqa: BLE001 - any PDF reader failure is the task's
             return pb2.ExtractPagesResponse(error=f"{type(exc).__name__}: {exc}"[:500])
         logger.info("gRPC page extraction complete: pages %d-%d", first, first + len(pages))
         return pb2.ExtractPagesResponse(

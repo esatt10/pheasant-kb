@@ -295,17 +295,9 @@ TOKEN_ENV = "PHEASANT_INDEX_WORKER_TOKEN"
 
 
 def _long_math_pdf(pages: int = 9) -> bytes:
-    import pymupdf
+    from pheasant.ingestion.pdf_write import repeated_pdf
 
-    source = pymupdf.open(MATH / "tex_article.pdf")
-    document = pymupdf.open()
-    for _ in range(pages):
-        document.insert_pdf(source)
-    try:
-        return document.tobytes()
-    finally:
-        document.close()
-        source.close()
+    return repeated_pdf((MATH / "tex_article.pdf").read_bytes(), pages)
 
 
 def test_the_reader_version_names_the_equation_reader() -> None:
