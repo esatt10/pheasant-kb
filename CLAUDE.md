@@ -249,7 +249,8 @@ pheasant-kb/
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
 │   ├── deployment/            ← roles, serving durability, mounts, host,
 │   │                            wake_gate (the api's port while its
-│   │                            database wakes)
+│   │                            database wakes), database (`wait` and
+│   │                            `ensure` for deployment startup commands)
 │   ├── security/              ← path_policy (what may be read),
 │   │                            corpus_policy (what may never be indexed),
 │   │                            acl, idp
@@ -257,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 222 pytest modules, offline by design
+└── tests/                     ← 223 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3390,6 +3391,16 @@ Each of these cost real time. They are listed because the shape recurs.
   PDFium read the PostgreSQL manual at 0.6x MuPDF's speed on this Windows
   workstation and 2.1x in a Linux container -- the platform every deployment
   runs. Benchmark in the shape that ships.
+- **A deployment file that imports the driver outlives the driver.** The
+  Container Apps kits waited for Postgres with `python -c 'import psycopg;
+  ...'` and created each slot's database the same way. With psycopg gone the
+  first loop never ended, so the indexer, graph and logger failed their
+  startup probes on dev while the api (which starts through the wake gate)
+  came up, and the second loop, which runs in the background with its output
+  discarded, would have failed silently for every new slot. Deployments call
+  `python -m pheasant.deployment.database wait|ensure` now, and pheasant picks
+  the driver. The general shape: a startup command is code, and it should
+  depend on pheasant's surface, not on what the image happens to contain.
 - **A dump from an image with extensions carries them, and their data.** A
   `pg_dump` of a pheasant database on the TimescaleDB image holds `CREATE
   EXTENSION timescaledb`, its comment, and the rows of `_timescaledb_catalog`
