@@ -13,8 +13,8 @@ const FORMATS: { value: Format; label: string; hint: string }[] = [
 /**
  * "Export this source": every document of one source as one file to keep —
  * `GET /sources/{name}/export?download=true`, the operation MCP
- * `export_source` calls. A source past the server's part size downloads as
- * several numbered files, and the panel says how far it is.
+ * `export_source` calls. It downloads as one file holding the whole tree; only
+ * a selection past the server's one-file ceiling (2 GiB) continues in a second.
  *
  * Reading, not managing: it needs `knowledge.use`, as reading a document or
  * downloading an artifact does, so it carries no `data-permission` gate. The
@@ -28,8 +28,8 @@ const FORMATS: { value: Format; label: string; hint: string }[] = [
  * **outline** opens (`ExportPanel`), because a floating panel is clipped by the
  * table there and runs off a phone's screen.
  *
- * A large source comes back in several parts, one download each, and takes a
- * while: the floating panel stays open while an export runs (`onBusy`). It
+ * A large source takes a while to prepare: the floating panel stays open
+ * while an export runs (`onBusy`). It
  * used to close on any click outside it, which unmounted the progress line,
  * and reopening it offered a fresh **Download** that started the whole export
  * again.

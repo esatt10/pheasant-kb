@@ -849,6 +849,12 @@ def test_every_extracted_operation_is_in_the_matrix() -> None:
     # `snapshot_path` is the predicate `read_document` reports `page` with.
     public.discard("page_snapshot")
     public.discard("snapshot_path")
+    # `export_source_file` is `export_source` written to a file for HTTP's
+    # `download=true`: one attachment for the whole selection. MCP carries the
+    # file inside its result, so it pages with `export_source`, which is in the
+    # matrix; both use one writer, and tests/test_source_export.py holds a
+    # one-page source's download byte for byte equal to the MCP answer.
+    public.discard("export_source_file")
     public.discard("classify")
     public.discard("clean_directory")
     # Dictation exists on one transport on purpose: it mints a live

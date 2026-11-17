@@ -301,3 +301,50 @@ def test_a_folder_exports_alone_on_both_surfaces(region: dict[str, Any]) -> None
     )
     assert refused.status_code == 422
     assert refused.json()["detail"] == "No document under 'rec' in 'reference'"
+
+
+def test_a_download_is_one_archive_of_the_whole_tree(
+    region: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exporting an uploads source of 48 documents came back as seven zips, each
+    holding a slice of the tree, because the download used the JSON answer's
+    32 MB pages. A download is one file: here MCP would need a part per
+    document, and the download is still one archive with the source's tree."""
+
+    monkeypatch.setattr(source_export, "MAX_PART_BYTES", 1)
+    paged = region["tools"].export_source(region["kb"], "reference", "zip")
+    assert paged["has_more"] and paged["documents"] == 1
+
+    monkeypatch.setattr(source_export.tempfile, "tempdir", str(tmp_path))
+    download = region["client"].get(
+        "/sources/reference/export", params={"format": "zip", "download": "true"}
+    )
+    assert download.status_code == 200
+    assert 'filename="reference.zip"' in download.headers["content-disposition"]
+    assert download.headers["x-pheasant-has-more"] == "false"
+    assert "x-pheasant-next-offset" not in download.headers
+    names = set(zipfile.ZipFile(io.BytesIO(download.content)).namelist())
+    assert {f"files/{path}" for path in _listed(region) if not path.endswith(".md")} <= names
+    assert {
+        "files/README.md",
+        "files/records/salesorder.md",
+        "manifest.jsonl",
+        "README.md",
+    } <= names
+    manifest = zipfile.ZipFile(io.BytesIO(download.content)).read("manifest.jsonl").splitlines()
+    assert len(manifest) == int(download.headers["x-pheasant-total"]) == len(_listed(region))
+    # The file it was written to is gone once it has been sent.
+    assert not list(tmp_path.glob("pheasant-export-*"))
+
+
+def test_a_download_past_the_file_ceiling_continues_in_a_second(
+    region: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(source_export, "MAX_FILE_BYTES", 1)
+    first = region["client"].get(
+        "/sources/reference/export", params={"format": "jsonl", "download": "true"}
+    )
+    assert first.headers["x-pheasant-documents"] == "1"
+    assert first.headers["x-pheasant-has-more"] == "true"
+    assert first.headers["x-pheasant-next-offset"] == "1"
+    assert 'filename="reference-000000.jsonl"' in first.headers["content-disposition"]

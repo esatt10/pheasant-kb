@@ -3213,6 +3213,15 @@ Each of these cost real time. They are listed because the shape recurs.
   `source_id` (the one `source_name` already filtered on), and `source_of`
   never reads `source` off a relationship. Found by the toggle's test, the
   first one to exclude a source the graph arm matched by an edge.
+- **A page size for one transport is not a file size for another.** Source
+  export pages by 32 MB because MCP carries the file inside its result, and
+  HTTP's `download=true` sent each page as its own attachment: an uploads
+  source of 48 documents arrived as seven zips, each holding a slice of the
+  tree, and every test passed because the fixture fits one page. A download
+  is one file now (`source_export.export_source_file`, written to a temporary
+  file a document at a time and streamed, `MAX_FILE_BYTES` 2 GiB before a
+  second), and the JSON answer keeps its pages; one writer serves both, so a
+  source that fits one page gives the same bytes either way.
 - **A filter by type silently drops the container types.** A ZIP member was
   listed only if its extension was an indexed type, and `.zip` is not one, so
   an archive inside an uploaded archive vanished with every unsupported file:

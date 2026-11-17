@@ -15,11 +15,13 @@ about the knowledge base itself.
 
 from __future__ import annotations
 
-import base64
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
 from pheasant.services import (
     inventory,
@@ -134,33 +136,36 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         principal_groups: list[str] | None = Query(default=None),
         path_prefix: str | None = None,
     ) -> Any:
-        """Every document of one source (or of one folder in it) as one file, paged by size.
+        """Every document of one source (or of one folder in it) as one file.
 
-        The JSON answer is MCP ``export_source``'s. ``download=true`` is this
-        adapter's own difference, on purpose: it sends the part's bytes as an
-        attachment, with the paging in ``X-Pheasant-*`` headers, so ``curl -O``
-        gets the file rather than a base64 string inside JSON.
+        The JSON answer is MCP ``export_source``'s, paged by size. ``download=true``
+        is this adapter's own difference, on purpose: the whole selection as one
+        attachment (``source_export.export_source_file``), written to a temporary
+        file and streamed, so ``curl -O`` and the UI get one archive holding the
+        source's tree rather than parts each holding a slice of it. The paging
+        headers stay, for a source past the one-file ceiling.
         """
 
-        part = source_export.export_source(
-            services,
-            source_export.ExportRequest(
-                source_name=source_name,
-                format=format,
-                offset=offset,
-                include_chunks=include_chunks,
-                principal=principal,
-                principal_groups=principal_groups,
-                path_prefix=path_prefix,
-            ),
+        request = source_export.ExportRequest(
+            source_name=source_name,
+            format=format,
+            offset=offset,
+            include_chunks=include_chunks,
+            principal=principal,
+            principal_groups=principal_groups,
+            path_prefix=path_prefix,
         )
         if not download:
-            return part
-        body = (
-            part["content"].encode("utf-8")
-            if part["encoding"] == "utf-8"
-            else base64.b64decode(part["content"])
+            return source_export.export_source(services, request)
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - removed after it is sent
+            prefix="pheasant-export-", suffix=f".{format}", delete=False
         )
+        try:
+            with handle:
+                part = source_export.export_source_file(services, request, handle)
+        except BaseException:
+            Path(handle.name).unlink(missing_ok=True)
+            raise
         headers = {
             "Content-Disposition": f'attachment; filename="{part["filename"]}"',
             "X-Pheasant-Documents": str(part["documents"]),
@@ -169,7 +174,12 @@ def register_inventory_routes(app: FastAPI, *, services: Any) -> None:
         }
         if part["next_offset"] is not None:
             headers["X-Pheasant-Next-Offset"] = str(part["next_offset"])
-        return Response(body, media_type=part["media_type"], headers=headers)
+        return FileResponse(
+            handle.name,
+            media_type=part["media_type"],
+            headers=headers,
+            background=BackgroundTask(Path(handle.name).unlink, missing_ok=True),
+        )
 
     @app.get("/documents/detail")
     def describe_document(

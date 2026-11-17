@@ -32,11 +32,21 @@ only here" uses: the path itself, or anything beneath it. It is what exporting
 from inside a folder of the taxonomy view sends; a prefix matching nothing is
 refused rather than answered with an empty file.
 
-**Paged by size, not by count.** One part holds documents until their text
-passes :data:`MAX_PART_BYTES`; ``next_offset`` says where the next part
-starts and ``has_more`` whether there is one. A part always holds at least one
-document, so a source with one huge document still makes progress. Binary
-formats come back base64-encoded (``encoding``), as ``export_artifact`` does.
+**Paged by size, not by count -- for the JSON answer.** One part holds
+documents until their text passes :data:`MAX_PART_BYTES`; ``next_offset``
+says where the next part starts and ``has_more`` whether there is one. A part
+always holds at least one document, so a source with one huge document still
+makes progress. Binary formats come back base64-encoded (``encoding``), as
+``export_artifact`` does. That bound exists because MCP carries the file
+inside its result.
+
+**A download is one file** (:func:`export_source_file`, HTTP's
+``download=true``): the whole selection, written to disk a document at a time
+and streamed back, so a source's tree arrives as one archive rather than as
+seven, each holding a slice of it -- which is what exporting an uploads source
+of 48 documents in 32 MB parts produced. :data:`MAX_FILE_BYTES` still bounds
+one file, past which it continues in a second, the same way. Both paths use
+one writer, so a source that fits in one part gives the same bytes either way.
 """
 
 from __future__ import annotations
@@ -44,11 +54,12 @@ from __future__ import annotations
 import base64
 import io
 import json
+import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 
 from pheasant.ingestion.content_types import MEMORY_ARTIFACT_TYPE
 from pheasant.services import ServiceContext
@@ -67,6 +78,9 @@ MAX_PART_BYTES = 32 * 1024 * 1024
 #: Documents one part may hold whatever their size: the outline query is one
 #: statement per document, and a part is a request somebody is waiting on.
 MAX_PART_DOCUMENTS = 5000
+#: Bytes of documents one *downloaded* file holds before it continues in a
+#: second: a ceiling for the disk the api writes it to, not a page size.
+MAX_FILE_BYTES = 2 * 1024**3
 
 _COLUMNS = (
     "a.id, a.source_id, a.relative_path, a.type, a.path, a.size_bytes, a.sha256, "
@@ -93,6 +107,60 @@ class ExportRequest:
     path_prefix: str | None = None
 
 
+@dataclass(frozen=True)
+class _Selection:
+    kb_id: str
+    source: str
+    fmt: str
+    prefix: str
+    offset: int
+    rows: list[Any]
+
+
+def _select(context: ServiceContext, request: ExportRequest) -> _Selection:
+    from pheasant.services.inventory_detail import _registered
+
+    kb_id = context.knowledge_base(request.knowledge_base)
+    fmt = str(request.format or "").strip().lower()
+    if fmt not in FORMATS:
+        raise InvalidRequest(f"format must be one of {', '.join(FORMATS)}; got {request.format!r}")
+    offset = max(0, int(request.offset))
+    source = str(_registered(context, request.source_name)["name"])
+    prefix = str(request.path_prefix or "").strip().strip("/")
+    rows = _rows(context, source, request.principal, request.principal_groups, prefix)
+    if prefix and not rows:
+        raise InvalidRequest(f"No document under {prefix!r} in {source!r}")
+    if offset > len(rows):
+        raise InvalidRequest(f"offset {offset} is past the {len(rows)} documents in {source!r}")
+    return _Selection(kb_id, source, fmt, prefix, offset, rows)
+
+
+def _describe(selection: _Selection, documents: int, size: int) -> dict[str, Any]:
+    """What a written part is: its name, type, extent and where the next one starts."""
+
+    total = len(selection.rows)
+    next_offset = selection.offset + documents
+    has_more = next_offset < total
+    named = (
+        f"{selection.source}-{_slug(selection.prefix)}" if selection.prefix else selection.source
+    )
+    whole = selection.offset == 0 and not has_more
+    stem = named if whole else f"{named}-{selection.offset:06d}"
+    return {
+        "knowledge_base": selection.kb_id,
+        "source": selection.source,
+        "format": selection.fmt,
+        "filename": f"{stem}.{selection.fmt}",
+        "media_type": MEDIA_TYPES[selection.fmt],
+        "bytes": size,
+        "documents": documents,
+        "total": total,
+        "offset": selection.offset,
+        "next_offset": next_offset if has_more else None,
+        "has_more": has_more,
+    }
+
+
 def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, Any]:
     """One part of ``request.source_name`` as a file: ``content`` plus how to read it.
 
@@ -102,60 +170,74 @@ def export_source(context: ServiceContext, request: ExportRequest) -> dict[str, 
     ``next_offset`` and ``has_more``.
     """
 
-    from pheasant.services.inventory_detail import _registered
-
-    kb_id = context.knowledge_base(request.knowledge_base)
-    fmt = str(request.format or "").strip().lower()
-    if fmt not in FORMATS:
-        raise InvalidRequest(f"format must be one of {', '.join(FORMATS)}; got {request.format!r}")
-    offset = max(0, int(request.offset))
-    source = str(_registered(context, request.source_name)["name"])
-
-    prefix = str(request.path_prefix or "").strip().strip("/")
-    rows = _rows(context, source, request.principal, request.principal_groups, prefix)
-    total = len(rows)
-    if prefix and not rows:
-        raise InvalidRequest(f"No document under {prefix!r} in {source!r}")
-    if offset > total:
-        raise InvalidRequest(f"offset {offset} is past the {total} documents in {source!r}")
-
-    records: list[dict[str, Any]] = []
-    originals: dict[str, bytes] = {}
-    used = 0
-    for row in rows[offset:]:
-        if records and (used >= MAX_PART_BYTES or len(records) >= MAX_PART_DOCUMENTS):
-            break
-        record, original = _record(context, row, fmt, request.include_chunks)
-        used += len((record["content"] or "").encode("utf-8")) + len(original or b"")
-        records.append(record)
-        if original is not None:
-            originals[record["id"]] = original
-
-    next_offset = offset + len(records)
-    has_more = next_offset < total
-    whole = offset == 0 and not has_more
-    named = f"{source}-{_slug(prefix)}" if prefix else source
-    stem = named if whole else f"{named}-{offset:06d}"
-    payload = _write(fmt, source, kb_id, records, originals, request.include_chunks)
-    if fmt == "jsonl":
+    selection = _select(context, request)
+    buffer = io.BytesIO()
+    documents = _write_into(
+        context, selection, request.include_chunks, buffer, MAX_PART_BYTES, MAX_PART_DOCUMENTS
+    )
+    payload = buffer.getvalue()
+    if selection.fmt == "jsonl":
         content, encoding = payload.decode("utf-8"), "utf-8"
     else:
         content, encoding = base64.b64encode(payload).decode("ascii"), "base64"
-    return {
-        "knowledge_base": kb_id,
-        "source": source,
-        "format": fmt,
-        "filename": f"{stem}.{fmt}",
-        "media_type": MEDIA_TYPES[fmt],
-        "encoding": encoding,
-        "content": content,
-        "bytes": len(payload),
-        "documents": len(records),
-        "total": total,
-        "offset": offset,
-        "next_offset": next_offset if has_more else None,
-        "has_more": has_more,
-    }
+    described = _describe(selection, documents, len(payload))
+    return {**described, "encoding": encoding, "content": content}
+
+
+def export_source_file(
+    context: ServiceContext, request: ExportRequest, target: BinaryIO
+) -> dict[str, Any]:
+    """The whole selection (from ``offset``) written to ``target`` as one file.
+
+    What :func:`export_source` describes, less ``content`` and ``encoding``:
+    the bytes are in ``target``. One file holds everything unless it passes
+    :data:`MAX_FILE_BYTES`, when ``next_offset`` says where the next starts.
+    HTTP's ``download=true`` is its caller; MCP, which carries the file inside
+    its result, pages with :func:`export_source` instead.
+    """
+
+    selection = _select(context, request)
+    documents = _write_into(
+        context, selection, request.include_chunks, target, MAX_FILE_BYTES, None
+    )
+    return _describe(selection, documents, target.tell())
+
+
+def _write_into(  # noqa: PLR0913 - the selection, the budget and where to write
+    context: ServiceContext,
+    selection: _Selection,
+    include_chunks: bool,
+    target: BinaryIO,
+    max_bytes: int,
+    max_documents: int | None,
+) -> int:
+    """Write documents from ``selection.offset`` into ``target`` until a budget is
+    spent (always at least one); return how many went in.
+
+    One document is held in memory at a time, so a file is bounded by the
+    budget, not by what a process can hold.
+    """
+
+    def records():
+        used = 0
+        for count, row in enumerate(selection.rows[selection.offset :]):
+            if count and (
+                used >= max_bytes or (max_documents is not None and count >= max_documents)
+            ):
+                return
+            record, original = _record(context, row, selection.fmt, include_chunks)
+            used += len((record["content"] or "").encode("utf-8")) + len(original or b"")
+            yield record, original
+
+    if selection.fmt == "jsonl":
+        written = 0
+        for record, _ in records():
+            target.write((json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
+            written += 1
+        return written
+    if selection.fmt == "parquet":
+        return _parquet(records(), include_chunks, target)
+    return _zip(selection.source, selection.kb_id, records(), include_chunks, target)
 
 
 def _rows(
@@ -244,21 +326,6 @@ def _chunks(context: ServiceContext, artifact_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def _write(
-    fmt: str,
-    source: str,
-    kb_id: str,
-    records: list[dict[str, Any]],
-    originals: dict[str, bytes],
-    include_chunks: bool,
-) -> bytes:
-    if fmt == "jsonl":
-        return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records).encode("utf-8")
-    if fmt == "parquet":
-        return _parquet(records, include_chunks)
-    return _zip(source, kb_id, records, originals, include_chunks)
-
-
 def _member(record: dict[str, Any], has_original: bool) -> str:
     """Where a document goes in the zip: its own path, unless that would lie."""
 
@@ -271,19 +338,12 @@ def _member(record: dict[str, Any], has_original: bool) -> str:
     return f"files/{path}.txt"
 
 
-def _zip(
-    source: str,
-    kb_id: str,
-    records: list[dict[str, Any]],
-    originals: dict[str, bytes],
-    include_chunks: bool,
-) -> bytes:
-    buffer = io.BytesIO()
+def _zip(source: str, kb_id: str, records: Any, include_chunks: bool, target: BinaryIO) -> int:
     manifest: list[str] = []
     chunks: list[str] = []
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for record in records:
-            original = originals.get(record["id"])
+    written = 0
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for record, original in records:
             member = _member(record, original is not None)
             if original is not None:
                 archive.writestr(member, original)
@@ -298,11 +358,12 @@ def _zip(
                 chunks.append(
                     json.dumps({"document_id": record["id"], **chunk}, ensure_ascii=False)
                 )
+            written += 1
         archive.writestr("manifest.jsonl", "".join(line + "\n" for line in manifest))
         if include_chunks:
             archive.writestr("chunks.jsonl", "".join(line + "\n" for line in chunks))
-        archive.writestr("README.md", _readme(source, kb_id, len(records), include_chunks))
-    return buffer.getvalue()
+        archive.writestr("README.md", _readme(source, kb_id, written, include_chunks))
+    return written
 
 
 def _readme(source: str, kb_id: str, documents: int, include_chunks: bool) -> str:
@@ -325,7 +386,7 @@ def _readme(source: str, kb_id: str, documents: int, include_chunks: bool) -> st
     return "\n".join(lines) + "\n"
 
 
-def _parquet(records: list[dict[str, Any]], include_chunks: bool) -> bytes:
+def _parquet(records: Any, include_chunks: bool, target: BinaryIO) -> int:
     try:
         import duckdb
     except ModuleNotFoundError as exc:  # pragma: no cover - dep-gated
@@ -333,14 +394,6 @@ def _parquet(records: list[dict[str, Any]], include_chunks: bool) -> bytes:
             "parquet export", "needs DuckDB: pip install 'pheasant-kb[analytics]'"
         ) from exc
 
-    flat = [
-        {
-            **{k: v for k, v in r.items() if k not in ("outline", "chunks")},
-            "outline": json.dumps(r["outline"], ensure_ascii=False),
-            "chunks": json.dumps(r["chunks"], ensure_ascii=False) if include_chunks else None,
-        }
-        for r in records
-    ]
     columns = {
         "id": "VARCHAR",
         "source": "VARCHAR",
@@ -362,9 +415,18 @@ def _parquet(records: list[dict[str, Any]], include_chunks: bool) -> bytes:
     with tempfile.TemporaryDirectory(prefix="pheasant-export-") as scratch:
         rows_path = Path(scratch) / "rows.jsonl"
         out_path = Path(scratch) / "out.parquet"
+        written = 0
         with rows_path.open("w", encoding="utf-8") as handle:
-            for row in flat:
+            for record, _ in records:
+                row = {
+                    **{k: v for k, v in record.items() if k not in ("outline", "chunks")},
+                    "outline": json.dumps(record["outline"], ensure_ascii=False),
+                    "chunks": json.dumps(record["chunks"], ensure_ascii=False)
+                    if include_chunks
+                    else None,
+                }
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                written += 1
         spec = ", ".join(f"'{name}': '{kind}'" for name, kind in columns.items())
         # COPY takes no parameters; both paths are ours, inside a fresh
         # temporary directory, and quoted anyway.
@@ -378,7 +440,9 @@ def _parquet(records: list[dict[str, Any]], include_chunks: bool) -> bytes:
             )
         finally:
             connection.close()
-        return out_path.read_bytes()
+        with out_path.open("rb") as built:
+            shutil.copyfileobj(built, target)
+    return written
 
 
 def _sql_string(path: Path) -> str:

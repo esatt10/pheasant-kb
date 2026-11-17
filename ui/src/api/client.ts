@@ -940,8 +940,9 @@ export const api = {
   },
   /**
    * Save a whole source to disk (`GET /sources/{name}/export?download=true`),
-   * one file per part: a source past the server's part size comes back in
-   * several, and `X-Pheasant-Next-Offset` names where the next one starts.
+   * as one file holding the whole tree. Only a selection past the server's
+   * one-file ceiling comes back in more than one, and `X-Pheasant-Next-Offset`
+   * names where the next one starts.
    * `onPart` reports each part as it lands, so the control can say how far it is.
    */
   downloadSourceExport: async (
