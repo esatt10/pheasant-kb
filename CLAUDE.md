@@ -58,7 +58,8 @@ pheasant-kb/
 ├── .env.example               ← pheasant-kb's .env: OPENAI_API_KEY + size knobs
 ├── Dockerfile                 ← one universal image: API + MCP + UI, port 8765
 ├── contracts/                 ← VENDORED Synapse schema + fixtures (never edit)
-├── deploy/                    ← compose/ (pheasant-kb.yaml + its answers,
+├── deploy/                    ← postgres/ (the database image),
+│                                compose/ (pheasant-kb.yaml + its answers,
 │                                init-secrets.sh, the other profiles),
 │                                kubernetes/ (+ scaled/), helm/
 ├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
@@ -126,7 +127,9 @@ pheasant-kb/
 │   │                            frontmatter, per file), captioner,
 │   │                            transcriber, office, msdoc, docx_text,
 │   │                            media (image bytes, content-addressed
-│   │                            under /state); equations as LaTeX:
+│   │                            under /state), pdf_pages (PDFium, the
+│   │                            native reader), pdf_write (test/benchmark
+│   │                            PDFs); equations as LaTeX:
 │   │                            omml (Word math), pdf_objects + pdf_glyphs
 │   │                            (the builtin reader's glyphs), pdf_math +
 │   │                            pdf_regions (what on a page is math),
@@ -157,6 +160,8 @@ pheasant-kb/
 │   │                            reinforcement, synthesis, versions/publications
 │   ├── memory/                ← deprecated import aliases to artifacts/
 │   ├── persistence/           ← state_store, backends (sqlite|postgres),
+│   │                            pg_driver (pg8000 + the pool: DSNs, TLS,
+│   │                            round trips, errors), pg_liveness,
 │   │                            schema, lexical_index (the pg_textsearch
 │   │                            index and its migration), graph_store
 │   │                            (file|rows), graph_rows
@@ -252,7 +257,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 220 pytest modules, offline by design
+└── tests/                     ← 222 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -380,8 +385,9 @@ sync, and its job reads `succeeded` before anything is indexed.
     container have each caught bugs a mock could not. When a change touches a
     backend, run that backend. When it touches the image, build the image.
     CI does the Postgres half for you on **every** PR (`ci.yml`'s
-    `backend-parity` job, deliberately unfiltered, on
-    `timescale/timescaledb-ha:pg17` with `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`);
+    `backend-parity` job, deliberately unfiltered, on `deploy/postgres`
+    -- built in the job by `.github/actions/pheasant-postgres` -- with
+    `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`);
     locally it is `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a
     Postgres 17 that preloads pg_textsearch, which turns on the parity suite
     and the lease/queue differential. Neither replaces running the thing you
@@ -423,6 +429,33 @@ sync, and its job reads `succeeded` before anything is indexed.
     Adding an operation to one surface only is how the last four divergences
     started; if it genuinely belongs to one transport, say so in the adapter,
     where a reader can see it.
+14. **Check dependency licenses before adding or upgrading them.** Prefer
+    permissive application dependencies (MIT, BSD, Apache-2.0, PostgreSQL
+    License). Read the upstream license and any commercial-use clauses for
+    the exact version being selected; do not rely on memory, a package badge,
+    or the top-level package's license alone. Check transitive dependencies,
+    optional extras, bundled native libraries, and deployment images too.
+    Do not introduce terms that prohibit or limit commercial use, restrict
+    hosted/service offerings, or require payment or a separate commercial
+    license for Pheasant's intended proprietary distribution or hosted use.
+    This includes dual-licensed dependencies when the available free terms
+    cannot support that use without a commercial exception. Copyleft is not
+    itself a commercial-use prohibition: assess its actual source-sharing
+    and redistribution obligations and prefer a permissive replacement.
+    Optional paid support or a commercial offering alongside a sufficient
+    permissive license is not a reason to reject a package.
+    Record the selected version, applicable license, upstream source URL and
+    relevant transitive findings in the change/PR notes. If terms are missing
+    or unclear, do not add the dependency; select a verified alternative or
+    report the unresolved requirement. PyMuPDF/MuPDF (AGPL or commercial),
+    Psycopg and its pool (LGPL) and the TimescaleDB image (Timescale terms)
+    were removed for this rule and replaced by PDFium (`pypdfium2`,
+    BSD-3/Apache-2.0), pg8000 + SQLAlchemy's pool (BSD-3, MIT) and
+    `deploy/postgres` (PostgreSQL + pg_textsearch, PostgreSQL License); do not
+    reintroduce them (`tests/test_pg_driver.py` and
+    `tests/test_workflow_coverage.py` fail if they return), and keep
+    `pg_textsearch`. This rule governs third-party dependencies, not
+    Pheasant's own licensing.
 
 ---
 
@@ -497,8 +530,9 @@ which grow by touching rules, fraction bars and radicals (`pdf_regions.py`),
 and each region is parsed geometrically (`math_layout.py`: fractions,
 radicals, limits, tall delimiters as matrices/`cases`, scripts). TeX's
 OML/OMS/OMX fonts are decoded by code, including matplotlib's BaKoMa shift
-(`tex_symbols.py`). It runs under every provider: `native` reads pymupdf's
-`rawdict` (with CIDs for unmapped glyphs) and drawings, `builtin` and
+(`tex_symbols.py`). It runs under every provider: `native` reads PDFium's
+characters (codes for unmapped glyphs, in content-stream order) and paths,
+with each advance from the builtin reader's `/Widths` (`pdf_pages.py`), `builtin` and
 `sandboxed` interpret the content stream themselves (`pdf_objects.py`,
 `pdf_glyphs.py`), and the sandbox's lexer is the Rust `pdf_lex` export,
 asserted byte-identical to `lex_pdf`. A page with no math is the old text,
@@ -859,7 +893,8 @@ incomparable scales and raw-score merging silently degraded to text-only.
 **On Postgres the lexical arm is BM25 from the pg_textsearch extension**
 (`storage.lexical_index`, default `pg_textsearch`; Postgres 17+ with the
 extension preloaded, which is why every shipped Postgres and every CI job runs
-`timescale/timescaledb-ha:pg17`). One expression index over a per-chunk
+`deploy/postgres`: the official PostgreSQL 17 image plus pg_textsearch and
+nothing else). One expression index over a per-chunk
 document in which each column is repeated by its weight, which is FTS5's
 weighting (weight as term frequency, then saturation), and one Block-Max WAND
 top-k scan per search: 3.6 ms against `tsvector`'s 75.5 ms at 20k chunks, 4.7
@@ -1896,6 +1931,44 @@ of copying.
 `src/pheasant/capacity.py` is the single home for sizing coefficients so
 `pheasant scan`, `pheasant shard plan` and the docs cannot disagree.
 
+### Permissive engines: PostgreSQL driver, PDF reader, database image
+
+**PostgreSQL is reached through `persistence/pg_driver.py`**: pg8000
+(BSD-3-Clause) for the wire protocol and SQLAlchemy's `QueuePool` (MIT) for
+pooling, the only module importing either. It parses the DSN itself (URL or
+libpq `key=value`; an unsupported option is refused by name), maps `sslmode`
+without weakening verification, sets TCP keepalives and `TCP_NODELAY` on its
+own socket, and normalizes every failure into `pg_driver.Error` subclasses with
+a `sqlstate` (`is_disconnect` and `transient_refusal` read those). Statements
+go out in pheasant's compiled form (`Dialect.compile`: `?`/`:name` to `$n`,
+literals untouched, so `%` is no longer escaped) with parameter types chosen
+as psycopg chose them (an `int` the smallest integer type, a `str` untyped).
+The pool's caller waits on a semaphore with its own deadline, so
+`getconn(timeout=remaining)` bounds one request without changing another's;
+a connection idle 30 s is pinged on checkout. pg8000 is pinned exactly
+because the driver touches its internals (traps).
+
+**PDFs are read by PDFium (`pypdfium2`, pinned) in `ingestion/pdf_pages.py`**
+under one process-wide lock; prose is one bulk text call per page, and a math
+page's glyphs and rules are rebuilt in MuPDF's shape (traps). EPUB is the
+builtin reader under every provider. `pdf_reader_version()` names the PDFium
+build, the wrapper and `ADAPTER_REVISION`, so a worker on another build is
+refused, and `sync/fingerprint.document_text_pipeline()` puts the revision in
+the fingerprint of every source that can hold a PDF or EPUB (its config admits
+one, or `SyncEngine._holds_documents` finds one indexed): changing the reader
+re-reads those once, recorded only after the pass succeeds. Test fixtures and
+the benchmark corpus are written by `ingestion/pdf_write.py` (PDFium's editing
+API, byte-deterministic), never by the indexing path.
+
+**The database image is `deploy/postgres`** (`ghcr.io/esatt10/pheasant-postgres`,
+tag in `deploy/postgres/TAG`): the official PostgreSQL 17.11 image by digest
+plus pg_textsearch 1.5.1 built from a checksummed tag, preloaded through the
+conf sample, `C.UTF-8` clusters, the official data layout, and an entrypoint
+that refuses to initialize an empty cluster beside a previous one (the upgrade
+from the TimescaleDB image is a dump and restore; `deploy/postgres/README.md`).
+CI builds it in each Postgres job; `container.yml` publishes it multi-arch,
+immutably.
+
 ### Sandboxing
 
 Third-party connector plugins can run under `connector.runtime: sandboxed`:
@@ -2594,8 +2667,9 @@ Each of these cost real time. They are listed because the shape recurs.
   `SELECT` unexecuted and `GraphRowStore.nodes_matching` runs it as a
   subquery; neither module imports the other.
 - **`IN (?,?,?)` makes the statement text a function of the batch size.**
-  psycopg3 prepares a statement after its fifth execution of the same text,
-  so a key-set predicate that never repeats its spelling is one that is never
+  The driver prepares a statement after its fifth execution of the same text
+  (psycopg3's rule, which `pg_driver` keeps on purpose), so a key-set
+  predicate that never repeats its spelling is one that is never
   prepared and re-planned on every call — **8.93 ms against 6.15 ms** for a
   500-key node fetch. Postgres gets `= ANY(?)` with the list as one array
   parameter: one text, one plan, every batch size. SQLite keeps the `IN`
@@ -2970,7 +3044,7 @@ Each of these cost real time. They are listed because the shape recurs.
   and chunking stay on the indexer. Both, with `chunk_strategy: auto`, are
   the defaults of every shipped fleet profile and of no single-container one.
   `tests/test_pdf_split.py` holds the text identical over real gRPC and HTTP
-  workers, through failures and a pymupdf mismatch;
+  workers, through failures and a PDF reader mismatch;
   `tests/test_chunking_scale.py` bounds lines executed per chunk.
 
 - **A pattern that can cross a line is quadratic on a file that never closes
@@ -3285,6 +3359,44 @@ Each of these cost real time. They are listed because the shape recurs.
   (`citation_targets.locate`) turned it red on CI. `admits` refuses a hit
   whose `artifact_id` is excluded now. An assertion that something is absent
   from a field needs the field to be present.
+- **A DB-API method with the same name is not the same number of round
+  trips.** pg8000's `Cursor.execute` waits for the server after Parse, after
+  Describe and after Execute -- three round trips a statement -- and its
+  `executemany` is that once per row, where psycopg sent one and pipelined.
+  Invisible on loopback; at Container Apps' 10-40 ms a commit costs three
+  times over. `pg_driver.Connection` writes the protocol messages itself (one
+  round trip, `BEGIN` folded into the first statement, `executemany` one Sync
+  per 1,000 rows) and reads with pg8000's handlers, and
+  `tests/test_pg_driver.py` counts flushes so the property is asserted, not
+  timed. Measured against psycopg in Linux containers: point reads and
+  transactions at parity or better, a 300-row `executemany` 2-4x faster. A
+  large result decodes in Python (about 1 us a value), so a 2,500-row read is
+  ~1.5x psycopg's; hot-path results are tens of rows.
+- **PDFium's character box is the advance *or the ink*, whichever reaches
+  further.** An italic's overhang, DejaVu's `∣` and TeX's zero-width `\not`
+  all came out wider than they are set, which moved the gaps the equation
+  reader reads spaces and fences from. PDFium exposes no advance, so the
+  native reader takes each upright glyph's advance from the builtin reader's
+  `/Widths` where it read the same glyph at the same origin
+  (`pdf_pages._BuiltinAdvances`). Three more of the same family, each found by
+  diffing glyph dumps against MuPDF's: the text page *reorders* overlapping
+  characters (the slash of `≠` must precede the `=`), so glyphs are put back
+  in content-stream order via each character's text object; a synthetic
+  oblique's skew is reported as an "angle", so "upright" is read off the
+  matrix; and the font size excludes the matrix's scaling, so LibreOffice's
+  squeezed parentheses are `size x sqrt(|det|)`. The exact TeX goldens are
+  what made each visible.
+- **A reader measured on Windows is a reader measured on the wrong wheel.**
+  PDFium read the PostgreSQL manual at 0.6x MuPDF's speed on this Windows
+  workstation and 2.1x in a Linux container -- the platform every deployment
+  runs. Benchmark in the shape that ships.
+- **A dump from an image with extensions carries them, and their data.** A
+  `pg_dump` of a pheasant database on the TimescaleDB image holds `CREATE
+  EXTENSION timescaledb`, its comment, and the rows of `_timescaledb_catalog`
+  (extension config tables), none of it pheasant's; restoring into an image
+  without the extension fails on the first. `restore.sh` restores through a
+  filtered TOC list, and the `COMMENT - EXTENSION` spelling is what the first
+  filter missed.
 
 ---
 

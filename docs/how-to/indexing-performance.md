@@ -56,7 +56,7 @@ range, the indexer joins the pages in order, and tidying, section detection
 and chunking stay on the indexer. That is also why it works for
 taxonomy-enabled sources. The indexed text is identical to a local read: a
 worker reads its range with the same function the extractor reads a whole PDF
-with, a worker on a different pymupdf release is not trusted, and any range
+with, a worker on a different PDF reader build is not trusted, and any range
 the fleet cannot read is read locally. gRPC workers answer the
 `ExtractPages` call and HTTP workers `POST /internal/indexing/extract-pages`;
 a worker too old for either is read around. It is on in every shipped fleet
