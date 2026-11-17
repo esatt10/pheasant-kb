@@ -27,7 +27,7 @@ pheasant-kb runs three images, from two registries:
 | Image | Registry | Built from | Used by |
 |---|---|---|---|
 | `ghcr.io/esatt10/pheasant:<version>` | GitHub Container Registry | This repository's `Dockerfile` | `api`, `graph`, `indexer`, `worker`, `logger` and the three init services |
-| `timescale/timescaledb-ha:pg17` | Docker Hub | Timescale; Postgres 17 with the `pg_textsearch` extension | `postgres`, `backup`, `restore` |
+| `ghcr.io/esatt10/pheasant-postgres:<tag>` | GitHub Container Registry | `deploy/postgres`: the official PostgreSQL 17 image plus the `pg_textsearch` extension, nothing else (built locally from the checkout when the tag is not published) | `postgres`, `backup`, `restore` |
 | `nats:2.10-alpine` | Docker Hub | The NATS project | `nats` |
 
 `docker compose up` pulls each from its own registry; nothing needs a login.

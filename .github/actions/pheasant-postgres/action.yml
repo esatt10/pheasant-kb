@@ -1,0 +1,49 @@
+name: pheasant PostgreSQL
+description: >-
+  Build deploy/postgres (PostgreSQL 17 with pg_textsearch preloaded, nothing
+  else) and start it on localhost:5432. A step rather than a service
+  container, because a service container starts before the job's first step
+  and so cannot run an image the job builds; this also works for forks and
+  pull requests, which have no registry credentials.
+inputs:
+  database:
+    description: Database to create.
+    required: true
+  user:
+    description: Superuser to create.
+    default: pheasant
+  password:
+    description: Its password.
+    default: pheasant
+runs:
+  using: composite
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build the PostgreSQL image
+      uses: docker/build-push-action@v6
+      with:
+        context: deploy/postgres
+        load: true
+        tags: pheasant-postgres:ci
+        cache-from: type=gha,scope=pheasant-postgres
+        cache-to: type=gha,scope=pheasant-postgres,mode=max
+
+    - name: Start PostgreSQL
+      shell: bash
+      run: |
+        docker run -d --name pheasant-postgres -p 5432:5432 \
+          -e POSTGRES_USER="${{ inputs.user }}" \
+          -e POSTGRES_PASSWORD="${{ inputs.password }}" \
+          -e POSTGRES_DB="${{ inputs.database }}" \
+          pheasant-postgres:ci
+        for attempt in $(seq 1 60); do
+          if docker exec pheasant-postgres pg_isready -U "${{ inputs.user }}" -h 127.0.0.1 >/dev/null 2>&1; then
+            break
+          fi
+          sleep 2
+        done
+        docker exec pheasant-postgres pg_isready -U "${{ inputs.user }}" -h 127.0.0.1
+        docker exec pheasant-postgres psql -U "${{ inputs.user }}" -d "${{ inputs.database }}" -Atc \
+          "SHOW shared_preload_libraries"

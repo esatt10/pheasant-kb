@@ -20,8 +20,9 @@ something in pheasant's design, so they are stated with the reason:
    anyway. The DSN is read from the env var named by `storage.dsn_env` — put
    it in a Secret, never in the ConfigMap. The lexical arm ranks with the
    pg_textsearch BM25 extension by default, so the server needs
-   `shared_preload_libraries = 'pg_textsearch'` (the
-   `timescale/timescaledb-ha:pg17` image has it) and pheasant's role must be a
+   `shared_preload_libraries = 'pg_textsearch'` (pheasant's
+   `ghcr.io/esatt10/pheasant-postgres` image, built from `deploy/postgres`,
+   has it and nothing else) and pheasant's role must be a
    superuser or find `CREATE EXTENSION pg_textsearch` already run. Without it
    the pods refuse to start; `storage.lexical_index: tsvector` runs on stock
    Postgres instead. See `docs/configuration.md`.

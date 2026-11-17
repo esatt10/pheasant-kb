@@ -109,7 +109,8 @@ Named volumes, prefixed with the project name (`pheasant-kb_`):
 
 | Volume | Contents | Treat as |
 |---|---|---|
-| `pheasant-pg17` | The Postgres database: state, chunks, graph rows, full-text index | **User data.** Back it up. |
+| `pheasant-postgres17` | The Postgres database: state, chunks, graph rows, full-text index | **User data.** Back it up. |
+| `pheasant-pg17` | The database of a stack that ran the TimescaleDB image, read-only and never written | Keep it until the new stack is confirmed; moving its data: `deploy/postgres/README.md` |
 | `pheasant-state` | LanceDB vectors, graph snapshots, image bytes, the upload landing zone | **User data.** Back it up. |
 | `pheasant-memory` | Agent memory records, one Markdown file each | **User data.** |
 | `pheasant-workspace` | Clones of repositories added by URL | Re-cloneable |

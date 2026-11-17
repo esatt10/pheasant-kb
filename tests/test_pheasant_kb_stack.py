@@ -285,7 +285,21 @@ FAKE_PG = {
     "pg_dump": (
         'for a in "$@"; do case "$a" in --file=*) cp "$FAKE_DB" "${a#--file=}";; esac; done\n'
     ),
-    "pg_restore": 'for a in "$@"; do last="$a"; done; cp "$last" "$FAKE_DB"\n',
+    # `--list` prints a table of contents with a TimescaleDB image's own
+    # entries in it, as a backup from that image has; a restore records the
+    # list it was told to use, so a test can see what it left out.
+    "pg_restore": (
+        'for a in "$@"; do case "$a" in --list) list=1;;'
+        ' --use-list=*) used="${a#--use-list=}";; esac; last="$a"; done\n'
+        'if [ -n "${list:-}" ]; then\n'
+        "  printf '%s\\n' '4; 3079 1 EXTENSION - timescaledb '"
+        " '5; 0 0 COMMENT - EXTENSION timescaledb '"
+        " '6; 0 1 TABLE DATA _timescaledb_catalog hypertable pheasant'"
+        " '7; 1259 2 TABLE public chunks pheasant' '8; 0 2 TABLE DATA public chunks pheasant'\n"
+        "  exit 0\n"
+        "fi\n"
+        'cp "$last" "$FAKE_DB"; [ -n "${used:-}" ] && cp "$used" "$FAKE_DB.list"; exit 0\n'
+    ),
     "psql": 'cat "$FAKE_TABLES"\n',
 }
 
@@ -421,6 +435,12 @@ def test_restore_into_an_empty_stack_needs_no_force(region: dict[str, Path]) -> 
     assert out.returncode == 0, out.stderr
     assert (region["state"] / "vectors" / "v.lance").read_text() == "vectors-v1"
     assert not list(region["backups"].glob("pre-restore-*"))
+    # A backup from the TimescaleDB image restores without that image's own
+    # extension entries, and with every one of pheasant's.
+    used = Path(str(region["db"]) + ".list").read_text(encoding="utf-8")
+    assert "timescaledb" not in used and "_timescaledb_catalog" not in used
+    assert "TABLE public chunks" in used and "TABLE DATA public chunks" in used
+    assert "leaving out 3 TimescaleDB extension entries" in out.stdout
 
 
 def test_backup_and_restore_are_on_demand_only() -> None:

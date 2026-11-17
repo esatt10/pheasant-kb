@@ -158,6 +158,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The database image (deploy/postgres: PostgreSQL 17 + pg_textsearch,
+      # nothing else). Its tag names its contents (deploy/postgres/TAG), not
+      # the release, and a published tag is never rebuilt: a rebuild would
+      # move the digest under every deployment pinned to it.
+      - name: Set up QEMU for the database image's arm64 build
+        uses: docker/setup-qemu-action@v3
+
+      - name: Resolve the database image tag
+        id: postgres
+        run: |
+          tag="$(tr -d '[:space:]' < deploy/postgres/TAG)"
+          ref="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/pheasant-postgres"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "${ref}:${tag}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the database image
+        if: steps.postgres.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/postgres
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.postgres.outputs.ref }}:${{ steps.postgres.outputs.tag }}
+
       # `latest` alongside the version tag because the untagged reference in
       # the README and the setup docs — `docker run … ghcr.io/esatt10/pheasant`
       # — resolves to `:latest`, and nothing had ever pushed one, so the
