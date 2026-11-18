@@ -199,6 +199,36 @@ surface, so the example keeps `text-embedding-3-small` deployed on Foundry. Any 
 answers `/openai/v1/embeddings` works. A different model means re-embedding
 (above).
 
+## Data privacy
+
+Azure hosting and model-provider access are separate questions. For
+[Models sold by Azure](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy),
+including Azure OpenAI chat and embedding deployments and Microsoft's own
+models, Microsoft states that prompts, outputs and embeddings are unavailable
+to underlying model providers and are not used for foundation-model training
+or product improvement without the customer's permission or instruction.
+These are service commitments under the applicable terms, not a privacy
+header that pheasant sets. Inference still requires Azure to process the
+submitted content. Check the terms for the actual model and feature,
+especially previews, before making a customer assurance.
+
+Default abuse monitoring can retain flagged content for authorized Microsoft
+employee review. This is separate from training. A subscription owner can
+[request modified abuse monitoring](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/abuse-monitoring#modified-abuse-monitoring)
+where eligible. Verify the live resource's `ContentLogging=false` capability
+and Microsoft's confirmation of model-specific coverage before claiming
+human review is disabled. An absent capability does not establish an
+exemption. Microsoft documents changes to exemption availability for models
+introduced on or after November 1, 2026; do not assume future models inherit
+an existing approval.
+
+Claude on Foundry has a different boundary: [Anthropic independently processes
+prompts and outputs](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/claude-models/data-privacy),
+including when hosted on Azure, under Anthropic's terms and safety systems.
+A Microsoft-only processing requirement must exclude Claude from both the
+deployed models and the caller-selectable catalog. Keeping disabled deployment
+code or commented examples does not itself send data to Anthropic.
+
 ## Limits
 
 - **Chat takes a key.** Embeddings, captions, transcripts and judgements
