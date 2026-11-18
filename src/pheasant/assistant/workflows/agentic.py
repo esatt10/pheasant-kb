@@ -857,7 +857,9 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
             'Write "sufficient" before "answer" so a streaming client can show '
             "provisional answer text as it is generated. "
             "If evidence is insufficient, say what is missing and provide only "
-            "queries that could find that specific information."
+            "queries that could find that specific information. When the passages "
+            "show that the question rests on a mistaken premise, the evidence is "
+            "sufficient: answer with the correction."
         )
         word_caps = options.get("answer_max_words") or {"short": 150, "medium": 400}
         word_cap = int(word_caps.get(str(state.get("depth") or "short"), 150))
@@ -1088,6 +1090,8 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             ),
             "answer_mode": "extractive",
             "error": str(exc),
+            # A gap held for the judge belongs to the draft that failed here.
+            "pending_gap": "",
             "steps": [
                 *steps,
                 WorkflowStep(

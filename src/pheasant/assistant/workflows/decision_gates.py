@@ -34,9 +34,8 @@ trusted.
 from __future__ import annotations
 
 import contextvars
-import re
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TypedDict
 
 from pheasant.assistant import decisions
@@ -49,9 +48,11 @@ from pheasant.assistant.workflows.decision_questions import (
     GROUNDED_COMPOSE,
     MISS_KINDS,
     RESPONSIVE,
+    SETTLED,
     SUFFICIENCY,
     SUFFICIENCY_COMPOSE,
     UNCLEAR,
+    followup_candidates,
 )
 
 #: How much of each cited document the acceptance gate reads. The writer read
@@ -86,12 +87,6 @@ def sufficiency_question(intent: str) -> str:
 
 NONE_OF_THESE = "none"
 
-_STOPWORDS = frozenset(
-    "a an and are as at be by can could do does for from how i in is it its me of on or "
-    "should show tell that the their there these this to use using was what when where which "
-    "who why will with would you your about into does explain describe".split()
-)
-
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pheasant-decision")
 
 
@@ -112,6 +107,9 @@ class DecisionState(TypedDict, total=False):
     repair_reason: str
     repair_pending: bool
     repairs: int
+    #: The evidence gap a written answer was left with, held for the
+    #: acceptance gate to confirm or withdraw (``accept_node``).
+    pending_gap: str
 
 
 @dataclass
@@ -192,55 +190,6 @@ def evidence_input(
         kinds = sorted({str(meta.get("type") or "?") for meta in shapes.values()})
         lines.append(f"Result set: {len(passages)} passage(s); file types: {', '.join(kinds)}")
     return "\n".join(lines)
-
-
-def followup_candidates(
-    question: str, intent: str, passages: list, shapes: dict, searched: list[str]
-) -> list[str]:
-    """Follow-up searches built from what the evidence already names.
-
-    The Decisions API picks; it cannot write. So the candidates come from
-    the hits' own directories and symbols and from the question's terms —
-    the structural vocabulary the model planner is told to use, read off the
-    index rather than invented. Deterministic: the same evidence offers the
-    same candidates.
-    """
-
-    from pheasant.assistant.workflows.agentic import _dedupe, _query_key
-
-    terms = [
-        word
-        for word in re.findall(r"[A-Za-z_][A-Za-z0-9_.\-]*", question)
-        if word.lower() not in _STOPWORDS and len(word) > 2
-    ]
-    base = " ".join(dict.fromkeys(terms))[:80].strip()
-    if not base:
-        return []
-    short = " ".join(list(dict.fromkeys(terms))[:3])
-    candidates: list[str] = []
-    directories: list[str] = []
-    for passage in passages[:8]:
-        path = str(passage.relative_path or "")
-        if "/" in path:
-            directory = path.rsplit("/", 1)[0]
-            if directory not in directories:
-                directories.append(directory)
-    candidates += [f"{directory} {short}" for directory in directories[:3]]
-    lowered = question.lower()
-    symbols: list[str] = []
-    for meta in shapes.values():
-        for symbol in meta.get("symbols") or []:
-            if symbol.lower() not in lowered and symbol not in symbols:
-                symbols.append(str(symbol))
-    wants_examples = intent in ("procedural", "compose")
-    suffix = "example usage" if wants_examples else ""
-    candidates += [f"{symbol} {suffix}".strip() for symbol in symbols[:3]]
-    if wants_examples:
-        candidates.append(f"{base} example configuration")
-    else:
-        candidates.append(f"{base} overview")
-    done = {_query_key(query) for query in searched}
-    return [query for query in _dedupe(candidates) if _query_key(query) not in done][:6]
 
 
 def _relevance_questions(count: int) -> list[dict[str, Any]]:
@@ -571,7 +520,7 @@ def finish_synthesis(
 ) -> dict[str, Any]:
     """The evidence the acceptance gate reads, and an evidence-gap note."""
 
-    out: dict[str, Any] = {"repair_pending": False}
+    out: dict[str, Any] = {"repair_pending": False, "pending_gap": ""}
     grade = state.get("grade") or {}
     artifact = state.get("intent") == "compose"
     # An artifact ends with its own list of what the passages did not document
@@ -584,7 +533,13 @@ def finish_synthesis(
         and "Evidence gap:" not in answer
     ):
         gap = grade.get("missing") or "the available passages are incomplete"
-        answer = f"{answer}\n\nEvidence gap: {gap}" if answer else f"Evidence gap: {gap}"
+        # The gap was judged on previews before anything was written. When the
+        # acceptance gate will read the finished answer, it decides whether the
+        # answer left the gap open (``SETTLED``), and the line waits for it.
+        if answer and citations and active(ctx, "accept"):
+            out["pending_gap"] = gap
+        else:
+            answer = with_gap(answer, gap)
     out["answer"] = answer
     if ctx.get("decider") is not None and "accept" in ctx["decider"].gates:
         texts: dict[int, str] = {}
@@ -610,7 +565,42 @@ def finish_synthesis(
 # ---------------------------------------------------------------- acceptance
 
 
+def with_gap(answer: str, gap: str) -> str:
+    return f"{answer}\n\nEvidence gap: {gap}" if answer else f"Evidence gap: {gap}"
+
+
 def accept_node(state: dict, ctx: dict) -> dict:
+    """Judge the finished answer, then settle any evidence gap it was left with.
+
+    A gap ``finish_synthesis`` held back is added unless the judge found that
+    the answer settles the question (``SETTLED`` at ``accept_threshold``).
+    Every path that did not ask (a refusal, an unavailable endpoint) adds it,
+    as before; a rewrite re-derives it from its own draft.
+    """
+
+    update = _judge_answer(state, ctx)
+    settled = update.pop("_settled", None)
+    gap = str(state.get("pending_gap") or "")
+    if not gap or update.get("repair_pending"):
+        return update
+    decider: Decider | None = ctx.get("decider")
+    threshold = decider.accept_threshold if decider is not None else 1.0
+    if settled is not None and settled >= threshold:
+        decisions.record("gap", "withdrawn")
+        steps = list(update.get("steps") or [])
+        if steps and steps[-1].name == "accept":
+            steps[-1] = replace(
+                steps[-1],
+                detail=f"{steps[-1].detail}; evidence gap withdrawn, the answer settles the "
+                f"question (settled p={settled:.2f})",
+            )
+            update["steps"] = steps
+        return {**update, "pending_gap": ""}
+    decisions.record("gap", "kept")
+    return {**update, "answer": with_gap(str(state.get("answer") or ""), gap), "pending_gap": ""}
+
+
+def _judge_answer(state: dict, ctx: dict) -> dict:
     """Judge the finished answer; ask for one rewrite when it is rejected."""
 
     decider: Decider | None = ctx.get("decider")
@@ -632,17 +622,18 @@ def accept_node(state: dict, ctx: dict) -> dict:
     for citation in used:
         text = texts.get(int(citation["index"])) or str(citation.get("snippet") or "")
         lines += [f"[{citation['index']}] {citation.get('title') or ''}", text, ""]
+    questions = [
+        decisions.predicate(
+            "grounded",
+            GROUNDED + (GROUNDED_COMPOSE if state.get("intent") == "compose" else ""),
+        ),
+        decisions.predicate("responsive", RESPONSIVE),
+    ]
+    gap = str(state.get("pending_gap") or "")
+    if gap:
+        questions.append(decisions.predicate("settled", SETTLED))
     try:
-        result = decider.decide(
-            "\n".join(lines),
-            [
-                decisions.predicate(
-                    "grounded",
-                    GROUNDED + (GROUNDED_COMPOSE if state.get("intent") == "compose" else ""),
-                ),
-                decisions.predicate("responsive", RESPONSIVE),
-            ],
-        )
+        result = decider.decide("\n".join(lines), questions)
     except DecisionUnavailable as exc:
         reason, entry = _unavailable("accept", exc)
         if shadow:
@@ -657,10 +648,12 @@ def accept_node(state: dict, ctx: dict) -> dict:
     threshold = decider.accept_threshold
     accepted = grounded >= threshold and responsive >= threshold
     repairs = int(state.get("repairs") or 0)
+    settled = result.probability("settled") if gap else None
     entry = {
         "gate": "accept",
         "grounded": round(grounded, 4),
         "responsive": round(responsive, 4),
+        **({"settled": round(settled, 4), "gap": gap} if settled is not None else {}),
         "threshold": threshold,
         "seconds": round(result.seconds, 3),
         "input_tokens": result.input_tokens,
@@ -682,6 +675,7 @@ def accept_node(state: dict, ctx: dict) -> dict:
         return {
             **_accept_step(state, f"answer accepted ({scores})", {**entry, "outcome": "accepted"}),
             "acceptance": acceptance,
+            "_settled": settled,
         }
     artifact = state.get("intent") == "compose"
     can_repair = (
@@ -725,6 +719,7 @@ def accept_node(state: dict, ctx: dict) -> dict:
             {**entry, "outcome": "rejected"},
         ),
         "acceptance": acceptance,
+        "_settled": settled,
     }
 
 
