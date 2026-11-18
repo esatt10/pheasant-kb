@@ -479,6 +479,71 @@ def test_exhausted_rounds_write_once_with_an_evidence_gap(monkeypatch) -> None:
     assert result.decisions["calls"][-1]["outcome"] == "insufficient"
 
 
+def _thin_then_judged(settled: float) -> tuple[_Wire, _LLM]:
+    """Two thin rounds judged on previews, then an answer the judge reads."""
+
+    wire = _Wire(
+        {
+            "sufficient": 0.05,
+            "miss": "absent",
+            "followup": "none",
+            "grounded": 0.9,
+            "responsive": 0.9,
+            "settled": settled,
+        }
+    )
+    planner = {"queries": ["pdfium successor"], "modes": ["hybrid"], "reasoning": "r"}
+    llm = _LLM([planner, "Nothing replaced it: PDFium replaced MuPDF [1]."])
+    return wire, llm
+
+
+def test_an_answer_that_settles_the_question_is_not_stamped_with_a_gap(monkeypatch) -> None:
+    # "What replaced PDFium?" of a region where PDFium is the replacement: the
+    # previews read as "absent", the writer read whole documents and answered
+    # with the correction. The judge of the finished answer withdraws the gap.
+    wire, llm = _thin_then_judged(settled=0.9)
+    result = _run(_Search({QUESTION: [_hit("overview")]}), llm, _decider(), monkeypatch, wire)
+
+    accept = wire.requests[-1][1]
+    assert [q["name"] for q in accept["questions"]] == ["grounded", "responsive", "settled"]
+    assert "Evidence gap:" not in accept["input"], "the judge reads the answer, not the gap line"
+    assert result.answer == "Nothing replaced it: PDFium replaced MuPDF [1]."
+    assert any(s.name == "accept" and "evidence gap withdrawn" in s.detail for s in result.steps)
+    assert result.decisions["calls"][-1]["settled"] == 0.9
+
+
+def test_an_answer_that_leaves_the_gap_open_still_says_so(monkeypatch) -> None:
+    wire, llm = _thin_then_judged(settled=0.1)
+    result = _run(_Search({QUESTION: [_hit("overview")]}), llm, _decider(), monkeypatch, wire)
+
+    assert result.answer.startswith("Nothing replaced it: PDFium replaced MuPDF [1].")
+    assert result.answer.endswith("Evidence gap: " + decision_gates_module().MISS_KINDS["absent"])
+
+
+def test_a_sufficient_round_asks_no_settled_question(monkeypatch) -> None:
+    wire = _Wire({"sufficient": 0.97, "grounded": 0.95, "responsive": 0.96})
+    search = _Search({QUESTION: [_hit("config")]})
+    _run(search, _LLM(["Answer [1]."]), _decider(), monkeypatch, wire)
+
+    assert "settled" not in wire.names(-1)
+
+
+def test_every_sufficiency_judge_counts_a_corrected_premise_as_enough() -> None:
+    from pheasant.assistant.workflows.agentic_prompts import GRADER_SYSTEM
+    from pheasant.assistant.workflows.decision_questions import PREMISE
+
+    gates = decision_gates_module()
+    for intent in ("knowledge", "procedural", "conversational"):
+        assert PREMISE in gates.sufficiency_question(intent)
+    assert "mistaken premise" in GRADER_SYSTEM
+
+
+def decision_gates_module():
+    from pheasant.assistant.workflows import decision_gates
+
+    return decision_gates
+
+
 def test_irrelevant_passages_are_left_out_but_never_below_the_floor(monkeypatch) -> None:
     hits = [_hit(name) for name in ("a", "b", "c", "d", "e")]
     search = _Search({QUESTION: hits})

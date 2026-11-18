@@ -71,6 +71,10 @@ answer the question, say true. Only say false when a specific, nameable \
 piece of information is missing that a different search might find — and let \
 "next_query" go after that gap by name (a symbol, a path, a file type).
 
+If the passages show that the question rests on a mistaken premise (it \
+assumes something they contradict), say true: the correction is the answer, \
+and no search will find the thing that does not exist.
+
 If the passages are the RIGHT KIND of file from the WRONG PLACE — a README \
 from another package, a test instead of the implementation — that is a \
 location miss, not a content miss. Say false and make "next_query" name the \
