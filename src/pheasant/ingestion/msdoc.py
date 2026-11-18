@@ -12,7 +12,7 @@ Why implement it rather than depend on something
 ------------------------------------------------
 There is no standard-library support, and no third-party package already in
 this project's dependency tree reads ``.doc``: ``python-docx`` handles only
-the OOXML ``.docx``, and ``pymupdf`` does not open Word binaries. The
+the OOXML ``.docx``, and PDFium reads only PDF. The
 alternative to this module is either a new dependency or a heuristic
 "scrape printable runs out of the binary" hack. The latter is what makes
 legacy extraction look broken — it interleaves field codes, style names and

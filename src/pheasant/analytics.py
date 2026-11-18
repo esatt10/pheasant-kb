@@ -284,8 +284,8 @@ def open_state(config: Any, sqlite_path: Any) -> Any:
     A Postgres-backed region has three failure modes SQLite does not, and all
     three surfaced raw before this existed: no DSN in the environment
     (``DsnUnavailable`` from four frames down), a database that is up but has
-    never been synced (``psycopg.errors.UndefinedTable: relation "sources"
-    does not exist``), and a database that is not reachable at all
+    never been synced (``UndefinedTable``/SQLSTATE ``42P01``: relation
+    "sources" does not exist), and a database that is not reachable at all
     (``PoolTimeout`` after the pool's 30-second wait).
 
     The "has this been synced" probe is ``table_columns('sources')`` because

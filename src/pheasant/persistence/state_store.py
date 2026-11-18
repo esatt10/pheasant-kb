@@ -720,8 +720,8 @@ class StateStore:
             if not chunks:
                 return
             # One `executemany` per table rather than two `execute`s per chunk.
-            # Same statements, same rows, same order -- but on Postgres psycopg
-            # pipelines an `executemany`, so a 30-chunk file is two round
+            # Same statements, same rows, same order -- but on Postgres the
+            # driver pipelines an `executemany`, so a 30-chunk file is two round
             # trips instead of sixty, and this runs under the sync mutex on the
             # sole commit authority. Measured on loopback Postgres, 30 chunks +
             # 40 terms + 8 symbols per artifact: see

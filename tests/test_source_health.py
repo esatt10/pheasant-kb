@@ -42,11 +42,11 @@ def backend(request) -> str:
     """The score's queries on both backends: SQLite here, Postgres on the fleet."""
 
     if request.param == "postgres":
-        import psycopg
+        from pheasant.persistence import pg_driver
 
-        with psycopg.connect(DSN, autocommit=True) as conn:
-            conn.execute("DROP SCHEMA public CASCADE")
-            conn.execute("CREATE SCHEMA public")
+        with pg_driver.connect(DSN, autocommit=True) as conn:
+            conn.query("DROP SCHEMA public CASCADE")
+            conn.query("CREATE SCHEMA public")
     return request.param
 
 

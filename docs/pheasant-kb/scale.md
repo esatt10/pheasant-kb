@@ -199,7 +199,7 @@ full-text index, so it grows with the corpus and carries every search.
 
 | Volume | Grows with | Rough size |
 |---|---|---|
-| `pheasant-pg17` | Chunks, graph rows, full-text index | The bulk of the footprint. About 240 MB for 8,000 files of code and docs together with `/state`; graph rows cost ~1.6 KB per node. |
+| `pheasant-postgres17` | Chunks, graph rows, full-text index | The bulk of the footprint. About 240 MB for 8,000 files of code and docs together with `/state`; graph rows cost ~1.6 KB per node. |
 | `pheasant-state` | Vectors (6 KB per chunk), graph snapshots, images, uploads | |
 | `pheasant-workspace` | Repositories added by URL | The size of the clones |
 | `pheasant-exports` | Parquet exports, cold observation partitions | Regenerable; prune freely |

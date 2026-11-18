@@ -455,16 +455,47 @@ retain their existing synchronous behavior.
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `backend` | `sqlite` \| `postgres` | `sqlite` | SQLite is a file and permits **one writer process per knowledge base** — pheasant's hard scaling ceiling. Postgres lifts it. |
-| `dsn_env` | string | `PHEASANT_DATABASE_URL` | Name of the environment variable holding the libpq DSN. Only the variable *name* goes in YAML — a DSN carries a password, and there is deliberately no field to paste one into. |
+| `dsn_env` | string | `PHEASANT_DATABASE_URL` | Name of the environment variable holding the DSN (a `postgresql://` URL or a libpq `key=value` string; see [DSNs](#postgresql-dsns)). Only the variable *name* goes in YAML — a DSN carries a password, and there is deliberately no field to paste one into. |
 | `pool_size` | integer | `10` | Server-side connections this process may hold. Unlike a SQLite file handle, each is a real process on the database. |
 | `lexical_index` | `pg_textsearch` \| `tsvector` | `pg_textsearch` | What the lexical arm ranks with on Postgres: BM25 from the pg_textsearch extension (Postgres 17+, preloaded), or the stock `tsvector`/`ts_rank_cd` arm. See [below](#bm25-on-postgres-storagelexical_index). SQLite ignores it and always uses FTS5. |
 
 Postgres needs the extra: `pip install 'pheasant-kb[postgres]'` (the published
-image already has it), and a server that can load the pg_textsearch extension,
-which the default lexical arm uses: PostgreSQL 17 or 18 with
-`shared_preload_libraries = 'pg_textsearch'`. The `timescale/timescaledb-ha:pg17`
-image is that server, and it is the one every shipped compose file and CI job
-runs. See [below](#bm25-on-postgres-storagelexical_index) for running without it.
+image already has it; it is pg8000 and SQLAlchemy's connection pool, both
+permissively licensed), and a server that can load the pg_textsearch
+extension, which the default lexical arm uses: PostgreSQL 17 or 18 with
+`shared_preload_libraries = 'pg_textsearch'`. pheasant's own image,
+`ghcr.io/esatt10/pheasant-postgres` (built from `deploy/postgres`: the official
+PostgreSQL 17 image plus pg_textsearch, nothing else), is that server, and it
+is the one every shipped compose file and CI job runs. See
+[below](#bm25-on-postgres-storagelexical_index) for running without it.
+
+#### PostgreSQL DSNs
+
+The DSN is read by pheasant's driver layer (`persistence/pg_driver.py`), not
+libpq, so these are the forms it accepts:
+
+- `postgresql://user:password@host:5432/dbname?option=value` (or `postgres://`),
+  with percent-escaped credentials and `[::1]`-style IPv6 hosts;
+- libpq `key=value` strings: `host=db port=5432 dbname=pheasant user=svc
+  password='it\'s'`.
+
+Honored options: `host`, `hostaddr`, `port`, `dbname`, `user`, `password`,
+`sslmode`, `sslrootcert`, `sslcert`, `sslkey`, `sslpassword`,
+`application_name`, `connect_timeout` and `options` (`-c name=value` startup
+settings). The `keepalives*`, `client_encoding` and `gssencmode` keys are
+accepted and need nothing: every connection uses TCP keepalives (idle 60 s,
+interval 10 s, count 3). Anything else -- several hosts, `target_session_attrs`
+-- is refused by name at startup rather than ignored. What a DSN leaves out is
+taken from `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`,
+`PGSSLMODE`, `PGSSLROOTCERT`, `PGAPPNAME` and `PGCONNECT_TIMEOUT`, as with
+libpq; `~/.pgpass` is not read.
+
+`sslmode` means what it means to libpq: `disable`; `allow`/`prefer` (the
+default: TLS when the server offers it, unverified); `require` (TLS,
+unverified, or verified against `sslrootcert` when one is named); `verify-ca`
+(chain verified); `verify-full` (chain and host name verified, never weakened;
+`sslrootcert=system` uses the system store). A connect gives up after
+`connect_timeout` seconds (default 10).
 
 ```yaml
 storage:
@@ -525,8 +556,8 @@ overlapped 71% (`tsvector`: 40%), and every query in
 `tests/test_backend_parity.py`'s gold set ranks as it does on SQLite.
 
 **What it needs.** PostgreSQL 17 or 18 with the extension installed and
-`shared_preload_libraries = 'pg_textsearch'` — the `timescale/timescaledb-ha:pg17`
-image, preloaded. pheasant runs `CREATE EXTENSION IF NOT EXISTS pg_textsearch`
+`shared_preload_libraries = 'pg_textsearch'` — pheasant's
+`ghcr.io/esatt10/pheasant-postgres` image (`deploy/postgres`), preloaded. pheasant runs `CREATE EXTENSION IF NOT EXISTS pg_textsearch`
 at boot, which needs a superuser; if pheasant's role is not one, run that
 statement once yourself. A server that cannot load the extension is a startup
 refusal naming these steps, not a quiet fallback.
@@ -582,10 +613,16 @@ one memory record, so that region was on the slow plan all the time.
 Source-scoped searches rank with the whole region's corpus statistics rather
 than the source's own, because the index keeps one set per table.
 
-**Upgrading a Postgres 16 deployment.** The compose stacks used
-`postgres:16-alpine` on a volume named `pheasant-pg`; they now run
-`timescale/timescaledb-ha:pg17` on `pheasant-pg17`, because a Postgres 16 data
-directory cannot be opened by 17. The old volume is left untouched. To carry
+**Upgrading from the TimescaleDB image.** The compose stacks ran
+`timescale/timescaledb-ha:pg17` on a volume named `pheasant-pg17`. They now run
+`deploy/postgres` on `pheasant-postgres17`, and the old volume is mounted
+read-only only so the server refuses to start an empty database beside it.
+Move the data with `docker compose run --rm backup` on the old image and
+`restore` on the new one: `deploy/postgres/README.md#upgrading-an-existing-stack`.
+
+**Upgrading a Postgres 16 deployment.** Before that, the compose stacks used
+`postgres:16-alpine` on a volume named `pheasant-pg`, which a Postgres 17
+server cannot open. The old volume is left untouched. To carry
 its data across, stop the stack, dump the old volume with the old image, then
 restore into the new one before starting pheasant (`<project>` is your compose
 project name; `docker volume ls` shows it):
@@ -936,7 +973,7 @@ Seven formats are handled:
 
 | Format | Extension | How the text is reached | Notes |
 |---|---|---|---|
-| PDF | `.pdf` | content streams (`zlib` + operator scan) or pymupdf | Only format with a sandboxed option |
+| PDF | `.pdf` | content streams (`zlib` + operator scan) or PDFium | Only format with a sandboxed option |
 | Word (OOXML) | `.docx` | `word/document.xml` | Includes tables |
 | Word (legacy) | `.doc` | OLE2 compound file → FIB → piece table | Word 97-2003; pre-97 layouts are refused, not guessed |
 | PowerPoint | `.pptx` | `<a:t>` runs per slide, in slide order | **Speaker notes are indexed too** |
@@ -959,18 +996,29 @@ offline and deterministic.
 
 | Provider | PDF path | DOCX path | Notes |
 |---|---|---|---|
-| `auto` | `pymupdf`, else builtin | `python-docx`, else builtin | Default. Keeps whichever yields text; never raises into a sync. |
-| `native` | `pymupdf` | `python-docx` | Best fidelity: CID/Type0 fonts, custom encodings, complex layout. Both libraries are already core dependencies. |
+| `auto` | PDFium (`pypdfium2`), else builtin | `python-docx`, else builtin | Default. Keeps whichever yields text; never raises into a sync. |
+| `native` | PDFium (`pypdfium2`) | `python-docx` | Best fidelity: CID/Type0 fonts, custom encodings, complex layout. Both libraries are already core dependencies. |
 | `builtin` | `zlib` + content-stream scan | `zipfile` + `xml.etree` | **Standard library only.** No third-party imports at all. |
 | `sandboxed` | builtin tokenizer inside the WASM sandbox | same as `builtin` | Fuel + memory cap, zero host capabilities. Needs `pip install 'pheasant-kb[wasm]'`. |
 
-`native` also reads **EPUB** through pymupdf, which lays the book out and walks
-it in reading order — a genuine upgrade over the builtin spine walk.
+**EPUB** is read by the builtin reader under every provider: the OPF spine in
+order, each chapter's `<head>` left out, and every XHTML document in the
+archive when the container, the OPF or its spine is missing or broken. (It was
+MuPDF under `native`; on the books it was measured against, the builtin reader
+reads the same text in the same order, and recovers malformed packages MuPDF
+could not open.)
+
+**Changing the PDF reader re-reads documents once.** The reader's revision is
+part of the fingerprint of every source that can hold a PDF or EPUB (its
+`include` or URLs admit one, or it already stores one), so a release that
+changes what the reader produces re-reads those sources in one full pass,
+recorded only when the pass succeeds; a source of code and Markdown is not
+touched. The move from MuPDF to PDFium is such a release.
 
 For **PPTX, XLSX, RTF and legacy DOC**, `native` and `builtin` are the *same
 code path*. No third-party reader for those formats exists in this project's
-dependency tree (`python-docx` handles only OOXML Word; `pymupdf` does not open
-them), and the builtin readers are complete for them — in the OOXML and EPUB
+dependency tree (`python-docx` handles only OOXML Word; PDFium reads only
+PDF), and the builtin readers are complete for them — in the OOXML and EPUB
 formats the XML *is* the text, and RTF is a text format by definition. Listing
 `native` as an upgrade there would be a pretend distinction.
 
@@ -1036,7 +1084,7 @@ involved: both readers below are deterministic.
 | Format | How | Providers |
 |---|---|---|
 | DOCX | Office Math XML (`m:oMath`) converted element by element: fractions, scripts, radicals, n-ary operators with limits, delimiters, matrices, `cases`, accents, functions | `builtin` and `native` share one converter and produce identical text |
-| PDF | Rebuilt from the glyphs: seeded by math fonts and operators, grown over what touches them; fraction bars and overlines from thin rules; scripts from size and baseline; limits, radicals, matrices and equation numbers from geometry | `native`/`auto` read glyphs through pymupdf; `builtin` interprets content streams itself; `sandboxed` does the same with every PDF token produced inside its WASM guest |
+| PDF | Rebuilt from the glyphs: seeded by math fonts and operators, grown over what touches them; fraction bars and overlines from thin rules; scripts from size and baseline; limits, radicals, matrices and equation numbers from geometry | `native`/`auto` read glyphs through PDFium (each glyph's advance from the font's own widths, as the builtin reader takes them); `builtin` interprets content streams itself; `sandboxed` does the same with every PDF token produced inside its WASM guest |
 
 Without the switch, equations are what they always were: absent from DOCX text
 (neither reader looked at Office Math) and scrambled in PDF text.

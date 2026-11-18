@@ -31,8 +31,8 @@ SECRETS="${SECRETS_DIR:-/secrets}"
 # Services that write what is being copied; reachable means running.
 WRITERS="${PHEASANT_WRITERS-indexer}"
 
-# timescaledb-ha carries several Postgres majors; use the newest client,
-# which is never older than the server.
+# Use the newest client the image carries, which is never older than the
+# server (deploy/postgres carries one major; the check costs nothing).
 newest_bin="$(ls -d "${PG_LIB_DIR:-/usr/lib/postgresql}"/*/bin 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "$newest_bin" ]; then
     PATH="$newest_bin:$PATH"

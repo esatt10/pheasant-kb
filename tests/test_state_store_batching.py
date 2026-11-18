@@ -31,11 +31,11 @@ postgres = pytest.mark.skipif(
 
 
 def _reset(dsn: str) -> None:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(dsn, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
 
 
 def _store(kind: str, tmp_path: Path, *, pool_size: int = 2) -> StateStore:
@@ -280,10 +280,11 @@ def test_a_standalone_read_leaves_the_write_path_transactional(tmp_path: Path) -
         )
 
         # And a failed standalone read returns the connection transactional.
-        import psycopg
+        from pheasant.persistence import pg_driver
 
-        with pytest.raises(psycopg.errors.UndefinedTable):
+        with pytest.raises(pg_driver.ProgrammingError) as missing:
             store.rows("SELECT * FROM no_such_table")
+        assert missing.value.sqlstate == "42P01"
         backend.execute(
             "INSERT INTO sync_fingerprints(scope, fingerprint, updated_at) VALUES(?,?,?)",
             ("probe", "kept", "now"),
@@ -303,21 +304,21 @@ def test_a_standalone_read_leaves_the_write_path_transactional(tmp_path: Path) -
 def test_a_standalone_read_sends_no_transaction_statements(tmp_path: Path) -> None:
     """The round trips themselves, where the server can count them."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
     store = _store("postgres", tmp_path)
     try:
-        with psycopg.connect(DSN, autocommit=True) as admin:
+        with pg_driver.connect(DSN, autocommit=True) as admin:
             try:
-                admin.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
-                admin.execute("SELECT pg_stat_statements_reset()")
-            except psycopg.Error:
+                admin.query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+                admin.query("SELECT pg_stat_statements_reset()")
+            except pg_driver.Error:
                 pytest.skip("pg_stat_statements is not loaded on this server")
             for _ in range(20):
                 store.rows("SELECT 7 AS standalone_read_probe")
             counts = {
                 str(query).strip().upper(): int(calls)
-                for query, calls in admin.execute(
+                for query, calls in admin.query(
                     "SELECT query, calls FROM pg_stat_statements "
                     "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())"
                 ).fetchall()

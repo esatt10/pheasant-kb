@@ -119,7 +119,7 @@ pheasant sync --source handbooks --mode full
 | Provider | Use when |
 |---|---|
 | `auto` (default) | Your documents. Best fidelity available, with a pure-stdlib safety net. |
-| `native` | You want `pymupdf`/`python-docx` specifically (CID/Type0 fonts, complex layout). |
+| `native` | You want PDFium/`python-docx` specifically (CID/Type0 fonts, complex layout). |
 | `builtin` | You need zero third-party imports in the extraction path. |
 | `sandboxed` | The PDFs come from somewhere you don't control. |
 

@@ -103,8 +103,24 @@ if [ -n "$populated" ]; then
 fi
 
 echo "pheasant-kb: restoring the database"
+# A backup taken on the TimescaleDB image (pheasant-kb before it moved to
+# deploy/postgres) carries that image's own extensions, which pheasant never
+# used: CREATE EXTENSION timescaledb / timescaledb_toolkit and the rows of their
+# catalog schemas. This image has neither, so those entries -- and only those --
+# are left out of the restore; every pheasant table, index and row is kept.
+toc="$(mktemp)"
+trap 'rm -f "$toc" "$toc.keep"' EXIT
+pg_restore --list "$source_dir/db.pgdump" > "$toc"
+grep -vE '(EXTENSION (- )?timescaledb(_toolkit)?( |$))|( (_timescaledb_[a-z_]+|timescaledb_[a-z_]+|toolkit_experimental) )' \
+    "$toc" > "$toc.keep" || true
+skipped="$(( $(grep -c . "$toc") - $(grep -c . "$toc.keep") ))"
+if [ "$skipped" -gt 0 ]; then
+    echo "pheasant-kb: leaving out $skipped TimescaleDB extension entries (not pheasant data)"
+fi
 pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error \
-    --dbname="${PGDATABASE:-pheasant}" "$source_dir/db.pgdump"
+    --use-list="$toc.keep" --dbname="${PGDATABASE:-pheasant}" "$source_dir/db.pgdump"
+# Fresh statistics, so the planner picks the BM25 and key indexes at once.
+psql --quiet --command "ANALYZE" >/dev/null
 
 unpack() {  # unpack <name> <dir>
     if [ -f "$source_dir/$1.tar.gz" ]; then

@@ -109,10 +109,10 @@ def test_a_sync_run_beats_while_its_work_holds_every_pooled_connection(tmp_path:
     held it. On a connection of its own it lands on time.
     """
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as admin:
-        admin.execute("DROP TABLE IF EXISTS sync_runs")
+    with pg_driver.connect(DSN, autocommit=True) as admin:
+        admin.query("DROP TABLE IF EXISTS sync_runs")
     state = _state(tmp_path, "postgres", pool_size=1)
     try:
         held = threading.Event()
@@ -131,10 +131,10 @@ def test_a_sync_run_beats_while_its_work_holds_every_pooled_connection(tmp_path:
             worker = threading.Thread(target=work, daemon=True)
             worker.start()
             assert held.wait(5)
-            with psycopg.connect(DSN, autocommit=True) as reader:
+            with pg_driver.connect(DSN, autocommit=True) as reader:
 
                 def beats() -> list[Any]:
-                    return reader.execute(
+                    return reader.query(
                         "SELECT heartbeat_at FROM sync_runs WHERE source_id='site'"
                     ).fetchall()
 
@@ -152,19 +152,19 @@ def test_a_sync_run_beats_while_its_work_holds_every_pooled_connection(tmp_path:
 def test_a_source_lease_holds_while_its_work_holds_every_pooled_connection(
     tmp_path: Path,
 ) -> None:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as admin:
-        admin.execute("DROP TABLE IF EXISTS source_leases")
+    with pg_driver.connect(DSN, autocommit=True) as admin:
+        admin.query("DROP TABLE IF EXISTS source_leases")
     state = _state(tmp_path, "postgres", pool_size=1)
     try:
         lease = SourceLease(state, "site", heartbeat_interval_s=0.1, stale_after_s=60)
         assert lease.try_acquire()
         state.backend.execute("SELECT 1")  # the work's open transaction holds the pool
-        with psycopg.connect(DSN, autocommit=True) as reader:
+        with pg_driver.connect(DSN, autocommit=True) as reader:
 
             def beat() -> Any:
-                return reader.execute(
+                return reader.query(
                     "SELECT heartbeat_at FROM source_leases WHERE source_id='site'"
                 ).fetchall()[0][0]
 

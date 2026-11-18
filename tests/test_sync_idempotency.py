@@ -1707,3 +1707,140 @@ def test_two_urls_that_reduce_to_one_path_are_two_artifacts(
         assert _site_state(engine) == after_full, "a re-sync rewrote a shared artifact"
     finally:
         engine.close()
+
+
+# ---------------------------------------------------------------------------
+# A new PDF reader re-reads the documents the old one indexed, once
+# ---------------------------------------------------------------------------
+
+
+def _document_engine(tmp_path: Path) -> SyncEngine:
+    from pheasant.ingestion.pdf_write import text_pdf
+
+    docs = tmp_path / "docs"
+    docs.mkdir(exist_ok=True)
+    (docs / "tariff.pdf").write_bytes(
+        text_pdf([["Kestrel transmission tariff", "Clause one sets the rate."]])
+    )
+    (docs / "notes.md").write_text("# Notes\n\nPlain text about cranes.\n", encoding="utf-8")
+    code = tmp_path / "code"
+    code.mkdir(exist_ok=True)
+    (code / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "reader-change",
+                "defaults": "standalone",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "sources": [
+                {
+                    "name": "docs",
+                    "type": "document_folder",
+                    "path": str(docs),
+                    "include": ["**/*.pdf", "**/*.md"],
+                },
+                {
+                    "name": "code",
+                    "type": "document_folder",
+                    "path": str(code),
+                    "include": ["**/*.py"],
+                },
+            ],
+        }
+    )
+    return SyncEngine(config)
+
+
+def test_a_reader_change_rereads_document_sources_once_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A document source indexed by the old PDF reader is re-read exactly once.
+
+    Its stored fingerprint was taken with the old reader's identity; installing
+    a new reader must escalate the next incremental sync to one full pass,
+    record the new identity only once that pass succeeds, and then cost
+    nothing. A source of code never names a reader, so it is not touched.
+    """
+
+    from pheasant.sync import fingerprint
+
+    engine = _document_engine(tmp_path)
+    try:
+        monkeypatch.setattr(fingerprint, "document_text_pipeline", lambda: "pdf:mupdf")
+        assert engine.sync_source("docs", "full").indexed_artifacts == 2
+        assert engine.sync_source("code", "full").indexed_artifacts == 1
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+        before = _state_shape(engine)
+
+        monkeypatch.undo()  # the new reader is installed
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 2  # a full pass
+        assert engine.sync_source("code", "incremental").indexed_artifacts == 0
+
+        # Re-read with unchanged text: the state is what it was.
+        assert _state_shape(engine) == before
+        # And once recorded, the next sync is free.
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+    finally:
+        engine.close()
+
+
+def test_a_reader_change_finds_a_pdf_the_configuration_does_not_name(tmp_path: Path) -> None:
+    """A web page served as a PDF from a URL with no suffix: the fingerprint
+    asks the store, not only the globs."""
+
+    from pheasant.sync.fingerprint import holds_documents, source_fingerprint
+
+    engine = _document_engine(tmp_path)
+    try:
+        engine.sync_source("code", "full")
+        code = next(s for s in engine.config.sources if s.name == "code")
+        plain = source_fingerprint(code)
+        assert source_fingerprint(code, holds_documents=False) == plain
+        assert source_fingerprint(code, holds_documents=True) != plain
+        assert holds_documents(engine.state, code) is False
+        assert source_fingerprint(code, state=engine.state) == plain
+        with engine.state.conn:
+            engine.state.conn.execute(
+                "UPDATE artifacts SET mime_type='application/pdf' WHERE source_id='code'"
+            )
+        assert holds_documents(engine.state, code) is True
+        assert source_fingerprint(code, state=engine.state) != plain
+    finally:
+        engine.close()
+
+
+def test_an_interrupted_reader_pass_is_not_recorded_as_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.sync import fingerprint
+    from pheasant.sync.engine import SOURCE_SCOPE
+
+    engine = _document_engine(tmp_path)
+    scope = SOURCE_SCOPE.format(name="docs")
+    try:
+        monkeypatch.setattr(fingerprint, "document_text_pipeline", lambda: "pdf:mupdf")
+        engine.sync_source("docs", "full")
+        old = engine.state.get_fingerprint(scope)
+        monkeypatch.undo()
+
+        real = engine.state.set_fingerprint
+
+        def dies_recording_the_source(name: str, *args: object, **kwargs: object) -> object:
+            if name == scope:
+                raise RuntimeError("killed before the pass was recorded")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(engine.state, "set_fingerprint", dies_recording_the_source)
+        try:
+            engine.sync_source("docs", "incremental")
+        except RuntimeError:
+            pass
+        assert engine.state.get_fingerprint(scope) == old
+        monkeypatch.undo()
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 2
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+    finally:
+        engine.close()

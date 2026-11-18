@@ -13,8 +13,10 @@ labels them ``"document"``) and then threw the content away:
 ``read_text`` / ``read_text_bytes`` hard-returned ``""`` for both, so a PDF
 was discovered, hashed, given an artifact row and a graph node — and produced
 **zero chunks**. It was findable by path and invisible by content. The two
-dependencies needed to fix it (``pymupdf``, ``python-docx``) were already
+dependencies needed to fix it (a PDF engine, ``python-docx``) were already
 declared as *core* requirements in ``pyproject.toml`` and imported nowhere.
+The PDF engine is PDFium (``pypdfium2``, BSD-3-Clause/Apache-2.0); it was
+MuPDF until MuPDF's AGPL terms were removed from the dependency tree.
 
 This module closes that gap the same way Synapse 25.4 closed it for images
 (:mod:`pheasant.ingestion.captioner`) and audio
@@ -43,10 +45,12 @@ Providers
   present (already a core dep), else a regex strip. This exists because
   a text extractor that dies when an optional import is missing would
   take the whole sync down with it.
-- :class:`NativeExtractor` — ``pymupdf`` for PDF and ``python-docx`` for
-  DOCX (both already core deps), with higher fidelity than the builtin on
-  hard PDFs: CID/Type0 fonts, custom encodings, complex layouts. Falls
-  back to the builtin per-format when its import is unavailable.
+- :class:`NativeExtractor` — PDFium (:mod:`pheasant.ingestion.pdf_pages`)
+  for PDF and ``python-docx`` for DOCX (both core deps), with higher
+  fidelity than the builtin on hard PDFs: CID/Type0 fonts, custom
+  encodings, complex layouts. Falls back to the builtin per-format when its
+  import is unavailable or it fails on a file. EPUB is the builtin reader
+  under every provider.
 - :class:`SandboxedExtractor` — the builtin PDF *tokenizer* run inside the
   Phase-34 WASM sandbox under a fuel + linear-memory cap with **zero host
   capabilities**. See :mod:`pheasant.ingestion.extractor_sandbox`; the
@@ -86,9 +90,8 @@ from pheasant.ingestion.html_text import (  # noqa: F401 - re-exported
     html_chrome_enabled,
 )
 from pheasant.ingestion.pdf_pages import (
-    _NATIVE_MUPDF_LOCK,
     PdfPages,
-    _pymupdf,
+    _pdfium,
     pdf_page_texts,
 )
 
@@ -164,7 +167,7 @@ class DocumentExtractor(Protocol):
 # the overwhelming majority of real-world text PDFs. It does NOT decrypt
 # encrypted PDFs, decode LZW/CCITT/JBIG2 streams, or resolve Type0/CID font
 # CMaps (whose multi-byte codes need the font's embedded mapping table). For
-# those, `NativeExtractor` (pymupdf) is materially better — which is exactly
+# those, `NativeExtractor` (PDFium) is materially better — which is exactly
 # why `AutoExtractor` prefers it and why this is the fallback, not the
 # default. A PDF this cannot read yields less text, never a crash.
 
@@ -513,7 +516,7 @@ class BuiltinExtractor:
 
 
 class NativeExtractor:
-    """``pymupdf`` + ``python-docx`` extractor (both already core deps).
+    """PDFium + ``python-docx`` extractor (both core deps).
 
     Higher fidelity than the builtin on PDFs with CID/Type0 fonts, custom
     encodings, or complex layout. Each format's import is deferred to call
@@ -544,15 +547,15 @@ class NativeExtractor:
             return self._extract_epub(content, relative_path)
         # PPTX, XLSX, RTF and legacy DOC have no third-party reader in this
         # project's dependency tree (`python-docx` is OOXML-word-only,
-        # `pymupdf` does not open them), and the builtin readers are complete
+        # PDFium reads only PDF), and the builtin readers are complete
         # for them — the OOXML/EPUB text *is* the XML, and RTF is a text
         # format. So "native" is honestly the same code path here rather than
         # a pretend upgrade.
         return extract_builtin(kind, content, math=self.math)
 
     def _extract_pdf(self, content: bytes, relative_path: str) -> str:
-        if _pymupdf() is None:
-            logger.debug("pymupdf unavailable; using builtin PDF extraction")
+        if _pdfium() is None:
+            logger.debug("pypdfium2 unavailable; using builtin PDF extraction")
             return extract_pdf_text_builtin(content)
         try:
             if self.pdf_pages is None:
@@ -563,33 +566,23 @@ class NativeExtractor:
         except Exception as exc:
             # A corrupt/encrypted PDF must not abort a sync: fall back to the
             # builtin, which may still recover the uncompressed streams.
-            logger.warning("pymupdf failed on %s (%s); using builtin", relative_path, exc)
+            logger.warning("PDFium failed on %s (%s); using builtin", relative_path, exc)
             return extract_pdf_text_builtin(content)
 
     def _extract_epub(self, content: bytes, relative_path: str) -> str:
-        """EPUB via pymupdf, which reads it natively (not just PDF).
+        """EPUB through the builtin reader (:mod:`pheasant.ingestion.office`).
 
-        A genuine upgrade over the builtin reader rather than a rename: MuPDF
-        lays the book out and walks it in reading order, so it recovers text
-        from packages whose spine or manifest the builtin path cannot follow.
-        Falls back to the builtin reader on any failure.
+        This was MuPDF, which laid the book out; it went with MuPDF's terms.
+        The builtin reader walks the package's spine in order and falls back
+        to every XHTML document in the archive when the manifest or spine is
+        missing or broken, so a malformed book still yields its chapters.
         """
+
         try:
-            import pymupdf  # type: ignore[import-not-found]
-        except ModuleNotFoundError:
-            try:
-                import fitz as pymupdf  # type: ignore[import-not-found,no-redef]
-            except ModuleNotFoundError:
-                return extract_builtin("epub", content)
-        try:
-            with _NATIVE_MUPDF_LOCK:
-                with pymupdf.open(stream=content, filetype="epub") as document:
-                    pages = [page.get_text() or "" for page in document]
-            text = _tidy("\n\n".join(pages))
-            return text or extract_builtin("epub", content)
-        except Exception as exc:
-            logger.warning("pymupdf failed on %s (%s); using builtin", relative_path, exc)
             return extract_builtin("epub", content)
+        except Exception as exc:  # noqa: BLE001 - never abort a sync on one book
+            logger.warning("EPUB extraction failed on %s (%s)", relative_path, exc)
+            return ""
 
     def _extract_docx(self, content: bytes, relative_path: str) -> str:
         import io
@@ -633,7 +626,7 @@ class AutoExtractor:
     """Default provider: native when it yields text, builtin otherwise.
 
     "Yields text" rather than "imports successfully" is deliberate — a PDF
-    whose fonts pymupdf renders as empty may still have readable
+    whose fonts PDFium reads as empty may still have readable
     uncompressed streams, and vice versa. Trying both and keeping the longer
     result costs one extra pass on the rare empty case and is the difference
     between indexing a document and silently dropping it.

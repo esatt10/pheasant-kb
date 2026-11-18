@@ -612,7 +612,7 @@ class ExtractorSettings(ModelMixin):
 
     ``provider``:
 
-    - ``auto`` (default) — ``pymupdf``/``python-docx`` when importable (both
+    - ``auto`` (default) — PDFium (``pypdfium2``)/``python-docx`` when importable (both
       already core deps), falling back to the pure-stdlib builtin. Never
       raises into a sync.
     - ``native`` — prefer the third-party libraries (best fidelity on PDFs

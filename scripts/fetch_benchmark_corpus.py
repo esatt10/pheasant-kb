@@ -118,32 +118,25 @@ def write_markdown(document: dict[str, Any], path: Path) -> None:
 
 
 def write_pdf(document: dict[str, Any], path: Path) -> bool:
-    """Write a real PDF. Returns False when PyMuPDF is unavailable.
+    """Write a real PDF. Returns False when the PDF writer is unavailable.
 
     Degrading to Markdown rather than failing: the benchmark's value is its
     judgements, and a missing optional writer should cost the demo its PDF
-    coverage, not its corpus.
+    coverage, not its corpus. The writer is pheasant's own
+    (`pheasant.ingestion.pdf_write`, over PDFium), so building the corpus
+    installs nothing pheasant does not already ship.
     """
 
     try:
-        import pymupdf
-    except ImportError:  # pragma: no cover - PyMuPDF is a core dependency
+        from pheasant.ingestion.pdf_write import wrapped_text_pdf
+    except ImportError:  # pragma: no cover - pypdfium2 is a core dependency
         return False
 
-    fitz = pymupdf
-    doc = fitz.open()
-    page = doc.new_page()
     text = f"{document['title']}\n\n{_abstract(document)}"
-    # A generous box and a small face, so a long abstract does not silently
-    # overflow the page and lose the tail — which would quietly change what
-    # the corpus contains and therefore what the benchmark measures.
-    box = fitz.Rect(56, 56, page.rect.width - 56, page.rect.height - 56)
-    overflow = page.insert_textbox(box, text, fontsize=9, fontname="helv")
-    if overflow < 0:
-        page = doc.new_page()
-        page.insert_textbox(box, text[len(text) + int(overflow) :], fontsize=9, fontname="helv")
-    doc.save(path)
-    doc.close()
+    # Wrapped to the page and continued onto as many pages as it needs, so a
+    # long abstract never silently loses its tail — which would quietly change
+    # what the corpus contains and therefore what the benchmark measures.
+    path.write_bytes(wrapped_text_pdf(text, font_size=9))
     return True
 
 

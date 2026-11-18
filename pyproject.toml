@@ -37,7 +37,12 @@ dependencies = [
   "pygments>=2.17",
   "beautifulsoup4>=4.12",
   "python-docx>=1.1",
-  "pymupdf>=1.24",
+  # PDF text and glyph geometry (`ingestion/pdf_pages.py`) through PDFium.
+  # pypdfium2 is Apache-2.0 / BSD-3-Clause and its wheel bundles PDFium
+  # (BSD-3-Clause) with notices for PDFium's own third-party code. Pinned:
+  # the PDF reader's identity is part of every stored text's fingerprint
+  # (`pdf_reader_version`), so an upgrade is a deliberate, reviewed change.
+  "pypdfium2==5.15.2",
   "numpy>=1.26",
   "zstandard>=0.22",
   # Already pulled in transitively via fastapi/starlette; declared directly
@@ -57,7 +62,13 @@ vector = ["lancedb>=0.6"]
 # Phase 35.2: the Postgres state backend. Gated so a standalone region —
 # which is every default install — carries no database driver and the
 # offline suite runs without one.
-postgres = ["psycopg[binary,pool]>=3.2"]
+#
+# pg8000 (BSD-3-Clause, pure Python) speaks the wire protocol and SQLAlchemy's
+# QueuePool (MIT) pools it; `persistence/pg_driver.py` is the only importer of
+# either. pg8000 is pinned exactly because pg_driver drives its connection's
+# message handling directly (see that module's docstring);
+# tests/test_pg_driver.py fails when an upgrade moves what it relies on.
+postgres = ["pg8000==1.31.6", "sqlalchemy>=2.0.30,<2.2"]
 # Synapse 24.4: optional Ed25519 contract signing. Gated so a region that
 # never sets synapse.signing_key_ref needs no crypto dep and the offline
 # suite passes without it.
@@ -117,7 +128,7 @@ dev = [
   "httpx>=0.27,<1",
   "jsonschema>=4.22",
   "ruff>=0.5",
-  # Not every extra is in `dev` — lancedb, wasmtime and psycopg each want a
+  # Not every extra is in `dev` — lancedb, wasmtime and postgres each want a
   # runtime or a server, so their tests skip in CI. DuckDB wants neither: it
   # is a wheel with no service behind it, so including it here is what makes
   # `tests/test_parquet_export.py` actually run on every PR instead of

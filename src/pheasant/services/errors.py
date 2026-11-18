@@ -723,22 +723,24 @@ def transient_refusal(exc: BaseException) -> ServiceError | None:
     (a constraint, bad SQL) is not transient and stays a crash.
     """
 
-    from pheasant.persistence.pg_liveness import is_disconnect
+    from pheasant.persistence.pg_liveness import is_disconnect, is_pool_timeout
 
+    if is_pool_timeout(exc):
+        return StateStoreUnavailable("no database connection became free in time")
     if is_disconnect(exc):
         return StateStoreUnavailable(f"{type(exc).__name__}: {str(exc).strip()[:200]}")
-    if type(exc).__name__ == "PoolTimeout" and type(exc).__module__.startswith("psycopg_pool"):
-        return StateStoreUnavailable("no database connection became free in time")
     return None
 
 
 def database_exception_types() -> tuple[type[BaseException], ...]:
     """The exception classes `transient_refusal` may translate, for an adapter
-    that registers handlers by type. Empty when psycopg is not installed."""
+    that registers handlers by type: the driver's connection failures (a
+    pool timeout among them) and pg8000's own, should one escape untranslated."""
+
+    from pheasant.persistence import pg_driver
 
     try:
-        import psycopg
-        import psycopg_pool
+        import pg8000.exceptions
     except ModuleNotFoundError:
-        return ()
-    return (psycopg.OperationalError, psycopg_pool.PoolTimeout)
+        return (pg_driver.OperationalError,)
+    return (pg_driver.OperationalError, pg8000.exceptions.InterfaceError)

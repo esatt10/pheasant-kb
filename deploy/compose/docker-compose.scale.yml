@@ -61,12 +61,14 @@ x-fleet-env: &fleet-env
 
 services:
   postgres:
-    # Postgres 17 with pg_textsearch preloaded: the lexical arm ranks with its
-    # BM25 index by default (storage.lexical_index). A new volume, because a
-    # Postgres 16 data directory cannot be opened by 17 -- the old
-    # `pheasant-pg` volume is left as it was; see docs/configuration.md for
-    # moving its data across.
-    image: timescale/timescaledb-ha:pg17
+    # Postgres 17 with pg_textsearch preloaded and nothing else
+    # (deploy/postgres): the lexical arm ranks with its BM25 index by default
+    # (storage.lexical_index). Its data is a new volume; the TimescaleDB
+    # image's (`pheasant-pg17`) is mounted read-only only so the server refuses
+    # to start empty beside it -- deploy/postgres/README.md says how to move
+    # the data, and the older Postgres 16 `pheasant-pg` volume is untouched.
+    image: ${PHEASANT_POSTGRES_IMAGE:-ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1}
+    build: ../postgres
     restart: unless-stopped
     command: ["postgres", "-c", "max_connections=100"]
     mem_limit: 1280m
@@ -75,8 +77,12 @@ services:
       POSTGRES_USER: pheasant
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pheasant}
       POSTGRES_DB: pheasant
+      # Set only for the one start that creates the new cluster a backup is
+      # restored into (deploy/postgres/README.md#upgrading-an-existing-stack).
+      PHEASANT_POSTGRES_ALLOW_FRESH: ${PHEASANT_POSTGRES_ALLOW_FRESH:-}
     volumes:
-      - pheasant-pg17:/home/postgres/pgdata
+      - pheasant-postgres17:/var/lib/postgresql/data
+      - pheasant-pg17:/var/lib/pheasant-previous-postgres:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pheasant"]
       interval: 10s
@@ -325,5 +331,6 @@ volumes:
   pheasant-workspace:
   pheasant-memory:
   pheasant-exports:
+  pheasant-postgres17:
   pheasant-pg17:
   pheasant-nats:

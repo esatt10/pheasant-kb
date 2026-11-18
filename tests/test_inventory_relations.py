@@ -589,11 +589,11 @@ def test_details_agree_across_backends(tmp_path: Path) -> None:
     """The detail SQL is hand-written for both dialects: `LIKE … ESCAPE`, the
     `GROUP BY` outline, `= ANY(?)` key sets, and the target-index seek."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
     lite = _region(tmp_path / "sqlite")
     pg = _region(
         tmp_path / "postgres",

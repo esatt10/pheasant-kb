@@ -39,22 +39,6 @@ _GROUP_CONCAT = re.compile(r"\bGROUP_CONCAT\s*\(", re.IGNORECASE)
 #: conflict target, so this is only rewritten where the store knows the key.
 _INSERT_OR_REPLACE = re.compile(r"\bINSERT\s+OR\s+REPLACE\s+INTO\b", re.IGNORECASE)
 
-#: A ``?`` placeholder, ignoring any inside a string literal or a cast (``?``
-#: does not appear in Postgres casts, but ``::`` does and we must not touch it).
-_PLACEHOLDER = re.compile(r"\?")
-
-#: A ``:name`` placeholder. sqlite3 takes these with a dict; psycopg spells the
-#: same thing ``%(name)s``. The negative lookbehind keeps Postgres's ``::``
-#: cast operator intact — ``search_vector::text`` must not become
-#: ``search_vector:%(text)s``, which is still valid-looking SQL and would bind
-#: a parameter that does not exist.
-_NAMED_PLACEHOLDER = re.compile(r"(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)")
-
-#: String literals, so placeholder rewriting never reaches inside one. A
-#: ``LIKE '%?%'`` would otherwise become ``LIKE '%%s%'`` and match nothing —
-#: silently, since it is still valid SQL.
-_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
-
 
 class Row(dict):
     """A result row supporting both ``row["col"]`` and ``row[0]``.
@@ -117,7 +101,7 @@ class Dialect:
         ``column IN (?,?,?)`` makes the *statement text* a function of how
         many keys were passed, so a batched read issues a differently-spelled
         statement on nearly every call. SQLite reparses cheaply and in
-        process; psycopg3 auto-prepares a statement after its fifth execution,
+        process; `pg_driver` prepares a statement after its fifth execution,
         so on Postgres a text that never repeats is a statement that is never
         prepared and a plan built from scratch every time. Measured on a
         500-key node fetch — the graph search arm's block size — **8.93ms
@@ -148,18 +132,49 @@ class Dialect:
 
         if not self.is_postgres:
             return sql
-        return _translate_postgres(sql)
+        return _compile_postgres(sql).text
+
+    def compile(self, sql: str) -> Compiled:
+        """:meth:`translate`, plus how to bind ``params`` to the result."""
+
+        if not self.is_postgres:
+            return Compiled(sql, None)
+        return _compile_postgres(sql)
+
+
+@dataclass(frozen=True)
+class Compiled:
+    """A statement in a driver's own placeholder syntax.
+
+    ``names`` is the parameter name behind each ``$n`` when the portable SQL
+    used ``:name`` placeholders, so a mapping of parameters can be bound by
+    position; ``None`` when it used ``?``.
+    """
+
+    text: str
+    names: tuple[str, ...] | None
+
+    def bind(self, params: Any) -> tuple[Any, ...]:
+        if params is None:
+            return ()
+        if self.names is not None:
+            if not isinstance(params, dict):
+                raise TypeError("this statement takes named parameters; pass a dict")
+            return tuple(params[name] for name in self.names)
+        if isinstance(params, dict):
+            raise TypeError("this statement takes positional parameters; pass a tuple")
+        return tuple(params)
 
 
 @functools.lru_cache(maxsize=2048)
-def _translate_postgres(sql: str) -> str:
+def _compile_postgres(sql: str) -> Compiled:
     """The Postgres rewrite, memoized: a pure function of the text.
 
-    Two regex passes and a string-literal scan ran on every statement --
-    11-28us each, measured -- and the statement texts a process issues are a
-    small fixed set. Bounded, because a text carrying an ``IN (?,?,...)`` list
-    varies with the list's length (`Dialect.in_clause` avoids that on the hot
-    paths, and a cache miss is only the old cost).
+    The scan and the two regex passes ran on every statement before they
+    were cached -- 11-28us each, measured -- and the statement texts a
+    process issues are a small fixed set. Bounded, because a text carrying an
+    ``IN (?,?,...)`` list varies with the list's length (`Dialect.in_clause`
+    avoids that on the hot paths, and a cache miss is only the old cost).
     """
 
     sql = _GROUP_CONCAT.sub("string_agg(", sql)
@@ -167,35 +182,68 @@ def _translate_postgres(sql: str) -> str:
     return _rewrite_placeholders(sql)
 
 
-def _rewrite_placeholders(sql: str) -> str:
-    """``?`` → ``%s``, leaving string literals alone.
+def _rewrite_placeholders(sql: str) -> Compiled:
+    """``?`` and ``:name`` to ``$n``, outside literals, identifiers and comments.
 
-    Also escapes any literal ``%`` so psycopg's own interpolation does not
-    consume it — ``LIKE '%/%'`` is real SQL in this codebase (the FTS title
-    migration uses it) and would otherwise raise or, worse, bind wrongly.
+    A ``LIKE '%?%'`` keeps its ``?``, ``search_vector::text`` keeps its cast
+    (``::`` is never a name), and a repeated ``:name`` reuses its number. No
+    other character is touched: the server sees ``%`` exactly as written,
+    which a driver interpolating ``%s`` could not promise.
     """
 
-    def rewrite(segment: str) -> str:
-        # Named first: `:id` -> `%(id)s`. Doing `?` first would be harmless,
-        # but the named pass must not see a `%s` it could mistake for text.
-        segment = _NAMED_PLACEHOLDER.sub(r"%(\1)s", segment)
-        return _PLACEHOLDER.sub("%s", segment)
-
     out: list[str] = []
-    position = 0
-    for literal in _STRING_LITERAL.finditer(sql):
-        out.append(rewrite(sql[position : literal.start()]))
-        out.append(literal.group(0).replace("%", "%%"))
-        position = literal.end()
-    out.append(rewrite(sql[position:]))
-    return "".join(out)
+    names: list[str] = []
+    positional = 0
+    i, length = 0, len(sql)
+    while i < length:
+        char = sql[i]
+        if char == "'" or char == '"':
+            end = i + 1
+            while end < length:
+                if sql[end] == char:
+                    if end + 1 < length and sql[end + 1] == char:
+                        end += 2
+                        continue
+                    break
+                end += 1
+            out.append(sql[i : end + 1])
+            i = end + 1
+        elif char == "-" and sql.startswith("--", i):
+            end = sql.find("\n", i)
+            end = length if end < 0 else end
+            out.append(sql[i:end])
+            i = end
+        elif char == "?":
+            positional += 1
+            out.append(f"${positional}")
+            i += 1
+        elif (
+            char == ":"
+            and i + 1 < length
+            and (sql[i + 1].isalpha() or sql[i + 1] == "_")
+            and (i == 0 or sql[i - 1] != ":")
+        ):
+            end = i + 1
+            while end < length and (sql[end].isalnum() or sql[end] == "_"):
+                end += 1
+            name = sql[i + 1 : end]
+            if name not in names:
+                names.append(name)
+            out.append(f"${names.index(name) + 1}")
+            i = end
+        else:
+            out.append(char)
+            i += 1
+    if positional and names:
+        raise ValueError("a statement mixes ? and :name placeholders")
+    return Compiled("".join(out), tuple(names) if names else None)
 
 
 SQLITE = Dialect(name="sqlite", paramstyle="qmark", fulltext="fts5")
 
 POSTGRES = Dialect(
     name="postgres",
-    paramstyle="pyformat",
+    paramstyle="numeric",
     fulltext="tsvector",
     types={
         # SQLite's TEXT/INTEGER/REAL are affinities, not widths. The mapping

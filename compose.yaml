@@ -80,9 +80,12 @@ x-kb-secrets: &kb-secrets pheasant-secrets:/run/pheasant/secrets:ro
 
 services:
   postgres:
-    # Postgres 17 with pg_textsearch preloaded: the lexical arm ranks with its
-    # BM25 index (storage.lexical_index). Not published on any host port.
-    image: timescale/timescaledb-ha:pg17
+    # Postgres 17 with pg_textsearch preloaded and nothing else
+    # (deploy/postgres): the lexical arm ranks with its BM25 index
+    # (storage.lexical_index). Not published on any host port. Pulled from
+    # GHCR, or built from deploy/postgres when the tag is not there yet.
+    image: ${PHEASANT_POSTGRES_IMAGE:-ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1}
+    build: ./deploy/postgres
     restart: unless-stopped
     command: ["postgres", "-c", "max_connections=${PHEASANT_POSTGRES_MAX_CONNECTIONS:-100}"]
     mem_limit: ${PHEASANT_POSTGRES_MEMORY:-1280m}
@@ -91,8 +94,17 @@ services:
       POSTGRES_USER: pheasant
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pheasant}
       POSTGRES_DB: pheasant
+      # Set only for the one start that creates the new cluster a backup is
+      # restored into (deploy/postgres/README.md#upgrading-an-existing-stack).
+      PHEASANT_POSTGRES_ALLOW_FRESH: ${PHEASANT_POSTGRES_ALLOW_FRESH:-}
     volumes:
-      - pheasant-pg17:/home/postgres/pgdata
+      - pheasant-postgres17:/var/lib/postgresql/data
+      # The database of a stack that ran the TimescaleDB image, read-only and
+      # never written: while this volume holds a cluster and the one above is
+      # empty, the server refuses to start an empty database rather than
+      # bringing the stack up with nothing in it. To move the data across:
+      # deploy/postgres/README.md#upgrading-an-existing-stack.
+      - pheasant-pg17:/var/lib/pheasant-previous-postgres:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pheasant"]
       interval: 10s
@@ -363,7 +375,8 @@ services:
   # See deploy/compose/backup.sh and restore.sh, and
   # docs/pheasant-kb/operate.md#back-up-and-restore.
   backup:
-    image: timescale/timescaledb-ha:pg17
+    image: ${PHEASANT_POSTGRES_IMAGE:-ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1}
+    build: ./deploy/postgres
     profiles: ["tools"]
     restart: "no"
     user: "0:0"
@@ -384,7 +397,8 @@ services:
       - pheasant-secrets:/secrets:ro
 
   restore:
-    image: timescale/timescaledb-ha:pg17
+    image: ${PHEASANT_POSTGRES_IMAGE:-ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1}
+    build: ./deploy/postgres
     profiles: ["tools"]
     restart: "no"
     user: "0:0"
@@ -406,6 +420,9 @@ volumes:
   pheasant-workspace:
   pheasant-memory:
   pheasant-exports:
+  pheasant-postgres17:
+  # The TimescaleDB image's data, kept for the upgrade guard above and for a
+  # rollback; nothing writes it.
   pheasant-pg17:
   pheasant-nats:
   pheasant-secrets:

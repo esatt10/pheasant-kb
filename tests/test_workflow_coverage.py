@@ -42,10 +42,15 @@ DIALECT_MARKERS = re.compile(
 
 DSN_VARIABLE = "PHEASANT_TEST_POSTGRES_DSN"
 
-#: Images that are a Postgres server. ``timescaledb-ha`` is the one every
-#: shipped Postgres runs, because it preloads pg_textsearch, the lexical arm's
-#: default there; matching on "postgres" alone stopped seeing it.
-POSTGRES_IMAGE = re.compile(r"postgres|timescaledb")
+#: Images that are a Postgres server, for a job that runs one as a service.
+POSTGRES_IMAGE = re.compile(r"postgres")
+
+#: The step that builds and starts pheasant's own PostgreSQL image
+#: (``deploy/postgres``: PostgreSQL 17 with pg_textsearch preloaded, nothing
+#: else). A step rather than a service, because a service starts before the
+#: job's first step and so cannot run an image the job builds.
+POSTGRES_ACTION = "./.github/actions/pheasant-postgres"
+ACTION_FILE = REPO_ROOT / ".github" / "actions" / "pheasant-postgres" / "action.yml"
 
 #: Set by the job that runs Postgres, so the pg_textsearch suite fails rather
 #: than skips on a server that cannot load the extension.
@@ -68,9 +73,15 @@ def _pull_request_trigger(document: dict[str, Any]) -> dict[str, Any] | None:
     return trigger if isinstance(trigger, dict) else ({} if trigger is None else None)
 
 
+def _builds_pheasant_postgres(job: dict[str, Any]) -> bool:
+    return any(str(step.get("uses", "")) == POSTGRES_ACTION for step in job.get("steps") or [])
+
+
 def _runs_postgres(job: dict[str, Any]) -> bool:
     services = job.get("services") or {}
-    return any(POSTGRES_IMAGE.search(str(spec.get("image", ""))) for spec in services.values())
+    return _builds_pheasant_postgres(job) or any(
+        POSTGRES_IMAGE.search(str(spec.get("image", ""))) for spec in services.values()
+    )
 
 
 def _sets_the_dsn(job: dict[str, Any]) -> bool:
@@ -123,10 +134,49 @@ def test_that_job_runs_the_lexical_default_rather_than_skipping_it() -> None:
             f"{workflow}:{name} runs Postgres without {REQUIRE_PG_TEXTSEARCH}=1, so the "
             "default lexical arm's tests may skip there"
         )
-        images = [str(spec.get("image", "")) for spec in (job.get("services") or {}).values()]
-        assert any("timescaledb-ha" in image for image in images), (
-            f"{workflow}:{name} runs {images}, which do not preload pg_textsearch"
+        assert _builds_pheasant_postgres(job), (
+            f"{workflow}:{name} does not run deploy/postgres, the image that preloads pg_textsearch"
         )
+        step = next(s for s in job["steps"] if s.get("uses") == POSTGRES_ACTION)
+        assert "if" not in step, f"{workflow}:{name} starts Postgres only conditionally"
+
+
+def test_the_postgres_action_builds_the_shipped_image() -> None:
+    action = yaml.safe_load(ACTION_FILE.read_text(encoding="utf-8"))
+    builds = [s for s in action["runs"]["steps"] if "build-push-action" in str(s.get("uses"))]
+    assert builds and builds[0]["with"]["context"] == "deploy/postgres"
+    dockerfile = (REPO_ROOT / "deploy" / "postgres" / "Dockerfile").read_text(encoding="utf-8")
+    assert "shared_preload_libraries = 'pg_textsearch'" in dockerfile
+    assert "timescale/timescaledb" not in dockerfile
+
+
+#: Everything this repository ships or runs a database from.
+_SHIPPED = [
+    "compose.yaml",
+    "deploy/compose/*.yml",
+    "deploy/compose/**/*.yml",
+    "deploy/compose/**/*.yaml",
+    "deploy/kubernetes/**/*.yaml",
+    "deploy/helm/**/*.yaml",
+    ".github/workflows/*.yml",
+    ".github/actions/**/*.yml",
+    "deploy/compose/*.sh",
+    "Dockerfile",
+]
+
+
+def test_no_shipped_path_runs_the_timescale_image() -> None:
+    """TimescaleDB's image carries Timescale-licensed components pheasant
+    never used; the shipped stack runs deploy/postgres instead. A manifest
+    that brings it back is caught here, not by a licence review later."""
+
+    offenders: list[str] = []
+    for pattern in _SHIPPED:
+        for path in REPO_ROOT.glob(pattern):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"timescale/timescaledb|timescaledb-ha", text):
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, f"the Timescale image is back in: {sorted(set(offenders))}"
 
 
 def test_that_job_runs_the_whole_suite_rather_than_a_curated_list() -> None:
@@ -299,3 +349,28 @@ def test_matrix_legs_are_expanded_with_their_own_values() -> None:
     assert len(legs) >= 2
     assert all("${{" not in str(leg.get("steps")) for leg in legs), "a matrix ref survived"
     assert sorted(_installs_agent(leg) for leg in legs) == [False, True]
+
+
+def test_every_compose_file_names_the_database_image_deploy_postgres_builds() -> None:
+    """One tag, in one file, named everywhere a stack starts its database.
+
+    The tag names the image's contents (PostgreSQL minor, pg_textsearch,
+    revision); `container.yml` publishes exactly deploy/postgres/TAG. A compose
+    file pinned to another tag would pull an image nothing published, or one
+    built from other sources.
+    """
+
+    tag = (REPO_ROOT / "deploy" / "postgres" / "TAG").read_text(encoding="utf-8").strip()
+    expected = f"ghcr.io/esatt10/pheasant-postgres:{tag}"
+    files = [
+        "compose.yaml",
+        "deploy/compose/docker-compose.scale.yml",
+        "deploy/compose/ci/docker-compose.evaluation.yml",
+        "deploy/compose/ci/docker-compose.log-tier.yml",
+    ]
+    for name in files:
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        found = set(re.findall(r"ghcr\.io/esatt10/pheasant-postgres:[\w.\-]+", text))
+        assert found == {expected}, f"{name} names {sorted(found)}, not {expected}"
+    container = (WORKFLOWS / "container.yml").read_text(encoding="utf-8")
+    assert "deploy/postgres/TAG" in container and "context: deploy/postgres" in container

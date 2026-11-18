@@ -932,11 +932,11 @@ def test_fact_collection_batches_row_backed_graph_reads(tmp_path: Path) -> None:
 
 
 def _reset(dsn: str) -> None:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(dsn, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
 
 
 @postgres

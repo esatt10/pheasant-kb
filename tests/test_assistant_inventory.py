@@ -436,13 +436,13 @@ POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 def test_listings_agree_across_backends(tmp_path: Path) -> None:
     """The listing SQL is hand-written for both dialects: `substr`, `LOWER … LIKE
     … ESCAPE`, a `NULL`-last ordering spelled as a boolean, and patterns passed
-    as parameters because a literal `%` is a psycopg placeholder."""
+    as parameters, so a user's text never becomes part of the statement."""
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
     lite = _region(tmp_path / "sqlite")
     pg = _region(
         tmp_path / "postgres",

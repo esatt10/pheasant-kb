@@ -8,7 +8,7 @@ the indexer.
 
 The property every test here comes back to is the one that makes the split
 safe to ship: the indexed text is **identical** to a local read, whatever the
-fleet does -- answers, fails, is too old, or reads with a different pymupdf.
+fleet does -- answers, fails, is too old, or reads with a different PDF reader.
 The gRPC tests run a real server on a loopback port, as `test_grpc_worker.py`
 does, because the value is in whether the pages arrive.
 """
@@ -35,18 +35,15 @@ TOKEN_ENV = "PHEASANT_INDEX_WORKER_TOKEN"
 
 
 def _pdf(pages: int) -> bytes:
-    import pymupdf
+    from pheasant.ingestion.pdf_write import text_pdf
 
-    document = pymupdf.open()
-    for number in range(pages):
-        page = document.new_page()
-        lines = [f"{number // 3 + 1}.{number % 3 + 1} Section on page {number + 1}"]
-        lines += [f"Transmission service clause {number}-{line}." for line in range(12)]
-        page.insert_text((36, 48), "\n".join(lines), fontsize=9)
-    try:
-        return document.tobytes()
-    finally:
-        document.close()
+    return text_pdf(
+        [
+            [f"{number // 3 + 1}.{number % 3 + 1} Section on page {number + 1}"]
+            + [f"Transmission service clause {number}-{line}." for line in range(12)]
+            for number in range(pages)
+        ]
+    )
 
 
 class _FakePool:
@@ -233,7 +230,7 @@ def test_pages_read_over_grpc_are_the_pages_read_here(grpc_worker: Any) -> None:
     assert sorted(servicer.ranges) == [(0, 7), (7, 14), (14, 21), (21, 28), (28, 30)]
 
 
-def test_a_worker_on_another_pymupdf_is_not_trusted(grpc_worker: Any) -> None:
+def test_a_worker_on_another_pdf_reader_is_not_trusted(grpc_worker: Any) -> None:
     from pheasant.sync.worker_pool import TaskRejected, WorkerPool
 
     url, servicer = grpc_worker
@@ -241,7 +238,7 @@ def test_a_worker_on_another_pymupdf_is_not_trusted(grpc_worker: Any) -> None:
     content = _pdf(30)
     pool = WorkerPool([url], "grpc-token", timeout=30, transport_name="grpc")
     try:
-        with pytest.raises(TaskRejected, match="pymupdf"):
+        with pytest.raises(TaskRejected, match="reads PDFs with"):
             pool.extract_pages(content, 0, 7)
     finally:
         pool.close()

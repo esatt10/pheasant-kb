@@ -417,7 +417,7 @@ def test_the_log_claim_is_race_free_on_postgres() -> None:
     the reason the two queues share one implementation of this statement.
     """
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
     new_store, stores = _pg_stores()
 
     seed = new_store()
@@ -461,7 +461,7 @@ def test_the_two_queues_do_not_contend_on_postgres() -> None:
     batches never see each other's rows -- the isolation this is a second
     table for."""
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
     new_store, stores = _pg_stores()
     try:
         seed = new_store()
@@ -490,7 +490,7 @@ def test_the_ledger_round_trips_on_postgres() -> None:
     ledger's idempotent insert and its bounded chunked delete exercise the
     last two directly."""
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
     new_store, stores = _pg_stores()
     try:
         store = new_store()
@@ -527,7 +527,7 @@ def test_an_older_postgres_ledger_gains_the_new_columns() -> None:
     build would fail every ledger insert on a missing column.
     """
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
     new_store, stores = _pg_stores()
     try:
         store = new_store()
@@ -569,7 +569,7 @@ def test_the_new_tables_are_in_the_postgres_schema_probe() -> None:
     skip -- which is why index_tasks, source_leases and sync_fingerprints are
     all listed there."""
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
     import inspect
 
     from pheasant.persistence.state_store import StateStore as Store

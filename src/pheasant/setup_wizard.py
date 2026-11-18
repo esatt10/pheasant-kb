@@ -598,7 +598,7 @@ def build_sections() -> list[Section]:
                     prompt="Document text extraction",
                     kind="choice",
                     choices=[
-                        Choice("auto", "Automatic", "pymupdf/python-docx, else stdlib."),
+                        Choice("auto", "Automatic", "PDFium/python-docx, else stdlib."),
                         Choice("native", "Third-party readers", "Best fidelity."),
                         Choice("builtin", "Standard library only", "No third-party imports."),
                         Choice(

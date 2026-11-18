@@ -228,13 +228,13 @@ def _extension_available() -> str:
 
     if not DSN:
         return "set PHEASANT_TEST_POSTGRES_DSN to a throwaway database"
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        available = conn.execute(
+    with pg_driver.connect(DSN, autocommit=True) as conn:
+        available = conn.query(
             "SELECT 1 FROM pg_available_extensions WHERE name = 'pg_textsearch'"
         ).fetchone()
-        preload = str(conn.execute("SHOW shared_preload_libraries").fetchone()[0])
+        preload = str(conn.query("SHOW shared_preload_libraries").fetchone()[0])
     if not available:
         return "the server at PHEASANT_TEST_POSTGRES_DSN has no pg_textsearch extension"
     if "pg_textsearch" not in preload:
@@ -261,10 +261,10 @@ def _engine(root: Path, workspace: Path, lexical_index: str, **ranking: float) -
 
 
 def _bm25_indexes() -> set[str]:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        rows = conn.execute(
+    with pg_driver.connect(DSN, autocommit=True) as conn:
+        rows = conn.query(
             "SELECT indexname FROM pg_indexes WHERE indexname LIKE 'idx_chunks_fts_bm25_%'"
         ).fetchall()
     return {str(row[0]) for row in rows}
@@ -357,10 +357,10 @@ def test_filters_reach_inside_the_index_scan(indexed, monkeypatch) -> None:
     assert store.search("gateway", source_name="elsewhere") == []
 
     # The fixture indexes without a taxonomy, so give one chunk a section.
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        conn.execute(
+    with pg_driver.connect(DSN, autocommit=True) as conn:
+        conn.query(
             "UPDATE chunks SET heading_path = 'Kestrel Runbook > Schedule' "
             "WHERE artifact_id IN (SELECT id FROM artifacts WHERE relative_path = 'runbook.md')"
         )
@@ -403,7 +403,7 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
     from the swap would be off by far more, or attached to the wrong chunk.
     """
 
-    import psycopg
+    from pheasant.persistence import pg_driver
 
     sql, params = pg_textsearch_sql(
         "gateway restarts nightly",
@@ -415,16 +415,16 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
         filter_params=[],
         max_results=10,
     )
-    statement = sql.replace("?", "%s")
+    statement = sql
 
     def run(setting: str) -> tuple[str, list[tuple[str, float]]]:
-        with psycopg.connect(DSN, autocommit=True) as conn:
-            conn.execute(setting)
+        with pg_driver.connect(DSN, autocommit=True) as conn:
+            conn.query(setting)
             plan = "\n".join(
                 str(row[0])
-                for row in conn.execute("EXPLAIN (VERBOSE) " + statement, params).fetchall()
+                for row in conn.query("EXPLAIN (VERBOSE) " + statement, params).fetchall()
             )
-            rows = conn.execute(statement, params).fetchall()
+            rows = conn.query(statement, params).fetchall()
         # Column 11 is `admits`: the statement keeps rows that did not match
         # (sorted last, for its counts) and the caller drops them, as here.
         return plan, [(str(row[0]), float(row[10])) for row in rows if row[11]]
@@ -534,10 +534,10 @@ def test_a_changed_column_weight_ranks_with_tsvector(indexed, monkeypatch) -> No
 
 
 def test_a_missing_index_falls_back_to_tsvector_not_to_like(indexed, caplog) -> None:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(DSN, autocommit=True) as conn:
-        conn.execute("DROP INDEX idx_chunks_fts_bm25_w8_3_2_1")
+    with pg_driver.connect(DSN, autocommit=True) as conn:
+        conn.query("DROP INDEX idx_chunks_fts_bm25_w8_3_2_1")
     pg_textsearch._bm25_fallback_warned = False
     with caplog.at_level(logging.WARNING, logger="pheasant.search.pg_textsearch"):
         hits = SearchStore(indexed.state).search("invoices generated monthly")

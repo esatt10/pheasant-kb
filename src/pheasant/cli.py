@@ -2932,7 +2932,7 @@ def main(argv: list[str] | None = None) -> int:
             # The export reads state; it never creates it. `open_state` turns
             # every way that can fail — missing file, absent DSN, unreachable
             # or never-synced database — into one actionable line instead of a
-            # traceback out of sqlite3 or psycopg.
+            # traceback out of sqlite3 or the PostgreSQL driver.
             try:
                 state = open_state(cfg, paths.sqlite)
             except StateUnavailable as exc:

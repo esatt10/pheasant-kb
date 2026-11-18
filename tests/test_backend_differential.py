@@ -86,11 +86,11 @@ def _store(root: Path, backend: str) -> StateStore:
 
 
 def _reset(dsn: str) -> None:
-    import psycopg
+    from pheasant.persistence import pg_driver
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
+    with pg_driver.connect(dsn, autocommit=True) as conn:
+        conn.query("DROP SCHEMA public CASCADE")
+        conn.query("CREATE SCHEMA public")
 
 
 # ---------------------------------------------------------------------------

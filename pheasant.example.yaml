@@ -312,7 +312,7 @@ ingestion:
   # Built only when a source's `include` admits one of those extensions.
   # Every provider is fully offline and deterministic (no model, no network).
   extractor:
-    provider: auto        # "auto" (pymupdf/python-docx, falling back to the
+    provider: auto        # "auto" (PDFium/python-docx, falling back to the
                           #   pure-stdlib reader) | "native" | "builtin"
                           #   (stdlib only) | "sandboxed" (PDF tokenizer inside
                           #   the WASM fuel/memory cap with zero host

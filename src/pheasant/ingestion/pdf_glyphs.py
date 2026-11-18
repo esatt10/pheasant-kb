@@ -1,6 +1,7 @@
 """A content stream as positioned glyphs and rules, for the builtin readers.
 
-The native reader gets glyph positions from MuPDF. The builtin and sandboxed
+The native reader gets glyph positions from PDFium (and each glyph's advance
+from here, `pdf_pages._BuiltinAdvances`). The builtin and sandboxed
 readers get them here, by interpreting a page's content stream the way a
 viewer does — enough of it to place every glyph: the graphics state
 (``q``/``Q``/``cm``), the text state (``Tf``, ``Tc``, ``Tw``, ``Tz``, ``TL``,
@@ -309,7 +310,8 @@ def _visual_lines(glyphs: list[Glyph]) -> list[Glyph]:
     number inside ``TJ``. In reading order, a glyph starts a new line when it
     steps back to the left, or moves up or down without carrying on to the
     right; a gap of a fifth of its size between two glyphs on a line is a
-    space — the rule pymupdf uses for the same job. Only a page holding an equation is
+    space — the rule MuPDF used for the same job, and the native PDFium
+    reader's lines come from here too. Only a page holding an equation is
     rebuilt this way; any other page keeps the scanner's text.
     """
     out: list[Glyph] = []

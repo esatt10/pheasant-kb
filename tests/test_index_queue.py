@@ -767,7 +767,7 @@ def test_the_claim_statement_is_race_free_on_postgres(tmp_path: Path) -> None:
     nothing in the SQLite suite.
     """
 
-    pytest.importorskip("psycopg", reason="the [postgres] extra is optional")
+    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
 
     from pheasant.persistence.backends import PostgresBackend
 

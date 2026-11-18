@@ -48,6 +48,9 @@ logger = logging.getLogger(__name__)
 # rather than in the OOM killer.
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
 MAX_TOTAL_CHARS = 8 * 1024 * 1024
+
+#: An XHTML chapter's ``<head>`` element, removed before its text is read.
+_EPUB_HEAD = re.compile(rb"<head\b.*?</head\s*>", re.IGNORECASE | re.DOTALL)
 MAX_SHEET_ROWS = 200_000
 
 
@@ -333,7 +336,9 @@ def extract_epub_text(content: bytes) -> str:
             raw = _read_member(archive, member)
             if raw is None:
                 continue
-            text = extract_html_text(raw)
+            # A chapter's <head> is metadata, not text a reader sees: its
+            # <title> (often the book's) would otherwise lead every chapter.
+            text = extract_html_text(_EPUB_HEAD.sub(b"", raw))
             if not text.strip():
                 continue
             blocks.append(text)
