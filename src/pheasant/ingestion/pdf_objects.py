@@ -280,12 +280,128 @@ def _fold_refs(items: list[Any]) -> None:
 # ---------------------------------------------------------------------------
 
 _OBJ_RE = re.compile(rb"(?<![0-9])(\d{1,7})\s+(\d{1,5})\s+obj\b")
+_OBJ_KEYWORD = re.compile(rb"obj\b")
+_SPACE = frozenset(b" \t\n\r\x0b\x0c")  # a bytes pattern's \s
+_DIGIT = frozenset(b"0123456789")
 
 
-@dataclass
+def _object_headers(content: bytes) -> list[tuple[int, int, int]]:
+    """``_OBJ_RE.finditer(content)`` as ``(number, start, end)``, at most
+    :data:`MAX_OBJECTS`.
+
+    The pattern starts with a lookbehind and a digit, so the regex engine
+    tries it at every byte of the file, stream data included -- most of what
+    finding a paper's objects cost. A match ends in ``obj``, a literal the
+    engine finds by fast search, and each ``obj`` ends at most one match: the
+    two numbers before it are whole digit runs (the lookbehind and the
+    whitespace after each number forbid a part of one), so reading them
+    backwards decides it, and matches cannot overlap.
+    """
+    out: list[tuple[int, int, int]] = []
+    for keyword in _OBJ_KEYWORD.finditer(content):
+        j = keyword.start()
+        k = j
+        while k > 0 and content[k - 1] in _SPACE:
+            k -= 1
+        m = k
+        while m > 0 and content[m - 1] in _DIGIT:
+            m -= 1
+        if k == j or not 1 <= k - m <= 5:
+            continue
+        q = m
+        while q > 0 and content[q - 1] in _SPACE:
+            q -= 1
+        s = q
+        while s > 0 and content[s - 1] in _DIGIT:
+            s -= 1
+        if q == m or not 1 <= q - s <= 7:
+            continue
+        out.append((int(content[s:q]), s, keyword.end()))
+        if len(out) >= MAX_OBJECTS:
+            break
+    return out
+
+
 class PdfObject:
-    value: Any
-    stream: bytes | None = None
+    """One object: its value, and its stream's raw bytes if it has one.
+
+    :func:`read_document` hands over an object's source bytes unlexed, and it
+    is lexed the first time its value or stream is read: a page's text reads
+    the page tree, its resources and its fonts, a few dozen objects of the
+    thousands a paper holds, and lexing all of them was most of the time a
+    math page cost. Parsing is a pure function of the bytes, so when it
+    happens changes no value. An object-stream member that parses to nothing
+    was never stored, so it reads as the definition it would have replaced
+    (``fallback``).
+    """
+
+    __slots__ = ("_body", "_lexer", "_value", "_stream", "_fallback")
+
+    def __init__(
+        self,
+        value: Any = None,
+        stream: bytes | None = None,
+        *,
+        body: bytes | None = None,
+        lexer: Lexer | None = None,
+        fallback: PdfObject | None = None,
+    ):
+        self._value = value
+        self._stream = stream
+        self._body = body
+        self._lexer = lexer
+        self._fallback = fallback
+
+    def _parse(self) -> None:
+        body, lexer = self._body, self._lexer
+        self._body = None
+        values = parse_values((lexer or lex_pdf)(body or b""))
+        if not values and self._fallback is not None:
+            self._value, self._stream = self._fallback.value, self._fallback.stream
+            return
+        value = values[0] if values else None
+        if isinstance(value, dict) and self._stream is not None:
+            length = value.get(b"Length")
+            if isinstance(length, int) and 0 < length <= len(self._stream):
+                self._stream = self._stream[:length]
+        self._value = value
+
+    @property
+    def value(self) -> Any:
+        if self._body is not None:
+            self._parse()
+        return self._value
+
+    @property
+    def stream(self) -> bytes | None:
+        if self._body is not None:
+            self._parse()
+        return self._stream
+
+    @property
+    def has_stream(self) -> bool:
+        """Whether the object carries a stream, answered without lexing it.
+
+        An object-stream member has none, and neither does its fallback: a
+        member never replaces an object that has one.
+        """
+
+        return self._stream is not None
+
+    def may_name(self, word: bytes) -> bool:
+        """``False`` only if the object cannot hold the name ``/word``.
+
+        A name is its bytes or a ``#`` escape of them, so source bytes holding
+        neither cannot parse to it -- which lets a search for the one catalog
+        skip lexing every other object.
+        """
+
+        body = self._body
+        if body is None:
+            return True
+        if word in body or b"#" in body:
+            return True
+        return self._fallback is not None and self._fallback.may_name(word)
 
 
 @dataclass
@@ -294,6 +410,10 @@ class PdfDocument:
 
     objects: dict[int, PdfObject] = field(default_factory=dict)
     lexer: Lexer = lex_pdf
+    #: Each ToUnicode CMap parsed, by its decoded bytes: a PDF whose pages
+    #: were assembled from others holds one copy of a font per page, and the
+    #: parse is a function of the bytes alone.
+    cmaps: dict[bytes, dict[int, str]] = field(default_factory=dict)
 
     def get(self, value: Any) -> Any:
         """``value`` with a reference followed (one level)."""
@@ -339,11 +459,9 @@ def read_document(content: bytes, lexer: Lexer = lex_pdf) -> PdfDocument:
     an object number replaces an earlier one, as an incremental update does.
     """
     document = PdfDocument(lexer=lexer)
-    matches = list(_OBJ_RE.finditer(content))[:MAX_OBJECTS]
-    for index, match in enumerate(matches):
-        number = int(match.group(1))
-        start = match.end()
-        limit = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+    matches = _object_headers(content)
+    for index, (number, _first, start) in enumerate(matches):
+        limit = matches[index + 1][1] if index + 1 < len(matches) else len(content)
         end = content.find(b"endobj", start, limit)
         body = content[start : end if end != -1 else limit]
         stream_at = re.search(rb"\bstream\r?\n", body)
@@ -353,19 +471,15 @@ def read_document(content: bytes, lexer: Lexer = lex_pdf) -> PdfDocument:
             cut = raw.rfind(b"endstream")
             stream = raw[:cut] if cut != -1 else raw
             body = body[: stream_at.start()]
-        values = parse_values(lexer(body))
-        value = values[0] if values else None
-        if isinstance(value, dict) and stream is not None:
-            length = value.get(b"Length")
-            if isinstance(length, int) and 0 < length <= len(stream):
-                stream = stream[:length]
-        document.objects[number] = PdfObject(value, stream)
+        document.objects[number] = PdfObject(stream=stream, body=body, lexer=lexer)
     _unpack_object_streams(document)
     return document
 
 
 def _unpack_object_streams(document: PdfDocument) -> None:
     for entry in list(document.objects.values()):
+        if not entry.has_stream or not entry.may_name(b"ObjStm"):
+            continue
         header = entry.value
         if not isinstance(header, dict) or header.get(b"Type") != b"ObjStm" or entry.stream is None:
             continue
@@ -381,12 +495,15 @@ def _unpack_object_streams(document: PdfDocument) -> None:
             if isinstance(offsets[i], int) and isinstance(offsets[i + 1], int)
         ]
         for index, (number, offset) in enumerate(pairs):
-            if number in document.objects and document.objects[number].stream is not None:
+            earlier = document.objects.get(number)
+            if earlier is not None and earlier.has_stream:
                 continue
             stop = pairs[index + 1][1] if index + 1 < len(pairs) else len(data) - first
-            values = parse_values(document.lexer(data[first + offset : first + stop]))
-            if values:
-                document.objects[number] = PdfObject(values[0])
+            document.objects[number] = PdfObject(
+                body=data[first + offset : first + stop],
+                lexer=document.lexer,
+                fallback=earlier,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +522,8 @@ def pages(document: PdfDocument) -> list[Page]:
     """The document's pages in order, through the page tree."""
 
     catalog = next(
-        (e.value for e in document.objects.values() if isinstance(e.value, dict)
-         and e.value.get(b"Type") == b"Catalog"),
+        (e.value for e in document.objects.values() if e.may_name(b"Catalog")
+         and isinstance(e.value, dict) and e.value.get(b"Type") == b"Catalog"),
         None,
     )  # fmt: skip
     out: list[Page] = []
@@ -572,7 +689,10 @@ def read_font(document: PdfDocument, value: Any) -> Font:
                     code += 1
     to_unicode = document.stream(font.get(b"ToUnicode"))
     if to_unicode:
-        result.unicode.update(parse_cmap(to_unicode, document.lexer))
+        cmap = document.cmaps.get(to_unicode)
+        if cmap is None:
+            cmap = document.cmaps[to_unicode] = parse_cmap(to_unicode, document.lexer)
+        result.unicode.update(cmap)
     if not to_unicode and tex_font_family(base_font_name(name)) is not None and not result.two_byte:
         result.tex_codes = True
         result.unicode.clear()  # the code is the truth; names are for printing

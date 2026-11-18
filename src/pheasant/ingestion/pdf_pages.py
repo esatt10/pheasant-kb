@@ -382,54 +382,76 @@ def page_glyphs(
     loose = raw.FS_RECTF()
     matrix = raw.FS_MATRIX()
     origin_x, origin_y = ctypes.c_double(), ctypes.c_double()
-    get_unicode = raw.FPDFText_GetUnicode
+    loose_ref, flags_ref = ctypes.byref(loose), ctypes.byref(flags)
+    matrix_ref = ctypes.byref(matrix)
+    origin_x_ref, origin_y_ref = ctypes.byref(origin_x), ctypes.byref(origin_y)
     is_generated = raw.FPDFText_IsGenerated
+    text_object = raw.FPDFText_GetTextObject
+    loose_box = raw.FPDFText_GetLooseCharBox
+    char_origin = raw.FPDFText_GetCharOrigin
+    get_unicode = raw.FPDFText_GetUnicode
+    as_address = ctypes.c_void_p
 
     position: dict[int, int] = {}
     for rank, (obj, _chain) in enumerate(_objects(raw, page.raw)):
-        position[ctypes.cast(obj, ctypes.c_void_p).value or 0] = rank
+        position[ctypes.cast(obj, as_address).value or 0] = rank
 
+    # Font, flags, size and matrix belong to a character's text object, so
+    # they are read once per object rather than once per character.
+    per_object: dict[int, tuple[str, bool, float, bool, bool, int]] = {}
     keyed: list[tuple[tuple[int, int], Glyph]] = []
+    # Each glyph's character index, and whether its own character (before a
+    # slanted one is blanked) was a code below space.
+    indices: list[tuple[int, bool]] = []
     unmapped = False
     index = 0
     while index < count:
         code = get_unicode(tp, index)
-        if is_generated(tp, index) or code in (10, 13):
+        # PDFium generates only spaces and line breaks, so a character that is
+        # neither needs no question about it.
+        if code in (10, 13) or (code == 32 and is_generated(tp, index)):
             index += 1
             continue
         char = chr(code) if code else "\x00"
         step = 1
+        # A character outside the BMP is two indices, its UTF-16 halves.
         if 0xD800 <= code < 0xDC00 and index + 1 < count:
             low = get_unicode(tp, index + 1)
             if 0xDC00 <= low < 0xE000:
                 char = chr(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
                 step = 2
-        length = raw.FPDFText_GetFontInfo(tp, index, font_buffer, 256, ctypes.byref(flags))
-        font = _base_font(font_buffer.raw[: max(0, length - 1)].decode("utf-8", "replace"))
-        size = float(raw.FPDFText_GetFontSize(tp, index)) or 10.0
-        raw.FPDFText_GetLooseCharBox(tp, index, ctypes.byref(loose))
-        raw.FPDFText_GetCharOrigin(tp, index, ctypes.byref(origin_x), ctypes.byref(origin_y))
-        raw.FPDFText_GetMatrix(tp, index, ctypes.byref(matrix))
-        # Set left to right on a horizontal baseline. Not PDFium's "angle",
-        # which also reports a synthetic oblique's skew (LibreOffice slants
-        # DejaVu's ∣ that way) as rotation.
-        upright = matrix.a > 0 and abs(matrix.b) <= 1e-3 * abs(matrix.a)
-        skewed = abs(matrix.c) > 1e-3 * abs(matrix.d or 1.0)
-        obj = raw.FPDFText_GetTextObject(tp, index)
-        rank = position.get(ctypes.cast(obj, ctypes.c_void_p).value or 0, len(position))
-        # The size MuPDF gave: the font size times the matrix's expansion, so
-        # LibreOffice's parentheses (a 12.3 pt font squeezed to 0.48 width)
-        # are the 8.55 pt glyphs they are drawn as.
-        size *= _math.sqrt(abs(matrix.a * matrix.d - matrix.b * matrix.c)) or 1.0
+        address = ctypes.cast(text_object(tp, index), as_address).value or 0
+        cached = per_object.get(address)
+        if cached is None:
+            length = raw.FPDFText_GetFontInfo(tp, index, font_buffer, 256, flags_ref)
+            font = _base_font(font_buffer.raw[: max(0, length - 1)].decode("utf-8", "replace"))
+            raw.FPDFText_GetMatrix(tp, index, matrix_ref)
+            # The size MuPDF gave: the font size times the matrix's expansion,
+            # so LibreOffice's parentheses (a 12.3 pt font squeezed to 0.48
+            # width) are the 8.55 pt glyphs they are drawn as.
+            size = (float(raw.FPDFText_GetFontSize(tp, index)) or 10.0) * (
+                _math.sqrt(abs(matrix.a * matrix.d - matrix.b * matrix.c)) or 1.0
+            )
+            # Set left to right on a horizontal baseline. Not PDFium's
+            # "angle", which also reports a synthetic oblique's skew
+            # (LibreOffice slants DejaVu's vertical bar that way) as rotation.
+            upright = matrix.a > 0 and abs(matrix.b) <= 1e-3 * abs(matrix.a)
+            skewed = abs(matrix.c) > 1e-3 * abs(matrix.d or 1.0)
+            rank = position.get(address, len(position))
+            cached = (font, bool(flags.value & _FONT_ITALIC), size, upright, skewed, rank)
+            per_object[address] = cached
+        font, italic, size, upright, skewed, rank = cached
+        loose_box(tp, index, loose_ref)
+        char_origin(tp, index, origin_x_ref, origin_y_ref)
         # The box MuPDF gave. PDFium's loose box is the advance box widened to
         # the glyph's ink; upright text starts at its origin and runs its
         # advance (the builtin's, from /Widths, when it read this glyph). A
         # slanted glyph's box is the slanted advance box, which is PDFium's.
-        baseline = float(top - origin_y.value)
-        x0 = float(loose.left) - left
-        x1 = float(loose.right) - left
+        baseline = top - origin_y.value
+        x0 = loose.left - left
+        x1 = loose.right - left
         if upright and not skewed:
-            x0 = float(origin_x.value) - left
+            x0 = origin_x.value - left
             advance = _advance(advances, x0, baseline, char) if advances is not None else None
             if advance is not None:
                 x1 = x0 + advance
@@ -442,26 +464,27 @@ def page_glyphs(
             baseline=baseline,
             order=0,
             line=0,
-            italic=bool(flags.value & _FONT_ITALIC),
-            box_top=float(top - loose.top),
-            box_bottom=float(top - loose.bottom),
+            italic=italic,
+            box_top=top - loose.top,
+            box_bottom=top - loose.bottom,
         )
-        if char < " ":
-            unmapped = True
-        if raw.FPDFText_HasUnicodeMapError(tp, index) or char < " ":
-            # What the plain reading shows: a code is for the equations.
-            glyph.plain = "\ufffd"
+        coded = char < " "
+        unmapped = unmapped or coded
         keyed.append(((rank, index), glyph))
+        indices.append((index, coded))
         index += step
+    if unmapped:
+        # What MuPDF's second, plain reading showed -- and it ran only on a
+        # page holding a code below space: a glyph the font could not map
+        # reads as U+FFFD in the prose, its code being for the equations.
+        map_error = raw.FPDFText_HasUnicodeMapError
+        for (_key, glyph), (char_index, coded) in zip(keyed, indices, strict=True):
+            if coded or map_error(tp, char_index):
+                glyph.plain = "�"
     keyed.sort(key=lambda item: item[0])
     glyphs = [glyph for _, glyph in keyed]
     for order, glyph in enumerate(glyphs):
         glyph.order = order
-    if not unmapped:
-        # MuPDF's second, plain reading ran only on a page holding a code
-        # below space; elsewhere a glyph's prose was its character.
-        for glyph in glyphs:
-            glyph.plain = None
     rules = _page_rules(raw, page, left, top, width, Rule)
     return _visual_lines(glyphs), rules
 

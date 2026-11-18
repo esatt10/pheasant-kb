@@ -17,8 +17,10 @@ editor's padding around a delimiter).
 
 from __future__ import annotations
 
+import math as _math
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from statistics import median
@@ -354,8 +356,29 @@ def _find_regions(glyphs: list[Glyph], rules: list[Rule]) -> tuple[list[Region],
     # centred on it (a fraction) or one side spans it (an overline, a
     # vinculum); either way its sides are judged as whole equations, since a
     # denominator can touch its bar through an inner numerator alone.
+    # A glyph touches a rule only if its box meets the rule's span widened by
+    # half the page's largest size, so the grid answers which glyphs to test
+    # instead of every glyph being tested against every rule. A glyph whose
+    # box is inverted is in no cell and is always tested, and so is every
+    # glyph when the page's numbers do not make a rectangle.
+    reach = 0.5 * max((abs(g.size) for g in ink), default=0.0)
+    gridded: set[int] = set()
+    for cell in grid.cells.values():
+        gridded.update(cell)
+    strays = [index for index in range(len(ink)) if index not in gridded]
+
+    def touching(rule: Rule) -> list[int]:
+        box = (rule.x0 - 0.5, rule.y - reach, rule.x1 + 0.5, rule.y + reach)
+        if not all(_math.isfinite(value) for value in box):
+            candidates: Iterable[int] = range(len(ink))
+        else:
+            found = grid.near(*box)
+            found.update(strays)
+            candidates = sorted(found)
+        return [index for index in candidates if _touches_rule(ink[index], rule)]
+
     for rule in sorted(rules, key=lambda r: r.x1 - r.x0):
-        near = [i for i, g in enumerate(ink) if _touches_rule(g, rule) and admissible(g)]
+        near = [i for i in touching(rule) if admissible(ink[i])]
         if not near:
             continue
         components: dict[int, list[int]] = defaultdict(list)
@@ -463,31 +486,41 @@ def _merge_bands(regions: list[Region], glyphs: list[Glyph], mathlike: set[int])
     brackets) come with them; any word, or punctuation alone, keeps them apart.
     """
     owner = {id(g): index for index, region in enumerate(regions) for g in region.glyphs}
+    # Each region's extent, kept beside it and recomputed only for the region
+    # a merge grew: every pair used to rescan both regions' glyphs, and the
+    # pass restarts after each merge. Spaces are never "between", so they are
+    # dropped once rather than tested per pair.
+    extent = {id(region): _extent(region) for region in regions}
+    ink = [g for g in glyphs if not g.space]
     merged = True
     while merged:
         merged = False
         for i, first in enumerate(regions):
             for j in range(i + 1, len(regions)):
                 second = regions[j]
-                left, right = sorted((first, second), key=lambda r: min(g.x0 for g in r.glyphs))
-                gap_start = max(g.x1 for g in left.glyphs)
-                gap_end = min(g.x0 for g in right.glyphs)
+                a, b = extent[id(first)], extent[id(second)]
+                if b[0] < a[0]:
+                    left, right, lb, rb = second, first, b, a
+                else:
+                    left, right, lb, rb = first, second, a, b
+                gap_start = lb[1]
+                gap_end = rb[0]
                 # One inside the other's span (a limit its operator's region
                 # missed) needs only to touch its band; side by side, to share it.
                 nested = gap_end < gap_start and _limit_like(first, second)
                 if gap_end < gap_start and not nested:
-                    if not _same_band(first, second):
+                    if not _same_band_extent(a, b):
                         continue
-                elif not _same_band(first, second, nested=nested):
+                elif not _same_band_extent(a, b, nested=nested):
                     continue
                 size = median(g.size for g in [*left.glyphs, *right.glyphs])
                 if gap_end - gap_start > 6 * size:
                     continue
-                top = max(min(g.top for g in r.glyphs) for r in (left, right))
-                bottom = min(max(g.bottom for g in r.glyphs) for r in (left, right))
+                top = max(lb[2], rb[2])
+                bottom = min(lb[3], rb[3])
                 between = [
-                    g for g in glyphs
-                    if not g.space and id(g) not in owner
+                    g for g in ink
+                    if id(g) not in owner
                     and gap_start < (g.x0 + g.x1) / 2 < gap_end
                     and g.bottom > top and g.top < bottom
                 ]  # fmt: skip
@@ -503,6 +536,8 @@ def _merge_bands(regions: list[Region], glyphs: list[Glyph], mathlike: set[int])
                 for glyph in second.glyphs:
                     owner[id(glyph)] = i
                 del regions[j]
+                del extent[id(second)]
+                extent[id(first)] = _extent(first)
                 merged = True
                 break
             if merged:
@@ -579,6 +614,30 @@ def _limit_like(a: Region, b: Region) -> bool:
 
     small, big = sorted((a, b), key=lambda r: len(r.glyphs))
     return len(small.glyphs) <= 4 and any(g.tex in BIG_OPERATORS for g in big.glyphs)
+
+
+def _extent(region: Region) -> tuple[float, float, float, float]:
+    """``(x0, x1, top, bottom)`` over a region's glyphs."""
+
+    glyphs = region.glyphs
+    return (
+        min(g.x0 for g in glyphs),
+        max(g.x1 for g in glyphs),
+        min(g.top for g in glyphs),
+        max(g.bottom for g in glyphs),
+    )
+
+
+def _same_band_extent(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float], nested: bool = False
+) -> bool:
+    """:func:`_same_band` over two regions' :func:`_extent`."""
+
+    top = max(a[2], b[2])
+    bottom = min(a[3], b[3])
+    if nested:
+        return bottom > top
+    return bottom - top >= 0.5 * min(a[3] - a[2], b[3] - b[2])
 
 
 def _same_band(a: Region, b: Region, nested: bool = False) -> bool:

@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 223 pytest modules, offline by design
+└── tests/                     ← 224 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1959,7 +1959,18 @@ the fingerprint of every source that can hold a PDF or EPUB (its config admits
 one, or `SyncEngine._holds_documents` finds one indexed): changing the reader
 re-reads those once, recorded only after the pass succeeds. Test fixtures and
 the benchmark corpus are written by `ingestion/pdf_write.py` (PDFium's editing
-API, byte-deterministic), never by the indexing path.
+API, byte-deterministic), never by the indexing path. A math page reads
+font, size and matrix once per text object; the builtin's object table
+(`pdf_objects.PdfObject`) lexes an object only when it is read, finds
+objects from each literal `obj` backwards rather than trying its header
+pattern at every byte (16x), and parses a repeated ToUnicode CMap once:
+lexing all ~6,000 objects of a paper to find a page's `/Widths` was most of
+a math page's cost (`tests/test_pdf_object_table.py`). The equation
+engine's band merge keeps each region's extent and the rule pass asks the
+page grid for candidates. Text is byte-identical throughout; math-on real
+papers read at 0.96x MuPDF's speed in half its RSS, and a PDF assembled from
+other PDFs (every page its own copy of each font) at ~0.66x, because each
+copy is a distinct font the builtin must read for its widths.
 
 **The database image is `deploy/postgres`** (`ghcr.io/esatt10/pheasant-postgres`,
 tag in `deploy/postgres/TAG`): the official PostgreSQL 17.11 image by digest
