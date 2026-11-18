@@ -89,8 +89,10 @@ export function describeIssue(issue: TaxonomyIssue): string {
   const after = issue.after ?? "?";
   const at = issue.at ?? "?";
   if (issue.kind === "gap") {
-    const missing = (issue.missing ?? []).join(", ");
-    return `${after} → ${at}${missing ? ` (missing ${missing})` : ""}`;
+    const listed = issue.missing ?? [];
+    const unlisted = Math.max(0, (issue.missing_count ?? listed.length) - listed.length);
+    const missing = listed.join(", ") + (unlisted ? `, … ${unlisted.toLocaleString()} more` : "");
+    return `${after} → ${at}${listed.length ? ` (missing ${missing})` : ""}`;
   }
   if (issue.kind === "duplicate") return `${at} appears twice, after ${after}`;
   return `${at} comes after ${after}`;

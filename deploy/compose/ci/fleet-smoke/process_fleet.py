@@ -112,7 +112,6 @@ def configs(work: Path, llm: str) -> dict[str, Path]:
         str(state),
         str(exports),
     ]
-    fleet["sources"][0]["path"] = str(memory)
     # A mounted corpus, as the fleet's operators add one: documents and the
     # image one of them shows.
     fleet["sources"].append(
@@ -576,6 +575,44 @@ def run_checks(fleet: Fleet, report: Report) -> None:
             "UI: an inline figure, and a diagram redrawn as a timeline in the hosted MCP App",
             *ui,
         )
+
+    # A typed record, with no agent-memory source: the api cannot write
+    # /state, so the record reaches the indexer through the artifact outbox,
+    # which writes artifact-records/ and indexes it.
+    status, written, _ = http(
+        "POST",
+        f"{api[0]}/artifacts/records",
+        token=token,
+        body={"text": "Ospreyledger keeps the fleet's record.", "scope": "org"},
+    )
+    record_id = written.get("artifact_id") if isinstance(written, dict) else None
+    deadline = time.monotonic() + 120
+    held, recalled = {}, {}
+    while record_id and time.monotonic() < deadline:
+        held = http("GET", f"{api[1]}/artifacts/{record_id}", token=token)[1]
+        recalled = http(
+            "POST",
+            f"{api[1]}/search",
+            token=token,
+            body={"query": "Ospreyledger", "mode": "text", "max_results": 3},
+        )[1]
+        if held.get("index_status") == "indexed" and "Ospreyledger" in json.dumps(recalled):
+            break
+        time.sleep(2)
+    report.check(
+        "a record written on one api replica is indexed by the indexer and found on the other",
+        status == 200
+        and written.get("source") == "artifact-records"
+        and held.get("index_status") == "indexed"
+        and "Ospreyledger" in json.dumps(recalled),
+        f"{status} source={written.get('source') if isinstance(written, dict) else written} "
+        f"index_status={held.get('index_status')}",
+    )
+    report.check(
+        "the record's file was written under /state by the indexer",
+        bool(list((fleet.work / "state" / "artifact-records").rglob(f"{record_id}.md"))),
+        str(record_id),
+    )
 
     problems = []
     for name in ("indexer", "graph", "api1", "api2", "worker"):

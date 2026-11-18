@@ -819,6 +819,14 @@ def _parent_path(heading: SectionHeading) -> str:
     return heading.path.rsplit(PATH_SEPARATOR, 1)[0]
 
 
+#: How many missing numbers a gap lists; ``missing_count`` says how many there
+#: are. A number is parsed as written, so a heading series that runs 1, 2, then
+#: a year or an id ("20261118.") is a "gap" of twenty million: listed whole it
+#: was a MemoryError in the graph service, and every ``GET /taxonomy`` over that
+#: document failed (production, 2026-11-18).
+MAX_LISTED_MISSING = 50
+
+
 def reconcile_issues(headings: list[SectionHeading]) -> list[dict[str, Any]]:
     """Sequence problems in the numbering: gaps, duplicates, out-of-order.
 
@@ -896,7 +904,10 @@ def reconcile_issues(headings: list[SectionHeading]) -> list[dict[str, Any]]:
                 issues.append(
                     {
                         "kind": "gap",
-                        "missing": list(range(before + 1, current)),
+                        "missing": list(
+                            range(before + 1, min(current, before + 1 + MAX_LISTED_MISSING))
+                        ),
+                        "missing_count": current - before - 1,
                         **common,
                     }
                 )

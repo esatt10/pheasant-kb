@@ -53,7 +53,7 @@ which rewrites a bare `/run/...` argument into a Windows path.
 | A Git repository | **Sources → Add** with its URL. The indexer clones it into the workspace volume and keeps it fetched. Set `GITHUB_TOKEN` in `.env` for private repositories. |
 | A web page or site section | **Sources → Add** with its URL. Each page is re-checked on its own schedule. |
 | A folder on this machine | Mount it into the stack, then add its container path as a source. See [Index a folder on the host](configure.md#index-a-folder-on-the-host). |
-| Notes an agent should remember | MCP `memory_write` or `POST /memory`, into the `agent-memory` source. |
+| Notes an agent should remember | MCP `record_artifact` or `POST /artifacts/records`, into the `artifact-records` source (`memory_write` and `/memory` are deprecated aliases). |
 
 Everything above is also available to agents over MCP (`register_source`,
 `submit_documents`, `sync_source`).

@@ -155,7 +155,7 @@ standalone is selected:
 | `observability.otlp_endpoint` | `` | unset |
 | `readiness.enabled` | `true` | `false` |
 | `readiness.corpus_denylist` | `["benchmark/*", "*.answers.json"]` | `[]` |
-| `sources` | `agent-memory`, `uploads` | none |
+| `sources` | `uploads` | none |
 <!-- defaults-table:end -->
 
 !!! warning "Upgrading a config that relies on defaults"

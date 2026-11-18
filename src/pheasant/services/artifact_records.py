@@ -17,18 +17,28 @@ from pheasant.security.identity import effective_principal
 from pheasant.services import ServiceContext
 from pheasant.services.errors import ArtifactNotFound, InvalidRequest
 
+#: The record source ``record_artifact`` creates on its first write when the
+#: region has none, under ``/state``. It replaces the ``agent-memory`` source
+#: (``/memory``) that regions were configured with before; a region that
+#: still has one keeps writing there (``artifact_source`` finds it first).
+RECORDS_SOURCE = "artifact-records"
+#: Outbox operations for a record the indexer writes on a serving replica's
+#: behalf (``sync.artifact_projection``).
+RECORD_WRITE = "record"
+RECORD_ARCHIVE = "record_archive"
+
 
 def source(context: ServiceContext, *, create: bool = False) -> Any:
     found = artifact_source(context.config, context.state)
     if found is not None or not create:
         return found
     config = context.config
-    directory = Path(config.pheasant.state_path) / "artifact-records"
+    directory = Path(config.pheasant.state_path) / RECORDS_SOURCE
     found = PheasantConfig.model_validate(
         {
             "sources": [
                 {
-                    "name": "artifact-records",
+                    "name": RECORDS_SOURCE,
                     "type": "artifact",
                     "path": str(directory),
                     "include": ["**/*.md"],
@@ -39,10 +49,49 @@ def source(context: ServiceContext, *, create: bool = False) -> Any:
             ]
         }
     ).sources[0]
-    directory.mkdir(parents=True, exist_ok=True)
+    if not indexer_writes(context, found):
+        directory.mkdir(parents=True, exist_ok=True)
     SourceRegistry(config, context.state).register_source(found)
     config.sources.append(found)
     return found
+
+
+def indexer_writes(context: ServiceContext, found: Any) -> bool:
+    """True when this process must hand ``found``'s files to the indexer.
+
+    A process that does not index (an api replica) mounts ``/state``
+    read-only, because the indexer is its only writer. Records kept there are
+    therefore written by the indexer, from the artifact outbox, exactly as
+    saved artifacts are; a record directory outside ``/state`` (a region's
+    existing ``agent-memory`` at ``/memory``) is written in place as before.
+    """
+
+    from pheasant.services.artifact_dispatch import _deferred
+
+    if not _deferred(context):
+        return False
+    try:
+        Path(found.path).resolve().relative_to(Path(context.config.pheasant.state_path).resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _hand_to_indexer(
+    context: ServiceContext, found: Any, operation: str, path: Path, content: str = ""
+) -> None:
+    from pheasant.persistence import artifact_outbox
+
+    relative = path.relative_to(Path(found.path)).as_posix()
+    with context.state.conn:
+        artifact_outbox.enqueue(
+            context.state,
+            context.config.knowledge_base_id,
+            # One intent per record file; a repeat coalesces into it.
+            f"{operation}:{found.name}:{relative}",
+            operation,
+            {"source": found.name, "path": relative, "content": content},
+        )
 
 
 def visible(record: Any, principal: str | None) -> bool:
@@ -79,6 +128,7 @@ def write(
         )
     who = effective_principal(request.principal) or None
     store = ArtifactRecordStore(found.path)
+    deferred = indexer_writes(context, found)
     if request.supersedes:
         previous = next(
             (r for r in store.list_records() if r.record_id == request.supersedes), None
@@ -101,6 +151,11 @@ def write(
             valid_until=request.valid_until,
             reinforcement=StateReinforcementIndex(context.state)
             if context.config.memory.reinforcement_enabled
+            else None,
+            writer=(
+                lambda path, content: _hand_to_indexer(context, found, RECORD_WRITE, path, content)
+            )
+            if deferred
             else None,
         )
     except ValueError as exc:
@@ -140,7 +195,14 @@ def write(
     }
     if not created and request.text.strip() != record.text:
         payload["submitted_text"] = request.text.strip()
-    if request.sync and created:
+    if deferred and created:
+        # The indexer writes the file and syncs its source; a request never
+        # waits for it (the record is returned above, its index_status pending).
+        from pheasant.services.artifact_dispatch import _wake_projection
+
+        payload["sync"] = {"status": "queued", "via": "artifact_outbox"}
+        _wake_projection(context)
+    elif request.sync and created:
         try:
             if context.engine is not None and (context.indexing is None or context.indexing.local):
                 payload["sync"] = context.engine.sync_source(
@@ -241,7 +303,12 @@ def retire(context: ServiceContext, artifact_id: str, principal: str | None = No
     held = get_record(context, artifact_id, principal)
     store = ArtifactRecordStore(found.path)
     record = store.load(Path(held["payload"]["record"]["path"]))
-    store.archive(record)
+    if indexer_writes(context, found):
+        # The archived_documents row below keeps it out of every sync at
+        # once; the indexer renames the file out of the include glob.
+        _hand_to_indexer(context, found, RECORD_ARCHIVE, record.path)
+    else:
+        store.archive(record)
     import json
 
     from pheasant.artifacts.publications import deprecate

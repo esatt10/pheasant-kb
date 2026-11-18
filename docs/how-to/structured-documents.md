@@ -114,9 +114,12 @@ section is queryable by citation rather than by wording.
 document:
 
 ```json
-{"kind": "gap", "series": "code", "after": "§ 12.3", "at": "§ 12.5", "missing": [4]}
+{"kind": "gap", "series": "code", "after": "§ 12.3", "at": "§ 12.5", "missing": [4], "missing_count": 1}
 {"kind": "duplicate", "series": "lettered", "after": "(b)", "at": "(b)"}
 ```
+
+A gap lists at most 50 missing numbers; `missing_count` is how many there are,
+so a series that jumps to a year or an id reports one bounded issue.
 
 `gap`, `duplicate` and `out_of_order`. Only gaps *between observed members of
 one series* count — a series starting at 3 is an excerpt, not a defect — and an

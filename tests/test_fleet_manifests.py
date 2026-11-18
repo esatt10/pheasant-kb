@@ -874,10 +874,10 @@ def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
         "hybrid",
     ]
 
-    assert any(source.type.value == "artifact" for source in advanced.sources)
-    memory_sources = [source for source in fleet.sources if source.type.value == "artifact"]
-    assert len(memory_sources) == 1
-    assert memory_sources[0].path.as_posix() == "/memory"
+    # The deprecated agent-memory source is gone from every profile: typed
+    # records live in artifact-records under /state, created on first write.
+    for profile in (advanced, fleet):
+        assert not any(source.type.value == "artifact" for source in profile.sources)
     assert fleet.evaluation.enabled is True
     assert fleet.tuning.enabled is True
     assert fleet.tuning.auto.enabled is False
@@ -1101,7 +1101,7 @@ def test_the_lab_fleet_admits_what_pheasant_swarm_search_needs() -> None:
     assert Path("/state") in config.security.allow_workspace_roots
     assert config.readiness.enabled
     assert config.security.api_auth.token_env == "PHEASANT_API_TOKEN"
-    assert any(str(source.type) == "artifact" for source in config.sources)
+    assert not any(source.name == "agent-memory" for source in config.sources)
 
 
 @pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])

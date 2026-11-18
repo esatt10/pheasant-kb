@@ -756,3 +756,125 @@ def test_retirement_is_hidden_while_the_fleet_writer_is_deferred(context):
         )["status"]
         == "deprecated"
     )
+
+
+# ------------------------------------------------- records on a serving replica
+
+
+def _serving(context, monkeypatch):
+    """The api tier of a fleet: it does not index, and /state is the indexer's."""
+    from dataclasses import replace
+
+    from pheasant.services import artifact_dispatch
+    from pheasant.services.archive import Indexing
+
+    monkeypatch.setattr(artifact_dispatch, "_wake_projection", lambda _: None)
+    return replace(context, indexing=Indexing(local=False, start_sync=lambda _: {}))
+
+
+def _project(context):
+    from pheasant.sync.queue import IndexTask
+
+    return context.engine.apply_index_task(
+        IndexTask(
+            id="projection",
+            source_id="artifacts",
+            mode="incremental",
+            payload={"operation": "project_artifacts"},
+        )
+    )
+
+
+def test_a_serving_replica_hands_a_new_record_to_the_indexer(context, monkeypatch):
+    """No agent-memory source: the first record creates artifact-records under
+    /state, which a serving replica cannot write, so its file is written and
+    indexed by the indexer from the outbox, like a saved artifact."""
+    from pheasant.persistence import artifact_outbox
+
+    assert artifact_records.source(context) is None
+    serving = _serving(context, monkeypatch)
+    written = artifact_records.write(
+        serving, artifact_records.WriteRequest("Quillfeather routes through harbor.", scope="org")
+    )
+    kb = context.config.knowledge_base_id
+    source = artifact_records.source(context)
+    assert source.name == artifact_records.RECORDS_SOURCE
+    path = source.path / "org" / f"{written['artifact_id']}.md"
+    assert not path.exists(), "the serving replica wrote nothing under /state"
+    assert written["sync"]["status"] == "queued"
+    pending = artifact_outbox.pending(context.state, kb)
+    assert [task["operation"] for task in pending] == [artifact_records.RECORD_WRITE]
+
+    _project(context)
+    assert path.exists() and not artifact_outbox.pending(context.state, kb)
+    assert context.state.rows(
+        "SELECT id FROM chunks WHERE source_id=? AND text LIKE ?",
+        (source.name, "%Quillfeather%"),
+    )
+    assert artifacts.get(serving, written["artifact_id"])["index_status"] == "indexed"
+    _project(context)  # an applied intent is gone; a second pass does nothing
+    assert len(list((source.path / "org").glob("*.md"))) == 1
+
+
+def test_a_serving_replica_retires_a_record_through_the_indexer(context, monkeypatch):
+    from pheasant.persistence import artifact_outbox
+
+    serving = _serving(context, monkeypatch)
+    written = artifact_records.write(
+        serving, artifact_records.WriteRequest("Quillfeather is retired.", scope="org")
+    )
+    _project(context)
+    source = artifact_records.source(context)
+    path = source.path / "org" / f"{written['artifact_id']}.md"
+    artifact_records.retire(serving, written["artifact_id"])
+    assert path.exists(), "the rename is the indexer's"
+    pending = artifact_outbox.pending(context.state, context.config.knowledge_base_id)
+    assert [task["operation"] for task in pending] == [artifact_records.RECORD_ARCHIVE]
+    _project(context)
+    assert not path.exists() and path.with_name(path.name + ".archived").exists()
+
+
+def test_a_local_writer_and_an_existing_memory_mount_still_write_in_place(
+    context, monkeypatch, tmp_path
+):
+    """Standalone writes the file itself; so does a serving replica whose
+    region kept its agent-memory source outside /state (a writable /memory)."""
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.persistence import artifact_outbox
+    from pheasant.registry.source_registry import SourceRegistry
+
+    local = artifact_records.write(
+        context, artifact_records.WriteRequest("Written where it is.", scope="org")
+    )
+    assert (artifact_records.source(context).path / "org" / f"{local['artifact_id']}.md").exists()
+
+    memory = tmp_path / "memory"
+    legacy = PheasantConfig.model_validate(
+        {"sources": [{"name": "agent-memory", "type": "artifact", "path": str(memory)}]}
+    ).sources[0]
+    SourceRegistry(context.config, context.state).register_source(legacy)
+    context.config.sources.insert(0, legacy)
+    written = artifact_records.write(
+        _serving(context, monkeypatch),
+        artifact_records.WriteRequest("Kept on the memory mount.", scope="org"),
+    )
+    assert written["source"] == "agent-memory"
+    assert (memory / "org" / f"{written['artifact_id']}.md").exists()
+    assert not artifact_outbox.pending(context.state, context.config.knowledge_base_id)
+
+
+def test_a_region_whose_config_no_longer_names_agent_memory_keeps_it(context, tmp_path):
+    """Dropping agent-memory from the defaults must not orphan a region's
+    records: the source stays registered, so it is still the record source
+    and still synced."""
+    from pheasant.artifacts.store import artifact_source
+    from pheasant.config.schema import PheasantConfig
+    from pheasant.registry.source_registry import SourceRegistry
+
+    legacy = PheasantConfig.model_validate(
+        {"sources": [{"name": "agent-memory", "type": "artifact", "path": str(tmp_path / "m")}]}
+    ).sources[0]
+    SourceRegistry(context.config, context.state).register_source(legacy)
+    assert all(s.name != "agent-memory" for s in context.config.sources)
+    assert artifact_source(context.config, context.state).name == "agent-memory"
+    assert "agent-memory" in [s.name for s in context.engine.enabled_sources()]

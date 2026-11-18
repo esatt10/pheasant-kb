@@ -4,6 +4,9 @@
     The memory viewpoint and tools are deprecated compatibility surfaces.
     Use [Replace memory with artifacts](artifact-migration.md) for the canonical
     UI, HTTP/MCP operations, learning settings and retention behavior.
+    No shipped configuration declares an `agent-memory` source any more:
+    `record_artifact` creates `artifact-records` under `/state` on its first
+    write. A region that already has one keeps it.
 
 A pheasant region can be an **agent memory store** (Product Framework Step
 33.1): agents write facts through MCP or HTTP, and those facts become

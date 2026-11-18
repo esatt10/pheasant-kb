@@ -288,21 +288,11 @@ FLAGSHIP_DEFAULTS: dict[str, Any] = {
         "otlp_endpoint": "",
     },
     "readiness": {"enabled": True, "corpus_denylist": ["benchmark/*", "*.answers.json"]},
+    # No agent-memory source: typed records live in the artifact-records source
+    # under /state, created by the first record_artifact and written by the
+    # indexer on a fleet (services/artifact_records.py). A region configured
+    # with agent-memory before keeps it, registered in its state database.
     "sources": [
-        {
-            "name": "agent-memory",
-            "type": "artifact",
-            "path": "/memory",
-            "description": "Durable knowledge artifacts",
-            "include": ["**/*.md"],
-            "exclude": ["**/*.archived"],
-            "sync": {
-                "on_startup": True,
-                "on_file_change": "debounce",
-                "on_git_commit": False,
-                "interval_seconds": 60,
-            },
-        },
         {
             "name": "uploads",
             "type": "document_folder",
