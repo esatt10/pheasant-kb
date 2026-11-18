@@ -925,8 +925,11 @@ export interface TaxonomyIssue {
   after?: string | null;
   at?: string | null;
   line: number;
-  /** Present on `gap` only: the numbers that are missing between the two. */
+  /** Present on `gap` only: the numbers that are missing between the two,
+   * listed up to a bound (`missing_count` is how many there are). */
   missing?: number[];
+  /** Present on `gap` only: how many numbers are missing (1.6.7 and later). */
+  missing_count?: number;
 }
 
 export interface TaxonomyDocument {

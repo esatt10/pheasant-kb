@@ -888,7 +888,20 @@ def test_gap_in_a_series_is_reported() -> None:
     issues = reconcile_issues(detect_headings("§ 12.3 Governing Law\n§ 12.5 Notices\n"))
     gap = next(i for i in issues if i["kind"] == "gap")
     assert gap["missing"] == [4]
+    assert gap["missing_count"] == 1
     assert gap["after"] == "§ 12.3" and gap["at"] == "§ 12.5"
+
+
+def test_a_gap_to_a_huge_number_is_counted_not_listed() -> None:
+    """A series that jumps to a year or an id is a gap of millions: the
+    numbers are listed up to a bound and counted in full, never materialized
+    (listing them was a MemoryError that failed every /taxonomy call)."""
+    from pheasant.ingestion.taxonomy import MAX_LISTED_MISSING, reconcile_issues
+
+    issues = reconcile_issues(detect_headings("1. One\n2. Two\n20261118. Dated\n"))
+    gap = next(i for i in issues if i["kind"] == "gap")
+    assert gap["missing_count"] == 20261118 - 3
+    assert gap["missing"] == list(range(3, 3 + MAX_LISTED_MISSING))
 
 
 def test_duplicate_and_out_of_order_are_reported() -> None:
