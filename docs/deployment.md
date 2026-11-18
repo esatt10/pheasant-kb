@@ -51,7 +51,7 @@ The profiles use these stable container paths:
 | generated or volume-backed config | `/config/pheasant.yaml` | Runtime config. |
 | `PHEASANT_WORKSPACE_PATH` or named volume | `/workspace` | Indexed repositories and documents. |
 | `pheasant-state` volume | `/state` | SQLite, manifests, graph snapshots and vectors. |
-| `pheasant-memory` volume | `/memory` | Durable agent-memory records. |
+| `pheasant-memory` volume | `/memory` | The deprecated `agent-memory` source, for a region set up before 1.6.7. A new region keeps its records in `/state/artifact-records`. |
 | `pheasant-exports` volume | `/exports` | Regenerable exports. |
 
 ### Connecting local files that aren't in the workspace

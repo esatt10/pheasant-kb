@@ -85,8 +85,12 @@ in the shipped files.
 
 ## Sources
 
-pheasant-kb ships with two sources: `agent-memory` (`/memory`) and `uploads`
-(the UI drop zone). Everything else is added at runtime from the UI, HTTP or
+pheasant-kb ships with one source: `uploads` (the UI drop zone). Typed records
+written with MCP `record_artifact` or `POST /artifacts/records` go to the
+`artifact-records` source under `/state`, created by the first write; on this
+stack the indexer writes their files, because the api mounts `/state`
+read-only. (A stack set up before this release also has `agent-memory` at
+`/memory`; it keeps it, and its records stay there.) Everything else is added at runtime from the UI, HTTP or
 MCP, and stored in the database, so it survives restarts, upgrades and config
 edits. You can also list sources under `sources:` in your `pheasant.yaml`; see
 [Configure sources](../how-to/sources.md) for every type and option.

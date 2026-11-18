@@ -69,7 +69,7 @@ def test_without_a_selection_the_flagship_is_the_default(monkeypatch: pytest.Mon
     assert config.storage.backend == "postgres"
     assert config.sync.queue.backend == "nats"
     assert config.search.embeddings.enabled
-    assert [source.name for source in config.sources] == ["agent-memory", "uploads"]
+    assert [source.name for source in config.sources] == ["uploads"]
 
 
 def test_a_config_choice_beats_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:

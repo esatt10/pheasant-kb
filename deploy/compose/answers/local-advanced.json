@@ -118,20 +118,5 @@
   "assistant.retrieval.grader_model": "gpt-6-luna",
   "assistant.retrieval.verify_citations": true,
   "assistant.retrieval.max_facts": 24,
-  "sources": [
-    {
-      "name": "agent-memory",
-      "type": "artifact",
-      "path": "/memory",
-      "description": "Durable knowledge artifacts",
-      "include": ["**/*.md"],
-      "exclude": ["**/*.archived"],
-      "sync": {
-        "on_startup": true,
-        "on_file_change": "debounce",
-        "on_git_commit": false,
-        "interval_seconds": 60
-      }
-    }
-  ]
+  "sources": []
 }

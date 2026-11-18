@@ -12,6 +12,16 @@ preserves source names, directories, record/file IDs and original Markdown
 bytes. Unchanged chunk content keeps its deterministic identity; enabling
 taxonomy can replace derived chunks as sections are extracted. The database records the original source definition once.
 Keep existing persistent mounts, including mounts named `/memory`.
+
+New regions have no `agent-memory` source: no shipped configuration declares
+one. The first `record_artifact` or `POST /artifacts/records` creates the
+`artifact-records` source under `<state_path>/artifact-records`. On a fleet the
+api mounts `/state` read-only, so the record's file goes through the artifact
+outbox, as a saved artifact's does: the indexer writes it, syncs the source,
+and `index_status` reads `pending` until then. Retiring a record is handed
+over the same way. A region that already has `agent-memory` keeps it, because
+the source is registered in its state database, and its records are still
+written in place at `/memory`.
 The `memory_*` tables remain derived compatibility projections; they do not
 hold a second, independently writable content store.
 

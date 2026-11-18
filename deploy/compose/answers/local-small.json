@@ -100,20 +100,5 @@
   "assistant.retrieval.grade_evidence": false,
   "assistant.retrieval.verify_citations": true,
   "assistant.retrieval.max_facts": 8,
-  "sources": [
-    {
-      "name": "agent-memory",
-      "type": "artifact",
-      "path": ".pheasant/memory",
-      "description": "Durable local agent memory",
-      "include": ["**/*.md"],
-      "exclude": ["**/*.archived"],
-      "sync": {
-        "on_startup": true,
-        "on_file_change": "debounce",
-        "on_git_commit": false,
-        "interval_seconds": 60
-      }
-    }
-  ]
+  "sources": []
 }

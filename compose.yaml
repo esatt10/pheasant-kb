@@ -214,6 +214,9 @@ services:
       # forwarded to it rather than written here.
       - pheasant-state:/state:ro
       - ${PHEASANT_FLEET_WORKSPACE_PATH:-pheasant-workspace}:/workspace:ro
+      # The deprecated agent-memory source, kept for a stack set up before
+      # 1.6.7: its records stay here. A new stack writes typed records to
+      # /state/artifact-records, through the indexer.
       - pheasant-memory:/memory
       # Parquet exports, the one volume meant for readers outside pheasant.
       - pheasant-exports:/exports

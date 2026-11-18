@@ -267,19 +267,6 @@ readiness:
   concurrency_probe_writers: 4
   concurrency_probe_items: 5
 sources:
-  - name: agent-memory
-    type: artifact
-    path: /memory
-    description: Durable knowledge artifacts
-    include:
-      - '**/*.md'
-    exclude:
-      - '**/*.archived'
-    sync:
-      on_startup: true
-      on_file_change: debounce
-      on_git_commit: false
-      interval_seconds: 60
   - name: uploads
     type: document_folder
     path: /state/uploads/uploads

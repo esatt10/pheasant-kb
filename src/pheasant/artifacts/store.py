@@ -32,6 +32,7 @@ import hashlib
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -393,8 +394,15 @@ class ArtifactRecordStore:
         valid_from: str | None = None,
         valid_until: str | None = None,
         reinforcement: ReinforcementIndex | None = None,
+        writer: Callable[[Path, str], None] | None = None,
     ) -> tuple[MemoryRecord, bool]:
         """Write one memory record; returns ``(record, created)``.
+
+        ``writer`` receives a created record's path and rendered bytes instead
+        of this process writing them: a serving replica, which mounts the
+        record directory read-only, hands them to the indexer that way
+        (``services.artifact_records``). Every decision above the write (id,
+        dedup, folding) is the same either way.
 
         Append-only: an existing record file is never rewritten — an
         identical write returns the stored record with ``created=False``.
@@ -560,10 +568,10 @@ class ArtifactRecordStore:
             self.last_outcome = "duplicate"
             self.last_fold = "exact"
             return record, False
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".md.tmp")
-        tmp.write_text(_render(record), encoding="utf-8")
-        os.replace(tmp, path)
+        if writer is not None:
+            writer(path, _render(record))
+        else:
+            write_record_file(path, _render(record))
         self.last_outcome = "created"
         self.last_fold = None
         return record, True
@@ -820,6 +828,15 @@ class ArtifactRecordStore:
 
     #: Pre-33.9 name, kept because it is used throughout this module.
     _archive = archive
+
+
+def write_record_file(path: Path, content: str) -> None:
+    """Write one record's bytes atomically (a reader never sees half a file)."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _render(record: MemoryRecord) -> str:

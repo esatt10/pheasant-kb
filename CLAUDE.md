@@ -3462,7 +3462,13 @@ adapters. New calls use `/artifacts/records`, `record_artifact`, and
 and validity policies (`config.memory` aliases the same object).
 
 Legacy source adoption is additive and in place; the original definition is
-recorded once. Published versions/receipts live independently of durable jobs.
+recorded once. No shipped config declares `agent-memory` any more: the first
+record creates `artifact-records` under `/state`, and a process that does not
+index (an api replica, `/state` read-only) hands the record file, and a
+retirement's rename, to the indexer through `artifact_outbox`
+(`services/artifact_records.indexer_writes`, `sync/artifact_projection`). A
+region that has `agent-memory` keeps it through its registry row and writes
+`/memory` in place. Published versions/receipts live independently of durable jobs.
 The scheduler prunes terminal job history after `artifacts.job_retention_days`
 (default 30); published outputs survive until deprecated/replaced. Saved base
 ranking bundles can be applied after reconfiguration and job deletion. Evidence

@@ -127,19 +127,6 @@ assistant:
     verify_citations: true
     max_facts: 8
   model: null
-sources:
-  - name: agent-memory
-    type: artifact
-    path: .pheasant/memory
-    description: Durable local agent memory
-    include:
-      - '**/*.md'
-    exclude:
-      - '**/*.archived'
-    sync:
-      on_startup: true
-      on_file_change: debounce
-      on_git_commit: false
-      interval_seconds: 60
+sources: []
 synapse:
   publish: false

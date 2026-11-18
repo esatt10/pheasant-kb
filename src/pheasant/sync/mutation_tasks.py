@@ -16,10 +16,21 @@ def apply(engine: Any, task: Any, on_progress: Any = None) -> Any:
         removed = archived.apply(engine, str(task.source_id))
         nodes, edges = engine._graph_counts()
         return SyncResult(str(task.source_id), removed, 0, nodes, edges, "removed")
-    completed, index, tasks = project(engine)
+    completed, index, tasks, record_sources = project(engine)
+    synced = {"healthy", "degraded", "unchanged"}
+    # Records a serving replica handed over are indexed now, so a record is
+    # searchable one projection after it was written, as a saved artifact is.
+    records_ok = True
+    for name in record_sources:
+        result = engine.sync_source(name, "incremental", on_progress=on_progress)
+        records_ok = records_ok and result.status in synced
     if index:
         result = engine.sync_source("artifacts", "incremental", on_progress=on_progress)
-        if result.status in {"healthy", "degraded", "unchanged"}:
+        if result.status in synced and records_ok:
+            acknowledge(engine, tasks)
+        return result
+    if record_sources:
+        if records_ok:
             acknowledge(engine, tasks)
         return result
     acknowledge(engine, tasks)
