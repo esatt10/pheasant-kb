@@ -1295,8 +1295,13 @@ key is called with the process's managed identity. See
 
 ### Automatic answering-model routing
 
-**Chat settings** selects automatic routing within the available **OpenAI** or
-**Anthropic** series, or a **custom selection** of catalog models across providers.
+The composer's **Model** button opens the answering-model dialog: **One model**
+(every answer from the model chosen, the region default marked) or
+**Automatic**, which routes within the available **OpenAI** or **Anthropic**
+models, or among **models you pick** across providers, each given a strength
+(Light, Medium, Deep) to steer the balance. It closes on Esc, a click outside or
+✕, and applies to the conversation at once. The judgement model is chosen in the
+same dialog.
 The default rubric weighs two things together: the reasoning a question
 needs, and the answer it asks for. Low is a lookup, extraction or routine
 rewrite answered short. Medium is synthesis or a comparison, or a medium answer
@@ -1325,7 +1330,8 @@ every replica; session overrides are not persisted. `GET /models/routing` and
 MCP `get_model_routing` return `settings`, `defaults`, and `can_save`.
 
 On a catalog with an OpenAI or Anthropic `default_chat`, automatic routing
-defaults to that series. With no catalog/default, or `models.selectable: false`,
+defaults to that series. An Admin can choose another default model at runtime
+(`PUT /models/defaults`); routing follows it. With no catalog/default, or `models.selectable: false`,
 the configured fixed-model behavior is preserved. An explicit `model` still
 pins one model for compatibility; do not also send `model_routing`.
 

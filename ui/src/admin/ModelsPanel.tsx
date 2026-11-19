@@ -3,12 +3,13 @@ import { api } from "../api/client";
 import type { CatalogModel } from "../api/types";
 
 /**
- * The models this region offers, and the one switch an Admin has over them.
+ * The models this region offers, and what an Admin decides about them.
  *
  * Which models exist is the operator's decision (the deployment's `models`
- * section); people pick the answering model in the chat composer. What is
- * decided here is the embedding model: one is in force for the whole region,
- * and changing it re-embeds everything already indexed.
+ * section). An Admin chooses which answering and judgement model is everyone's
+ * default (people can still pick another in the composer's model dialog), and
+ * which embedding model indexes the region: one at a time, and changing it
+ * re-embeds everything already indexed.
  */
 export function ModelsPanel() {
   const queryClient = useQueryClient();
@@ -111,15 +112,23 @@ export function ModelsPanel() {
 
       <ModelList
         title="Answering models"
-        note="People choose one of these in the chat composer for their session."
+        note="Write the answers. The default answers everyone unless they choose another in the composer's model dialog."
+        kind="chat"
         models={data.chat}
         selectable={data.selectable}
+        current={data.default_chat}
+        provisioned={data.deployment_defaults?.chat ?? null}
+        canSet={Boolean(data.can_set_defaults)}
       />
       <ModelList
         title="Judgement models"
-        note="Grade whether the evidence is enough and whether an answer is supported."
+        note="Grade whether the evidence is enough, whether an answer is supported, and pick the answering model in Automatic."
+        kind="decision"
         models={data.decisions}
         selectable={data.selectable}
+        current={data.default_decision}
+        provisioned={data.deployment_defaults?.decision ?? null}
+        canSet={Boolean(data.can_set_defaults)}
       />
     </>
   );
@@ -128,15 +137,30 @@ export function ModelsPanel() {
 function ModelList({
   title,
   note,
+  kind,
   models,
   selectable,
+  current,
+  provisioned,
+  canSet,
 }: {
   title: string;
   note: string;
+  kind: "chat" | "decision";
   models: CatalogModel[];
   selectable: boolean;
+  current: string | null;
+  provisioned: string | null;
+  canSet: boolean;
 }) {
+  const queryClient = useQueryClient();
+  const choose = useMutation({
+    mutationFn: (id: string | null) => api.setDefaultModels({ [kind]: id }),
+    onSuccess: (data) => queryClient.setQueryData(["models"], data),
+  });
   if (!models.length) return null;
+  const label = (id: string | null) => models.find((model) => model.id === id)?.label ?? id;
+  const changed = Boolean(provisioned && current && current !== provisioned);
   return (
     <section className="section">
       <h2 className="section__title">{title}</h2>
@@ -144,6 +168,26 @@ function ModelList({
         {note} {selectable ? "" : "Per-question choice is off: everyone gets the default."} Adding or
         removing a model is the operator's change to the deployment.
       </p>
+      {changed ? (
+        <div className="banner banner--info admin-default-note">
+          <span>
+            <strong>{label(current)}</strong> is the default, chosen here; the deployment provisioned{" "}
+            <strong>{label(provisioned)}</strong>.
+          </span>
+          {canSet ? (
+            <button
+              className="btn btn--small"
+              disabled={choose.isPending}
+              onClick={() => choose.mutate(null)}
+            >
+              Restore deployment default
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {choose.isError ? (
+        <div className="banner banner--error">{(choose.error as Error).message}</div>
+      ) : null}
       <div className="table-scroll">
         <table className="data-table">
           <thead>
@@ -151,6 +195,7 @@ function ModelList({
               <th>Model</th>
               <th>Maker</th>
               <th>Status</th>
+              {canSet ? <th /> : null}
             </tr>
           </thead>
           <tbody>
@@ -165,6 +210,24 @@ function ModelList({
                   {model.default ? <span className="pill pill--accent">default</span> : null}
                   {!model.available ? <span className="pill pill--warn">no credential here</span> : null}
                 </td>
+                {canSet ? (
+                  <td className="admin-actions">
+                    {!model.default ? (
+                      <button
+                        className="btn btn--small"
+                        disabled={choose.isPending || !model.available}
+                        title={
+                          model.available
+                            ? `Answer with ${model.label} by default, for everyone in this knowledge base`
+                            : "This process holds no credential for it"
+                        }
+                        onClick={() => choose.mutate(model.id)}
+                      >
+                        Make default
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

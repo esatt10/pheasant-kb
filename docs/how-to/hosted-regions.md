@@ -186,6 +186,14 @@ models:
       cached_input_price: 0.2
 ```
 
+`default_chat` and `default_decision` are the deployment's defaults. An Admin
+can choose another catalog entry as everyone's default without a redeploy: the
+Admin page's Models tab (**Make default**, **Restore deployment default**),
+`PUT /models/defaults` or MCP `set_default_models`. The choice is a row every
+replica reads on its next question; the catalog itself (which models exist and
+their keys) stays the deployment's. People still choose another model for
+their own conversation in the composer's model dialog.
+
 With `observability.usage` the region keeps daily totals: tokens by model
 (input, cached input, output), questions, searches, who asked and on which
 surface, and how long answers and searches took. Totals only, never a question
@@ -201,6 +209,38 @@ tab) reads them back for an Admin:
   (each figure is the upper bound of the range the percentile falls in).
 - **Size**: documents, chunks and indexed bytes against
   `storage.knowledge_base_limit_gb`, and whether the knowledge base is full.
+
+### The traces behind the totals
+
+With `observability.interactions` on, every model, organization and person in
+the Usage tab opens the sessions behind its numbers, and each session its
+calls: the question and answer, the models that ran, the route, and the steps
+the answer took with their tokens and timings, laid out as the chat's own step
+trace. Nothing is computed ahead: each list is one query, run when it is
+opened, and the period selector (7, 30, 90, 365 days) is how far back it reads.
+The interaction ledger keeps `observability.interactions.hot_retention_days`
+(7 by default), so a longer period shows what remains and says so.
+
+A session is a conversation (the web UI's conversation, MCP's `session`); a
+call made outside one stands alone. Each level offers:
+
+- **A Log Analytics query.** Spans carry the call's W3C trace id as
+  `OperationId` in the workspace's App Insights tables, so the query names the
+  selection's trace ids under the period (`| where TimeGenerated > ago(30d)`),
+  or a session's own time span. Copy it into the workspace's Logs. Spans carry
+  no person, by design; the ledger is what joins a person to their traces.
+- **Export JSONL.** The selection's ledger rows, one call per line, attributes
+  included.
+
+The drill-down reads **Questions** by default: the questions and searches the
+totals count. On a live region nearly every ledger row is the interface
+polling for jobs and status, so **Every call** (`calls=all`) is there for
+chasing a fault rather than for reading.
+
+The same reads are `GET /usage/sessions` and `GET /usage/sessions/{session}`
+(MCP `list_usage_sessions`, `get_usage_session`), Admin only. The person
+filter is `person` on both: on MCP a parameter named `principal` is always the
+caller.
 
 Cost is the operator's. It is shown to the local operator, the shared token and
 the admins the deployment pinned (`role_assignments`); an Admin a customer

@@ -1,26 +1,247 @@
-.model-routing { position: relative; }
-.model-routing > summary { cursor: pointer; }
-.model-routing__panel {
-  position: fixed;
-  z-index: 30;
-  bottom: 84px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(440px, calc(100vw - 48px));
-  max-height: min(650px, 70vh);
-  overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg, white);
-  box-shadow: 0 8px 28px #0002;
-  display: grid;
-  gap: 12px;
+/* The composer's model button: what answers this conversation, at a glance. */
+.model-routing__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6px * var(--sp));
+  max-width: 100%;
 }
-.model-routing__panel > label { display: grid; gap: 6px; }
-.model-routing__panel textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-.model-routing__panel fieldset { min-width: 0; padding: 8px; border: 1px solid var(--border); }
-.model-routing__candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
-.model-routing__candidate > label { display: flex; align-items: center; gap: 6px; flex: 1; }
-.model-routing__candidate > span:first-child { flex: 1; }
-.model-routing__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-routing__trigger-label {
+  color: var(--text-soft);
+  font-weight: 500;
+}
+.model-routing__trigger-label::after {
+  content: "·";
+  margin-left: calc(6px * var(--sp));
+}
+.model-routing__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* The dialog itself rides `.modal`; these lay out its sections. */
+.model-routing {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: calc(14px * var(--sp));
+}
+.model-routing .modal__header {
+  margin-bottom: 0;
+}
+.model-routing__lead {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: max(12px, calc(13.5px * var(--fs)));
+  line-height: 1.5;
+}
+.model-routing__choice .radio-card__sub {
+  line-height: 1.45;
+}
+.model-routing__section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--sp));
+}
+.model-routing__heading {
+  margin: 0;
+  font-size: max(11.5px, calc(12px * var(--fs)));
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+.model-routing__note {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: max(12px, calc(12.5px * var(--fs)));
+  line-height: 1.5;
+}
+.model-routing__pool {
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+.model-routing__pool button {
+  padding: calc(6px * var(--sp)) calc(12px * var(--sp));
+  font-size: max(12px, calc(12.5px * var(--fs)));
+}
+.model-routing__list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--sp));
+}
+.model-routing__model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(3px * var(--sp));
+  padding: calc(10px * var(--sp)) calc(12px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+button.model-routing__model {
+  cursor: pointer;
+}
+button.model-routing__model:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+button.model-routing__model:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.model-routing__model.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.model-routing__model--row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name strength"
+    "note strength";
+  align-items: center;
+  column-gap: calc(12px * var(--sp));
+}
+.model-routing__model--row > .model-routing__include,
+.model-routing__model--row > .model-routing__model-name {
+  grid-area: name;
+}
+.model-routing__model--row > .model-routing__model-note {
+  grid-area: note;
+}
+.model-routing__model--row > .pill {
+  grid-area: note;
+  justify-self: start;
+}
+.model-routing__model--row > .model-routing__strength {
+  grid-area: strength;
+}
+.model-routing__model-name {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(8px * var(--sp));
+  font-weight: 600;
+  font-size: max(12px, calc(13.5px * var(--fs)));
+}
+.model-routing__model-note {
+  color: var(--text-soft);
+  font-size: max(12px, calc(12.5px * var(--fs)));
+  line-height: 1.45;
+}
+.model-routing__include {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(8px * var(--sp));
+  cursor: pointer;
+}
+.model-routing__strength button {
+  padding: calc(4px * var(--sp)) calc(9px * var(--sp));
+}
+.model-routing__strength button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.model-routing__advanced {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--sp));
+  padding-top: calc(4px * var(--sp));
+}
+.model-routing__advanced > summary {
+  cursor: pointer;
+  font-size: max(12px, calc(13px * var(--fs)));
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: calc(6px * var(--sp));
+}
+.model-routing__advanced[open] > *:not(summary) + * {
+  margin-top: calc(6px * var(--sp));
+}
+.model-routing__criteria {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: max(12px, calc(12.5px * var(--fs)));
+  line-height: 1.5;
+}
+.model-routing__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(10px * var(--sp));
+  padding-top: calc(12px * var(--sp));
+  border-top: 1px solid var(--border);
+}
+.model-routing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--sp));
+  margin-left: auto;
+}
+.model-routing__status {
+  margin: 0;
+  color: var(--accent-text);
+  font-size: max(12px, calc(12.5px * var(--fs)));
+}
+
+@media (max-width: 560px) {
+  .model-routing__model--row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "name" "note" "strength";
+    row-gap: calc(6px * var(--sp));
+  }
+}
+
+/* The one line under each choice says what it does: never below 12px. */
+.model-routing .radio-card__sub,
+.model-routing__model-note {
+  font-size: max(12px, calc(13px * var(--fs)));
+}
+
+.model-routing .segmented button,
+.model-routing .btn--small,
+.model-routing .pill {
+  font-size: max(12px, calc(12px * var(--fs)));
+}
+
+.model-routing .radio-card__title {
+  font-size: max(13px, calc(14px * var(--fs)));
+}
+
+.model-routing .text-input {
+  font-size: max(12.5px, calc(13.5px * var(--fs)));
+}
+
+/* At the desktop density a segmented button came out 23px tall: under the
+   24px a pointer target needs. */
+.model-routing__trigger,
+.model-routing .segmented button {
+  min-height: 26px;
+}
+
+/* On a touch screen every control in the dialog, and the button that opens
+   it, is a finger's height. */
+@media (pointer: coarse) {
+  .model-routing__trigger {
+    min-height: 40px;
+  }
+
+  .model-routing .segmented button,
+  .model-routing .btn,
+  .model-routing__include {
+    min-height: 40px;
+  }
+
+  /* The label is the target; the box inside it is a finger's width too. */
+  .model-routing__include input {
+    width: 20px;
+    height: 20px;
+  }
+}

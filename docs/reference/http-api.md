@@ -365,6 +365,10 @@ See [Vector self-search](../how-to/vector-search.md).
 | GET | `/models/routing` | Saved automatic routing policy, default low/medium/high reasoning rubric, and `can_save`. Readers can inspect and use runtime overrides. |
 | PUT | `/models/routing` | Save shared routing defaults (`settings.manage`: Contributor/Admin). Body: `mode` (`openai`, `anthropic`, `custom`, `off`), `models` (custom catalog IDs), optional `criteria` and `reasoning_levels` (ID to low/medium/high). |
 
+| PUT | `/models/defaults` | Choose the region's default answering and judgement models (Admin): `{"chat": id, "decision": id}`, `null` to return a kind to the deployment's default. Every replica answers with it from its next question. Returns `GET /models`, which also reports `deployment_defaults` and `can_set_defaults`. |
+| GET | `/usage/sessions` | The sessions behind the usage totals (Admin), newest first, read from the interaction ledger when asked: `?days=` (the window), one of `person`, `organization` (a tenant id; empty for the region's own) or `model`, and `calls`: `questions` (default, the questions and searches the totals count) or `all` (every request, the UI's polling included). Each selection carries `kql`, a Log Analytics query for its spans, and `retention`, how far back the ledger reaches. |
+| GET | `/usage/sessions/{session}` | One session's calls in order (Admin): the question and answer, the models, the route and the steps each answer took, and a `kql` query bounded by the session's own time span. A call made outside a session is `trace:<id>`. Takes `calls` as above. |
+| GET | `/usage/sessions/{session}/export`, `/usage/traces/export` | The same ledger rows as JSON lines (`application/x-ndjson`, an attachment), for a session or a whole selection. HTTP only: a file for a browser to save. |
 | GET | `/usage` | With `observability.usage`: tokens by model, questions, searches, people, organizations, surfaces, answer and search p50/p95, and size, over `?days=` (Admin). Cost, at the prices the operator stated, is `null` unless the caller operates the region. |
 
 `POST /assistant/chat` and its stream take `model` and `decision_model` (ids

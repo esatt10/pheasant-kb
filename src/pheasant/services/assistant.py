@@ -168,6 +168,10 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
     from pheasant.security.authorization import require_permission
 
     require_permission("knowledge.use")
+    from pheasant.services import models as model_catalog
+
+    # An Admin's default models, laid over the catalog for this request.
+    context = model_catalog.effective(context)
     if request.save is True:
         require_permission("artifacts.manage")
     context.knowledge_base(request.knowledge_base)
@@ -225,6 +229,10 @@ def answer(
     from dataclasses import replace
 
     from pheasant.security.authorization import scoped_principal
+    from pheasant.services import models as model_catalog
+
+    # An Admin's default models, laid over the catalog for this request.
+    context = model_catalog.effective(context)
 
     principal, groups = scoped_principal(request.principal, request.principal_groups)
     request = replace(request, principal=principal, principal_groups=groups)
@@ -334,6 +342,10 @@ def answer(
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000
+            from pheasant.services import usage_traces
+
+            # Its models, route and steps onto the ledger row: the usage drill-down.
+            usage_traces.annotate_answer(request, payload)
             answered = True
             return payload
     except Exception as exc:

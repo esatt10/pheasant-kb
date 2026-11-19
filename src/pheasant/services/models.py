@@ -25,8 +25,10 @@ process, and re-embeds everything already indexed.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from dataclasses import replace
+from dataclasses import replace as dataclass_replace
 from typing import Any
 
 from pheasant.connections import environment as connection_environment
@@ -96,6 +98,118 @@ def _public(entry: Any, **extra: Any) -> dict[str, Any]:
     }
 
 
+#: The ``region_settings`` section holding an Admin's choice of default
+#: models, laid over the catalog's ``default_chat`` / ``default_decision``.
+DEFAULTS_SECTION = "model_defaults"
+
+
+def _saved_defaults(config: Any, state: Any) -> dict[str, Any]:
+    if state is None:
+        return {}
+    try:
+        rows = state.rows(
+            "SELECT data_json FROM region_settings WHERE kb_id=? AND section=?",
+            (config.knowledge_base_id, DEFAULTS_SECTION),
+        )
+    except Exception:  # noqa: BLE001 - a region without the row answers as provisioned
+        return {}
+    if not rows:
+        return {}
+    try:
+        saved = json.loads(rows[0]["data_json"] or "{}")
+    except ValueError:
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def effective_config(config: Any, state: Any) -> Any:
+    """``config`` with the Admin's chosen default models, when there are any.
+
+    The catalog (what is provisioned) stays the deployment's; only which entry
+    is the default moves. An id the catalog no longer lists is ignored, so a
+    redeploy that drops a model falls back to the provisioned default rather
+    than failing every question.
+    """
+
+    catalog = _models(config)
+    saved = _saved_defaults(config, state) if catalog is not None else {}
+    if not saved:
+        return config
+    chat_ids = {entry.id for entry in catalog.chat}
+    decision_ids = {entry.id for entry in catalog.decisions}
+    chat = saved.get("chat") if saved.get("chat") in chat_ids else None
+    decision = saved.get("decision") if saved.get("decision") in decision_ids else None
+    if (chat or catalog.default_chat) == catalog.default_chat and (
+        decision or catalog.default_decision
+    ) == catalog.default_decision:
+        return config
+    view = copy.copy(config)
+    view.models = replace(
+        catalog,
+        default_chat=chat or catalog.default_chat,
+        default_decision=decision or catalog.default_decision,
+    )
+    return view
+
+
+def effective(context: ServiceContext) -> ServiceContext:
+    """``context`` whose config carries the Admin's default models."""
+
+    # A context with no state store (a caller's stand-in, a check run before
+    # one exists) has no saved choice to apply.
+    config = effective_config(context.config, getattr(context, "state", None))
+    return context if config is context.config else dataclass_replace(context, config=config)
+
+
+def set_defaults(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
+    """Choose the region's default answering and judgement models (Admin).
+
+    ``changes`` names ``chat`` and/or ``decision`` by catalog id; ``null``
+    returns that kind to the deployment's own default. Every replica reads the
+    row on its next question; nothing is restarted and no key moves.
+    """
+
+    require_permission("security.manage")
+    if not isinstance(changes, dict) or not changes:
+        raise InvalidRequest(
+            "send chat and/or decision: a catalog id, or null for the deployment's"
+        )
+    unknown = set(changes) - {"chat", "decision"}
+    if unknown:
+        raise InvalidRequest(f"unknown default model field(s): {', '.join(sorted(unknown))}")
+    catalog = _models(context.config)
+    if catalog is None or not (catalog.chat or catalog.decisions):
+        raise InvalidRequest("this region lists no models to choose a default from (models.*)")
+    saved = dict(_saved_defaults(context.config, context.state))
+    for kind, entries in (("chat", catalog.chat), ("decision", catalog.decisions)):
+        if kind not in changes:
+            continue
+        value = changes[kind]
+        if value is None:
+            saved.pop(kind, None)
+            continue
+        saved[kind] = _entry(kind, entries, str(value)).id
+    identity = current_identity()
+    actor = identity.principal if identity is not None else "operator"
+    from datetime import UTC, datetime
+
+    context.state.execute(
+        "INSERT INTO region_settings(kb_id, section, data_json, updated_at, updated_by) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(kb_id, section) DO UPDATE SET "
+        "data_json=excluded.data_json, updated_at=excluded.updated_at, "
+        "updated_by=excluded.updated_by",
+        (
+            context.config.knowledge_base_id,
+            DEFAULTS_SECTION,
+            json.dumps(saved),
+            datetime.now(UTC).isoformat(timespec="seconds"),
+            actor,
+        ),
+    )
+    logger.info("default models set: by=%s to=%s", actor, saved)
+    return describe(context)
+
+
 def chat_available(config: Any, model: str, env: dict[str, str]) -> bool:
     from pheasant.assistant.answering import resolve_llm
 
@@ -115,6 +229,8 @@ def describe(context: ServiceContext, *, env: dict[str, str] | None = None) -> d
     Never an endpoint, a variable name or a key: those are the operator's.
     """
 
+    provisioned = _models(context.config)
+    context = effective(context)
     config = context.config
     env = env if env is not None else connection_environment()
     models = _models(config)
@@ -181,6 +297,13 @@ def describe(context: ServiceContext, *, env: dict[str, str] | None = None) -> d
         or (chat[0]["id"] if len(chat) == 1 else None),
         "decisions": decisions,
         "default_decision": models.default_decision if models else None,
+        # What the deployment provisioned as defaults, beside the Admin's choice
+        # above: "back to the deployment's" needs to say what that is.
+        "deployment_defaults": {
+            "chat": provisioned.default_chat if provisioned else None,
+            "decision": provisioned.default_decision if provisioned else None,
+        },
+        "can_set_defaults": bool(chat or decisions) and _may("security.manage"),
         "embeddings": embeddings,
         "embedding": {
             "active": active,

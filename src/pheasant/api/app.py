@@ -1549,6 +1549,10 @@ def create_app(
                 answer=str(answer.get("answer") or "") or None,
                 event=event,
             )
+            from pheasant.services import usage_traces
+
+            # Its models, route and steps: the usage drill-down's row for it.
+            usage_traces.annotate_answer(req, answer, event=event)
             cap_answer(event, max_chars=int(getattr(settings, "max_answer_chars", 4000)))
             redact(event, enabled=bool(getattr(settings, "redact_text", False)))
             interaction_buffer.record(event)

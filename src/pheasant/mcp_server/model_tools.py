@@ -49,6 +49,48 @@ class ModelTools:
 
         return usage.describe(self.services, days=days)
 
+    def set_default_models(
+        self, knowledge_base: str, chat: str | None = None, decision: str | None = None
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import models
+
+        changes: dict = {}
+        if chat is not None:
+            changes["chat"] = None if chat == "deployment" else chat
+        if decision is not None:
+            changes["decision"] = None if decision == "deployment" else decision
+        return models.set_defaults(self.services, changes)
+
+    def list_usage_sessions(
+        self,
+        knowledge_base: str,
+        days: int = 7,
+        person: str | None = None,
+        organization: str | None = None,
+        model: str | None = None,
+        calls: str = "questions",
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import usage_traces
+
+        return usage_traces.sessions(
+            self.services,
+            days=days,
+            principal=person,
+            organization=organization,
+            model=model,
+            calls=calls,
+        )
+
+    def get_usage_session(
+        self, knowledge_base: str, session: str, days: int = 7, calls: str = "questions"
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import usage_traces
+
+        return usage_traces.session(self.services, session, days=days, calls=calls)
+
 
 def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
     @mcp.tool()
@@ -115,3 +157,55 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         with no price. USAGE_NOT_ENABLED means the region keeps no totals."""
 
         return tools.get_usage(knowledge_base, days)
+
+    @mcp.tool()
+    @anticipated
+    def set_default_models(
+        knowledge_base: str, chat: str | None = None, decision: str | None = None
+    ) -> dict:
+        """Choose the region's default answering (``chat``) and judgement
+        (``decision``) models by list_models id (Admin only). Pass
+        ``"deployment"`` to return a kind to the deployment's own default; omit
+        a kind to leave it. Every replica answers with the new default from its
+        next question. Returns list_models."""
+
+        return tools.set_default_models(knowledge_base, chat, decision)
+
+    @mcp.tool()
+    @anticipated
+    def list_usage_sessions(
+        knowledge_base: str,
+        days: int = 7,
+        person: str | None = None,
+        organization: str | None = None,
+        model: str | None = None,
+        calls: str = "questions",
+    ) -> dict:
+        """The sessions behind the usage totals (Admin only), newest first.
+
+        Filter by ``person`` (a person as get_usage's people name them),
+        ``organization`` (a tenant id from get_usage's by_organization; "" for
+        the region's own indexing and shared credentials) or ``model`` (a model
+        id). ``days`` is the window and the depth of the drill-down;
+        ``retention`` says how many days the interaction ledger keeps. A
+        session is a conversation; a call made outside one is keyed
+        ``trace:<id>``. Pass a session to get_usage_session for its calls.
+        ``calls`` is ``questions`` (default: the questions and searches the
+        totals count) or ``all`` (every request, the UI's polling included).
+        TRACES_NOT_KEPT means the region keeps no interaction ledger."""
+
+        return tools.list_usage_sessions(knowledge_base, days, person, organization, model, calls)
+
+    @mcp.tool()
+    @anticipated
+    def get_usage_session(
+        knowledge_base: str, session: str, days: int = 7, calls: str = "questions"
+    ) -> dict:
+        """One session's calls in order (Admin only): each question and answer,
+        the models that ran, the steps the answer took with their tokens and
+        timings, and ``kql``, a Log Analytics query for the session's spans
+        (paste it into the workspace's Logs). The JSON-lines export is HTTP
+        only: GET /usage/sessions/{session}/export. ``calls`` as in
+        list_usage_sessions."""
+
+        return tools.get_usage_session(knowledge_base, session, days, calls)

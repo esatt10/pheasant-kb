@@ -296,6 +296,10 @@ export interface ModelCatalog {
   default_chat: string | null;
   decisions: (CatalogModel & { api: string })[];
   default_decision: string | null;
+  /** The defaults the deployment provisioned, beside an Admin's choice above. */
+  deployment_defaults?: { chat: string | null; decision: string | null };
+  /** Whether this caller may choose the region's default models (Admin). */
+  can_set_defaults?: boolean;
   embeddings: (CatalogModel & { dimensions: number | null; active: boolean })[];
   embedding: {
     active: string | null;

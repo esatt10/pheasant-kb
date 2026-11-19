@@ -6,7 +6,6 @@ import { api, collectAnswer } from "../api/client";
 import type {
   AnswerDepth,
   AssistantStatus,
-  CatalogModel,
   ChatAnswer,
   Citation,
   VisualResponse,
@@ -80,52 +79,6 @@ const SUGGESTIONS = [
   "@pheasant what's in this knowledge base?",
   "@pheasant how are my sources linked?",
 ];
-
-/** One model menu of the composer: the region's default first, then by maker. */
-function ModelMenu({
-  label,
-  models,
-  fallback,
-  value,
-  onChange,
-}: {
-  label: string;
-  models: CatalogModel[];
-  fallback: string | null;
-  value: string | null;
-  onChange: (id: string | null) => void;
-}) {
-  const families = [...new Set(models.map((model) => model.family ?? "Other"))];
-  const current = models.find((model) => model.id === (value ?? fallback));
-  return (
-    <select
-      className="composer__depth"
-      value={value ?? fallback ?? ""}
-      title={current?.description ?? label}
-      aria-label={label}
-      // Choosing the default again is "no choice": the region decides.
-      onChange={(event) => onChange(event.target.value === fallback ? null : event.target.value)}
-    >
-      {families.map((family) => (
-        <optgroup key={family} label={family}>
-          {models
-            .filter((model) => (model.family ?? "Other") === family)
-            .map((model) => (
-              <option
-                key={model.id}
-                value={model.id}
-                disabled={!model.available}
-                title={model.description ?? undefined}
-              >
-                {model.label}
-                {model.id === fallback ? " (default)" : ""}
-              </option>
-            ))}
-        </optgroup>
-      ))}
-    </select>
-  );
-}
 
 export function ChatPanel({
   status,
@@ -613,16 +566,12 @@ export function ChatPanel({
             ))}
           </select>
           {pickable && pickable.chat.some((model) => model.id !== "configured") ? (
-            <ModelRoutingSettings catalog={pickable} value={state.modelRouting}
-              onChange={(routing) => dispatch({ type: "set-model-routing", routing })} />
-          ) : null}
-          {pickable && pickable.decisions.length > 1 ? (
-            <ModelMenu
-              label="Judgement model (grades evidence and answers)"
-              models={pickable.decisions}
-              fallback={pickable.default_decision}
-              value={decisionModel}
-              onChange={setDecisionModel}
+            <ModelRoutingSettings
+              catalog={pickable}
+              value={state.modelRouting}
+              onChange={(routing) => dispatch({ type: "set-model-routing", routing })}
+              decisionModel={decisionModel}
+              onDecisionModel={setDecisionModel}
             />
           ) : null}
           {topicTurns.length > 0 ? (
@@ -669,9 +618,6 @@ export function ChatPanel({
                 Connect a model
               </button>
             </>
-          ) : routingPolicy && routingPolicy.mode !== "off" ? (
-            <span>Routing among available {routingPolicy.mode === "custom" ? "selected" :
-              routingPolicy.mode === "openai" ? "OpenAI" : "Anthropic"} models</span>
           ) : status?.credential_source === "session" ? (
             <span>
               Using {status.session?.provider} · key held for this session only

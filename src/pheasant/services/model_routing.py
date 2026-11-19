@@ -62,7 +62,8 @@ def series(entry: Any) -> str:
 
 
 def defaults(context: ServiceContext) -> dict[str, Any]:
-    catalog = context.config.models
+    # The Admin's default model, not only the deployment's, picks the series.
+    catalog = models.effective_config(context.config, context.state).models
     entry = next((m for m in catalog.chat if m.id == catalog.default_chat), None)
     family = series(entry) if entry else "off"
     return {

@@ -32,7 +32,7 @@ import { DEFAULT_DEPTH, useSession } from "../state/session";
  */
 export function GraphPage() {
   const { state, dispatch } = useSession();
-  const [tab, setTab] = useState<"overview" | "path">("overview");
+  const [tab, setTab] = useState<"overview" | "path" | "node">("overview");
   // The side panel folds to a spine so the canvas can take the whole width;
   // remembered for the tab, like the Notebook's panes.
   const [sideCollapsed, setSideCollapsed] = useState<boolean>(() => {
@@ -137,7 +137,14 @@ export function GraphPage() {
             layoutName={state.layout}
             spacing={1}
             shapeAlgorithm="node_type"
-            onSelect={(id) => dispatch({ type: "select-node", nodeId: id })}
+            onSelect={(id) => {
+              dispatch({ type: "select-node", nodeId: id });
+              // Show what was selected; a background tap only deselects.
+              if (id) {
+                setTab("node");
+                if (sideCollapsed) toggleSide();
+              }
+            }}
             onRecenter={(id) => dispatch({ type: "center-node", nodeId: id })}
           />
         )}
@@ -173,6 +180,9 @@ export function GraphPage() {
           </button>
           <button className={tab === "path" ? "tab active" : "tab"} onClick={() => setTab("path")}>
             Path
+          </button>
+          <button className={tab === "node" ? "tab active" : "tab"} onClick={() => setTab("node")}>
+            Node
           </button>
           <button
             className="btn btn--small btn--icon"
@@ -321,8 +331,11 @@ export function GraphPage() {
                 </ol>
               </>
             ) : null}
+          </div>
+        ) : null}
 
-            <h3 className="side__heading">Selected node</h3>
+        {tab === "node" ? (
+          <div className="pane__body">
             <NodeInspector
               selectedId={state.selectedId}
               nodes={graph.nodes}

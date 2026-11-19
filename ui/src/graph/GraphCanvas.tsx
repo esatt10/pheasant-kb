@@ -53,7 +53,7 @@ export function GraphCanvas({
   const cyRef = useRef<Core | null>(null);
   const onSelectRef = useRef(onSelect);
   const onRecenterRef = useRef(onRecenter);
-  const listenerBoundRef = useRef(false);
+  const listenerBoundRef = useRef<Core | null>(null);
   const selectedRef = useRef<string | null>(null);
   // Only the Columns layout needs a plan; every other layout passes `null`
   // and gets exactly the elements it always had.
@@ -231,8 +231,13 @@ export function GraphCanvas({
         maxZoom={3}
         cy={(cy: Core) => {
           cyRef.current = cy;
-          if (listenerBoundRef.current) return;
-          listenerBoundRef.current = true;
+          // Bound once per Cytoscape *instance*, not once per component: the
+          // wrapper builds a new instance whenever it remounts under a canvas
+          // that lives on (React's StrictMode double mount, a tile that moves),
+          // and an instance with no `tap` listener is a graph whose nodes
+          // cannot be selected.
+          if (listenerBoundRef.current === cy) return;
+          listenerBoundRef.current = cy;
           cy.on("tap", "node", (event) => onSelectRef.current(event.target.id()));
           // Tapping empty canvas clears the selection and nothing else. Before
           // this the only way out of a selection was "Clear", which also reset

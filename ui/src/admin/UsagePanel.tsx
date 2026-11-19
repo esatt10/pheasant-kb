@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { UsageReport, UsageTotals } from "../api/admin";
+import { TraceExplorer, type TraceTarget } from "./TraceExplorer";
 
 type Metric = "questions" | "tokens" | "cost";
 
@@ -41,6 +42,8 @@ const duration = (ms: number | null) =>
 export function UsagePanel() {
   const [days, setDays] = useState(30);
   const [metric, setMetric] = useState<Metric>("questions");
+  // A usage row being followed into its traces; the period above is the depth.
+  const [target, setTarget] = useState<TraceTarget | null>(null);
   const usage = useQuery({
     queryKey: ["usage", days],
     queryFn: () => api.usage(days),
@@ -83,6 +86,14 @@ export function UsagePanel() {
           {data.window.from} to {data.window.to} (UTC)
         </span>
       </div>
+      {target ? (
+        <TraceExplorer days={days} target={target} onClose={() => setTarget(null)} />
+      ) : (
+        <>
+      <p className="muted small usage-drill-hint">
+        Choose a model, an organization or a person below to see the sessions and traces behind
+        their numbers.
+      </p>
 
       <div className="stat-row admin-stats">
         <Stat label="Questions" value={compact(totals.questions)} />
@@ -148,6 +159,12 @@ export function UsagePanel() {
         <h2 className="section__title">By model</h2>
         <Table
           head={["Model", "Kind", "Calls", "Input", "Cached input", "Output", ...(data.cost_visible ? ["Cost"] : [])]}
+          onOpen={(index) => {
+            const row = data.by_model[index];
+            if (row.kind !== "embedding")
+              setTarget({ kind: "model", label: row.model, selection: { model: row.model } });
+          }}
+          openable={(index) => data.by_model[index].kind !== "embedding"}
           rows={data.by_model.map((row) => [
             row.model,
             row.kind,
@@ -167,6 +184,14 @@ export function UsagePanel() {
         <h2 className="section__title">By organization</h2>
         <Table
           head={["Organization", "People", "Questions", "Searches", "Tokens", ...(data.cost_visible ? ["Cost"] : [])]}
+          onOpen={(index) => {
+            const row = data.by_organization[index];
+            setTarget({
+              kind: "organization",
+              label: row.organization,
+              selection: { organization: row.tenant_id },
+            });
+          }}
           rows={data.by_organization.map((row) => [
             row.organization,
             compact(row.active_people),
@@ -183,6 +208,10 @@ export function UsagePanel() {
         <h2 className="section__title">People</h2>
         <Table
           head={["Person", "Organization", "Questions", "Searches", "Tokens", "Last active", ...(data.cost_visible ? ["Cost"] : [])]}
+          onOpen={(index) => {
+            const row = data.people[index];
+            setTarget({ kind: "person", label: row.principal, selection: { principal: row.principal } });
+          }}
           rows={data.people.map((row) => [
             row.principal,
             row.organization,
@@ -218,6 +247,8 @@ export function UsagePanel() {
           empty=""
         />
       </section>
+        </>
+      )}
     </>
   );
 }
@@ -232,7 +263,20 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
   );
 }
 
-function Table({ head, rows, empty }: { head: string[]; rows: string[][]; empty: string }) {
+function Table({
+  head,
+  rows,
+  empty,
+  onOpen,
+  openable,
+}: {
+  head: string[];
+  rows: string[][];
+  empty: string;
+  /** Makes each row's first cell open that row's traces. */
+  onOpen?: (index: number) => void;
+  openable?: (index: number) => boolean;
+}) {
   if (!rows.length) return <p className="muted small">{empty}</p>;
   return (
     <div className="table-scroll">
@@ -248,7 +292,20 @@ function Table({ head, rows, empty }: { head: string[]; rows: string[][]; empty:
           {rows.map((row, index) => (
             <tr key={index}>
               {row.map((cell, column) => (
-                <td key={column}>{cell}</td>
+                <td key={column}>
+                  {column === 0 && onOpen && (openable?.(index) ?? true) ? (
+                    <button
+                      type="button"
+                      className="link-button usage-open"
+                      title={`See the sessions and traces behind ${cell}`}
+                      onClick={() => onOpen(index)}
+                    >
+                      {cell} <span aria-hidden="true">›</span>
+                    </button>
+                  ) : (
+                    cell
+                  )}
+                </td>
               ))}
             </tr>
           ))}
