@@ -145,6 +145,11 @@ export function ChatPanel({
   // Whether saved artifacts (composed answers and reports) may be evidence;
   // the `artifacts` field search and answers take on every surface.
   const [useArtifacts, setUseArtifacts] = useState(true);
+  // On a phone the controls under the composer were three rows of a 740px
+  // screen; they fold behind one button there, closed until asked for. CSS
+  // decides when (`.notebook--tabs`); on a wide pane the wrapper is `display:
+  // contents` and the button is hidden, so this state does nothing.
+  const [optionsOpen, setOptionsOpen] = useState(false);
   // The judgement model is session-local; answering-model routing lives in
   // session state so switching Notebook views preserves the current policy.
   const [decisionModel, setDecisionModel] = useState<string | null>(null);
@@ -496,17 +501,6 @@ export function ChatPanel({
               {dictation.notice}
             </span>
           ) : null}
-          {keywords.length > 0 ? (
-            <button
-              type="button"
-              className={`btn btn--small${reference.open ? " btn--active" : ""}`}
-              aria-pressed={reference.open}
-              onClick={reference.toggle}
-              title="Keyword quick reference (Ctrl+/)"
-            >
-              @ keywords
-            </button>
-          ) : null}
           {pathScope ? (
             <span
               className="pill pill--accent scope-pill"
@@ -547,84 +541,110 @@ export function ChatPanel({
               </button>
             </span>
           ) : null}
-          <select
-            className="composer__depth"
-            value={answerDepth ?? "auto"}
-            title={DEPTHS.find((d) => d.value === (answerDepth ?? "auto"))?.title}
-            onChange={(event) =>
-              dispatch({
-                type: "set-answer-depth",
-                depth: event.target.value === "auto" ? null : (event.target.value as AnswerDepth),
-              })
-            }
-            aria-label="Answer length"
+          <button
+            type="button"
+            className="btn btn--small composer__options-btn"
+            aria-expanded={optionsOpen}
+            aria-controls="composer-options"
+            onClick={() => setOptionsOpen((open) => !open)}
+            title={optionsOpen ? "Hide the answer options" : "Answer length, model, keywords and more"}
           >
-            {DEPTHS.map((depth) => (
-              <option key={depth.value} value={depth.value} title={depth.title}>
-                {depth.label}
-              </option>
-            ))}
-          </select>
-          {pickable && pickable.chat.some((model) => model.id !== "configured") ? (
-            <ModelRoutingSettings
-              catalog={pickable}
-              value={state.modelRouting}
-              onChange={(routing) => dispatch({ type: "set-model-routing", routing })}
-              decisionModel={decisionModel}
-              onDecisionModel={setDecisionModel}
-            />
-          ) : null}
-          {topicTurns.length > 0 ? (
-            <button data-permission="artifacts.manage"
-              type="button"
-              className="btn btn--small"
-              onClick={() => saveThread.mutate()}
-              disabled={saveThread.isPending}
-              title="Keep this conversation -- every question, answer, source and trace -- as one artifact"
-            >
-              {saveThread.isPending ? "Saving…" : saveThread.isSuccess ? "Thread saved" : "Save thread"}
-            </button>
-          ) : null}
-          {saveThread.isError ? <span className="error small">{(saveThread.error as Error).message}</span> : null}
-          {history.length > 0 ? (
-            <span className="composer__context" title="Earlier turns sent with your next question">
-              continuing from {history.length} earlier turn{history.length === 1 ? "" : "s"}
+            Options {optionsOpen ? "▴" : "▾"}
+          </button>
+          <div
+            id="composer-options"
+            className={`composer__options${optionsOpen ? " composer__options--open" : ""}`}
+          >
+            {keywords.length > 0 ? (
               <button
                 type="button"
-                className="btn btn--small"
-                onClick={() => dispatch({ type: "new-topic" })}
-                title="Answer the next question on its own; the thread stays visible"
+                className={`btn btn--small${reference.open ? " btn--active" : ""}`}
+                aria-pressed={reference.open}
+                onClick={reference.toggle}
+                title="Keyword quick reference (Ctrl+/)"
               >
-                New topic
+                @ keywords
               </button>
-            </span>
-          ) : null}
-          <label className="composer__memory" title="Let knowledge records, saved reports and composed work inform the answer">
-            <input
-              type="checkbox"
-              checked={useArtifacts}
-              onChange={(event) => setUseArtifacts(event.target.checked)}
-            />
-            use artifacts
-          </label>
-          {extractive ? (
-            <>
-              <span className="composer__note">No model connected — answers are extracted passages, not synthesis.</span>
-              <button
+            ) : null}
+            <select
+              className="composer__depth"
+              value={answerDepth ?? "auto"}
+              title={DEPTHS.find((d) => d.value === (answerDepth ?? "auto"))?.title}
+              onChange={(event) =>
+                dispatch({
+                  type: "set-answer-depth",
+                  depth: event.target.value === "auto" ? null : (event.target.value as AnswerDepth),
+                })
+              }
+              aria-label="Answer length"
+            >
+              {DEPTHS.map((depth) => (
+                <option key={depth.value} value={depth.value} title={depth.title}>
+                  {depth.label}
+                </option>
+              ))}
+            </select>
+            {pickable && pickable.chat.some((model) => model.id !== "configured") ? (
+              <ModelRoutingSettings
+                catalog={pickable}
+                value={state.modelRouting}
+                onChange={(routing) => dispatch({ type: "set-model-routing", routing })}
+                decisionModel={decisionModel}
+                onDecisionModel={setDecisionModel}
+              />
+            ) : null}
+            {topicTurns.length > 0 ? (
+              <button data-permission="artifacts.manage"
+                type="button"
                 className="btn btn--small"
-                onClick={onConnectModel}
-                title="No model connected — answers are extracted passages, not synthesis."
+                onClick={() => saveThread.mutate()}
+                disabled={saveThread.isPending}
+                title="Keep this conversation -- every question, answer, source and trace -- as one artifact"
               >
-                Connect a model
+                {saveThread.isPending ? "Saving…" : saveThread.isSuccess ? "Thread saved" : "Save thread"}
               </button>
-            </>
-          ) : status?.credential_source === "session" ? (
-            <span>
-              Using {status.session?.provider} · key held for this session only
-            </span>
-          ) : status?.credential_source === "environment" ? (
-            <span>Using {status.configured_provider} from the server environment</span>
-          ) : null}
+            ) : null}
+            {saveThread.isError ? <span className="error small">{(saveThread.error as Error).message}</span> : null}
+            {history.length > 0 ? (
+              <span className="composer__context" title="Earlier turns sent with your next question">
+                continuing from {history.length} earlier turn{history.length === 1 ? "" : "s"}
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => dispatch({ type: "new-topic" })}
+                  title="Answer the next question on its own; the thread stays visible"
+                >
+                  New topic
+                </button>
+              </span>
+            ) : null}
+            <label className="composer__memory" title="Let knowledge records, saved reports and composed work inform the answer">
+              <input
+                type="checkbox"
+                checked={useArtifacts}
+                onChange={(event) => setUseArtifacts(event.target.checked)}
+              />
+              use artifacts
+            </label>
+            {extractive ? (
+              <>
+                <span className="composer__note">No model connected — answers are extracted passages, not synthesis.</span>
+                <button
+                  className="btn btn--small"
+                  onClick={onConnectModel}
+                  title="No model connected — answers are extracted passages, not synthesis."
+                >
+                  Connect a model
+                </button>
+              </>
+            ) : status?.credential_source === "session" ? (
+              <span>
+                Using {status.session?.provider} · key held for this session only
+              </span>
+            ) : status?.credential_source === "environment" ? (
+              <span>Using {status.configured_provider} from the server environment</span>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

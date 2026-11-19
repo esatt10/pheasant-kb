@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { RateTile, StageBars, SweepChart } from "../tuning/charts";
 import { Explain, MechanismTable, ObjectiveBanner } from "../tuning/explain";
 import type { GlossaryEntry, TuningGate, TuningHealth, TuningTrial } from "../api/types";
+import { PreviewNotice } from "../components/PreviewNotice";
 
 /** Stages a ranking parameter can actually move. Mirrors `tuning.stages`. */
 const ACTIONABLE = new Set([
@@ -198,6 +199,7 @@ export function TuningPage() {
           </button>
         </div>
       </header>
+      <PreviewNotice feature="Retrieval tuning" />
 
       {status.data && status.data.status !== "none" ? (
         <section className="tune-section">
