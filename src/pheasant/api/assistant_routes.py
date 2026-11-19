@@ -287,6 +287,10 @@ def register_assistant_routes(
         # Captured here, in the request, because `run()` executes on a worker
         # thread after this route has already returned its response object.
         parent_event = observed(request)
+        if parent_event is not None and not parent_event.session_id and req.conversation_id:
+            # Still open here, so the request's own row joins the conversation
+            # too; the answer's row (`record_stream_answer`) inherits it.
+            parent_event.session_id = str(req.conversation_id)[:200]
         # Monotonic, like every other duration here: a wall-clock delta across a
         # generation that can take a minute is exactly where an NTP step shows up.
         answer_started = time.perf_counter()

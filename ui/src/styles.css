@@ -28,7 +28,9 @@
 
   --text: #1f1c17;
   --text-soft: #57524a;
-  --muted: #8a8377;
+  /* 5.9:1 on white, 5.3:1 on --bg-sunken: AA for the small type it is used
+     for. #8a8377 was 3.8:1, below AA, on every secondary line in the app. */
+  --muted: #6b655b;
 
   --accent: #5f6b45;
   --accent-soft: #eef0e7;
@@ -933,13 +935,26 @@ select.text-input {
 }
 
 .msg__answer {
-  font-size: calc(14.5px * var(--fs));
-  line-height: 1.65;
+  /* Reading text, not interface text: a step larger than the controls around
+     it, a generous line height, and a measure of about 72 characters, so a
+     wide pane does not turn a paragraph into lines too long to track. */
+  font-size: calc(16px * var(--fs));
+  line-height: 1.7;
   color: var(--text);
+  letter-spacing: 0.003em;
+}
+
+.msg__answer > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, .math--display) {
+  max-width: 72ch;
 }
 
 .msg__answer p {
-  margin: 0 0 calc(12px * var(--sp));
+  margin: 0 0 calc(14px * var(--sp));
+}
+
+/* The first paragraph is the answer; what follows supports it. */
+.msg__answer > p:first-child {
+  font-size: 1.04em;
 }
 
 .msg__answer p:last-child {
@@ -948,12 +963,21 @@ select.text-input {
 
 .msg__answer ul,
 .msg__answer ol {
-  margin: 0 0 calc(12px * var(--sp));
-  padding-left: calc(22px * var(--sp));
+  margin: 0 0 calc(14px * var(--sp));
+  padding-left: calc(24px * var(--sp));
 }
 
 .msg__answer li {
-  margin-bottom: calc(5px * var(--sp));
+  margin-bottom: calc(7px * var(--sp));
+  padding-left: calc(2px * var(--sp));
+}
+
+.msg__answer li > p {
+  margin-bottom: calc(6px * var(--sp));
+}
+
+.msg__answer li::marker {
+  color: var(--text-soft);
 }
 
 .msg__answer table {
@@ -1098,11 +1122,14 @@ select.text-input {
   padding: 0;
 }
 
+/* A section heading reads as one: larger than the text, more space above it
+   than below, so it groups with what it introduces. */
 .msg__answer h1,
 .msg__answer h2,
 .msg__answer h3 {
-  font-size: calc(15px * var(--fs));
-  margin: calc(16px * var(--sp)) 0 calc(8px * var(--sp));
+  font-size: calc(17.5px * var(--fs));
+  margin: calc(22px * var(--sp)) 0 calc(8px * var(--sp));
+  letter-spacing: -0.005em;
 }
 
 /* A question that read close to one about the knowledge base itself, but was
@@ -1119,8 +1146,8 @@ select.text-input {
   display: flex;
   align-items: center;
   gap: calc(8px * var(--sp));
-  font-size: calc(11.5px * var(--fs));
-  color: var(--muted);
+  font-size: calc(12px * var(--fs));
+  color: var(--text-soft);
   flex-wrap: wrap;
 }
 
@@ -1128,15 +1155,15 @@ select.text-input {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  min-width: 20px;
   height: 18px;
-  padding: 0 calc(5px * var(--sp));
+  padding: 0 calc(6px * var(--sp));
   margin: 0 calc(2px * var(--sp));
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
   color: var(--accent-text);
-  font-size: calc(10.5px * var(--fs));
+  font-size: calc(12px * var(--fs));
   font-weight: 600;
   cursor: pointer;
   vertical-align: 1.5px;
@@ -6812,3 +6839,197 @@ select.text-input {
 .usage-chart__ticks { display: flex; justify-content: space-between; margin-top: calc(4px * var(--sp)); }
 .usage-chart__table { margin-top: calc(8px * var(--sp)); }
 .usage-chart__table summary { cursor: pointer; margin-bottom: calc(8px * var(--sp)); }
+
+/* The panel graph's selection: shown over the graph so selecting never hides
+   it (Notebook.tsx). Details opens the Node tab. */
+.selected-node-card {
+  position: absolute;
+  left: calc(10px * var(--sp));
+  /* Clear of the zoom buttons on the right edge. */
+  right: 58px;
+  bottom: calc(10px * var(--sp));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--sp));
+  padding: calc(8px * var(--sp)) calc(10px * var(--sp));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+.selected-node-card .dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.selected-node-card__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.selected-node-card__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: calc(13px * var(--fs));
+  color: var(--text);
+}
+.selected-node-card__type {
+  font-size: calc(11.5px * var(--fs));
+  color: var(--text-soft);
+}
+
+.admin-default-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(10px * var(--sp));
+}
+
+/* Usage → traces (admin/TraceExplorer.tsx). */
+.usage-drill-hint {
+  margin: 0 0 calc(10px * var(--sp));
+}
+.usage-open {
+  padding-left: 0;
+  font-weight: 550;
+  text-align: left;
+}
+.trace-explorer {
+  display: flex;
+  flex-direction: column;
+  gap: calc(12px * var(--sp));
+}
+.trace-explorer__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--sp));
+  color: var(--text-soft);
+  font-size: calc(13px * var(--fs));
+}
+.trace-explorer__crumbs strong {
+  color: var(--text);
+}
+.trace-explorer__crumb-session {
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--fs));
+}
+.trace-explorer__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(12px * var(--sp));
+}
+.trace-explorer__head .section__title {
+  margin-bottom: calc(2px * var(--sp));
+}
+.trace-explorer__head p {
+  margin: 0;
+}
+.trace-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--sp));
+}
+.trace-call {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--sp));
+  padding: calc(12px * var(--sp)) calc(14px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.trace-call--failed {
+  border-color: var(--warn);
+}
+.trace-call__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--sp));
+}
+.trace-call__time {
+  font-weight: 600;
+  color: var(--text);
+  font-size: calc(12.5px * var(--fs));
+  margin-right: calc(4px * var(--sp));
+}
+.trace-call__metrics {
+  margin-left: auto;
+  color: var(--text-soft);
+  font-size: calc(12px * var(--fs));
+  font-variant-numeric: tabular-nums;
+}
+.trace-call__question {
+  margin: 0;
+  font-size: calc(14px * var(--fs));
+  font-weight: 550;
+  line-height: 1.5;
+  color: var(--text);
+}
+.trace-call__answer > summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: calc(12.5px * var(--fs));
+}
+.trace-call__answer p {
+  margin: calc(6px * var(--sp)) 0 0;
+  max-width: 72ch;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.trace-call .trace > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.trace-call__id {
+  align-self: flex-start;
+  padding-left: 0;
+  font-family: var(--font-mono);
+  font-size: calc(11.5px * var(--fs));
+}
+.kql-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: calc(12px * var(--sp)) calc(14px * var(--sp));
+}
+.kql-block__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(10px * var(--sp));
+}
+.kql-block__title {
+  margin: 0 0 calc(2px * var(--sp));
+  font-size: calc(13px * var(--fs));
+  font-weight: 600;
+}
+.kql-block__head p {
+  margin: 0;
+}
+.kql-block__query {
+  margin: calc(10px * var(--sp)) 0 0;
+  padding: calc(10px * var(--sp)) calc(12px * var(--sp));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  overflow-x: auto;
+  max-height: 18rem;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--fs));
+  line-height: 1.55;
+  white-space: pre;
+}

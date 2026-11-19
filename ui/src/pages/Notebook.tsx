@@ -416,16 +416,25 @@ export function Notebook() {
                   layoutName={state.layout}
                   spacing={1}
                   shapeAlgorithm="node_type"
-                  onSelect={(id) => {
-                    dispatch({ type: "select-node", nodeId: id });
-                    // Only jump to the Node tab when there is a node to show;
-                    // a background tap is a deselect and should leave the
-                    // graph exactly as it is.
-                    if (id) dispatch({ type: "open-tab", tab: "node" });
-                  }}
+                  // Selecting keeps the graph in view. It used to switch the
+                  // panel to the Node tab, which hid the graph after every
+                  // click: choosing a second node meant coming back first. The
+                  // card below says what is selected; Details opens the tab.
+                  onSelect={(id) => dispatch({ type: "select-node", nodeId: id })}
                   onRecenter={(id) => dispatch({ type: "center-node", nodeId: id })}
                 />
               )}
+              {state.selectedId && groupTabs.includes("node") ? (
+                <SelectedNodeCard
+                  node={nodeById.get(state.selectedId)}
+                  nodeId={state.selectedId}
+                  onDetails={() => dispatch({ type: "open-tab", tab: "node" })}
+                  onCenter={() =>
+                    state.selectedId && dispatch({ type: "center-node", nodeId: state.selectedId })
+                  }
+                  onClose={() => dispatch({ type: "select-node", nodeId: null })}
+                />
+              ) : null}
             </div>
             <GraphLegend
               counts={overview.data?.node_counts ?? {}}
@@ -842,6 +851,48 @@ export function Notebook() {
 function browserLocation(browser: BrowserState): string {
   const where = browser.source ? [browser.source, ...browser.path.split("/").filter(Boolean)].join(" / ") : "All sources";
   return browser.file ? `${where} · ${browser.file.path.split("/").pop()}` : where;
+}
+
+/** What is selected on the panel's graph, without leaving the graph. */
+function SelectedNodeCard({
+  node,
+  nodeId,
+  onDetails,
+  onCenter,
+  onClose,
+}: {
+  node: GraphNode | undefined;
+  nodeId: string;
+  onDetails: () => void;
+  onCenter: () => void;
+  onClose: () => void;
+}) {
+  const type = node?.type ?? "node";
+  return (
+    <div className="selected-node-card" role="status" aria-live="polite">
+      <span className="dot" style={{ background: colorForNode(type) }} />
+      <div className="selected-node-card__text">
+        <span className="selected-node-card__label" title={nodeId}>
+          {labelOf(node, nodeId)}
+        </span>
+        <span className="selected-node-card__type">{type.replace(/_/g, " ")}</span>
+      </div>
+      <button type="button" className="btn btn--small btn--primary" onClick={onDetails}>
+        Details
+      </button>
+      <button type="button" className="btn btn--small" onClick={onCenter} title="Explore around this node">
+        Center
+      </button>
+      <button
+        type="button"
+        className="btn btn--ghost btn--icon btn--small"
+        onClick={onClose}
+        aria-label="Clear the selection"
+      >
+        ✕
+      </button>
+    </div>
+  );
 }
 
 function labelOf(node: GraphNode | undefined, fallback: string): string {

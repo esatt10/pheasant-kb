@@ -155,3 +155,90 @@ export interface FleetReport {
   can_create: boolean;
   can_resolve: boolean;
 }
+
+/** Which slice of the usage totals a drill-down follows. */
+export interface UsageSelection {
+  principal?: string;
+  organization?: string;
+  model?: string;
+}
+
+/** How far back the interaction ledger reaches for the selected window. */
+export interface TraceRetention {
+  ledger_days: number | null;
+  complete: boolean;
+  note: string | null;
+}
+
+export interface UsageSessionSummary {
+  /** A conversation id, or `trace:<id>` for a call made outside one. */
+  session: string;
+  first_at: string;
+  last_at: string;
+  calls: number;
+  errors: number;
+  duration_ms: number;
+  principal: string | null;
+  modality: string | null;
+}
+
+export interface UsageSessions {
+  window: { days: number; from: string };
+  filter: UsageSelection;
+  sessions: UsageSessionSummary[];
+  truncated: boolean;
+  retention: TraceRetention;
+  /** A Log Analytics query for this selection's spans, for the window. */
+  kql: string | null;
+  kql_note: string | null;
+}
+
+export interface AnswerTraceStep {
+  name: string;
+  detail: string;
+  model: string | null;
+  passages: number | null;
+  duration_seconds: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+}
+
+export interface AnswerTrace {
+  models?: { chat: string | null; decision: string | null };
+  routing?: { mode?: string; outcome?: string; selected?: string | null; decision_model?: string | null } | null;
+  route?: { intent?: string; depth?: string; visual?: string } | null;
+  workflow?: string | null;
+  degraded?: boolean;
+  citations?: number;
+  tokens?: { input_tokens: number; output_tokens: number };
+  server_ms?: number | null;
+  steps?: AnswerTraceStep[];
+}
+
+export interface UsageCall {
+  trace_id: string;
+  span_id: string;
+  operation: string;
+  modality: string;
+  principal: string | null;
+  organization: string | null;
+  started_at: string;
+  duration_ms: number | null;
+  status: string;
+  question: string | null;
+  answer: string | null;
+  result_count: number | null;
+  answer_trace: AnswerTrace | null;
+  http_status: number | null;
+}
+
+export interface UsageSession {
+  session: string;
+  window: { days: number; from: string };
+  first_at: string;
+  last_at: string;
+  calls: UsageCall[];
+  truncated: boolean;
+  retention: TraceRetention;
+  kql: string;
+}

@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 225 pytest modules, offline by design
+└── tests/                     ← 226 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1679,6 +1679,25 @@ operator provisions, the users decide.
   cost is withheld from an Admin a customer granted (`usage.is_operator`).
   The engine binds the meter, so a sync child's embeddings count too.
   `tests/test_usage_metering.py`.
+- **The traces behind the totals are read when asked** (`services/usage_traces.py`;
+  `GET /usage/sessions[/{session}[/export]]`, `/usage/traces/export`, MCP
+  `list_usage_sessions` / `get_usage_session`; the Usage tab's drill-down,
+  `ui/src/admin/TraceExplorer.tsx`). The interaction ledger is the index: an
+  answer annotates its row (`annotate_answer`: models, route, routing outcome,
+  tokens, steps; the UI's `conversation_id` as the session), `observe()` adds
+  the caller's organization as usage keys it, and the exported span carries
+  the models (never the person). A stream's answer is a child row of the
+  request's trace, annotated there, because the request's row is already
+  handed to the buffer (`event.handed_over`). Sessions are grouped by
+  conversation, a call by its trace; each level carries KQL naming its trace
+  ids (`OperationId` in the App Insights tables) and a JSONL export. Nothing
+  is materialized: the window is the depth, and `hot_retention_days` bounds
+  it, said in `retention`. `tests/test_usage_traces.py`.
+- **An Admin chooses the default models at runtime** (`models.set_defaults`,
+  `models.effective`; `PUT /models/defaults`, MCP `set_default_models`, the
+  Models tab's Make default). A `region_settings` row laid over the catalog
+  per request; the catalog stays the deployment's, and an id it no longer
+  lists is ignored.
 - **Several knowledge bases are several regions with a directory**
   (`fleet.*`; `persistence/fleet_store.py`, `services/fleet.py`; `/fleet*`,
   MCP `list_fleet` / `create_knowledge_base` / `request_capacity` /

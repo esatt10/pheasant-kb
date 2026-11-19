@@ -979,6 +979,7 @@ def observe(
         event.duration_ms = round((time.perf_counter() - ticked) * 1000.0, 3)
         if event.result_count is None and event.result_ids:
             event.result_count = len(event.result_ids)
+        _annotate_organization(event)
         if span_cm is not None:
             try:
                 _annotate_span(event)
@@ -988,8 +989,32 @@ def observe(
         _CURRENT_TRACE.reset(token)
         _CURRENT_EVENT.reset(event_token)
         _CURRENT_FLAGS.reset(flags_token)
+        # Handed to the buffer from here on: a worker thread that copied this
+        # context (a streamed answer) must not mutate it -- see `child_event`.
+        event.handed_over = True
         if buffer is not None:
             buffer.record(event)
+
+
+def _annotate_organization(event: InteractionEvent) -> None:
+    """The caller's organization, keyed as the usage ledger keys it.
+
+    Read at the end of the call, when the transport has certainly bound the
+    verified identity. A person's tenant, else ``""`` (the region's own
+    indexing and shared credentials), so the trace drill-down groups calls
+    exactly as the usage totals do (``services/usage_traces.py``).
+    """
+
+    if "tenant_id" in event.attributes:
+        return
+    try:
+        from pheasant.security.identity import current_identity
+
+        identity = current_identity()
+        person = identity is not None and identity.is_person
+        event.attributes["tenant_id"] = (identity.tenant_id if person else "") or ""
+    except Exception:  # noqa: BLE001 - observation must never fail a call
+        return
 
 
 def _annotate_span(event: InteractionEvent) -> None:
@@ -1016,6 +1041,11 @@ def _annotate_span(event: InteractionEvent) -> None:
         span.set_attribute("http.route", event.operation)
     if event.result_count is not None:
         span.set_attribute("pheasant.result_count", int(event.result_count))
+    # Which models answered: what the usage drill-down's KQL filters on. A
+    # model name is the shape of the call, not its content.
+    for key in ("chat_model", "decision_model"):
+        if event.attributes.get(key):
+            span.set_attribute(f"pheasant.{key}", str(event.attributes[key]))
     if event.status != "ok":
         span.set_status(ot_trace.Status(ot_trace.StatusCode.ERROR, event.status))
 
@@ -1080,7 +1110,7 @@ def child_event(parent: InteractionEvent, operation: str) -> InteractionEvent:
     what a parent/child span relationship is for.
     """
 
-    return InteractionEvent(
+    child = InteractionEvent(
         kb_id=parent.kb_id,
         operation=operation,
         modality=parent.modality,
@@ -1092,6 +1122,10 @@ def child_event(parent: InteractionEvent, operation: str) -> InteractionEvent:
         parent_span_id=parent.span_id,
         started_at=_iso(utc_now()),
     )
+    # The same caller's organization: the usage drill-down groups by it.
+    if "tenant_id" in parent.attributes:
+        child.attributes["tenant_id"] = parent.attributes["tenant_id"]
+    return child
 
 
 def extract_results(payload: Any) -> tuple[list[str], list[str], float | None, int]:

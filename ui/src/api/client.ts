@@ -62,6 +62,9 @@ import type {
   CapacityRequest,
   FleetReport,
   UsageReport,
+  UsageSelection,
+  UsageSession,
+  UsageSessions,
 } from "./admin";
 import type {
   Artifact,
@@ -636,6 +639,41 @@ export const api = {
       { method: "DELETE" },
     ),
   usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
+  /** The sessions behind a usage row (Admin), read only when asked for. */
+  usageSessions: (days: number, selection: UsageSelection) =>
+    request<UsageSessions>(`/usage/sessions${qs({ days, ...selection })}`),
+  /** One session's calls, with each answer's steps and a KQL query. */
+  usageSession: (session: string, days: number) =>
+    request<UsageSession>(`/usage/sessions/${encodeURIComponent(session)}${qs({ days })}`),
+  /** Save a selection's ledger rows as JSON lines (Admin). Returns the file name. */
+  downloadUsageTraces: async (
+    days: number,
+    selection: UsageSelection & { session?: string },
+  ): Promise<string> => {
+    const { session, ...filter } = selection;
+    const path = session
+      ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days })}`
+      : `/usage/traces/export${qs({ days, ...filter })}`;
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: requestHeaders(undefined, false),
+    });
+    if (response.status === 401) signalApiAuthRequired();
+    if (!response.ok) {
+      const detail = await response.json().then((body) => body?.detail).catch(() => null);
+      throw new ApiError(detail ? String(detail) : `${response.status} ${response.statusText}`, response.status);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? "pheasant-traces.jsonl";
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return name;
+  },
   fleet: () => request<FleetReport>("/fleet"),
   createKnowledgeBase: (body: { name: string; description?: string; admins?: string[] }) =>
     request<{
@@ -663,6 +701,12 @@ export const api = {
       body: JSON.stringify(configuration),
     }),
   /** Switch the region's embedding model (application Admin); re-embeds everything. */
+  /** Choose the region's default answering / judgement model (Admin); null restores the deployment's. */
+  setDefaultModels: (defaults: { chat?: string | null; decision?: string | null }) =>
+    request<ModelCatalog>("/models/defaults", {
+      method: "PUT",
+      body: JSON.stringify(defaults),
+    }),
   selectEmbedding: (embedding: string) =>
     request<ModelCatalog & { status: string }>("/models/embedding", {
       method: "PUT",
