@@ -225,7 +225,10 @@ export const DEFAULT_INNER_WIDTH = 560;
 export const DEFAULT_BROWSER_HEIGHT = 420;
 export const DEFAULT_TREE_WIDTH = 260;
 
-export const DEFAULT_DEPTH = 3;
+// Two layers: a node, what it links to, and what those link to. A third
+// pulled in every hub's whole neighbourhood before anyone asked for it;
+// the depth control still widens the horizon to MAX_DEPTH.
+export const DEFAULT_DEPTH = 2;
 export const MIN_DEPTH = 1;
 export const MAX_DEPTH = 6;
 

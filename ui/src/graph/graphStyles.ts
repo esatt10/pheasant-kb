@@ -380,7 +380,7 @@ export function buildStylesheet(theme: Theme = "light"): CyStylesheet[] {
       },
     },
     // Rings: the center is emphatic, each layer out recedes. This is what
-    // makes a depth-3 horizon read as "near / middle / far" instead of as a
+    // makes a deeper horizon read as "near / middle / far" instead of as a
     // flat blob of equally-loud nodes.
     {
       selector: "node.ring-0",
