@@ -237,6 +237,14 @@ totals count. On a live region nearly every ledger row is the interface
 polling for jobs and status, so **Every call** (`calls=all`) is there for
 chasing a fault rather than for reading.
 
+**Search** narrows either level with a simple wildcard pattern over each
+call's question, answer, operation and session: `*` is any run of
+characters, `?` is one, case is ignored, and the pattern may match anywhere,
+so `deploy*worker` finds "how do I deploy a worker". The sessions list keeps
+the sessions with a matching call and counts those calls; a session shows
+only its matching calls, with **Show all calls** beside them; the export takes
+the same search. The parameter is `match` on both surfaces.
+
 The same reads are `GET /usage/sessions` and `GET /usage/sessions/{session}`
 (MCP `list_usage_sessions`, `get_usage_session`), Admin only. The person
 filter is `person` on both: on MCP a parameter named `principal` is always the

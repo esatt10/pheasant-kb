@@ -13,6 +13,8 @@ Acceptance:
 4. Admin only, on both surfaces; a region with no ledger says so.
 5. An Admin's default models are laid over the catalog for every answer and
    listing, and ``null`` returns to the deployment's.
+6. A wildcard search (`*`, `?`, case ignored, anywhere) narrows the
+   sessions, a session's calls and the export alike, on both surfaces.
 """
 
 from __future__ import annotations
@@ -618,3 +620,150 @@ def test_mcp_filters_by_the_person_asked_for_not_the_caller(roles):
     )
     assert unfiltered["filter"]["principal"] is None
     assert {s["session"] for s in unfiltered["sessions"]} >= {"conv-bob", "conv-r"}
+
+
+# ------------------------------------------------------------------ search
+
+
+def _said(index: int, question: str, answer: str = "", **attributes) -> InteractionEvent:
+    event = _event(index, **attributes)
+    event.query_text = question
+    event.answer_text = answer
+    return event
+
+
+def _searched(context, match: str, **filters) -> list[str]:
+    listed = usage_traces.sessions(context, days=1, match=match, **filters)
+    return [s["session"] for s in listed["sessions"]]
+
+
+def test_a_wildcard_search_narrows_sessions_calls_and_the_export(context, admin):
+    _check_search(context)
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
+    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
+)
+def test_the_search_reads_the_same_on_a_real_postgres(tmp_path, admin):
+    """Postgres's LIKE is case-sensitive and SQLite's is not; LOWER on both
+    sides and the backslash escape have to mean the same thing on each."""
+
+    from pheasant.sync.engine import SyncEngine
+
+    config = _config(tmp_path)
+    config.observability.interactions.enabled = True
+    config.storage.backend = "postgres"
+    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    engine = SyncEngine(config)
+    try:
+        context = ServiceContext(config, engine.state, None)
+        context.state.execute("DELETE FROM interaction_events WHERE kb_id = ?", (KB,))
+        _check_search(context)
+    finally:
+        engine.close()
+
+
+def _check_search(context):
+    _write(
+        context,
+        _said(
+            91,
+            "How do I deploy a worker?",
+            "Scale it with PHEASANT_WORKERS.",
+            session="conv-deploy",
+            minutes_ago=9,
+        ),
+        _said(
+            92, "What is the graph arm?", "One of three arms.", session="conv-deploy", minutes_ago=8
+        ),
+        _said(93, "Is 50% of the corpus indexed?", "Yes.", session="conv-pct", minutes_ago=7),
+        _said(94, "Is 50 of the corpus indexed?", "No.", session="conv-plain", minutes_ago=6),
+        _said(95, "colour or color?", "Either.", session="conv-colour", minutes_ago=5),
+    )
+    assert _searched(context, "deploy*worker") == ["conv-deploy"], "* spans characters"
+    assert _searched(context, "DEPLOY") == ["conv-deploy"], "case is ignored"
+    assert _searched(context, "PHEASANT_WORKERS") == ["conv-deploy"], "answers are searched"
+    assert _searched(context, "conv-pl*") == ["conv-plain"], "so is the session"
+    assert _searched(context, "colo?r") == ["conv-colour"], "? is one character"
+    assert _searched(context, "colo?r?") == ["conv-colour"], "matched anywhere"
+    assert _searched(context, "50%") == ["conv-pct"], "LIKE's % is literal"
+    assert _searched(context, "50_") == [], "and so is _"
+    assert _searched(context, "nothing*like*this") == []
+    everything = _searched(context, "")
+    assert _searched(context, "*") == everything and len(everything) == 4
+
+    listed = usage_traces.sessions(context, days=1, match="  graph  ")
+    assert listed["filter"]["match"] == "graph", "trimmed and reported"
+    assert listed["sessions"][0]["calls"] == 1, "a session counts its matching calls"
+
+    found = usage_traces.session(context, "conv-deploy", days=1, match="graph arm")
+    assert [c["question"] for c in found["calls"]] == ["What is the graph arm?"]
+    assert found["filter"] == {"calls": "questions", "match": "graph arm"}
+    whole = usage_traces.session(context, "conv-deploy", days=1)
+    assert len(whole["calls"]) == 2 and whole["filter"]["match"] is None
+    with pytest.raises(usage_traces.SessionNotFound, match="matching 'colour'"):
+        usage_traces.session(context, "conv-deploy", days=1, match="colour")
+
+    lines = list(usage_traces.export_lines(context, days=1, match="indexed"))
+    assert sorted(json.loads(line)["session_id"] for line in lines) == ["conv-pct", "conv-plain"]
+    one = list(
+        usage_traces.export_lines(context, days=1, session_key="conv-deploy", match="worker")
+    )
+    assert [json.loads(line)["trace_id"] for line in one] == [f"{91:032x}"]
+
+    from pheasant.services.errors import InvalidRequest
+
+    with pytest.raises(InvalidRequest, match="at most 200"):
+        usage_traces.sessions(context, days=1, match="x" * 201)
+
+
+def test_both_surfaces_search_alike(roles):
+    app, client = roles
+    StateSink(app.state.state).write(
+        [
+            _said(
+                96,
+                "Where do uploads land?",
+                "In the landing zone.",
+                session="conv-up",
+                minutes_ago=1,
+            )
+        ]
+    )
+    headers = {"Authorization": "Bearer admin-token"}
+    http = client.get(
+        "/usage/sessions", params={"days": 1, "match": "upload*land"}, headers=headers
+    ).json()
+    assert [s["session"] for s in http["sessions"]] == ["conv-up"]
+    reply = _mcp(client, "admin-token", "list_usage_sessions", {"days": 1, "match": "upload*land"})
+    assert json.loads(reply["result"]["content"][0]["text"])["sessions"] == http["sessions"]
+
+    one = client.get(
+        "/usage/sessions/conv-up", params={"days": 1, "match": "LANDING"}, headers=headers
+    ).json()
+    reply = _mcp(
+        client,
+        "admin-token",
+        "get_usage_session",
+        {"session": "conv-up", "days": 1, "match": "LANDING"},
+    )
+    assert json.loads(reply["result"]["content"][0]["text"])["calls"] == one["calls"]
+    assert len(one["calls"]) == 1
+
+    exported = client.get(
+        "/usage/traces/export", params={"days": 1, "match": "landing"}, headers=headers
+    )
+    assert [json.loads(line)["session_id"] for line in exported.text.splitlines()] == ["conv-up"]
+
+    missing = client.get(
+        "/usage/sessions/conv-up", params={"days": 1, "match": "nope"}, headers=headers
+    )
+    assert missing.status_code == 404 and "matching 'nope'" in missing.text
+    refused = _mcp(
+        client,
+        "admin-token",
+        "get_usage_session",
+        {"session": "conv-up", "days": 1, "match": "nope"},
+    )
+    assert _mcp_refused(refused)

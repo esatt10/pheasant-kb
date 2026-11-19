@@ -239,6 +239,7 @@ export interface UsageCall {
 export interface UsageSession {
   session: string;
   window: { days: number; from: string };
+  filter?: { calls: TraceCalls; match: string | null };
   first_at: string;
   last_at: string;
   calls: UsageCall[];

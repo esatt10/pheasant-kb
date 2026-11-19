@@ -70,6 +70,7 @@ class ModelTools:
         organization: str | None = None,
         model: str | None = None,
         calls: str = "questions",
+        match: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import usage_traces
@@ -81,15 +82,21 @@ class ModelTools:
             organization=organization,
             model=model,
             calls=calls,
+            match=match,
         )
 
     def get_usage_session(
-        self, knowledge_base: str, session: str, days: int = 7, calls: str = "questions"
+        self,
+        knowledge_base: str,
+        session: str,
+        days: int = 7,
+        calls: str = "questions",
+        match: str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import usage_traces
 
-        return usage_traces.session(self.services, session, days=days, calls=calls)
+        return usage_traces.session(self.services, session, days=days, calls=calls, match=match)
 
 
 def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
@@ -180,6 +187,7 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         organization: str | None = None,
         model: str | None = None,
         calls: str = "questions",
+        match: str | None = None,
     ) -> dict:
         """The sessions behind the usage totals (Admin only), newest first.
 
@@ -192,20 +200,30 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         ``trace:<id>``. Pass a session to get_usage_session for its calls.
         ``calls`` is ``questions`` (default: the questions and searches the
         totals count) or ``all`` (every request, the UI's polling included).
+        ``match`` is a wildcard search over each call's question, answer,
+        operation and session: ``*`` any characters, ``?`` one, case ignored,
+        matched anywhere ("deploy*worker"); it keeps the sessions with a call it
+        finds, counting those calls.
         TRACES_NOT_KEPT means the region keeps no interaction ledger."""
 
-        return tools.list_usage_sessions(knowledge_base, days, person, organization, model, calls)
+        return tools.list_usage_sessions(
+            knowledge_base, days, person, organization, model, calls, match
+        )
 
     @mcp.tool()
     @anticipated
     def get_usage_session(
-        knowledge_base: str, session: str, days: int = 7, calls: str = "questions"
+        knowledge_base: str,
+        session: str,
+        days: int = 7,
+        calls: str = "questions",
+        match: str | None = None,
     ) -> dict:
         """One session's calls in order (Admin only): each question and answer,
         the models that ran, the steps the answer took with their tokens and
         timings, and ``kql``, a Log Analytics query for the session's spans
         (paste it into the workspace's Logs). The JSON-lines export is HTTP
-        only: GET /usage/sessions/{session}/export. ``calls`` as in
-        list_usage_sessions."""
+        only: GET /usage/sessions/{session}/export. ``calls`` and ``match`` as
+        in list_usage_sessions; with ``match``, only the calls it finds."""
 
-        return tools.get_usage_session(knowledge_base, session, days, calls)
+        return tools.get_usage_session(knowledge_base, session, days, calls, match)

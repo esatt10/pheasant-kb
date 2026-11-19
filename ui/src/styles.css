@@ -7014,6 +7014,28 @@ select.text-input {
   color: var(--text-soft);
   font-size: max(11px, calc(13px * var(--fs)));
 }
+/* One search over the drill-down's calls, under the crumbs. */
+.trace-explorer__search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--sp)) calc(10px * var(--sp));
+}
+.trace-explorer__search .text-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 480px;
+}
+.trace-explorer__search-hint code {
+  font-family: var(--font-mono);
+}
+@media (pointer: coarse) {
+  /* A touch-sized field, and 16px so iOS does not zoom the page on focus. */
+  .trace-explorer__search .text-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
 /* The Questions / Every call switch sits at the crumbs' far end. */
 .trace-explorer__calls {
   margin-left: auto;
