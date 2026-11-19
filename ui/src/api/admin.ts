@@ -163,6 +163,10 @@ export interface UsageSelection {
   model?: string;
 }
 
+/** Which calls a drill-down reads: the questions and searches the totals
+ *  count (default), or every request the ledger observed, polling included. */
+export type TraceCalls = "questions" | "all";
+
 /** How far back the interaction ledger reaches for the selected window. */
 export interface TraceRetention {
   ledger_days: number | null;

@@ -62,6 +62,7 @@ import type {
   CapacityRequest,
   FleetReport,
   UsageReport,
+  TraceCalls,
   UsageSelection,
   UsageSession,
   UsageSessions,
@@ -419,6 +420,12 @@ export interface GraphQueryOptions {
   source?: string;
 }
 
+/** The drill-down's person filter is `person` on the wire: on MCP a parameter
+ *  named `principal` is always the caller, so neither surface uses it here. */
+function personFilter({ principal, ...rest }: UsageSelection): Record<string, string | undefined> {
+  return { ...rest, person: principal };
+}
+
 export const api = {
   health: () => request<{ status: string }>("/health"),
   /**
@@ -640,20 +647,20 @@ export const api = {
     ),
   usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
   /** The sessions behind a usage row (Admin), read only when asked for. */
-  usageSessions: (days: number, selection: UsageSelection) =>
-    request<UsageSessions>(`/usage/sessions${qs({ days, ...selection })}`),
+  usageSessions: (days: number, selection: UsageSelection, calls: TraceCalls = "questions") =>
+    request<UsageSessions>(`/usage/sessions${qs({ days, calls, ...personFilter(selection) })}`),
   /** One session's calls, with each answer's steps and a KQL query. */
-  usageSession: (session: string, days: number) =>
-    request<UsageSession>(`/usage/sessions/${encodeURIComponent(session)}${qs({ days })}`),
+  usageSession: (session: string, days: number, calls: TraceCalls = "questions") =>
+    request<UsageSession>(`/usage/sessions/${encodeURIComponent(session)}${qs({ days, calls })}`),
   /** Save a selection's ledger rows as JSON lines (Admin). Returns the file name. */
   downloadUsageTraces: async (
     days: number,
-    selection: UsageSelection & { session?: string },
+    selection: UsageSelection & { session?: string; calls?: TraceCalls },
   ): Promise<string> => {
-    const { session, ...filter } = selection;
+    const { session, calls = "questions", ...filter } = selection;
     const path = session
-      ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days })}`
-      : `/usage/traces/export${qs({ days, ...filter })}`;
+      ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days, calls })}`
+      : `/usage/traces/export${qs({ days, calls, ...personFilter(filter) })}`;
     const response = await fetch(`${API_BASE}${path}`, {
       headers: requestHeaders(undefined, false),
     });

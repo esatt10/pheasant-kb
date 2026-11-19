@@ -232,8 +232,15 @@ call made outside one stands alone. Each level offers:
 - **Export JSONL.** The selection's ledger rows, one call per line, attributes
   included.
 
+The drill-down reads **Questions** by default: the questions and searches the
+totals count. On a live region nearly every ledger row is the interface
+polling for jobs and status, so **Every call** (`calls=all`) is there for
+chasing a fault rather than for reading.
+
 The same reads are `GET /usage/sessions` and `GET /usage/sessions/{session}`
-(MCP `list_usage_sessions`, `get_usage_session`), Admin only.
+(MCP `list_usage_sessions`, `get_usage_session`), Admin only. The person
+filter is `person` on both: on MCP a parameter named `principal` is always the
+caller.
 
 Cost is the operator's. It is shown to the local operator, the shared token and
 the admins the deployment pinned (`role_assignments`); an Admin a customer

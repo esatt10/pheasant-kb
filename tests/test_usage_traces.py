@@ -529,3 +529,92 @@ def test_traces_and_default_models_are_the_admins_on_both_surfaces(roles, role):
     assert listed.status_code == 200
     assert listed.json()["can_set_defaults"] is allowed
     assert not _mcp_refused(_mcp(client, token, "list_models", {}))
+
+
+def _poll(index: int, *, minutes_ago: float = 3) -> InteractionEvent:
+    """A request with no question: the UI polling for jobs, as on a live region."""
+
+    return InteractionEvent(
+        kb_id=KB,
+        operation="/jobs",
+        modality="ui",
+        trace_id=f"{index:032x}",
+        span_id=f"{index:016x}",
+        started_at=_at(minutes_ago),
+        duration_ms=4.0,
+        principal="alice@contoso.com",
+    )
+
+
+def test_the_drill_down_reads_questions_unless_asked_for_every_call(context, admin):
+    """Polling is ~98% of a live ledger; the traces behind the totals are the
+    questions and searches, and ``all`` is there for chasing a fault."""
+
+    _write(
+        context,
+        _event(51, session="conv-q", minutes_ago=4),
+        *[_poll(60 + i) for i in range(5)],
+    )
+    asked = usage_traces.sessions(context, days=1, principal="alice@contoso.com")
+    assert [s["session"] for s in asked["sessions"]] == ["conv-q"]
+    assert asked["filter"]["calls"] == "questions"
+    everything = usage_traces.sessions(context, days=1, principal="alice@contoso.com", calls="all")
+    assert len(everything["sessions"]) == 6
+    lines = list(usage_traces.export_lines(context, days=1, principal="alice@contoso.com"))
+    assert [json.loads(line)["operation"] for line in lines] == ["/assistant"]
+    assert len(list(usage_traces.export_lines(context, days=1, calls="all"))) == 6
+    polled = f"trace:{60:032x}"
+    with pytest.raises(usage_traces.SessionNotFound):
+        usage_traces.session(context, polled, days=1)
+    assert (
+        usage_traces.session(context, polled, days=1, calls="all")["calls"][0]["operation"]
+        == "/jobs"
+    )
+    from pheasant.services.errors import InvalidRequest
+
+    with pytest.raises(InvalidRequest, match="calls must be questions or all"):
+        usage_traces.sessions(context, days=1, calls="some")
+
+
+def test_both_surfaces_take_which_calls(roles):
+    app, client = roles
+    StateSink(app.state.state).write([_poll(70, minutes_ago=1)])
+    headers = {"Authorization": "Bearer admin-token"}
+    questions = client.get("/usage/sessions", params={"days": 1}, headers=headers).json()
+    everything = client.get(
+        "/usage/sessions", params={"days": 1, "calls": "all"}, headers=headers
+    ).json()
+    assert len(everything["sessions"]) == len(questions["sessions"]) + 1
+    refused = client.get("/usage/sessions", params={"days": 1, "calls": "x"}, headers=headers)
+    assert refused.status_code == 422
+    reply = _mcp(client, "admin-token", "list_usage_sessions", {"days": 1, "calls": "all"})
+    text = reply["result"]["content"][0]["text"]
+    assert len(json.loads(text)["sessions"]) == len(everything["sessions"])
+
+
+def test_mcp_filters_by_the_person_asked_for_not_the_caller(roles):
+    """MCP rebinds a parameter named ``principal`` to the caller, so the filter
+    is ``person`` on both surfaces: an Admin reads someone else's sessions."""
+
+    app, client = roles
+    StateSink(app.state.state).write(
+        [_event(81, session="conv-bob", minutes_ago=1, principal="bob@contoso.com")]
+    )
+    headers = {"Authorization": "Bearer admin-token"}
+    http = client.get(
+        "/usage/sessions", params={"days": 1, "person": "bob@contoso.com"}, headers=headers
+    ).json()
+    assert [s["session"] for s in http["sessions"]] == ["conv-bob"]
+    reply = _mcp(
+        client, "admin-token", "list_usage_sessions", {"days": 1, "person": "bob@contoso.com"}
+    )
+    body = json.loads(reply["result"]["content"][0]["text"])
+    assert body["filter"]["principal"] == "bob@contoso.com"
+    assert body["sessions"] == http["sessions"]
+    unfiltered = json.loads(
+        _mcp(client, "admin-token", "list_usage_sessions", {"days": 1})["result"]["content"][0][
+            "text"
+        ]
+    )
+    assert unfiltered["filter"]["principal"] is None
+    assert {s["session"] for s in unfiltered["sessions"]} >= {"conv-bob", "conv-r"}

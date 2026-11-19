@@ -1689,7 +1689,9 @@ operator provisions, the users decide.
   the models (never the person). A stream's answer is a child row of the
   request's trace, annotated there, because the request's row is already
   handed to the buffer (`event.handed_over`). Sessions are grouped by
-  conversation, a call by its trace; each level carries KQL naming its trace
+  conversation, a call by its trace, questions only unless `calls=all`
+  (polling is ~98% of a live ledger); the person filter is `person`, because
+  MCP rebinds any `principal` parameter to the caller; each level carries KQL naming its trace
   ids (`OperationId` in the App Insights tables) and a JSONL export. Nothing
   is materialized: the window is the depth, and `hot_retention_days` bounds
   it, said in `retention`. `tests/test_usage_traces.py`.

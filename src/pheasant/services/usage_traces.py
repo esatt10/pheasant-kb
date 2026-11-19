@@ -179,10 +179,13 @@ def _where(
     principal: str | None,
     organization: str | None,
     model: str | None,
+    calls: str = "questions",
 ) -> tuple[str, list[Any]]:
     state = context.state
     clauses = ["kb_id = ?", "started_at >= ?"]
     params: list[Any] = [context.config.pheasant.name, since]
+    if calls == "questions":
+        clauses.append(QUESTIONS)
     if principal:
         clauses.append("principal = ?")
         params.append(principal)
@@ -196,6 +199,23 @@ def _where(
         )
         params += [model, model]
     return " AND ".join(clauses), params
+
+
+#: Which calls a drill-down reads. The ledger observes every request, and on a
+#: live region about 98% of them are the UI's polling (``/jobs``, ``/queue``,
+#: ``/overview``) and the tiers' own ``/internal`` traffic: measured on
+#: production, 179 questions among 11,645 rows in a week. The usage totals
+#: count questions and searches, so the traces behind them are the calls that
+#: carry one; ``all`` is every request, for chasing a fault.
+CALLS = ("questions", "all")
+QUESTIONS = "COALESCE(query_text, '') <> ''"
+
+
+def _calls(value: Any) -> str:
+    value = str(value or "questions").strip().lower()
+    if value not in CALLS:
+        raise InvalidRequest("calls must be questions or all")
+    return value
 
 
 def _retention(settings: Any, days: int) -> dict[str, Any]:
@@ -220,13 +240,19 @@ def sessions(
     principal: str | None = None,
     organization: str | None = None,
     model: str | None = None,
+    calls: str = "questions",
 ) -> dict[str, Any]:
-    """The sessions a person, organization or model took part in, newest first."""
+    """The sessions a person, organization or model took part in, newest first.
+
+    ``calls`` is ``questions`` (the default: the questions and searches the
+    usage totals count) or ``all`` (every request the ledger observed).
+    """
 
     settings = _settings(context)
     days, since = _window(days)
+    calls = _calls(calls)
     where, params = _where(
-        context, since, principal=principal, organization=organization, model=model
+        context, since, principal=principal, organization=organization, model=model, calls=calls
     )
     key = "COALESCE(session_id, 'trace:' || trace_id)"
     rows = context.state.rows(
@@ -269,7 +295,12 @@ def sessions(
     named = traces if len(traces) <= MAX_KQL_TRACES else None
     return {
         "window": {"days": days, "from": since},
-        "filter": {"principal": principal, "organization": organization, "model": model},
+        "filter": {
+            "principal": principal,
+            "organization": organization,
+            "model": model,
+            "calls": calls,
+        },
         "sessions": listed,
         "truncated": len(rows) > MAX_SESSIONS,
         "retention": _retention(settings, days),
@@ -313,11 +344,15 @@ _COLUMNS = (
 )
 
 
-def _session_rows(context: ServiceContext, key: str, since: str) -> list[dict[str, Any]]:
+def _session_rows(
+    context: ServiceContext, key: str, since: str, calls: str = "questions"
+) -> list[dict[str, Any]]:
     if key.startswith("trace:"):
         clause, value = "trace_id = ? AND session_id IS NULL", key[len("trace:") :]
     else:
         clause, value = "session_id = ?", key
+    if calls == "questions":
+        clause += f" AND {QUESTIONS}"
     return context.state.rows(
         f"SELECT {_COLUMNS} FROM interaction_events WHERE kb_id = ? AND started_at >= ? "
         f"AND {clause} ORDER BY started_at LIMIT ?",
@@ -325,15 +360,18 @@ def _session_rows(context: ServiceContext, key: str, since: str) -> list[dict[st
     )
 
 
-def session(context: ServiceContext, key: str, *, days: int = 7) -> dict[str, Any]:
+def session(
+    context: ServiceContext, key: str, *, days: int = 7, calls: str = "questions"
+) -> dict[str, Any]:
     """One session's calls in order, with each answer's steps and a KQL query."""
 
     settings = _settings(context)
     days, since = _window(days)
+    calls = _calls(calls)
     key = str(key or "").strip()
     if not key:
         raise InvalidRequest("session is required")
-    rows = _session_rows(context, key, since)
+    rows = _session_rows(context, key, since, calls)
     if not rows:
         raise SessionNotFound(key)
     # A request whose work is a child row of the same trace (a stream's answer)
@@ -344,6 +382,7 @@ def session(context: ServiceContext, key: str, *, days: int = 7) -> dict[str, An
     return {
         "session": key,
         "window": {"days": days, "from": since},
+        "filter": {"calls": calls},
         "first_at": calls[0]["started_at"],
         "last_at": calls[-1]["started_at"],
         "calls": calls,
@@ -365,16 +404,18 @@ def export_lines(
     organization: str | None = None,
     model: str | None = None,
     session_key: str | None = None,
+    calls: str = "questions",
 ) -> Iterator[str]:
     """The selected ledger rows as JSON lines, oldest first, for a download."""
 
     _settings(context)
     days, since = _window(days)
+    calls = _calls(calls)
     if session_key:
-        rows = _session_rows(context, session_key, since)
+        rows = _session_rows(context, session_key, since, calls)
     else:
         where, params = _where(
-            context, since, principal=principal, organization=organization, model=model
+            context, since, principal=principal, organization=organization, model=model, calls=calls
         )
         rows = context.state.rows(
             f"SELECT {_COLUMNS} FROM interaction_events WHERE {where} ORDER BY started_at LIMIT ?",

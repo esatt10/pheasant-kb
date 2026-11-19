@@ -6965,6 +6965,22 @@ select.text-input {
   color: var(--text-soft);
   font-size: max(11px, calc(13px * var(--fs)));
 }
+/* The Questions / Every call switch sits at the crumbs' far end. */
+.trace-explorer__calls {
+  margin-left: auto;
+}
+
+.trace-explorer .segmented button {
+  min-height: 26px;
+  font-size: max(11.5px, calc(12.5px * var(--fs)));
+}
+
+@media (pointer: coarse) {
+  .trace-explorer .segmented button {
+    min-height: 40px;
+  }
+}
+
 .trace-explorer__crumbs strong {
   color: var(--text);
 }

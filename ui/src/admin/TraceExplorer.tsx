@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
-import type { UsageCall, UsageSelection, UsageSessionSummary } from "../api/admin";
+import type { TraceCalls, UsageCall, UsageSelection, UsageSessionSummary } from "../api/admin";
 
 /** What a drill-down follows: a usage row, named the way the reader saw it. */
 export interface TraceTarget {
@@ -41,6 +41,9 @@ export function TraceExplorer({
   onClose: () => void;
 }) {
   const [session, setSession] = useState<string | null>(null);
+  // Questions by default: on a live region nearly every ledger row is the UI
+  // polling for jobs and status, which would bury the conversations.
+  const [calls, setCalls] = useState<TraceCalls>("questions");
   return (
     <section className="section trace-explorer" aria-label="Traces">
       <nav className="trace-explorer__crumbs" aria-label="Trace navigation">
@@ -61,11 +64,30 @@ export function TraceExplorer({
             <strong className="trace-explorer__crumb-session">{sessionName(session)}</strong>
           </>
         ) : null}
+        <div className="segmented trace-explorer__calls" role="group" aria-label="Which calls">
+          {(
+            [
+              ["questions", "Questions", "The questions and searches the totals count"],
+              ["all", "Every call", "Every request, the interface's own polling included"],
+            ] as const
+          ).map(([value, label, title]) => (
+            <button
+              key={value}
+              type="button"
+              className={calls === value ? "active" : ""}
+              aria-pressed={calls === value}
+              title={title}
+              onClick={() => setCalls(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </nav>
       {session ? (
-        <SessionView days={days} session={session} />
+        <SessionView days={days} session={session} calls={calls} />
       ) : (
-        <SessionList days={days} target={target} onOpen={setSession} />
+        <SessionList days={days} target={target} calls={calls} onOpen={setSession} />
       )}
     </section>
   );
@@ -74,15 +96,17 @@ export function TraceExplorer({
 function SessionList({
   days,
   target,
+  calls,
   onOpen,
 }: {
   days: number;
   target: TraceTarget;
+  calls: TraceCalls;
   onOpen: (session: string) => void;
 }) {
   const sessions = useQuery({
-    queryKey: ["usage-sessions", days, target.selection],
-    queryFn: () => api.usageSessions(days, target.selection),
+    queryKey: ["usage-sessions", days, target.selection, calls],
+    queryFn: () => api.usageSessions(days, target.selection, calls),
     retry: false,
   });
   const exported = useExport();
@@ -97,14 +121,16 @@ function SessionList({
           <p className="muted small">
             {data.sessions.length
               ? `${data.sessions.length}${data.truncated ? "+" : ""} in the last ${days} days, newest first. A session is one conversation; a call made outside one stands alone.`
-              : `No traced calls for ${target.label} in the last ${days} days.`}
+              : calls === "questions"
+                ? `No questions or searches by ${target.label} in the last ${days} days. "Every call" shows the rest of the traffic.`
+                : `No traced calls for ${target.label} in the last ${days} days.`}
           </p>
         </div>
         <button
           type="button"
           className="btn btn--small"
           disabled={exported.isPending || !data.sessions.length}
-          onClick={() => exported.mutate({ days, ...target.selection })}
+          onClick={() => exported.mutate({ days, calls, ...target.selection })}
           title="Save every call in this selection as JSON lines"
         >
           {exported.isPending ? "Exporting…" : "Export JSONL"}
@@ -160,10 +186,18 @@ function SessionList({
   );
 }
 
-function SessionView({ days, session }: { days: number; session: string }) {
+function SessionView({
+  days,
+  session,
+  calls,
+}: {
+  days: number;
+  session: string;
+  calls: TraceCalls;
+}) {
   const found = useQuery({
-    queryKey: ["usage-session", days, session],
-    queryFn: () => api.usageSession(session, days),
+    queryKey: ["usage-session", days, session, calls],
+    queryFn: () => api.usageSession(session, days, calls),
     retry: false,
   });
   const exported = useExport();
@@ -185,7 +219,7 @@ function SessionView({ days, session }: { days: number; session: string }) {
           type="button"
           className="btn btn--small"
           disabled={exported.isPending}
-          onClick={() => exported.mutate({ days, session })}
+          onClick={() => exported.mutate({ days, session, calls })}
           title="Save this session's calls as JSON lines"
         >
           {exported.isPending ? "Exporting…" : "Export JSONL"}
@@ -330,7 +364,10 @@ function TraceError({ error }: { error: Error }) {
 
 function useExport() {
   return useMutation({
-    mutationFn: ({ days, ...selection }: UsageSelection & { days: number; session?: string }) =>
+    mutationFn: ({
+      days,
+      ...selection
+    }: UsageSelection & { days: number; session?: string; calls?: TraceCalls }) =>
       api.downloadUsageTraces(days, selection),
   });
 }

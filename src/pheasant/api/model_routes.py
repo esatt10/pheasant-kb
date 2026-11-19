@@ -58,9 +58,10 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
     @app.get("/usage/sessions")
     def usage_sessions(
         days: int = 7,
-        principal: str | None = None,
+        person: str | None = None,
         organization: str | None = None,
         model: str | None = None,
+        calls: str = "questions",
     ) -> dict:
         """The sessions a person, organization or model took part in (Admin),
         newest first, read from the interaction ledger when asked."""
@@ -68,30 +69,38 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
         from pheasant.services import usage_traces
 
         return usage_traces.sessions(
-            services, days=days, principal=principal, organization=organization, model=model
+            services,
+            days=days,
+            principal=person,
+            organization=organization,
+            model=model,
+            calls=calls,
         )
 
     @app.get("/usage/sessions/{session_key:path}/export")
-    def export_usage_session(session_key: str, days: int = 7):
-        return _export(days=days, session_key=session_key)
+    def export_usage_session(session_key: str, days: int = 7, calls: str = "questions"):
+        return _export(days=days, session_key=session_key, calls=calls)
 
     @app.get("/usage/sessions/{session_key:path}")
-    def usage_session(session_key: str, days: int = 7) -> dict:
+    def usage_session(session_key: str, days: int = 7, calls: str = "questions") -> dict:
         """One session's calls, each answer's steps and models, and a KQL query
         for its spans in Log Analytics (Admin)."""
 
         from pheasant.services import usage_traces
 
-        return usage_traces.session(services, session_key, days=days)
+        return usage_traces.session(services, session_key, days=days, calls=calls)
 
     @app.get("/usage/traces/export")
     def export_usage_traces(
         days: int = 7,
-        principal: str | None = None,
+        person: str | None = None,
         organization: str | None = None,
         model: str | None = None,
+        calls: str = "questions",
     ):
-        return _export(days=days, principal=principal, organization=organization, model=model)
+        return _export(
+            days=days, principal=person, organization=organization, model=model, calls=calls
+        )
 
     def _export(**selection: Any):
         """The selected ledger rows as JSON lines. HTTP only, like a raw
