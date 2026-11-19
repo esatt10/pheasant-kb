@@ -118,6 +118,22 @@ def sync_result_counts(result: Any, engine: Any) -> dict[str, int]:
     return normalized
 
 
+@pytest.fixture(autouse=True)
+def _fresh_model_availability():
+    """Start every test with no model marked unavailable.
+
+    A failed model call marks that model, resource and key unavailable for 60 s
+    in this process (``LLM.available``), so automatic routing skips it. Across
+    tests that is leaked state: a test calling a fake endpoint left every later
+    test using the same model and key with no eligible model inside the
+    window, and the order the files ran in decided which one failed.
+    """
+    from pheasant.assistant import llm
+
+    llm.reset_availability()
+    yield
+
+
 @pytest.fixture()
 def workspace_copy(tmp_path: Path) -> Path:
     """Copy the sample workspace so tests can mutate it safely."""

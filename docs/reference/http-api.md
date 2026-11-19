@@ -362,11 +362,20 @@ See [Vector self-search](../how-to/vector-search.md).
 |---|---|---|
 | GET | `/models` | The answering, judgement and embedding models offered, the default of each, and the embedding in force (`embedding.state`: `ready` or `reindex_pending`). Never an endpoint or a variable name. |
 | PUT | `/models/embedding` | Switch the region's embedding model (application Admin). Every chunk already indexed is re-embedded; no source is re-read. |
+| GET | `/models/routing` | Saved automatic routing policy, default low/medium/high reasoning rubric, and `can_save`. Readers can inspect and use runtime overrides. |
+| PUT | `/models/routing` | Save shared routing defaults (`settings.manage`: Contributor/Admin). Body: `mode` (`openai`, `anthropic`, `custom`, `off`), `models` (custom catalog IDs), optional `criteria` and `reasoning_levels` (ID to low/medium/high). |
 
 | GET | `/usage` | With `observability.usage`: tokens by model, questions, searches, people, organizations, surfaces, answer and search p50/p95, and size, over `?days=` (Admin). Cost, at the prices the operator stated, is `null` unless the caller operates the region. |
 
 `POST /assistant/chat` and its stream take `model` and `decision_model` (ids
 from `GET /models`); the answer's `models` reports which ran.
+Alternatively, send `model_routing` with the same policy shape as
+`PUT /models/routing` for an ephemeral override; omit it to use saved defaults.
+The decision model's choices are built from eligible models and its instructions
+from the current criteria. Do not combine `model` and `model_routing`.
+The response's `model_routing` records the actual routing decision/fallback.
+No eligible candidate gives `503 NO_AVAILABLE_MODEL`; invalid policies give
+`422 INVALID_REQUEST`. See [Automatic routing](../configuration.md#automatic-answering-model-routing).
 
 ## Access
 

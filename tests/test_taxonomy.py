@@ -898,10 +898,32 @@ def test_a_gap_to_a_huge_number_is_counted_not_listed() -> None:
     (listing them was a MemoryError that failed every /taxonomy call)."""
     from pheasant.ingestion.taxonomy import MAX_LISTED_MISSING, reconcile_issues
 
-    issues = reconcile_issues(detect_headings("1. One\n2. Two\n20261118. Dated\n"))
+    # A bare numbered heading cannot carry such a number any more
+    # (MAX_ORDINAL_PART_DIGITS); a § citation can, and the gap stays bounded.
+    issues = reconcile_issues(detect_headings("§ 1 One\n§ 2 Two\n§ 99999 Far\n"))
     gap = next(i for i in issues if i["kind"] == "gap")
-    assert gap["missing_count"] == 20261118 - 3
+    assert gap["missing_count"] == 99999 - 3
     assert gap["missing"] == list(range(3, 3 + MAX_LISTED_MISSING))
+
+
+def test_a_run_of_page_numbers_is_not_a_heading() -> None:
+    """Production: a textbook PDF's run-together page numbers, ``192021222324``,
+    read as a numbered heading after section 406, a gap of 192 billion."""
+    from pheasant.ingestion.taxonomy import reconcile_issues
+
+    headings = detect_headings(
+        "405. Policy Gradient\n406. Actor-Critic Methods\n192021222324 Reinforcement Learning\n"
+    )
+    assert [h.number for h in headings] == ["405", "406"]
+    assert reconcile_issues(headings) == []
+
+
+def test_years_and_long_statute_citations_are_still_headings() -> None:
+    """The digit bound is for bare numbered headings only, and admits a year."""
+    years = detect_headings("2025. The Old Plan\n2026. The New Plan\n")
+    assert [h.number for h in years] == ["2025", "2026"]
+    statute = detect_headings("§ 12101 Findings and purpose\n§ 12102 Definition of disability\n")
+    assert [h.number for h in statute] == ["§ 12101", "§ 12102"]
 
 
 def test_duplicate_and_out_of_order_are_reported() -> None:

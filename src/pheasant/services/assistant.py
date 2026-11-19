@@ -154,6 +154,8 @@ class AnswerRequest:
     #: ``GET /models``). ``None`` is the region's default of each.
     model: str | None = None
     decision_model: str | None = None
+    #: Ephemeral automatic selection policy; unset follows the saved region default.
+    model_routing: dict[str, Any] | None = None
 
 
 def admit(context: ServiceContext, request: AnswerRequest) -> None:
@@ -189,6 +191,9 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
 
     # An unknown model is refused here, before a stream opens.
     models.resolve(context.config, request.model, request.decision_model)
+    from pheasant.services import model_routing
+
+    model_routing.admit(context, request.model_routing, request.model)
     if request.intent and str(request.intent).strip().lower() not in {"auto", *chat.INTENTS}:
         raise InvalidRequest(
             f"intent must be one of auto, {', '.join(chat.INTENTS)}; got {request.intent!r}"
@@ -240,10 +245,6 @@ def answer(
         request.artifacts, request.source_name, request.source_names, None, state=context.state
     )
     from pheasant.services import models
-
-    # The chosen models as a view of the config: every workflow reads
-    # `config.assistant`, so none of them needs to know one was picked.
-    config = models.config_for(context.config, request.model, request.decision_model)
     from pheasant.telemetry import usage as metering
 
     answered = False
@@ -253,6 +254,23 @@ def answer(
 
         budget.check()
         with activate(budget), collect_query_embedding_metrics() as embedding_metrics:
+            from pheasant.services import model_routing
+
+            answer_env = env if env is not None else connection_environment()
+            selected_model, routing_trace = model_routing.select(
+                context,
+                request,
+                env=answer_env,
+                credential=credential,
+                budget=budget,
+            )
+            # A request-local config view carries the selection to every workflow.
+            config = models.config_for(context.config, selected_model, request.decision_model)
+            # A routed answer reuses a session key only on its own wire; an answer
+            # that needed no choice (``not_needed``) keeps the caller's as it was.
+            routed = routing_trace is not None and routing_trace.get("selected") is not None
+            if routed:
+                answer_env = model_routing.credential_environment(config, credential, answer_env)
             payload = answer_question(
                 request.question,
                 search=context.searcher,
@@ -260,8 +278,8 @@ def answer(
                 config=config,
                 graph=context.graph,
                 state=context.state,
-                credential=credential,
-                env=env if env is not None else connection_environment(),
+                credential=None if routed else credential,
+                env=answer_env,
                 mode=request.mode,
                 max_results=request.max_results,
                 source_name=source_name,
@@ -295,7 +313,11 @@ def answer(
             # After the answer exists: names where each citation can be opened.
             locate_all(payload)
             payload["query_embedding"] = embedding_metrics.as_dict()
-            payload["models"] = models.chosen(context.config, request.model, request.decision_model)
+            payload["models"] = models.chosen(
+                context.config, selected_model, request.decision_model
+            )
+            if routing_trace is not None:
+                payload["model_routing"] = routing_trace
             # A composed answer is kept as an artifact the moment it exists,
             # for every surface: `services/artifacts.py`.
             kept = artifacts.keep_composed(

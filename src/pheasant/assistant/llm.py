@@ -25,6 +25,7 @@ it is not needed.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections.abc import Callable
@@ -43,6 +44,27 @@ from pheasant.request_budget import DeadlineExceeded
 
 #: Output tokens added to a caller's cap for a model known to think first.
 REASONING_HEADROOM = 8192
+
+# Recent transport failures affect the next automatic selection, without probe
+# calls. Scope by credential too: one session's bad key cannot disable another.
+_UNAVAILABLE: dict[tuple[str, str, str, str], float] = {}
+_AVAILABILITY_LOCK = threading.Lock()
+
+
+def reset_availability() -> None:
+    """Forget every recent failure (tests; the table is per process)."""
+    with _AVAILABILITY_LOCK:
+        _UNAVAILABLE.clear()
+
+
+def _availability_key(llm: Any) -> tuple[str, str, str, str]:
+    return (
+        llm.provider,
+        llm.base_url or "",
+        llm.model_id,
+        hashlib.sha256(llm.api_key.encode()).hexdigest(),
+    )
+
 
 #: ``(provider, base_url, model)`` of every model seen to spend a whole cap
 #: before writing. Per process, learned, never persisted: a model that stops
@@ -80,6 +102,15 @@ class LLM:
     def model_id(self) -> str:
         spec = PROVIDERS.get(self.provider)
         return self.model or (spec.default_model if spec else "unknown")
+
+    def available(self) -> bool:
+        """No recent availability failure on this process, resource and credential."""
+        with _AVAILABILITY_LOCK:
+            key = _availability_key(self)
+            if _UNAVAILABLE.get(key, 0) > time.monotonic():
+                return False
+            _UNAVAILABLE.pop(key, None)
+            return True
 
     def with_model(self, model: str) -> LLM:
         """Use another model with the same provider, credentials and limits."""
@@ -174,10 +205,18 @@ class LLM:
                     model=self.model_id,
                     reasoning_effort=self.reasoning_effort,
                 )
-        except ProviderError:
+        except ProviderError as exc:
+            message = str(exc)
+            if message.startswith(("401 ", "403 ", "404 ", "429 ", "5")) or any(
+                text in message for text in ("could not reach", "connection to", "did not answer")
+            ):
+                with _AVAILABILITY_LOCK:
+                    _UNAVAILABLE[_availability_key(self)] = time.monotonic() + 60
             if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
                 raise DeadlineExceeded("assistant request deadline exceeded") from None
             raise
+        with _AVAILABILITY_LOCK:
+            _UNAVAILABLE.pop(_availability_key(self), None)
         if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
             raise DeadlineExceeded("assistant request deadline exceeded")
         return response

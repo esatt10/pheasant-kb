@@ -123,6 +123,13 @@ MAX_HEADING_LINE_CHARS = 120
 #: legal/procedural headings longer than ten are rare while numbered list
 #: items longer than ten are common.
 MAX_TITLE_WORDS = 10
+#: Most digits one part of a bare numbered heading (``N. Title``) may carry.
+#: A section is numbered in the tens or hundreds and a year has four digits;
+#: a longer run is a page-number strip or an id. Found on production: a
+#: textbook PDF's run-together page numbers, ``192021222324``, read as a
+#: heading after section 406. ``§`` citations are not held to it, because
+#: statute sections run to five digits (``§ 12101``).
+MAX_ORDINAL_PART_DIGITS = 4
 
 _KEYWORD_LEVELS: dict[str, int] = {
     "book": 1,
@@ -451,7 +458,9 @@ def _classify(raw_line: str) -> tuple[int, str | None, str, str] | None:
     match = _RE_NUMBERED.match(line)
     if match:
         ordinal, title = match.group(1), match.group(2).strip()
-        if _plausible_heading(title, line):
+        if _plausible_heading(title, line) and all(
+            len(part) <= MAX_ORDINAL_PART_DIGITS for part in ordinal.split(".")
+        ):
             return 3 + ordinal.count("."), ordinal, title[:MAX_TITLE_CHARS], "numbered"
 
     match = _RE_LETTERED.match(line)

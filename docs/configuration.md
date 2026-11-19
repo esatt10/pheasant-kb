@@ -1275,7 +1275,7 @@ are the only models and nothing here is consulted.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `chat` | list | `[]` | Answering models: `id`, `label`, `family`, `provider` (`openai` \| `azure` \| `anthropic` \| `gemini`), `model`, `base_url`, `api_key_env`, `description`, `max_output_tokens`. |
+| `chat` | list | `[]` | Answering models: `id`, `label`, `family`, `provider` (`openai` \| `azure` \| `anthropic` \| `gemini`), `model`, `base_url`, `api_key_env`, `description`, `max_output_tokens`, optional `reasoning_level` (`low`, `medium`, `high`, a routing capability hint). |
 | `default_chat` | string \| null | `null` | The `id` used when a caller names none. Unset: `assistant.*` as configured. |
 | `decisions` | list | `[]` | Judgement models: `id`, `api` (`decisions` \| `systemone`), `model`, `base_url`, `api_key_env`, and its own `sufficient_threshold` / `relevant_threshold` / `accept_threshold`. |
 | `default_decision` | string \| null | `null` | The `id` used when a caller names none. |
@@ -1292,6 +1292,77 @@ Ids must be unique within a list and a default must be one of them; a config
 that breaks either does not load. An entry on an Azure AI Foundry host with no
 key is called with the process's managed identity. See
 [Host a region for someone else](how-to/hosted-regions.md).
+
+### Automatic answering-model routing
+
+**Chat settings** selects automatic routing within the available **OpenAI** or
+**Anthropic** series, or a **custom selection** of catalog models across providers.
+The default rubric weighs two things together: the reasoning a question
+needs, and the answer it asks for. Low is a lookup, extraction or routine
+rewrite answered short. Medium is synthesis or a comparison, or a medium answer
+of a few sections. High is complex code, architecture or conflicting evidence,
+a long detailed answer, or a composed artifact.
+
+Before the judge runs, the router's own rules read the answer's shape with no
+model call: first-word keywords (`@detailed`, `@overview`, `@brief`,
+`@compose`), intent (knowledge, procedural, compose), depth (`short`, `medium`,
+`long`, from "briefly", "compare", "in detail" and the like) and visual. The
+judge receives that shape as `answer_shape`, with the reason each axis was
+read, so "explain X in detail" and "briefly, what is X" are judged differently.
+The same shape is reported in the answer's `model_routing`. A question the
+index answers with no model (a lookup about the knowledge base itself,
+`@search`, `@remove`) asks no judge: `outcome: not_needed`.
+Optional per-model reasoning levels describe capability; they do not set a
+provider's reasoning-effort parameter. A different free-text rubric can be used
+for this chat or supplied with each request. The decision model receives that
+rubric and choices built from the eligible models on every request, through
+either the Decisions API or System One.
+
+Readers may use runtime overrides. Only Contributors and Admins
+(`settings.manage`) may **Save as region default**, `PUT /models/routing`, or
+MCP `configure_model_routing`. Saved defaults are region-scoped rows, read by
+every replica; session overrides are not persisted. `GET /models/routing` and
+MCP `get_model_routing` return `settings`, `defaults`, and `can_save`.
+
+On a catalog with an OpenAI or Anthropic `default_chat`, automatic routing
+defaults to that series. With no catalog/default, or `models.selectable: false`,
+the configured fixed-model behavior is preserved. An explicit `model` still
+pins one model for compatibility; do not also send `model_routing`.
+
+Both `POST /assistant/chat` (including its stream) and MCP
+`ask_knowledge_base` accept the same runtime object:
+
+```json
+{
+  "model_routing": {
+    "mode": "custom",
+    "models": ["luna", "sonnet", "opus"],
+    "reasoning_levels": {"luna": "low", "sonnet": "medium", "opus": "high"},
+    "criteria": "Choose sufficient reasoning for this request; prefer concise writing when equally capable."
+  }
+}
+```
+
+Use actual catalog IDs. `mode` is `openai`, `anthropic`, `custom` or `off`
+(the fixed region model); omit `criteria` to inherit the saved/default rubric.
+Runtime fields override the corresponding saved fields. Custom selection needs
+at least one model. Unavailable candidates are omitted, including models with
+no usable credential and models that recently returned an availability error
+(60-second process-local cooldown, scoped to the resource/model/credential).
+There are no probe calls and this is not a provider uptime guarantee. The
+current request retains its normal error behavior; a later request considers
+the updated availability. If none are eligible, `503 NO_AVAILABLE_MODEL` is
+returned; routing never escapes the chosen series/set.
+
+With one eligible model there is no decision call. If a decision is unavailable,
+refused or invalid, routing uses the region default if eligible, else the first
+eligible catalog entry, and reports `outcome: fallback`. Selection also stays
+on that fallback in decision `shadow` mode, with the proposed model reported
+as `suggested`. The answer's `models`
+reports the selection; `model_routing` reports candidates, criteria, decision
+model, probabilities when supplied, and outcome. Routing shares the end-to-end
+answer deadline. A pasted session key cannot override a routed provider, model
+or endpoint.
 
 ---
 
