@@ -266,7 +266,10 @@ def answer(
             )
             # A request-local config view carries the selection to every workflow.
             config = models.config_for(context.config, selected_model, request.decision_model)
-            if routing_trace is not None:
+            # A routed answer reuses a session key only on its own wire; an answer
+            # that needed no choice (``not_needed``) keeps the caller's as it was.
+            routed = routing_trace is not None and routing_trace.get("selected") is not None
+            if routed:
                 answer_env = model_routing.credential_environment(config, credential, answer_env)
             payload = answer_question(
                 request.question,
@@ -275,7 +278,7 @@ def answer(
                 config=config,
                 graph=context.graph,
                 state=context.state,
-                credential=None if routing_trace is not None else credential,
+                credential=None if routed else credential,
                 env=answer_env,
                 mode=request.mode,
                 max_results=request.max_results,

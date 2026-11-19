@@ -126,6 +126,59 @@ def test_series_and_credential_availability_narrow_the_choices(context, monkeypa
         model_routing.select(context, AnswerRequest("q"), env={})
 
 
+def _judged_shape(calls) -> dict:
+    body = json.dumps(calls[-1][1])
+    state = json.loads(json.loads(body)["input"])
+    return state["answer_shape"]
+
+
+@pytest.mark.parametrize(
+    ("question", "depth", "intent"),
+    [
+        ("Briefly, what is the harbor subsystem?", "short", "knowledge"),
+        ("Compare the harbor and bridge subsystems", "medium", "knowledge"),
+        ("Explain the harbor subsystem in detail", "long", "knowledge"),
+        ("@detailed What is the harbor subsystem?", "long", "knowledge"),
+        ("Write the terraform configuration for a harbor deployment", "short", "compose"),
+    ],
+)
+def test_the_judge_weighs_the_answer_the_router_will_write(
+    context, monkeypatch, question, depth, intent
+):
+    """Depth and kind of answer are read by the router's own rules before the
+    judge runs, so "in detail" and "briefly" reach it as the workflow will
+    read them, not as the caller's (usually unset) pins."""
+    calls = wire(monkeypatch)
+    _, trace = model_routing.select(context, AnswerRequest(question), env=ENV)
+    shape = _judged_shape(calls)
+    assert (shape["depth"], shape["intent"]) == (depth, intent)
+    assert shape["depth_why"] and shape["intent_why"]
+    assert trace["answer_shape"]["depth"] == depth
+    assert "from_index" not in shape
+
+
+def test_a_pinned_depth_reaches_the_judge_as_pinned(context, monkeypatch):
+    calls = wire(monkeypatch)
+    model_routing.select(context, AnswerRequest("What is harbor?", depth="long"), env=ENV)
+    shape = _judged_shape(calls)
+    assert shape["depth"] == "long" and shape["depth_decided_by"] == "pinned"
+
+
+def test_a_question_the_index_answers_asks_no_judge(context, monkeypatch):
+    calls = wire(monkeypatch)
+    picked, trace = model_routing.select(context, AnswerRequest("List all sources"), env=ENV)
+    assert picked is None and not calls
+    assert trace["outcome"] == "not_needed" and trace["answer_shape"]["from_index"]
+    picked, trace = model_routing.select(context, AnswerRequest("@search harbor"), env=ENV)
+    assert picked is None and trace["outcome"] == "not_needed" and not calls
+
+
+def test_the_default_rubric_weighs_reasoning_and_answer_depth(context):
+    criteria = model_routing.defaults(context)["criteria"]
+    for words in ("answer_shape", "depth", "long detailed answer", "compose", "briefly"):
+        assert words in criteria
+
+
 def test_default_reasoning_rubric_applies_to_custom_multi_selection(context):
     policy = model_routing.validate(context, {"mode": "custom", "models": ["sol", "terra"]})
     for level in ("Low:", "Medium:", "High:"):

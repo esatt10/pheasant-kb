@@ -699,10 +699,25 @@ export interface ChatAnswer {
   model_routing?: {
     mode: ModelRoutingPolicy["mode"];
     candidates: string[];
-    selected: string;
+    /** `null` when the index answered and no model was needed (`not_needed`). */
+    selected: string | null;
     criteria: string;
     decision_model: string | null;
-    outcome: "decided" | "single_available" | "fallback";
+    outcome: "decided" | "single_available" | "fallback" | "not_needed";
+    /** The answer the routing rules read before any model ran, as the judge saw it. */
+    answer_shape?: {
+      intent: string;
+      intent_why: string;
+      depth: "short" | "medium" | "long";
+      depth_why: string;
+      depth_decided_by: string;
+      visual: string;
+      visual_why: string;
+      keywords: string[];
+      question_words: number;
+      history_turns: number;
+      from_index: boolean;
+    };
     reason?: string;
     confidence?: number | null;
     probabilities?: Record<string, number>;

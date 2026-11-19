@@ -1297,8 +1297,21 @@ key is called with the process's managed identity. See
 
 **Chat settings** selects automatic routing within the available **OpenAI** or
 **Anthropic** series, or a **custom selection** of catalog models across providers.
-The default rubric distinguishes low reasoning (lookup/extraction), medium
-reasoning (synthesis/comparison) and high reasoning (complex code/architecture).
+The default rubric weighs two things together: the reasoning a question
+needs, and the answer it asks for. Low is a lookup, extraction or routine
+rewrite answered short. Medium is synthesis or a comparison, or a medium answer
+of a few sections. High is complex code, architecture or conflicting evidence,
+a long detailed answer, or a composed artifact.
+
+Before the judge runs, the router's own rules read the answer's shape with no
+model call: first-word keywords (`@detailed`, `@overview`, `@brief`,
+`@compose`), intent (knowledge, procedural, compose), depth (`short`, `medium`,
+`long`, from "briefly", "compare", "in detail" and the like) and visual. The
+judge receives that shape as `answer_shape`, with the reason each axis was
+read, so "explain X in detail" and "briefly, what is X" are judged differently.
+The same shape is reported in the answer's `model_routing`. A question the
+index answers with no model (a lookup about the knowledge base itself,
+`@search`, `@remove`) asks no judge: `outcome: not_needed`.
 Optional per-model reasoning levels describe capability; they do not set a
 provider's reasoning-effort parameter. A different free-text rubric can be used
 for this chat or supplied with each request. The decision model receives that

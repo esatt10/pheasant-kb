@@ -754,6 +754,14 @@ function FanoutBreakdown({ timings }: { timings?: WorkflowStep["fanout_timings"]
   );
 }
 
+/** The routing pill's tooltip: what was chosen, from what, for which answer. */
+function routingTitle(routing: NonNullable<ChatAnswer["model_routing"]>): string {
+  const shape = routing.answer_shape;
+  const answer = shape ? `; a ${shape.depth} ${shape.intent} answer (${shape.depth_why})` : "";
+  const why = routing.reason ? ` — ${routing.reason}` : "";
+  return `${routing.selected ?? "default"} from ${routing.candidates.join(", ")}${answer}${why}`;
+}
+
 function AnswerTurn({
   answer,
   drawn,
@@ -955,8 +963,8 @@ function AnswerTurn({
         </p>
       ) : null}
       <div className="msg__meta">
-        {answer.model_routing ? <span className="pill"
-          title={answer.model_routing.reason ?? `Selected from ${answer.model_routing.candidates.join(", ")}`}>
+        {answer.model_routing && answer.model_routing.outcome !== "not_needed" ? <span className="pill"
+          title={routingTitle(answer.model_routing)}>
           {answer.model_routing.outcome === "fallback" ? "routing fallback" : "auto selected"}
         </span> : null}
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
