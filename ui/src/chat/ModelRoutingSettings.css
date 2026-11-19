@@ -33,7 +33,7 @@
 .model-routing__lead {
   margin: 0;
   color: var(--text-soft);
-  font-size: calc(13.5px * var(--fs));
+  font-size: max(12px, calc(13.5px * var(--fs)));
   line-height: 1.5;
 }
 .model-routing__choice .radio-card__sub {
@@ -46,7 +46,7 @@
 }
 .model-routing__heading {
   margin: 0;
-  font-size: calc(12px * var(--fs));
+  font-size: max(11.5px, calc(12px * var(--fs)));
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -55,7 +55,7 @@
 .model-routing__note {
   margin: 0;
   color: var(--text-soft);
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(12px, calc(12.5px * var(--fs)));
   line-height: 1.5;
 }
 .model-routing__pool {
@@ -64,7 +64,7 @@
 }
 .model-routing__pool button {
   padding: calc(6px * var(--sp)) calc(12px * var(--sp));
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(12px, calc(12.5px * var(--fs)));
 }
 .model-routing__list {
   display: flex;
@@ -127,11 +127,11 @@ button.model-routing__model:disabled {
   align-items: center;
   gap: calc(8px * var(--sp));
   font-weight: 600;
-  font-size: calc(13.5px * var(--fs));
+  font-size: max(12px, calc(13.5px * var(--fs)));
 }
 .model-routing__model-note {
   color: var(--text-soft);
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(12px, calc(12.5px * var(--fs)));
   line-height: 1.45;
 }
 .model-routing__include {
@@ -155,7 +155,7 @@ button.model-routing__model:disabled {
 }
 .model-routing__advanced > summary {
   cursor: pointer;
-  font-size: calc(13px * var(--fs));
+  font-size: max(12px, calc(13px * var(--fs)));
   font-weight: 600;
   color: var(--text);
   margin-bottom: calc(6px * var(--sp));
@@ -167,7 +167,7 @@ button.model-routing__model:disabled {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(12px, calc(12.5px * var(--fs)));
   line-height: 1.5;
 }
 .model-routing__footer {
@@ -188,7 +188,7 @@ button.model-routing__model:disabled {
 .model-routing__status {
   margin: 0;
   color: var(--accent-text);
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(12px, calc(12.5px * var(--fs)));
 }
 
 @media (max-width: 560px) {
@@ -196,5 +196,37 @@ button.model-routing__model:disabled {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "name" "note" "strength";
     row-gap: calc(6px * var(--sp));
+  }
+}
+
+/* The one line under each choice says what it does: never below 12px. */
+.model-routing .radio-card__sub,
+.model-routing__model-note {
+  font-size: max(12px, calc(13px * var(--fs)));
+}
+
+.model-routing .segmented button,
+.model-routing .btn--small,
+.model-routing .pill {
+  font-size: max(12px, calc(12px * var(--fs)));
+}
+
+/* On a touch screen every control in the dialog, and the button that opens
+   it, is a finger's height. */
+@media (pointer: coarse) {
+  .model-routing__trigger {
+    min-height: 40px;
+  }
+
+  .model-routing .segmented button,
+  .model-routing .btn,
+  .model-routing__include {
+    min-height: 40px;
+  }
+
+  /* The label is the target; the box inside it is a finger's width too. */
+  .model-routing__include input {
+    width: 20px;
+    height: 20px;
   }
 }

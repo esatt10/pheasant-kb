@@ -426,3 +426,106 @@ def test_a_stream_is_one_call_of_its_session(context, admin):
     found = usage_traces.session(context, "conv-t", days=1)
     assert [c["operation"] for c in found["calls"]] == ["/assistant/chat/stream"]
     assert len(list(usage_traces.export_lines(context, days=1, session_key="conv-t"))) == 2
+
+
+# ------------------------------------------------------- who may do what
+
+
+@pytest.fixture
+def roles(tmp_path, monkeypatch):
+    """A region with an Admin, a Contributor and a Reader, each with a token."""
+
+    from fastapi.testclient import TestClient
+
+    from pheasant.api.app import create_app
+
+    monkeypatch.setenv("TEST_FOUNDRY_KEY", "k-123")
+    monkeypatch.setenv("PHEASANT_API_TOKEN", "admin-token")
+    monkeypatch.setenv("READER_TOKEN", "reader-token")
+    monkeypatch.setenv("CONTRIBUTOR_TOKEN", "contributor-token")
+    config = _config(tmp_path)
+    config.artifacts.index_on_save = False
+    config.observability.interactions.enabled = True
+    config.security.api_auth.role_tokens = {
+        "READER_TOKEN": "Reader",
+        "CONTRIBUTOR_TOKEN": "Contributor",
+    }
+    app = create_app(config, config_path=str(tmp_path / "pheasant.yaml"))
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        StateSink(app.state.state).write([_event(31, session="conv-r", minutes_ago=2)])
+        yield app, client
+    app.state.engine.close()
+
+
+CALLERS = {
+    "Admin": "admin-token",
+    "Contributor": "contributor-token",
+    "Reader": "reader-token",
+}
+
+
+def _mcp(client, token, name, arguments):
+    pytest.importorskip("mcp")
+    response = client.post(
+        "/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": {"knowledge_base": "kb", **arguments}},
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json, text/event-stream",
+        },
+    )
+    assert response.status_code == 200, response.text[:300]
+    body = response.text
+    if body.startswith("event:") or "\ndata:" in body or body.startswith("data:"):
+        body = next(line[5:].strip() for line in body.splitlines() if line.startswith("data:"))
+    return json.loads(body)
+
+
+def _mcp_refused(reply) -> bool:
+    return "error" in reply or bool(reply.get("result", {}).get("isError"))
+
+
+@pytest.mark.parametrize("role", sorted(CALLERS))
+def test_traces_and_default_models_are_the_admins_on_both_surfaces(roles, role):
+    """Admin may; Contributor and Reader may not, over HTTP and MCP alike.
+    Everyone may still read the catalog and pick a model for a question."""
+
+    app, client = roles
+    token = CALLERS[role]
+    headers = {"Authorization": f"Bearer {token}"}
+    allowed = role == "Admin"
+    catalog = app.state.config.models
+    other = next(m.id for m in catalog.chat if m.id != catalog.default_chat)
+
+    http = {
+        "list": client.get("/usage/sessions", params={"days": 1}, headers=headers),
+        "session": client.get("/usage/sessions/conv-r", params={"days": 1}, headers=headers),
+        "session export": client.get(
+            "/usage/sessions/conv-r/export", params={"days": 1}, headers=headers
+        ),
+        "selection export": client.get("/usage/traces/export", params={"days": 1}, headers=headers),
+        "set default": client.put("/models/defaults", json={"chat": other}, headers=headers),
+        "reset default": client.put("/models/defaults", json={"chat": None}, headers=headers),
+    }
+    for name, response in http.items():
+        expected = 200 if allowed else 403
+        assert response.status_code == expected, (role, name, response.text[:200])
+
+    mcp = {
+        "list_usage_sessions": {"days": 1},
+        "get_usage_session": {"session": "conv-r", "days": 1},
+        "set_default_models": {"chat": "deployment"},
+    }
+    for name, arguments in mcp.items():
+        reply = _mcp(client, token, name, arguments)
+        assert _mcp_refused(reply) is (not allowed), (role, name, json.dumps(reply)[:300])
+
+    listed = client.get("/models", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()["can_set_defaults"] is allowed
+    assert not _mcp_refused(_mcp(client, token, "list_models", {}))

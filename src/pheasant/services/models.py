@@ -155,7 +155,9 @@ def effective_config(config: Any, state: Any) -> Any:
 def effective(context: ServiceContext) -> ServiceContext:
     """``context`` whose config carries the Admin's default models."""
 
-    config = effective_config(context.config, context.state)
+    # A context with no state store (a caller's stand-in, a check run before
+    # one exists) has no saved choice to apply.
+    config = effective_config(context.config, getattr(context, "state", None))
     return context if config is context.config else dataclass_replace(context, config=config)
 
 

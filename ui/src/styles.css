@@ -2516,7 +2516,7 @@ select.text-input {
   background: none;
   padding: 0;
   cursor: pointer;
-  font-size: calc(11.5px * var(--fs));
+  font-size: max(11px, calc(11.5px * var(--fs)));
   color: var(--muted);
   font-family: inherit;
 }
@@ -2544,14 +2544,14 @@ select.text-input {
   grid-template-columns: 76px minmax(0, 1fr) auto;
   gap: calc(8px * var(--sp));
   align-items: baseline;
-  font-size: calc(11.5px * var(--fs));
+  font-size: max(11px, calc(11.5px * var(--fs)));
 }
 
 .trace__name {
   color: var(--accent-text);
   font-weight: 600;
   font-family: var(--font-mono);
-  font-size: calc(10.5px * var(--fs));
+  font-size: max(11px, calc(10.5px * var(--fs)));
 }
 
 .trace__detail {
@@ -2570,7 +2570,7 @@ select.text-input {
   background: var(--bg-raised);
   color: var(--text-soft);
   font-family: var(--font-mono);
-  font-size: calc(10px * var(--fs));
+  font-size: max(11px, calc(10px * var(--fs)));
   line-height: 1.6;
   vertical-align: baseline;
   white-space: nowrap;
@@ -2591,7 +2591,7 @@ select.text-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--muted);
-  font-size: calc(10.5px * var(--fs));
+  font-size: max(11px, calc(10.5px * var(--fs)));
 }
 
 .trace__fanout-time {
@@ -5843,6 +5843,37 @@ select.text-input {
     --fs: 0.86;
     --sp: 1;
   }
+
+  /* An answer is read at arm's length on a phone: 16px, not the interface's
+     scaled 13.8px, with headings a step above the text they head. */
+  .msg__answer {
+    font-size: 16px;
+  }
+
+  .msg__answer :is(h1, h2, h3) {
+    font-size: 1.12em;
+  }
+
+  .msg__answer table {
+    font-size: 14px;
+  }
+
+  .cite-chip {
+    font-size: 12px;
+  }
+
+  /* iOS zooms the whole page when a field under 16px takes focus. */
+  .composer textarea {
+    font-size: 16px;
+  }
+}
+
+/* A finger is not a cursor: the controls people tap while reading. */
+@media (pointer: coarse) {
+  .cite-chip {
+    min-width: 24px;
+    height: 24px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -6900,6 +6931,14 @@ select.text-input {
   font-weight: 550;
   text-align: left;
 }
+/* The drill-down is read closely: its labels never drop below 11px, where the
+   desktop density's pills (9.2px) and step labels would. */
+.trace-explorer .pill,
+.trace-explorer .small,
+.trace-explorer .btn--small {
+  font-size: max(11.5px, calc(12.5px * var(--fs)));
+}
+
 .trace-explorer {
   display: flex;
   flex-direction: column;
@@ -6911,14 +6950,14 @@ select.text-input {
   align-items: center;
   gap: calc(6px * var(--sp));
   color: var(--text-soft);
-  font-size: calc(13px * var(--fs));
+  font-size: max(11px, calc(13px * var(--fs)));
 }
 .trace-explorer__crumbs strong {
   color: var(--text);
 }
 .trace-explorer__crumb-session {
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--fs));
+  font-size: max(11px, calc(12px * var(--fs)));
 }
 .trace-explorer__head {
   display: flex;
@@ -6962,13 +7001,13 @@ select.text-input {
 .trace-call__time {
   font-weight: 600;
   color: var(--text);
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(11px, calc(12.5px * var(--fs)));
   margin-right: calc(4px * var(--sp));
 }
 .trace-call__metrics {
   margin-left: auto;
   color: var(--text-soft);
-  font-size: calc(12px * var(--fs));
+  font-size: max(11px, calc(12px * var(--fs)));
   font-variant-numeric: tabular-nums;
 }
 .trace-call__question {
@@ -6981,7 +7020,7 @@ select.text-input {
 .trace-call__answer > summary {
   cursor: pointer;
   color: var(--text-soft);
-  font-size: calc(12.5px * var(--fs));
+  font-size: max(11px, calc(12.5px * var(--fs)));
 }
 .trace-call__answer p {
   margin: calc(6px * var(--sp)) 0 0;
@@ -6997,7 +7036,7 @@ select.text-input {
   align-self: flex-start;
   padding-left: 0;
   font-family: var(--font-mono);
-  font-size: calc(11.5px * var(--fs));
+  font-size: max(11px, calc(11.5px * var(--fs)));
 }
 .kql-block {
   border: 1px solid var(--border);
@@ -7014,7 +7053,7 @@ select.text-input {
 }
 .kql-block__title {
   margin: 0 0 calc(2px * var(--sp));
-  font-size: calc(13px * var(--fs));
+  font-size: max(11px, calc(13px * var(--fs)));
   font-weight: 600;
 }
 .kql-block__head p {
@@ -7029,7 +7068,7 @@ select.text-input {
   overflow-x: auto;
   max-height: 18rem;
   font-family: var(--font-mono);
-  font-size: calc(12px * var(--fs));
+  font-size: max(11px, calc(12px * var(--fs)));
   line-height: 1.55;
   white-space: pre;
 }
