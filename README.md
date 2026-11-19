@@ -5,6 +5,10 @@
 <h1 align="center">pheasant</h1>
 
 <p align="center">
+  <em>"Intelligence isn't what you know, it's understanding what you don't know."</em>
+</p>
+
+<p align="center">
   <em>A knowledge harness for you and your agents: your sources, indexed into one searchable, cited knowledge base.</em>
 </p>
 
