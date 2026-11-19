@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import threading
 from datetime import timedelta
 from pathlib import Path
@@ -400,3 +401,66 @@ def test_a_reader_may_export_a_source_on_both_surfaces(region):
     finally:
         reset_identity(token)
     assert called == [True]
+
+
+def _mcp_post(client, role, method, params):
+    pytest.importorskip("mcp")
+    response = client.post(
+        "/mcp/",
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        headers={
+            **headers(role),
+            "accept": "application/json, text/event-stream",
+            # The MCP transport's DNS-rebinding guard admits loopback hosts.
+            "host": "127.0.0.1:8765",
+        },
+    )
+    assert response.status_code == 200, response.text[:300]
+    body = response.text
+    if "data:" in body:
+        body = next(line[5:].strip() for line in body.splitlines() if line.startswith("data:"))
+    return json.loads(body)
+
+
+def test_each_role_is_listed_the_tools_it_may_call(region):
+    """``tools/list`` is the call rule read ahead of time: an Admin sees every
+    tool, a Contributor a subset, a Reader a smaller one, and each listed tool
+    is one that role may call."""
+
+    import asyncio
+
+    from pheasant.mcp_server.server import create_mcp_server
+
+    _, client, config = region
+    every = {tool.name for tool in asyncio.run(create_mcp_server(config).list_tools())}
+    listed = {
+        role: {
+            tool["name"] for tool in _mcp_post(client, role, "tools/list", {})["result"]["tools"]
+        }
+        for role in ("Admin", "Contributor", "Reader")
+    }
+    for role, names in listed.items():
+        expected = {
+            name
+            for name in every
+            if MCP_PERMISSIONS.get(name, "unclassified") in ROLE_PERMISSIONS[role]
+        }
+        assert names == expected, (role, sorted(names ^ expected))
+    assert listed["Admin"] == every, "with no caller bound, and for an Admin, every tool"
+    assert listed["Reader"] < listed["Contributor"] < listed["Admin"]
+
+    for name in ("list_usage_sessions", "get_usage_session", "get_usage", "set_default_models"):
+        assert name in listed["Admin"] and name not in listed["Contributor"], name
+    for name in ("register_source", "archive_documents", "start_retrieval_tuning"):
+        assert name in listed["Contributor"] and name not in listed["Reader"], name
+    for name in ("search_context", "ask_knowledge_base", "read_document", "export_source"):
+        assert name in listed["Reader"], name
+
+    hidden = _mcp_post(
+        client,
+        "Reader",
+        "tools/call",
+        {"name": "list_usage_sessions", "arguments": {"knowledge_base": "kb", "days": 1}},
+    )
+    text = json.dumps(hidden)
+    assert "permission required: security.manage" in text, "a hidden tool is refused, not unknown"

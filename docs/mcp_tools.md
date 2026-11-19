@@ -2,6 +2,24 @@
 
 MCP is the primary agent interface. Tool responses should be compact, ranked, and provenance-rich.
 
+## Which tools a caller is shown
+
+`tools/list` shows each caller the tools its role may call, so an agent is never
+shown a tool it can only be refused by:
+
+| Caller | Tools listed |
+|---|---|
+| Admin, the shared token, or no caller (stdio, the local operator) | every tool |
+| Contributor | every tool except the `security.manage` ones: usage totals and traces, default and embedding models, connected organizations and services, the fleet, and promoting a runtime source into the config |
+| Reader | the `knowledge.use` tools: search, answers, reading and browsing documents, exports, the graph, status |
+
+The rule is the one each call is checked against (`MCP_PERMISSIONS` in
+`security/permissions.py`, read through the caller's role), applied before
+listing, so a listed tool is one the caller may call. Calling a tool that was
+not listed is still refused with the permission it needs (`permission
+required: security.manage`), not "unknown tool". A connector signed in as a
+different person sees a different list.
+
 ## Server transports
 
 pheasant exposes MCP through the official Python MCP SDK (`mcp>=2.1,<3`) when the `mcp` extra is installed. The Docker image includes this runtime.
