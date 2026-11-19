@@ -900,9 +900,15 @@ select.text-input {
   align-items: center;
   gap: calc(8px * var(--sp));
   margin-top: calc(8px * var(--sp));
-  font-size: calc(11.5px * var(--fs));
+  font-size: max(11px, calc(11.5px * var(--fs)));
   color: var(--muted);
   flex-wrap: wrap;
+}
+
+/* The controls under the composer are used on every question: not below the
+   row's own 11px floor. */
+.composer__hint :is(.btn--small, select) {
+  font-size: max(11.5px, calc(12.5px * var(--fs)));
 }
 
 .msg {
@@ -944,7 +950,9 @@ select.text-input {
   letter-spacing: 0.003em;
 }
 
-.msg__answer > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, .math--display) {
+/* The answer's Markdown renders inside .answer-markdown, so the measure and
+   the lead paragraph are set on that wrapper's children. */
+:is(.msg__answer, .msg__answer .answer-markdown) > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, .math--display) {
   max-width: 72ch;
 }
 
@@ -953,7 +961,7 @@ select.text-input {
 }
 
 /* The first paragraph is the answer; what follows supports it. */
-.msg__answer > p:first-child {
+.msg__answer > .answer-markdown:first-child > p:first-child {
   font-size: 1.04em;
 }
 
@@ -2541,13 +2549,16 @@ select.text-input {
 
 .trace__list li {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) auto;
+  grid-template-columns: 9.5em minmax(0, 1fr) auto;
   gap: calc(8px * var(--sp));
   align-items: baseline;
   font-size: max(11px, calc(11.5px * var(--fs)));
 }
 
+/* The name column is set in em so it grows with the type; a name longer
+   than it wraps rather than running into the detail beside it. */
 .trace__name {
+  overflow-wrap: anywhere;
   color: var(--accent-text);
   font-weight: 600;
   font-family: var(--font-mono);
@@ -2614,7 +2625,7 @@ select.text-input {
    in landscape, and three metrics beside the detail left it a sliver. */
 @container (max-width: 640px) {
   .trace__list li {
-    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-columns: 9.5em minmax(0, 1fr);
   }
 
   .trace__metrics {
@@ -3303,8 +3314,8 @@ select.text-input {
   display: inline-flex;
   gap: 0.35em;
   align-items: center;
-  font-size: 0.8em;
-  opacity: 0.8;
+  /* The row's own size: at 0.8em of it the label was 7.4px on a desktop. */
+  font-size: inherit;
 }
 
 /* Source-type filter chips in the Sources rail. Scoping by kind of source is
@@ -6935,6 +6946,8 @@ select.text-input {
    desktop density's pills (9.2px) and step labels would. */
 .trace-explorer .pill,
 .trace-explorer .small,
+.trace-explorer .section__title,
+.trace-explorer .banner,
 .trace-explorer .btn--small {
   font-size: max(11.5px, calc(12.5px * var(--fs)));
 }

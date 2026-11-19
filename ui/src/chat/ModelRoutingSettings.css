@@ -211,6 +211,21 @@ button.model-routing__model:disabled {
   font-size: max(12px, calc(12px * var(--fs)));
 }
 
+.model-routing .radio-card__title {
+  font-size: max(13px, calc(14px * var(--fs)));
+}
+
+.model-routing .text-input {
+  font-size: max(12.5px, calc(13.5px * var(--fs)));
+}
+
+/* At the desktop density a segmented button came out 23px tall: under the
+   24px a pointer target needs. */
+.model-routing__trigger,
+.model-routing .segmented button {
+  min-height: 26px;
+}
+
 /* On a touch screen every control in the dialog, and the button that opens
    it, is a finger's height. */
 @media (pointer: coarse) {
