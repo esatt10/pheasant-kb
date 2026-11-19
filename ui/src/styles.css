@@ -7106,9 +7106,16 @@ select.text-input {
   line-height: 1.6;
   white-space: pre-wrap;
 }
+/* Folded on phones, so it shows the same disclosure marker as Answer. */
 .trace-call .trace > summary {
-  list-style: none;
+  display: list-item;
   cursor: pointer;
+}
+@media (pointer: coarse) {
+  .trace-call .trace > summary,
+  .trace-call__answer > summary {
+    padding-block: calc((40px - 1.5em) / 2);
+  }
 }
 .trace-call__id {
   align-self: flex-start;

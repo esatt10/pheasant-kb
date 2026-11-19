@@ -240,8 +240,14 @@ function SessionView({
   );
 }
 
+/** Phones show a call's question and fold its steps; a wider pane shows them. */
+const stepsOpenByDefault = () =>
+  !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 860px)").matches);
+
 function CallCard({ call }: { call: UsageCall }) {
   const [copied, setCopied] = useState(false);
+  // Read once: a phone turned sideways keeps whatever the reader opened.
+  const [stepsOpen] = useState(stepsOpenByDefault);
   const trace = call.answer_trace;
   const tokens = trace?.tokens;
   return (
@@ -280,7 +286,7 @@ function CallCard({ call }: { call: UsageCall }) {
         </details>
       ) : null}
       {trace?.steps?.length ? (
-        <details className="trace" open>
+        <details className="trace" open={stepsOpen}>
           <summary className="trace__toggle">{trace.steps.length} steps</summary>
           <ol className="trace__list">
             {trace.steps.map((step, index) => (
