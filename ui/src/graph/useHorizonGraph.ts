@@ -7,7 +7,7 @@ import type { GraphLink, GraphNode } from "../api/types";
  *
  * A real index is tens of thousands of nodes; drawn at once it is a hairball
  * that answers no question. So the view is a *horizon*: everything within N
- * hops of one center node, N defaulting to 3 and adjustable by the user. After
+ * hops of one center node, N defaulting to 2 and adjustable by the user. After
  * a question the horizon is drawn around the nodes the answer actually
  * surfaced, so the canvas shows the evidence rather than the universe.
  */

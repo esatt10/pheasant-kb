@@ -911,6 +911,24 @@ select.text-input {
   font-size: max(11.5px, calc(12.5px * var(--fs)));
 }
 
+/* The answer options fold behind one button on a phone (below); on a wide
+   pane they are part of the row and the button is not shown. */
+.composer__options {
+  display: contents;
+}
+
+.composer__options-btn {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  /* The one control a phone's composer shows; a thumb has to hit it. */
+  .composer__options-btn {
+    min-height: 40px;
+    min-width: 44px;
+  }
+}
+
 .msg {
   display: flex;
   flex-direction: column;
@@ -2229,6 +2247,19 @@ select.text-input {
   background: var(--warn-soft);
   border: 1px solid var(--warn);
   color: var(--warn);
+}
+
+.preview-notice {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.preview-notice__pill {
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .banner--error {
@@ -6010,6 +6041,24 @@ select.text-input {
     margin-top: calc(6px * var(--sp));
   }
 
+  /* Closed until asked for: the composer is one row and a button, and the
+     answer has the screen. */
+  .notebook--tabs .composer__options-btn {
+    display: inline-flex;
+  }
+
+  .notebook--tabs .composer__options {
+    display: none;
+  }
+
+  .notebook--tabs .composer__options--open {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: inherit;
+    width: 100%;
+  }
+
   .notebook--tabs .composer__depth {
     padding: calc(2px * var(--sp)) calc(4px * var(--sp));
     line-height: 1.2;
@@ -6965,6 +7014,28 @@ select.text-input {
   color: var(--text-soft);
   font-size: max(11px, calc(13px * var(--fs)));
 }
+/* One search over the drill-down's calls, under the crumbs. */
+.trace-explorer__search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--sp)) calc(10px * var(--sp));
+}
+.trace-explorer__search .text-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 480px;
+}
+.trace-explorer__search-hint code {
+  font-family: var(--font-mono);
+}
+@media (pointer: coarse) {
+  /* A touch-sized field, and 16px so iOS does not zoom the page on focus. */
+  .trace-explorer__search .text-input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
 /* The Questions / Every call switch sits at the crumbs' far end. */
 .trace-explorer__calls {
   margin-left: auto;
@@ -7057,9 +7128,16 @@ select.text-input {
   line-height: 1.6;
   white-space: pre-wrap;
 }
+/* Folded on phones, so it shows the same disclosure marker as Answer. */
 .trace-call .trace > summary {
-  list-style: none;
+  display: list-item;
   cursor: pointer;
+}
+@media (pointer: coarse) {
+  .trace-call .trace > summary,
+  .trace-call__answer > summary {
+    padding-block: calc((40px - 1.5em) / 2);
+  }
 }
 .trace-call__id {
   align-self: flex-start;

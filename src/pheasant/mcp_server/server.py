@@ -950,6 +950,9 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_fleet_tools(mcp, tools, anticipated)
     register_job_tools(mcp, tools, anticipated)
 
+    from pheasant.mcp_server.authorization import list_only_callable_tools
+
+    list_only_callable_tools(mcp)
     return mcp
 
 

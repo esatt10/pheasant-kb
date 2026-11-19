@@ -8,6 +8,7 @@ import {
   Sparkline,
 } from "../evaluation/primitives";
 import type { EvaluationMetricResult, EvaluationStatus } from "../api/types";
+import { PreviewNotice } from "../components/PreviewNotice";
 
 const TREND_METRICS = [
   "known_positive_reciprocal_rank",
@@ -162,6 +163,7 @@ export function EvaluationPage() {
         <header className="page__header">
           <h1>Knowledge effectiveness</h1>
         </header>
+        <PreviewNotice feature="Knowledge effectiveness" />
         <section className="section eval-section">
           <h2 className="section__title">Evaluation is switched off</h2>
           <p>
@@ -203,6 +205,7 @@ export function EvaluationPage() {
           </button>
         </div>
       </header>
+      <PreviewNotice feature="Knowledge effectiveness" />
 
       <RunProgress status={live} />
       {removeRun.error ? <p role="alert">{String(removeRun.error)}</p> : null}

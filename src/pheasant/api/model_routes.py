@@ -62,9 +62,12 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
         organization: str | None = None,
         model: str | None = None,
         calls: str = "questions",
+        match: str | None = None,
     ) -> dict:
         """The sessions a person, organization or model took part in (Admin),
-        newest first, read from the interaction ledger when asked."""
+        newest first, read from the interaction ledger when asked. ``match`` is
+        a wildcard search (``*`` any characters, ``?`` one) over each call's
+        question, answer, operation and session."""
 
         from pheasant.services import usage_traces
 
@@ -75,20 +78,25 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
             organization=organization,
             model=model,
             calls=calls,
+            match=match,
         )
 
     @app.get("/usage/sessions/{session_key:path}/export")
-    def export_usage_session(session_key: str, days: int = 7, calls: str = "questions"):
-        return _export(days=days, session_key=session_key, calls=calls)
+    def export_usage_session(
+        session_key: str, days: int = 7, calls: str = "questions", match: str | None = None
+    ):
+        return _export(days=days, session_key=session_key, calls=calls, match=match)
 
     @app.get("/usage/sessions/{session_key:path}")
-    def usage_session(session_key: str, days: int = 7, calls: str = "questions") -> dict:
+    def usage_session(
+        session_key: str, days: int = 7, calls: str = "questions", match: str | None = None
+    ) -> dict:
         """One session's calls, each answer's steps and models, and a KQL query
-        for its spans in Log Analytics (Admin)."""
+        for its spans in Log Analytics (Admin); with ``match``, the calls it finds."""
 
         from pheasant.services import usage_traces
 
-        return usage_traces.session(services, session_key, days=days, calls=calls)
+        return usage_traces.session(services, session_key, days=days, calls=calls, match=match)
 
     @app.get("/usage/traces/export")
     def export_usage_traces(
@@ -97,9 +105,15 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
         organization: str | None = None,
         model: str | None = None,
         calls: str = "questions",
+        match: str | None = None,
     ):
         return _export(
-            days=days, principal=person, organization=organization, model=model, calls=calls
+            days=days,
+            principal=person,
+            organization=organization,
+            model=model,
+            calls=calls,
+            match=match,
         )
 
     def _export(**selection: Any):

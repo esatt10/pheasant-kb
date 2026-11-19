@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { TraceCalls, UsageCall, UsageSelection, UsageSessionSummary } from "../api/admin";
@@ -44,6 +44,18 @@ export function TraceExplorer({
   // Questions by default: on a live region nearly every ledger row is the UI
   // polling for jobs and status, which would bury the conversations.
   const [calls, setCalls] = useState<TraceCalls>("questions");
+  // What the box says, and the search it settles into a moment after typing
+  // stops (or at once on Enter), so each keystroke is not a ledger query.
+  const [typed, setTyped] = useState("");
+  const [match, setMatch] = useState("");
+  useEffect(() => {
+    const settled = window.setTimeout(() => setMatch(typed.trim()), 350);
+    return () => window.clearTimeout(settled);
+  }, [typed]);
+  const clearSearch = () => {
+    setTyped("");
+    setMatch("");
+  };
   return (
     <section className="section trace-explorer" aria-label="Traces">
       <nav className="trace-explorer__crumbs" aria-label="Trace navigation">
@@ -84,10 +96,37 @@ export function TraceExplorer({
           ))}
         </div>
       </nav>
+      <form
+        className="trace-explorer__search"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setMatch(typed.trim());
+        }}
+      >
+        <input
+          className="text-input"
+          type="search"
+          aria-label={session ? "Search this session's calls" : "Search these sessions' calls"}
+          placeholder="Search questions and answers, e.g. deploy*worker"
+          value={typed}
+          maxLength={200}
+          onChange={(event) => setTyped(event.target.value)}
+        />
+        <span className="muted small trace-explorer__search-hint">
+          <code>*</code> any characters · <code>?</code> one character
+        </span>
+      </form>
       {session ? (
-        <SessionView days={days} session={session} calls={calls} />
+        <SessionView
+          days={days}
+          session={session}
+          calls={calls}
+          match={match}
+          onShowAll={clearSearch}
+        />
       ) : (
-        <SessionList days={days} target={target} calls={calls} onOpen={setSession} />
+        <SessionList days={days} target={target} calls={calls} match={match} onOpen={setSession} />
       )}
     </section>
   );
@@ -97,16 +136,18 @@ function SessionList({
   days,
   target,
   calls,
+  match,
   onOpen,
 }: {
   days: number;
   target: TraceTarget;
   calls: TraceCalls;
+  match: string;
   onOpen: (session: string) => void;
 }) {
   const sessions = useQuery({
-    queryKey: ["usage-sessions", days, target.selection, calls],
-    queryFn: () => api.usageSessions(days, target.selection, calls),
+    queryKey: ["usage-sessions", days, target.selection, calls, match],
+    queryFn: () => api.usageSessions(days, target.selection, calls, match),
     retry: false,
   });
   const exported = useExport();
@@ -120,8 +161,12 @@ function SessionList({
           <h2 className="section__title">Sessions</h2>
           <p className="muted small">
             {data.sessions.length
-              ? `${data.sessions.length}${data.truncated ? "+" : ""} in the last ${days} days, newest first. A session is one conversation; a call made outside one stands alone.`
-              : calls === "questions"
+              ? match
+                ? `${data.sessions.length}${data.truncated ? "+" : ""} with a call matching "${match}" in the last ${days} days, newest first. Calls counts the matching ones.`
+                : `${data.sessions.length}${data.truncated ? "+" : ""} in the last ${days} days, newest first. A session is one conversation; a call made outside one stands alone.`
+              : match
+                ? `No calls matching "${match}" by ${target.label} in the last ${days} days.`
+                : calls === "questions"
                 ? `No questions or searches by ${target.label} in the last ${days} days. "Every call" shows the rest of the traffic.`
                 : `No traced calls for ${target.label} in the last ${days} days.`}
           </p>
@@ -130,8 +175,12 @@ function SessionList({
           type="button"
           className="btn btn--small"
           disabled={exported.isPending || !data.sessions.length}
-          onClick={() => exported.mutate({ days, calls, ...target.selection })}
-          title="Save every call in this selection as JSON lines"
+          onClick={() => exported.mutate({ days, calls, match, ...target.selection })}
+          title={
+            match
+              ? "Save the calls matching this search as JSON lines"
+              : "Save every call in this selection as JSON lines"
+          }
         >
           {exported.isPending ? "Exporting…" : "Export JSONL"}
         </button>
@@ -190,19 +239,33 @@ function SessionView({
   days,
   session,
   calls,
+  match,
+  onShowAll,
 }: {
   days: number;
   session: string;
   calls: TraceCalls;
+  match: string;
+  onShowAll: () => void;
 }) {
   const found = useQuery({
-    queryKey: ["usage-session", days, session, calls],
-    queryFn: () => api.usageSession(session, days, calls),
+    queryKey: ["usage-session", days, session, calls, match],
+    queryFn: () => api.usageSession(session, days, calls, match),
     retry: false,
   });
   const exported = useExport();
   if (found.isLoading) return <p className="muted small">Loading calls…</p>;
-  if (found.isError) return <TraceError error={found.error as Error} />;
+  if (found.isError)
+    return (
+      <>
+        <TraceError error={found.error as Error} />
+        {match ? (
+          <button type="button" className="btn btn--small" onClick={onShowAll}>
+            Show all calls
+          </button>
+        ) : null}
+      </>
+    );
   const data = found.data!;
   return (
     <>
@@ -210,17 +273,30 @@ function SessionView({
         <div>
           <h2 className="section__title">
             {data.calls.length} call{data.calls.length === 1 ? "" : "s"}
+            {match ? ` matching "${match}"` : ""}
           </h2>
           <p className="muted small">
             {when(data.first_at)} to {when(data.last_at)}
+            {match ? (
+              <>
+                {" · "}
+                <button type="button" className="link-button" onClick={onShowAll}>
+                  Show all calls
+                </button>
+              </>
+            ) : null}
           </p>
         </div>
         <button
           type="button"
           className="btn btn--small"
           disabled={exported.isPending}
-          onClick={() => exported.mutate({ days, session, calls })}
-          title="Save this session's calls as JSON lines"
+          onClick={() => exported.mutate({ days, session, calls, match })}
+          title={
+            match
+              ? "Save this session's calls matching the search as JSON lines"
+              : "Save this session's calls as JSON lines"
+          }
         >
           {exported.isPending ? "Exporting…" : "Export JSONL"}
         </button>
@@ -240,8 +316,14 @@ function SessionView({
   );
 }
 
+/** Phones show a call's question and fold its steps; a wider pane shows them. */
+const stepsOpenByDefault = () =>
+  !(typeof window !== "undefined" && window.matchMedia?.("(max-width: 860px)").matches);
+
 function CallCard({ call }: { call: UsageCall }) {
   const [copied, setCopied] = useState(false);
+  // Read once: a phone turned sideways keeps whatever the reader opened.
+  const [stepsOpen] = useState(stepsOpenByDefault);
   const trace = call.answer_trace;
   const tokens = trace?.tokens;
   return (
@@ -280,7 +362,7 @@ function CallCard({ call }: { call: UsageCall }) {
         </details>
       ) : null}
       {trace?.steps?.length ? (
-        <details className="trace" open>
+        <details className="trace" open={stepsOpen}>
           <summary className="trace__toggle">{trace.steps.length} steps</summary>
           <ol className="trace__list">
             {trace.steps.map((step, index) => (
@@ -367,7 +449,7 @@ function useExport() {
     mutationFn: ({
       days,
       ...selection
-    }: UsageSelection & { days: number; session?: string; calls?: TraceCalls }) =>
+    }: UsageSelection & { days: number; session?: string; calls?: TraceCalls; match?: string }) =>
       api.downloadUsageTraces(days, selection),
   });
 }

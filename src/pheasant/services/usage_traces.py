@@ -16,6 +16,13 @@ reads the ledger and points at Log Analytics for the spans:
   answer took, its models and tokens, and a KQL query for its spans.
 * :func:`export_lines` -- the same rows as JSON lines, for an export.
 
+Each takes ``match``, a simple wildcard search over what a call said: its
+question, its answer, its operation and its session. ``*`` is any run of
+characters, ``?`` is one, everything else is literal, case is ignored, and
+the pattern may match anywhere (``deploy*worker`` finds "how do I deploy a
+worker"). A session list then holds the sessions with a matching call, counting
+those calls, and a session holds only its matching calls.
+
 **Nothing is materialized ahead of a question.** Each is one bounded query
 over the ledger, run when the operator selects something; the window is the
 depth of the drill-down. The ledger keeps ``hot_retention_days``, so a window
@@ -64,8 +71,9 @@ class SessionNotFound(ServiceError):
     status = 404
     code = "SESSION_NOT_FOUND"
 
-    def __init__(self, key: str) -> None:
-        super().__init__(f"No calls for session {key} in the selected window")
+    def __init__(self, key: str, match: str | None = None) -> None:
+        searched = f" matching {match!r}" if match else ""
+        super().__init__(f"No calls{searched} for session {key} in the selected window")
 
 
 # --------------------------------------------------------------------- writing
@@ -180,12 +188,17 @@ def _where(
     organization: str | None,
     model: str | None,
     calls: str = "questions",
+    match: str | None = None,
 ) -> tuple[str, list[Any]]:
     state = context.state
     clauses = ["kb_id = ?", "started_at >= ?"]
     params: list[Any] = [context.config.pheasant.name, since]
     if calls == "questions":
         clauses.append(QUESTIONS)
+    if match:
+        clause, values = _match_clause(match)
+        clauses.append(clause)
+        params += values
     if principal:
         clauses.append("principal = ?")
         params.append(principal)
@@ -218,6 +231,51 @@ def _calls(value: Any) -> str:
     return value
 
 
+#: The longest search pattern a drill-down takes.
+MAX_MATCH = 200
+#: What a search reads: what the call said, and where it was made.
+MATCHED_COLUMNS = ("query_text", "answer_text", "operation", "session_id")
+
+
+def _match(value: Any) -> str | None:
+    """A search pattern, trimmed; ``None`` for no search."""
+
+    value = str(value or "").strip()
+    if not value.strip("*"):
+        return None  # "" and "*" match everything: no search at all
+    if len(value) > MAX_MATCH:
+        raise InvalidRequest(f"match must be at most {MAX_MATCH} characters")
+    return value
+
+
+def _like_pattern(match: str) -> str:
+    """A wildcard pattern as a LIKE pattern that matches anywhere.
+
+    ``*`` and ``?`` become ``%`` and ``_``; LIKE's own ``%`` and ``_`` and the
+    escape character (a backslash) are literal, so "50%" finds "50%".
+    """
+
+    out = []
+    for char in match.lower():
+        if char == "*":
+            out.append("%")
+        elif char == "?":
+            out.append("_")
+        elif char in "%_\\":
+            out.append("\\" + char)
+        else:
+            out.append(char)
+    return "%" + "".join(out) + "%"
+
+
+def _match_clause(match: str) -> tuple[str, list[Any]]:
+    # LOWER on both sides: SQLite's LIKE ignores ASCII case and Postgres's
+    # does not, and a search should read the same on both.
+    pattern = _like_pattern(match)
+    branches = [f"LOWER(COALESCE({column}, '')) LIKE ? ESCAPE '\\'" for column in MATCHED_COLUMNS]
+    return "(" + " OR ".join(branches) + ")", [pattern] * len(MATCHED_COLUMNS)
+
+
 def _retention(settings: Any, days: int) -> dict[str, Any]:
     kept = int(getattr(settings, "hot_retention_days", 0) or 0)
     return {
@@ -241,18 +299,27 @@ def sessions(
     organization: str | None = None,
     model: str | None = None,
     calls: str = "questions",
+    match: str | None = None,
 ) -> dict[str, Any]:
     """The sessions a person, organization or model took part in, newest first.
 
     ``calls`` is ``questions`` (the default: the questions and searches the
     usage totals count) or ``all`` (every request the ledger observed).
+    ``match`` keeps the sessions with a call it finds, counting those calls.
     """
 
     settings = _settings(context)
     days, since = _window(days)
     calls = _calls(calls)
+    match = _match(match)
     where, params = _where(
-        context, since, principal=principal, organization=organization, model=model, calls=calls
+        context,
+        since,
+        principal=principal,
+        organization=organization,
+        model=model,
+        calls=calls,
+        match=match,
     )
     key = "COALESCE(session_id, 'trace:' || trace_id)"
     rows = context.state.rows(
@@ -300,6 +367,7 @@ def sessions(
             "organization": organization,
             "model": model,
             "calls": calls,
+            "match": match,
         },
         "sessions": listed,
         "truncated": len(rows) > MAX_SESSIONS,
@@ -345,53 +413,70 @@ _COLUMNS = (
 
 
 def _session_rows(
-    context: ServiceContext, key: str, since: str, calls: str = "questions"
+    context: ServiceContext,
+    key: str,
+    since: str,
+    calls: str = "questions",
+    match: str | None = None,
 ) -> list[dict[str, Any]]:
     if key.startswith("trace:"):
-        clause, value = "trace_id = ? AND session_id IS NULL", key[len("trace:") :]
+        clause, params = "trace_id = ? AND session_id IS NULL", [key[len("trace:") :]]
     else:
-        clause, value = "session_id = ?", key
+        clause, params = "session_id = ?", [key]
     if calls == "questions":
         clause += f" AND {QUESTIONS}"
+    if match:
+        searched, values = _match_clause(match)
+        clause += f" AND {searched}"
+        params += values
     return context.state.rows(
         f"SELECT {_COLUMNS} FROM interaction_events WHERE kb_id = ? AND started_at >= ? "
         f"AND {clause} ORDER BY started_at LIMIT ?",
-        (context.config.pheasant.name, since, value, MAX_SESSION_CALLS),
+        (context.config.pheasant.name, since, *params, MAX_SESSION_CALLS),
     )
 
 
 def session(
-    context: ServiceContext, key: str, *, days: int = 7, calls: str = "questions"
+    context: ServiceContext,
+    key: str,
+    *,
+    days: int = 7,
+    calls: str = "questions",
+    match: str | None = None,
 ) -> dict[str, Any]:
-    """One session's calls in order, with each answer's steps and a KQL query."""
+    """One session's calls in order, with each answer's steps and a KQL query.
+
+    With ``match``, only the calls it finds; none is ``SESSION_NOT_FOUND``.
+    """
 
     settings = _settings(context)
     days, since = _window(days)
-    calls = _calls(calls)
+    which = _calls(calls)
+    match = _match(match)
     key = str(key or "").strip()
     if not key:
         raise InvalidRequest("session is required")
-    rows = _session_rows(context, key, since, calls)
+    rows = _session_rows(context, key, since, which, match)
     if not rows:
-        raise SessionNotFound(key)
+        raise SessionNotFound(key, match)
     # A request whose work is a child row of the same trace (a stream's answer)
     # says nothing its child does not: show the child, keep both in exports.
     parents = {row["parent_span_id"] for row in rows if row["parent_span_id"]}
-    calls = [_call(row) for row in rows if row["span_id"] not in parents]
-    trace_ids = list(dict.fromkeys(call["trace_id"] for call in calls))
+    found = [_call(row) for row in rows if row["span_id"] not in parents]
+    trace_ids = list(dict.fromkeys(call["trace_id"] for call in found))
     return {
         "session": key,
         "window": {"days": days, "from": since},
-        "filter": {"calls": calls},
-        "first_at": calls[0]["started_at"],
-        "last_at": calls[-1]["started_at"],
-        "calls": calls,
+        "filter": {"calls": which, "match": match},
+        "first_at": found[0]["started_at"],
+        "last_at": found[-1]["started_at"],
+        "calls": found,
         "truncated": len(rows) >= MAX_SESSION_CALLS,
         "retention": _retention(settings, days),
         "kql": kql(
             trace_ids=trace_ids,
-            start=calls[0]["started_at"],
-            end=calls[-1]["started_at"],
+            start=found[0]["started_at"],
+            end=found[-1]["started_at"],
         ),
     }
 
@@ -405,17 +490,25 @@ def export_lines(
     model: str | None = None,
     session_key: str | None = None,
     calls: str = "questions",
+    match: str | None = None,
 ) -> Iterator[str]:
     """The selected ledger rows as JSON lines, oldest first, for a download."""
 
     _settings(context)
     days, since = _window(days)
     calls = _calls(calls)
+    match = _match(match)
     if session_key:
-        rows = _session_rows(context, session_key, since, calls)
+        rows = _session_rows(context, session_key, since, calls, match)
     else:
         where, params = _where(
-            context, since, principal=principal, organization=organization, model=model, calls=calls
+            context,
+            since,
+            principal=principal,
+            organization=organization,
+            model=model,
+            calls=calls,
+            match=match,
         )
         rows = context.state.rows(
             f"SELECT {_COLUMNS} FROM interaction_events WHERE {where} ORDER BY started_at LIMIT ?",

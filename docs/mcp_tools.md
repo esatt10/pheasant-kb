@@ -2,6 +2,24 @@
 
 MCP is the primary agent interface. Tool responses should be compact, ranked, and provenance-rich.
 
+## Which tools a caller is shown
+
+`tools/list` shows each caller the tools its role may call, so an agent is never
+shown a tool it can only be refused by:
+
+| Caller | Tools listed |
+|---|---|
+| Admin, the shared token, or no caller (stdio, the local operator) | every tool |
+| Contributor | every tool except the `security.manage` ones: usage totals and traces, default and embedding models, connected organizations and services, the fleet, and promoting a runtime source into the config |
+| Reader | the `knowledge.use` tools: search, answers, reading and browsing documents, exports, the graph, status |
+
+The rule is the one each call is checked against (`MCP_PERMISSIONS` in
+`security/permissions.py`, read through the caller's role), applied before
+listing, so a listed tool is one the caller may call. Calling a tool that was
+not listed is still refused with the permission it needs (`permission
+required: security.manage`), not "unknown tool". A connector signed in as a
+different person sees a different list.
+
 ## Server transports
 
 pheasant exposes MCP through the official Python MCP SDK (`mcp>=2.1,<3`) when the `mcp` extra is installed. The Docker image includes this runtime.
@@ -158,8 +176,8 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `connect_organization` | Let a customer's Microsoft Entra tenant sign in (Admin): its tenant id, optional domains and a default role (Reader or Contributor) for every member. Returns the admin-consent link its directory admin opens once and the sign-in link for its people. Same operation as `POST /access/organizations`. |
 | `disconnect_organization` | Disconnect an organization and remove every grant made to its people (Admin). |
 | `set_default_models` | Choose the region's default answering (`chat`) and judgement (`decision`) models by `list_models` id (Admin); `"deployment"` returns a kind to the deployment's default. Same operation as `PUT /models/defaults`. |
-| `list_usage_sessions` | The sessions behind the usage totals (Admin), newest first, for a `person`, `organization` or `model` over `days` (`calls`: `questions` by default, or `all`), with a KQL query for their spans and how far back the ledger reaches. Same operation as `GET /usage/sessions`. |
-| `get_usage_session` | One session's calls (Admin): each question and answer, its models and route, the steps it took with tokens and timings, and a KQL query for its spans. Same operation as `GET /usage/sessions/{session}`; the JSON-lines export is HTTP only. |
+| `list_usage_sessions` | The sessions behind the usage totals (Admin), newest first, for a `person`, `organization` or `model` over `days` (`calls`: `questions` by default, or `all`; `match`: a wildcard search over each call's question, answer, operation and session, `*` any characters and `?` one), with a KQL query for their spans and how far back the ledger reaches. Same operation as `GET /usage/sessions`. |
+| `get_usage_session` | One session's calls (Admin): each question and answer, its models and route, the steps it took with tokens and timings, and a KQL query for its spans; with `match`, only the calls it finds. Same operation as `GET /usage/sessions/{session}`; the JSON-lines export is HTTP only. |
 | `get_usage` | What the region was used for over the last `days` days (Admin): tokens by model, questions, searches, people, organizations, answer and search p50/p95, and size against its ceiling. Cost is at the operator's stated prices and null unless the caller operates the region. Same operation as `GET /usage`. |
 | `list_fleet` | The knowledge bases the caller administers in this fleet, how many slots are free, and capacity requests; the operator sees every slot with its usage. Same operation as `GET /fleet`. |
 | `create_knowledge_base` | Claim a free slot for a new, empty knowledge base (Admin). The caller and `admins` become its Admins; it has its own sources, Contributors and Readers. `FLEET_NO_CAPACITY` when none is free. Same operation as `POST /fleet/knowledge-bases`. |

@@ -124,7 +124,9 @@ existed, and nothing read it.
 From 1.3.0, [Admin, Contributor and Reader](how-to/roles.md) are enforced per
 operation across the UI, HTTP and MCP. Reader can consume and generate output,
 but cannot manage sources, publish artifacts or run tuning. Contributor has
-application/content control; Admin also manages security and infrastructure.
+application/content control; Admin also manages security and infrastructure. MCP's
+`tools/list` shows each caller only the tools its role may call
+([MCP tools](mcp_tools.md#which-tools-a-caller-is-shown)).
 
 `security.entra` adds verified people beside the shared token; it does not
 replace it. With it on, the guard in front of the HTTP API and `/mcp`

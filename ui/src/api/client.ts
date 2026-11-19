@@ -647,20 +647,30 @@ export const api = {
     ),
   usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
   /** The sessions behind a usage row (Admin), read only when asked for. */
-  usageSessions: (days: number, selection: UsageSelection, calls: TraceCalls = "questions") =>
-    request<UsageSessions>(`/usage/sessions${qs({ days, calls, ...personFilter(selection) })}`),
+  usageSessions: (
+    days: number,
+    selection: UsageSelection,
+    calls: TraceCalls = "questions",
+    match?: string,
+  ) =>
+    request<UsageSessions>(
+      `/usage/sessions${qs({ days, calls, match: match || undefined, ...personFilter(selection) })}`,
+    ),
   /** One session's calls, with each answer's steps and a KQL query. */
-  usageSession: (session: string, days: number, calls: TraceCalls = "questions") =>
-    request<UsageSession>(`/usage/sessions/${encodeURIComponent(session)}${qs({ days, calls })}`),
+  usageSession: (session: string, days: number, calls: TraceCalls = "questions", match?: string) =>
+    request<UsageSession>(
+      `/usage/sessions/${encodeURIComponent(session)}${qs({ days, calls, match: match || undefined })}`,
+    ),
   /** Save a selection's ledger rows as JSON lines (Admin). Returns the file name. */
   downloadUsageTraces: async (
     days: number,
-    selection: UsageSelection & { session?: string; calls?: TraceCalls },
+    selection: UsageSelection & { session?: string; calls?: TraceCalls; match?: string },
   ): Promise<string> => {
-    const { session, calls = "questions", ...filter } = selection;
+    const { session, calls = "questions", match, ...filter } = selection;
+    const searched = match || undefined;
     const path = session
-      ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days, calls })}`
-      : `/usage/traces/export${qs({ days, calls, ...personFilter(filter) })}`;
+      ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days, calls, match: searched })}`
+      : `/usage/traces/export${qs({ days, calls, match: searched, ...personFilter(filter) })}`;
     const response = await fetch(`${API_BASE}${path}`, {
       headers: requestHeaders(undefined, false),
     });
