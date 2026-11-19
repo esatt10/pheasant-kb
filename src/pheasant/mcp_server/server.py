@@ -950,43 +950,10 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_fleet_tools(mcp, tools, anticipated)
     register_job_tools(mcp, tools, anticipated)
 
-    _list_only_callable_tools(mcp)
+    from pheasant.mcp_server.authorization import list_only_callable_tools
+
+    list_only_callable_tools(mcp)
     return mcp
-
-
-def _list_only_callable_tools(mcp: Any) -> None:
-    """``tools/list`` shows each caller the tools its role may call.
-
-    Every tool is already refused at call time by the permission
-    ``MCP_PERMISSIONS`` names for it (``authorization.authorized``). Listing
-    all of them anyway handed a Reader's agent every tool, most of which it
-    could only be refused by, and an agent picks from what it is shown. So
-    the list is the call rule read ahead of time: an Admin sees every tool,
-    a Contributor everything but ``security.manage``, and a Reader the
-    ``knowledge.use`` tools. One predicate (``allowed``) decides both, so a
-    listed tool is one the caller may call. A tool missing from the table is
-    ``unclassified``, which no role holds, so it is hidden as it is refused.
-    With no caller bound (stdio, the local operator) everything is listed,
-    as everything may be called.
-
-    It is an instance override of the SDK's ``list_tools``, which its
-    ``tools/list`` handler calls; ``tools/call`` still finds a hidden tool and
-    refuses it with the permission it needs, rather than "unknown tool".
-    """
-
-    from pheasant.security.authorization import allowed
-    from pheasant.security.permissions import MCP_PERMISSIONS
-
-    every_tool = mcp.list_tools
-
-    async def list_tools() -> list[Any]:
-        return [
-            tool
-            for tool in await every_tool()
-            if allowed(MCP_PERMISSIONS.get(tool.name, "unclassified"))
-        ]
-
-    mcp.list_tools = list_tools
 
 
 # The SDK's own allow-list for a server bound to loopback. Kept as the floor
