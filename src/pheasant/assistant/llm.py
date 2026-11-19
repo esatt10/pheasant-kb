@@ -51,6 +51,12 @@ _UNAVAILABLE: dict[tuple[str, str, str, str], float] = {}
 _AVAILABILITY_LOCK = threading.Lock()
 
 
+def reset_availability() -> None:
+    """Forget every recent failure (tests; the table is per process)."""
+    with _AVAILABILITY_LOCK:
+        _UNAVAILABLE.clear()
+
+
 def _availability_key(llm: Any) -> tuple[str, str, str, str]:
     return (
         llm.provider,
