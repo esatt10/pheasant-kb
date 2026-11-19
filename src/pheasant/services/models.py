@@ -96,6 +96,19 @@ def _public(entry: Any, **extra: Any) -> dict[str, Any]:
     }
 
 
+def chat_available(config: Any, model: str, env: dict[str, str]) -> bool:
+    from pheasant.assistant.answering import resolve_llm
+
+    if not config.models.selectable:
+        # Listing a disabled picker still describes every provisioned entry.
+        # This view is only for credential/health inspection, never answering.
+        view = copy.copy(config)
+        view.models = replace(config.models, selectable=True)
+        config = view
+    llm = resolve_llm(config_for(config, model), env=env)
+    return llm is not None and llm.available()
+
+
 def describe(context: ServiceContext, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Every model a caller may use, by kind, with the default and what is in force.
 
@@ -110,8 +123,9 @@ def describe(context: ServiceContext, *, env: dict[str, str] | None = None) -> d
         _public(
             entry,
             provider=entry.provider,
+            reasoning_level=entry.reasoning_level,
             default=entry.id == models.default_chat,
-            available=_usable(entry, env, assistant.api_key_env),
+            available=chat_available(config, entry.id, env),
         )
         for entry in (models.chat if models else [])
     ]
@@ -157,7 +171,10 @@ def describe(context: ServiceContext, *, env: dict[str, str] | None = None) -> d
         for entry in (models.embeddings if models else [])
     ]
     settings = config.search.embeddings
+    from pheasant.services import model_routing
+
     return {
+        "routing": model_routing.describe(context),
         "selectable": bool(models.selectable) if models else False,
         "chat": chat,
         "default_chat": (models.default_chat if models else None)
@@ -233,6 +250,7 @@ def config_for(config: Any, chat: str | None = None, decision: str | None = None
         return config
     assistant = config.assistant
     if chat_entry is not None:
+        same_provider = assistant.provider == chat_entry.provider
         same_model = (assistant.provider, assistant.model) == (
             chat_entry.provider,
             chat_entry.model,
@@ -241,8 +259,9 @@ def config_for(config: Any, chat: str | None = None, decision: str | None = None
             assistant,
             provider=chat_entry.provider,
             model=chat_entry.model,
-            base_url=chat_entry.base_url or assistant.base_url,
-            api_key_env=chat_entry.api_key_env or assistant.api_key_env,
+            base_url=chat_entry.base_url or (assistant.base_url if same_provider else None),
+            api_key_env=chat_entry.api_key_env
+            or (assistant.api_key_env if same_provider else None),
             max_output_tokens=chat_entry.max_output_tokens or assistant.max_output_tokens,
         )
         if not same_model:

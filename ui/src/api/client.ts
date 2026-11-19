@@ -1,5 +1,7 @@
 import { browserTraceparent } from "../telemetry";
 import type {
+  ModelRoutingPolicy,
+  ModelRoutingSettings,
   MemoryConsolidateResponse,
   MemoryCandidateEvidence,
   MemoryCandidateListResponse,
@@ -655,6 +657,11 @@ export const api = {
 
   /** The models this region offers, and the default of each kind. */
   models: () => request<ModelCatalog>("/models"),
+  saveModelRouting: (configuration: ModelRoutingPolicy) =>
+    request<ModelRoutingSettings>("/models/routing", {
+      method: "PUT",
+      body: JSON.stringify(configuration),
+    }),
   /** Switch the region's embedding model (application Admin); re-embeds everything. */
   selectEmbedding: (embedding: string) =>
     request<ModelCatalog & { status: string }>("/models/embedding", {
@@ -713,6 +720,9 @@ export const api = {
     source_name?: string | null;
     workflow?: string | null;
     options?: Record<string, unknown>;
+    model?: string | null;
+    decision_model?: string | null;
+    model_routing?: Partial<ModelRoutingPolicy> | null;
   }) =>
     request<ChatAnswer>("/assistant/chat", {
       method: "POST",
@@ -770,6 +780,7 @@ export const api = {
       /** The answering and judgement model, by `GET /models` id; unset is the default. */
       model?: string | null;
       decision_model?: string | null;
+      model_routing?: Partial<ModelRoutingPolicy> | null;
     },
     onStep: (step: WorkflowStep) => void,
     signal?: AbortSignal,

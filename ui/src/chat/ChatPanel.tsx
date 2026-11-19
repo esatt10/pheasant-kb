@@ -29,6 +29,7 @@ import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pe
 import { MicButton, useDictation } from "./MicButton";
 import { dictationUnsupported, spliceAtCaret } from "./dictation";
 import { SourceStrip, openable } from "./SourceStrip";
+import { ModelRoutingSettings } from "./ModelRoutingSettings";
 
 export type { ChatTurn } from "../state/session";
 
@@ -191,13 +192,15 @@ export function ChatPanel({
   // Whether saved artifacts (composed answers and reports) may be evidence;
   // the `artifacts` field search and answers take on every surface.
   const [useArtifacts, setUseArtifacts] = useState(true);
-  // The model answering this session's questions, from the region's catalog.
-  // `null` is the region's default, which is also what a reload returns to:
-  // the choice belongs to the session, like the rest of the composer.
-  const [chatModel, setChatModel] = useState<string | null>(null);
+  // The judgement model is session-local; answering-model routing lives in
+  // session state so switching Notebook views preserves the current policy.
   const [decisionModel, setDecisionModel] = useState<string | null>(null);
   const catalog = useQuery({ queryKey: ["models"], queryFn: api.models, staleTime: 60_000 });
   const pickable = catalog.data?.selectable ? catalog.data : undefined;
+  const routingPolicy = state.modelRouting ?? pickable?.routing.settings;
+  const routingReady = !routingPolicy || (routingPolicy.criteria.trim().length > 0 && (
+    routingPolicy.mode !== "custom" || routingPolicy.models.length > 0
+  ));
   // `@remove` changed the index: the taxonomy view's listings are stale.
   const refreshArchive = useArchiveRefresh();
 
@@ -291,7 +294,7 @@ export function ChatPanel({
           artifacts: useArtifacts ? null : "exclude",
           history,
           depth: answerDepth,
-          model: chatModel,
+          model_routing: state.modelRouting,
           decision_model: decisionModel,
         },
         onStep,
@@ -344,7 +347,7 @@ export function ChatPanel({
 
   const submit = (text: string) => {
     const question = text.trim();
-    if (!question || ask.isPending) return;
+    if (!question || ask.isPending || !routingReady) return;
     recordUI("ask", window.location.pathname);
     // `@taxonomy` on its own opens the browser at once, on the source the chat
     // is scoped to; the answer (from the index, no model) confirms where.
@@ -523,7 +526,7 @@ export function ChatPanel({
           <button
             className="composer__send"
             onClick={() => submit(draft)}
-            disabled={!draft.trim() || ask.isPending}
+            disabled={!draft.trim() || ask.isPending || !routingReady}
             aria-label="Send"
             title="Send (Enter)"
           >
@@ -609,14 +612,9 @@ export function ChatPanel({
               </option>
             ))}
           </select>
-          {pickable && pickable.chat.length > 1 ? (
-            <ModelMenu
-              label="Answering model"
-              models={pickable.chat}
-              fallback={pickable.default_chat}
-              value={chatModel}
-              onChange={setChatModel}
-            />
+          {pickable && pickable.chat.some((model) => model.id !== "configured") ? (
+            <ModelRoutingSettings catalog={pickable} value={state.modelRouting}
+              onChange={(routing) => dispatch({ type: "set-model-routing", routing })} />
           ) : null}
           {pickable && pickable.decisions.length > 1 ? (
             <ModelMenu
@@ -671,6 +669,9 @@ export function ChatPanel({
                 Connect a model
               </button>
             </>
+          ) : routingPolicy && routingPolicy.mode !== "off" ? (
+            <span>Routing among available {routingPolicy.mode === "custom" ? "selected" :
+              routingPolicy.mode === "openai" ? "OpenAI" : "Anthropic"} models</span>
           ) : status?.credential_source === "session" ? (
             <span>
               Using {status.session?.provider} · key held for this session only
@@ -954,6 +955,10 @@ function AnswerTurn({
         </p>
       ) : null}
       <div className="msg__meta">
+        {answer.model_routing ? <span className="pill"
+          title={answer.model_routing.reason ?? `Selected from ${answer.model_routing.candidates.join(", ")}`}>
+          {answer.model_routing.outcome === "fallback" ? "routing fallback" : "auto selected"}
+        </span> : null}
         {answer.workflow ? <span className="pill">{answer.workflow}</span> : null}
         {(answer.keywords?.used ?? []).map((keyword) => (
           <span className="pill pill--accent" key={keyword} title="Asked with this keyword">

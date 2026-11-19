@@ -44,6 +44,8 @@ class ChatModelSettings(ModelMixin):
     base_url: str | None = None
     api_key_env: str | None = None
     description: str = ""
+    #: Optional routing hint; describes capability, not a provider-specific effort argument.
+    reasoning_level: str | None = None
     #: Overrides ``assistant.max_output_tokens`` for this model when set.
     max_output_tokens: int | None = None
     #: What the operator pays per million tokens, in ``models.currency``:
@@ -52,6 +54,10 @@ class ChatModelSettings(ModelMixin):
     input_price: float | None = None
     output_price: float | None = None
     cached_input_price: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.reasoning_level not in (None, "low", "medium", "high"):
+            raise ValueError("models.chat.reasoning_level must be low, medium, high or unset")
 
 
 @dataclass

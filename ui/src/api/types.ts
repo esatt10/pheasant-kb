@@ -270,10 +270,26 @@ export interface CatalogModel {
   default: boolean;
   /** False when the operator listed it and this process holds no credential for it. */
   available: boolean;
+  provider?: string;
+  reasoning_level?: "low" | "medium" | "high" | null;
+}
+
+export interface ModelRoutingPolicy {
+  mode: "off" | "openai" | "anthropic" | "custom";
+  models: string[];
+  criteria: string;
+  reasoning_levels: Record<string, "low" | "medium" | "high">;
+}
+
+export interface ModelRoutingSettings {
+  settings: ModelRoutingPolicy;
+  defaults: ModelRoutingPolicy;
+  can_save: boolean;
 }
 
 /** The region's model catalog: what a question may be answered with. */
 export interface ModelCatalog {
+  routing: ModelRoutingSettings;
   /** Whether a caller may pick per question; off, the defaults answer. */
   selectable: boolean;
   chat: CatalogModel[];
@@ -679,6 +695,18 @@ export interface Artifact extends ArtifactSummary {
 }
 
 export interface ChatAnswer {
+  models?: { chat: string | null; decision: string | null };
+  model_routing?: {
+    mode: ModelRoutingPolicy["mode"];
+    candidates: string[];
+    selected: string;
+    criteria: string;
+    decision_model: string | null;
+    outcome: "decided" | "single_available" | "fallback";
+    reason?: string;
+    confidence?: number | null;
+    probabilities?: Record<string, number>;
+  };
   question: string;
   answer: string;
   /** A composed answer, kept by the region as an artifact (`/artifacts`). */

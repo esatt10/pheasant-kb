@@ -94,6 +94,7 @@ class AssistantTools(ComposeTools):
         on_step: Any = None,
         model: str | None = None,
         decision_model: str | None = None,
+        model_routing: dict | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -143,6 +144,7 @@ class AssistantTools(ComposeTools):
                 channel="mcp",
                 model=model,
                 decision_model=decision_model,
+                model_routing=model_routing,
             ),
             # A progress sink, for a caller that follows the answer as a job
             # (compose_artifact); the MCP tool itself passes none.
@@ -299,6 +301,7 @@ def register_assistant_tools(
         save: bool | None = None,
         model: str | None = None,
         decision_model: str | None = None,
+        model_routing: dict | None = None,
     ) -> dict:
         """Answer a question from the knowledge base, with citations and graph facts.
 
@@ -368,6 +371,13 @@ def register_assistant_tools(
         for this question, by the ids list_models returns; unset, the region's
         default of each. The answer's "models" says which ran.
 
+        model_routing overrides automatic selection for this request/session:
+        mode is openai, anthropic, custom or off; models lists custom catalog ids;
+        criteria is a runtime rubric (default: low/medium/high reasoning), and
+        reasoning_levels optionally maps candidate ids to low/medium/high.
+        Send model or model_routing, not both. Runtime overrides need no save
+        permission; configure_model_routing saves defaults for Contributor/Admin.
+
         session identifies the conversation this call belongs to. It is
         recorded, never enforced -- pass a stable opaque string and the
         region can keep one refined memory per session; omit it and nothing
@@ -402,6 +412,7 @@ def register_assistant_tools(
             conversation_id=session,
             model=model,
             decision_model=decision_model,
+            model_routing=model_routing,
         )
 
     @mcp.tool(meta=app_meta())

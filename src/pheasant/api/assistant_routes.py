@@ -89,6 +89,7 @@ class ChatRequest(BaseModel):
     # `GET /models` lists. Unset: the region's default of each.
     model: str | None = None
     decision_model: str | None = None
+    model_routing: dict[str, Any] | None = None
 
     def service_request(self, channel: str = "api") -> assistant_service.AnswerRequest:
         return assistant_service.AnswerRequest(
@@ -118,6 +119,7 @@ class ChatRequest(BaseModel):
             channel=channel,
             model=self.model,
             decision_model=self.decision_model,
+            model_routing=self.model_routing,
         )
 
 

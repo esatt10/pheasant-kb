@@ -6,6 +6,7 @@ import type {
   GraphLink,
   GraphNode,
   HistoryTurn,
+  ModelRoutingPolicy,
   VisualResponse,
 } from "../api/types";
 import { NOISY_NODE_TYPES } from "../graph/graphStyles";
@@ -180,6 +181,8 @@ export interface SessionState {
   conversationId: string;
   /** A pinned answer length, or null to let each question decide. */
   answerDepth: AnswerDepth | null;
+  /** In-memory chat routing override; only an explicit Save writes a shared default. */
+  modelRouting: ModelRoutingPolicy | null;
   /** Pane widths in px. The graph pane in particular needs to be growable. */
   railWidth: number;
   panelWidth: number;
@@ -253,6 +256,7 @@ const INITIAL: SessionState = {
   contextFrom: 0,
   conversationId: newConversationId(),
   answerDepth: null,
+  modelRouting: null,
   railWidth: DEFAULT_RAIL_WIDTH,
   panelWidth: DEFAULT_PANEL_WIDTH,
   innerWidth: DEFAULT_INNER_WIDTH,
@@ -296,6 +300,7 @@ export type SessionAction =
   | { type: "new-conversation" }
   | { type: "new-topic" }
   | { type: "set-answer-depth"; depth: AnswerDepth | null }
+  | { type: "set-model-routing"; routing: ModelRoutingPolicy | null }
   | { type: "set-pane-width"; pane: "rail" | "panel" | "inner" | "browser" | "tree"; width: number }
   | { type: "open-browser"; source: string | null; path?: string }
   | { type: "open-file"; file: OpenFile }
@@ -624,6 +629,8 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       return { ...state, contextFrom: state.turns.length, conversationId: newConversationId() };
     case "set-answer-depth":
       return { ...state, answerDepth: action.depth };
+    case "set-model-routing":
+      return { ...state, modelRouting: action.routing };
     case "new-conversation":
       // Drops the thread and everything derived from it. The canvas goes back
       // to its plain state too, because the graph filter came from an answer

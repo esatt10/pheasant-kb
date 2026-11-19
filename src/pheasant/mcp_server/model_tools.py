@@ -16,6 +16,18 @@ class ModelTools:
 
     services: Any
 
+    def get_model_routing(self, knowledge_base: str) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import model_routing
+
+        return model_routing.describe(self.services)
+
+    def configure_model_routing(self, knowledge_base: str, configuration: dict) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import model_routing
+
+        return model_routing.save(self.services, configuration)
+
     def _require_knowledge_base(self, knowledge_base: str | None) -> None:  # pragma: no cover
         raise NotImplementedError
 
@@ -39,6 +51,23 @@ class ModelTools:
 
 
 def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
+    @mcp.tool()
+    @anticipated
+    def get_model_routing(knowledge_base: str) -> dict:
+        """Get automatic model routing settings, defaults and whether you can save them."""
+        return tools.get_model_routing(knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def configure_model_routing(knowledge_base: str, configuration: dict) -> dict:
+        """Save region routing defaults (Contributor/Admin). configuration has mode
+        (openai, anthropic, custom or off), models (catalog ids for custom),
+        criteria (the decision model's runtime rubric) and optional reasoning_levels
+        (catalog id to low/medium/high). For an ephemeral session/request choice,
+        pass model_routing to ask_knowledge_base instead; no save permission needed.
+        """
+        return tools.configure_model_routing(knowledge_base, configuration)
+
     @mcp.tool()
     @anticipated
     def list_models(knowledge_base: str) -> dict:

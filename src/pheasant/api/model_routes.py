@@ -21,6 +21,18 @@ class EmbeddingSelection(BaseModel):
 
 
 def register_model_routes(app: FastAPI, *, services: Any) -> None:
+    @app.get("/models/routing")
+    def get_model_routing() -> dict:
+        from pheasant.services import model_routing
+
+        return model_routing.describe(services)
+
+    @app.put("/models/routing")
+    def save_model_routing(body: dict[str, Any]) -> dict:
+        from pheasant.services import model_routing
+
+        return model_routing.save(services, body)
+
     @app.get("/models")
     def list_models() -> dict:
         """The answering, judgement and embedding models this region offers,
