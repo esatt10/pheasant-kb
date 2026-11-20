@@ -38,6 +38,7 @@ Three routes reach the same place, so pick whichever fits:
 | `web_collection` | A set of web URLs |
 | `memory` | Agent-memory records (see [Agent memory](agent-memory.md)) |
 | `gdrive` | Google Drive docs + text files (`connector.api_key_env`, default `GDRIVE_TOKEN`) |
+| `sharepoint` | OneDrive and SharePoint: the sites, libraries, folders, lists (with attachments) and pages its `urls` name — see [OneDrive and SharePoint](sharepoint-onedrive.md) |
 | `api` | Experimental — an HTTP API source |
 
 Third-party connector plugins add further types by name — see the

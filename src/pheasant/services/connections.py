@@ -366,7 +366,7 @@ def start_sign_in(context: ServiceContext, request: SignInRequest) -> dict[str, 
     state = secrets.token_urlsafe(32)
     digest = hashlib.sha256(state.encode("ascii")).hexdigest()
     verifier, challenge = oauth.pkce_pair()
-    tenant = settings.microsoft_tenant if spec is oauth.MICROSOFT_DEVOPS else None
+    tenant = settings.microsoft_tenant if spec.microsoft else None
     redirect_uri = public_url + CALLBACK_PATH
     expires = _now() + timedelta(seconds=int(settings.oauth_timeout_seconds))
     vault.delete_expired_pending(

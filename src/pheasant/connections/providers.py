@@ -306,6 +306,28 @@ def _check_drive(secret: dict[str, Any]) -> CheckResult:
     )
 
 
+def _check_microsoft_365(secret: dict[str, Any]) -> CheckResult:
+    from pheasant.connections import microsoft
+
+    try:
+        token = microsoft.graph_token(secret)
+    except oauth.OAuthError as exc:
+        return CheckResult(False, str(exc), rejected=exc.rejected)
+    graph = "https://graph.microsoft.com/v1.0"
+    if secret.get("client_secret") and not secret.get("refresh_token"):
+        # An app has no /me: the tenant's root site is what Sites.Read.All reads.
+        return _checked(
+            "Microsoft Graph",
+            lambda: _request(f"{graph}/sites/root?$select=webUrl", _bearer(token)),
+            lambda body: body.get("webUrl"),
+        )
+    return _checked(
+        "Microsoft Graph",
+        lambda: _request(f"{graph}/me?$select=userPrincipalName,mail", _bearer(token)),
+        lambda body: body.get("userPrincipalName") or body.get("mail"),
+    )
+
+
 TOKEN = Field("token", "Token", secret=True)
 API_KEY = Field("api_key", "API key", secret=True)
 
@@ -425,6 +447,58 @@ PROVIDERS: tuple[Provider, ...] = (
         source_types=("gdrive",),
         token_url="https://console.cloud.google.com/apis/credentials",
         check=_check_drive,
+    ),
+    Provider(
+        id="microsoft_365",
+        label="Microsoft 365",
+        kind="source",
+        description=(
+            "OneDrive and SharePoint: sites, document libraries, folders, lists with "
+            "their attachments, and pages. Paste any link to add it."
+        ),
+        methods=(
+            sign_in(oauth.MICROSOFT_365),
+            Method(
+                "app",
+                "App registration",
+                (
+                    Field(
+                        "tenant_id", "Tenant ID", placeholder="contoso.onmicrosoft.com or a GUID"
+                    ),
+                    Field("client_id", "Application (client) ID"),
+                    Field(
+                        "client_secret",
+                        "Client secret",
+                        secret=True,
+                        help=(
+                            "Grant the application permission Sites.Read.All (or "
+                            "Sites.Selected per site) with admin consent."
+                        ),
+                    ),
+                ),
+            ),
+            Method(
+                "token",
+                "Access token",
+                (
+                    Field(
+                        "token",
+                        "Graph access token",
+                        secret=True,
+                        help="Expires within about an hour; sign in or use an app to keep it.",
+                    ),
+                    Field(
+                        "sharepoint_token",
+                        "SharePoint token (for list attachments)",
+                        secret=True,
+                        required=False,
+                    ),
+                ),
+            ),
+        ),
+        source_types=("sharepoint",),
+        token_url="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+        check=_check_microsoft_365,
     ),
     Provider(
         id="api_token",

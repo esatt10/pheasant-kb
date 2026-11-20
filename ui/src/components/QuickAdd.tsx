@@ -9,6 +9,7 @@ const EXAMPLES = [
   { label: "A folder", value: "/workspace/notes" },
   { label: "A git repo", value: "https://github.com/owner/repo" },
   { label: "A docs site", value: "https://docs.example.com/guide" },
+  { label: "A SharePoint site", value: "https://contoso.sharepoint.com/sites/team" },
   { label: "Every subfolder", value: "/workspace/clients/*" },
 ];
 
@@ -119,7 +120,8 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
 
           <p className="muted small" style={{ margin: 0 }}>
             pheasant detects what it is — repository, Obsidian vault, notes folder,
-            document folder, web collection, bucket or connector — then indexes it. The
+            document folder, web collection, SharePoint or OneDrive link, or connector —
+            then indexes it. A second link into the same SharePoint site joins it. The
             equivalent command is <code>pheasant up {target.trim() || "<target>"}</code>.
             Registration is immediate; indexing continues in the background and its
             progress shows up on the Sources page (and the "Syncing…" indicator at the

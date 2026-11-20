@@ -2,7 +2,7 @@
 
 pheasant is a **knowledge harness** for you and your agents. It turns your
 sources (git repositories, folders, PDFs and Office documents, images and
-audio, web pages, Google Drive and APIs) into one **knowledge graph** with
+audio, web pages, Google Drive, OneDrive and SharePoint, and APIs) into one **knowledge graph** with
 hybrid search and cited answers, served through a web UI, an HTTP API and MCP.
 
 ## Start here

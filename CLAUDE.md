@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 231 pytest modules, offline by design
+└── tests/                     ← 232 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -713,11 +713,24 @@ source as registered now (`SourceRegistry.adopt`), and a publish digests the
 registered config into the task id, so an indexer never syncs a stale copy.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
-third-party plugin needs no dispatch code here. One ships first-party: Google
-Drive (Notion, Slack, Confluence and IMAP were removed for the initial product,
-as were the `s3` and `obsidian_vault` built-ins; `config/retired.py` keeps old
-configs loading). `pheasant.testing.ConnectorConformance`
-is the public quality bar.
+third-party plugin needs no dispatch code here. Two ship first-party: Google
+Drive and **OneDrive/SharePoint** (Notion, Slack, Confluence and IMAP were
+removed for the initial product, as were the `s3` and `obsidian_vault`
+built-ins; `config/retired.py` keeps old configs loading).
+`pheasant.testing.ConnectorConformance` is the public quality bar.
+**OneDrive/SharePoint** (`type: sharepoint`, `connectors/sharepoint.py` over
+`connectors/graph_client.py`; a `microsoft_365` connection,
+`connections/microsoft.py`) is one source per site whose `urls` are any pasted
+links (`connectors/sharepoint_urls.py` reads a link's shape without a request,
+and names the source after the site so a second link joins it, like a web
+collection's host): libraries and folders walked (shared folders from another
+drive too), lists as one Markdown document per item with each attachment
+beside it under `Lists/<list>/<id>-<title>/` and wiki-linked from it, modern
+pages rendered from their canvas as HTML (a page snapshot, so the viewer shows
+it). Attachments are SharePoint REST, a second audience: a sign-in's refresh
+token redeemed for the host (`oauth.token_for_scopes`). A link that cannot be
+read is an `_unreadable/` item and makes that pass not a complete listing, so
+nothing is pruned; a 401 fails the source. `tests/test_sharepoint_connector.py`.
 
 ### Where the graph lives
 

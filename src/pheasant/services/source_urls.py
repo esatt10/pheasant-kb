@@ -26,8 +26,10 @@ from pheasant.security.authorization import require_permission
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound
 
-#: The source types whose pages are a URL list.
-URL_SOURCE_TYPES = frozenset({"web_collection", "api"})
+#: The source types whose pages are a URL list. A ``sharepoint`` source's
+#: URLs are the links it reads (sites, libraries, folders, lists, pages), each
+#: expanded at listing time, so removing one removes everything beneath it.
+URL_SOURCE_TYPES = frozenset({"web_collection", "api", "sharepoint"})
 
 
 @dataclass(frozen=True)
@@ -57,14 +59,17 @@ def edit_urls(context: ServiceContext, request: UrlEditRequest) -> dict[str, Any
     kind = getattr(source.type, "value", source.type)
     if kind not in URL_SOURCE_TYPES:
         raise InvalidRequest(
-            f"{source.name} is a {kind} source; only a web_collection or api source "
-            "holds a URL list"
+            f"{source.name} is a {kind} source; only a web_collection, api or "
+            "sharepoint source holds a URL list"
         )
     add = _urls(request.add)
     remove = _urls(request.remove)
     if not add and not remove:
         raise InvalidRequest("name at least one URL to add or remove")
-    _check_fetchable(add, allow_private=request.allow_private)
+    if kind == "sharepoint":
+        _check_microsoft(add)
+    else:
+        _check_fetchable(add, allow_private=request.allow_private)
 
     current = list(source.urls)
     kept = [url for url in current if url not in remove]
@@ -119,6 +124,16 @@ def _urls(values: list[str] | None) -> list[str]:
         if url and url not in urls:
             urls.append(url)
     return urls
+
+
+def _check_microsoft(urls: list[str]) -> None:
+    from pheasant.connectors.sharepoint_urls import parse
+
+    for url in urls:
+        try:
+            parse(url)
+        except ValueError as exc:
+            raise InvalidRequest(str(exc)) from exc
 
 
 def _check_fetchable(urls: list[str], *, allow_private: bool) -> None:

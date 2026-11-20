@@ -144,6 +144,10 @@ def token(row: vault.Connection, fields: dict[str, Any]) -> str | None:
             )
         if row.provider == "google_drive":
             return google.access_token_for(fields)
+        if row.provider == "microsoft_365":
+            from pheasant.connections import microsoft
+
+            return microsoft.graph_token(fields)
     except oauth.OAuthError as exc:
         raise ConnectionUnavailable(f"connection {row.name!r}: {exc}") from exc
     return providers.secret_value(row.provider, fields)

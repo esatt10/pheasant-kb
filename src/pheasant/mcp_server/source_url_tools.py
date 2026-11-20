@@ -55,7 +55,9 @@ def register_source_url_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         remove: list[str] | None = None,
         sync_now: bool = True,
     ) -> dict:
-        """Add pages to a web collection (or API source) or take them out.
+        """Add pages to a web collection (or API source) or take them out, or
+        links to a SharePoint/OneDrive source (sites, libraries, folders, lists,
+        pages: each read with everything beneath it).
 
         ``add`` joins URLs on after the ones already listed, each once;
         ``remove`` takes URLs off. Every other page stays as indexed. Returns
@@ -64,7 +66,8 @@ def register_source_url_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         syncs, which fetches an added page and removes a removed one from the
         index. Use this rather than ``register_source`` to change one page:
         ``register_source`` replaces the whole list. Only public addresses are
-        accepted unless ``security.allow_agent_private_urls`` is set.
+        accepted unless ``security.allow_agent_private_urls`` is set; a
+        SharePoint source takes OneDrive and SharePoint links only.
         """
 
         return tools.edit_source_urls(knowledge_base, source_name, add, remove, sync_now)

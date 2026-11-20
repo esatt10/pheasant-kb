@@ -99,7 +99,10 @@ def test_pyproject_declares_only_the_kept_first_party_connectors() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     with pyproject.open("rb") as fh:
         eps = tomllib.load(fh)["project"]["entry-points"]["pheasant.connectors"]
-    assert eps == {"gdrive": "pheasant.connectors.gdrive:GDriveConnector"}
+    assert eps == {
+        "gdrive": "pheasant.connectors.gdrive:GDriveConnector",
+        "sharepoint": "pheasant.connectors.sharepoint:SharePointConnector",
+    }
 
 
 # ---------------------------------------------------------------------------

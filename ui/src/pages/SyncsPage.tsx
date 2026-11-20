@@ -26,6 +26,7 @@ const KINDS: { id: string; label: string; match: (row: PipelineRow) => boolean }
   { id: "all", label: "All", match: () => true },
   { id: "web", label: "Web", match: (r) => r.type === "web_collection" || r.type === "api" },
   { id: "repo", label: "Repositories", match: (r) => r.type === "repository" },
+  { id: "microsoft", label: "SharePoint", match: (r) => r.type === "sharepoint" },
   { id: "folder", label: "Folders", match: (r) => r.type.endsWith("_folder") },
   {
     id: "attention",
@@ -802,7 +803,7 @@ function QualityPill({ status, flags }: { status: string; flags: LedgerDocument[
 
 function labelType(type: string): string {
   return (
-    { web_collection: "Web", api: "API", repository: "Repository", document_folder: "Folder", markdown_folder: "Folder", artifact: "Artifacts", memory: "Artifacts (legacy)" }[type] ??
+    { web_collection: "Web", api: "API", repository: "Repository", document_folder: "Folder", markdown_folder: "Folder", artifact: "Artifacts", memory: "Artifacts (legacy)", sharepoint: "SharePoint", gdrive: "Google Drive" }[type] ??
     type
   );
 }

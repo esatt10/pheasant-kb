@@ -731,6 +731,13 @@ def source_includes_documents(source: Any) -> bool:
 
     if source_includes_zip(source):
         return True
+    # A OneDrive or SharePoint library is mostly Office files and PDFs, and
+    # its connector admits every format the pipeline reads unless an include
+    # is chosen, so the extractor is wanted whatever the globs say.
+    if str(getattr(getattr(source, "type", None), "value", getattr(source, "type", ""))) == (
+        "sharepoint"
+    ):
+        return True
     # ``**/*`` is the explicit "this folder may contain anything" form used
     # by setup/up and uploads.  Treating it as admitting documents keeps the
     # handler-build gate aligned with the filesystem walk instead of silently
