@@ -103,6 +103,9 @@ class Meter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._rows: dict[Key, Totals] = {}
+        #: Rows a flush has taken but not yet written: still counted by the
+        #: spend guard, which would otherwise see them in neither place.
+        self._inflight: dict[Key, Totals] = {}
         self._target: tuple[Any, str] | None = None
         #: A second ledger the same totals are added to: a fleet's directory,
         #: so the operator reads every knowledge base in one place.
@@ -152,6 +155,7 @@ class Meter:
             self._target = None
             self._mirror = None
             self._rows.clear()
+            self._inflight = {}
 
     def _key(self, kind: str, model: str) -> Key:
         from pheasant.security.identity import current_identity
@@ -206,16 +210,17 @@ class Meter:
         """
 
         with self._lock:
-            return [
-                {
-                    "model": key[2],
-                    "input_tokens": totals.input_tokens,
-                    "output_tokens": totals.output_tokens,
-                    "cached_input_tokens": totals.cached_input_tokens,
-                }
-                for key, totals in self._rows.items()
-                if key[1] in MODEL_KINDS and key[0] >= since_day
-            ]
+            held = [*self._rows.items(), *self._inflight.items()]
+        return [
+            {
+                "model": key[2],
+                "input_tokens": totals.input_tokens,
+                "output_tokens": totals.output_tokens,
+                "cached_input_tokens": totals.cached_input_tokens,
+            }
+            for key, totals in held
+            if key[1] in MODEL_KINDS and key[0] >= since_day
+        ]
 
     def operation(self, name: str, seconds: float, *, ok: bool = True) -> None:
         """Count one answer or search and where its duration falls."""
@@ -254,21 +259,32 @@ class Meter:
             target, mirror, rows = self._target, self._mirror, self._rows
             self._rows = {}
             self._flushed_at = time.monotonic()
+            if target is not None and rows:
+                self._inflight = rows
         if target is None or not rows:
             return 0
         from pheasant.persistence import usage_ledger
 
-        if mirror is not None:
-            try:
-                usage_ledger.add(mirror, target[1], rows)
-            except Exception:  # noqa: BLE001 - the region's own ledger still gets them
-                logger.debug("usage totals could not be mirrored to the fleet directory")
         try:
-            usage_ledger.add(target[0], target[1], rows)
-        except Exception:  # noqa: BLE001 - a lost interval of counts must never fail a request
-            logger.debug("usage totals could not be written; dropped %d rows", len(rows))
-            return 0
-        return len(rows)
+            if mirror is not None:
+                try:
+                    usage_ledger.add(mirror, target[1], rows)
+                except Exception:  # noqa: BLE001 - the region's own ledger still gets them
+                    logger.debug("usage totals could not be mirrored to the fleet directory")
+            try:
+                usage_ledger.add(target[0], target[1], rows)
+            except Exception:  # noqa: BLE001 - a lost interval of counts must never fail a request
+                logger.debug("usage totals could not be written; dropped %d rows", len(rows))
+                return 0
+            return len(rows)
+        finally:
+            # The ledger now holds them: the spend guard reads it afresh rather
+            # than from a total cached before the write.
+            from pheasant.telemetry.spend import GUARD
+
+            GUARD.forget()
+            with self._lock:
+                self._inflight = {}
 
 
 #: The process's meter. Module-level like `metrics.REGISTRY`, for the same

@@ -138,15 +138,35 @@ def test_an_embedding_request_is_refused_before_it_is_sent(region, monkeypatch):
     assert sent == [], "nothing reached the provider"
 
 
-def test_this_processs_unwritten_calls_count_at_once(region):
+def test_this_processs_unwritten_calls_count_at_once(region, monkeypatch):
+    """A call counts from the moment it is metered: while it waits for a flush,
+    while a flush is writing it, and once the ledger holds it, even with a
+    ledger total cached from before. CI caught the middle case: a background
+    flush had taken the rows and not yet written them, and the guard saw
+    them in neither place."""
+
     state = region.state
     METER.bind(state, "kb")
     try:
         _spend_rows(state, day=TODAY.isoformat(), model="gpt-6-luna", input_tokens=499_500_000)
         spend.GUARD.forget()
-        assert spend.GUARD.over() is None
-        METER.model_call("chat", "gpt-6-luna", 1_000_000)  # $1, not yet flushed
-        assert spend.GUARD.over() is not None, "the guard adds what the meter holds"
+        assert spend.GUARD.over() is None, "$499.50 of $500, and the total is now cached"
+        monkeypatch.setattr(METER, "_maybe_flush", lambda: None)  # this test drives the flush
+        METER.model_call("chat", "gpt-6-luna", 1_000_000)  # $1, not yet written
+        assert spend.GUARD.over() is not None, "pending: the guard adds what the meter holds"
+
+        seen_while_writing: list[Any] = []
+        write = usage_ledger.add
+
+        def writing(target: Any, kb_id: str, rows: Any) -> None:
+            seen_while_writing.append(spend.GUARD.over())
+            write(target, kb_id, rows)
+
+        monkeypatch.setattr(usage_ledger, "add", writing)
+        assert METER.flush() == 1
+        assert seen_while_writing and seen_while_writing[0] is not None, "in flight: still counted"
+        assert METER.pending_model_rows(spend.month_start()) == [], "written, so no longer pending"
+        assert spend.GUARD.over() is not None, "written: the flush cleared the cached total"
     finally:
         METER.unbind(state)
 
