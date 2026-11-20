@@ -1,4 +1,13 @@
-"""Shared job history with a time lifetime independent of published outputs."""
+"""Shared job history with a time lifetime independent of published outputs.
+
+**Clearing a job dismisses it; it does not delete it.** The jobs tray's Clear
+(``DELETE /jobs``) used to delete every finished row, and a finished row is
+what an agent reads its result from: a person clearing their notifications
+while an agent's ``compose_artifact`` had just finished turned the agent's
+next ``get_job`` into "Unknown job", its result gone (found on production,
+the clear 14 s after the job ended). A cleared row is now hidden from every
+listing and still returned by its id until retention (``prune``) removes it.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +40,8 @@ class DurableJobStore:
         self.legacy = legacy
 
     def write(self, payload: dict[str, Any]) -> None:
+        # The upsert leaves dismissed_at alone: a progress write never
+        # un-dismisses, and a dismissed job is terminal, so none arrives.
         finished = payload.get("finished_at")
         if finished:
             finished = datetime.fromisoformat(str(finished).replace("Z", "+00:00")).isoformat()
@@ -77,15 +88,20 @@ class DurableJobStore:
             return False
 
     def list(self, *, limit: int | None = None) -> list[dict]:
+        """Every job not dismissed: the active ones, and with ``limit`` that
+        many of the most recently finished."""
+
+        visible = "kb_id=? AND dismissed_at IS NULL"
         fence, params = "", ()
         if limit is not None:
             fence = (
-                " AND (active=1 OR id IN (SELECT id FROM durable_jobs WHERE kb_id=? AND active=0 "
-                "ORDER BY COALESCE(finished_at,updated_at) DESC,id DESC LIMIT ?))"
+                " AND (active=1 OR id IN (SELECT id FROM durable_jobs WHERE "
+                + visible
+                + " AND active=0 ORDER BY COALESCE(finished_at,updated_at) DESC,id DESC LIMIT ?))"
             )
             params = (self.kb_id, max(1, int(limit)))
         rows = self.state.rows(
-            "SELECT * FROM durable_jobs WHERE kb_id=?" + fence + " ORDER BY updated_at DESC",
+            "SELECT * FROM durable_jobs WHERE " + visible + fence + " ORDER BY updated_at DESC",
             (self.kb_id, *params),
         )
         records = {r["id"]: self._decode(r) for r in rows}
@@ -97,16 +113,20 @@ class DurableJobStore:
         return list(records.values())
 
     def clear_finished(self, job_id: str | None = None) -> set[str]:
+        """Dismiss finished jobs: gone from listings, still read by their id."""
+
         suffix, values = (" AND id=?", (job_id,)) if job_id else ("", ())
         with self.state.conn:
             rows = self.state.conn.execute(
-                "DELETE FROM durable_jobs WHERE kb_id=? AND active=0" + suffix + " RETURNING id",
-                (self.kb_id, *values),
+                "UPDATE durable_jobs SET dismissed_at=? WHERE kb_id=? AND active=0 "
+                "AND dismissed_at IS NULL" + suffix + " RETURNING id",
+                (datetime.now(UTC).isoformat(), self.kb_id, *values),
             ).fetchall()
         removed = {str(row["id"]) for row in rows}
         migrated = set(removed)
         if job_id and not self.state.rows(
-            "SELECT id FROM durable_jobs WHERE kb_id=? AND id=?", (self.kb_id, job_id)
+            "SELECT id FROM durable_jobs WHERE kb_id=? AND id=? AND dismissed_at IS NULL",
+            (self.kb_id, job_id),
         ):
             # The serving replica may already have deleted the shared row.
             # Its notification still lets the writable indexer tidy the copy.
@@ -161,6 +181,14 @@ class DurableJobStore:
             ).fetchall()
         self._remove_migrated({str(row["id"]) for row in rows})
         return len(rows)
+
+
+def migrate_durable_jobs(state: Any) -> None:
+    """Add ``dismissed_at`` to a ``durable_jobs`` created before it existed."""
+
+    existing = state.backend.table_columns("durable_jobs")
+    if existing and "dismissed_at" not in existing:
+        state.conn.execute("ALTER TABLE durable_jobs ADD COLUMN dismissed_at TEXT")
 
 
 def store_for(

@@ -226,7 +226,10 @@ def test_jobs_survive_restart_and_deletion_never_changes_publication(context):
         jobs.finish(job.id, result={"artifact_id": kept["id"]})
         assert observer.get(job.id)["result"]["artifact_id"] == kept["id"]
         observer.clear(job.id)
-        assert jobs.get(job.id) is None
+        # Cleared is dismissed: off every listing, still read by its id, so an
+        # agent holding the job id still gets its result.
+        assert jobs.get(job.id)["result"]["artifact_id"] == kept["id"]
+        assert job.id not in {entry["id"] for entry in jobs.list()}
         assert jobs.list() == []
         assert (
             publications.status(context.state, context.config.knowledge_base_id, kept["id"])
@@ -706,7 +709,8 @@ def test_readonly_notification_cleanup_does_not_fail_durable_deletion(
     with monkeypatch.context() as m:
         m.setattr(Path, "unlink", readonly)
         assert store.clear_finished("done") == {"done"}
-    assert store.get("done") is None and migrated.exists()
+    assert store.get("done") is not None and migrated.exists(), "dismissed, not deleted"
+    assert store.list() == []
     # The notification is handled in another process after the row is gone.
     assert store.clear_finished("done") == set()
     assert not migrated.exists()

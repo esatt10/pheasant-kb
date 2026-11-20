@@ -9,9 +9,13 @@ from typing import Any
 def migrate_saved_artifacts(state: Any) -> None:
     """Add the session, channel and archive columns to a pre-existing ``saved_artifacts``.
 
-    Both migration paths call it, for `_migrate_evaluation_progress`'s reason.
+    Both migration paths call it, for `_migrate_evaluation_progress`'s reason,
+    and it widens ``durable_jobs`` too (the same change shipped both tables).
     """
 
+    from pheasant.persistence.durable_jobs import migrate_durable_jobs
+
+    migrate_durable_jobs(state)
     existing = state.backend.table_columns("saved_artifacts")
     if not existing:
         return

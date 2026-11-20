@@ -1491,7 +1491,13 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   runtime questions. Lab A/B, same code: p50 8.71 → 5.70 s, p90 10.30 → 7.02 s,
   fact coverage unchanged. `prune` (per-passage relevance) exists and is off:
   it saved no time and, with the cheap draft, cost a detail.
-  `tests/test_decisions_api.py`.
+  `tests/test_decisions_api.py`. **A judgement's input is fitted to the
+  judge's context** (`assistant.decisions.context_tokens`, 32,768;
+  `Decider.fit`: what fits its share is kept whole, the rest share the
+  remainder, and the acceptance step says how much was cut). The compose
+  shape's acceptance check read every document the writer read, unbounded, and
+  every call was a 422 reported as "decisions unavailable"; an answer longer
+  than the context alone is not sent.
 - **Azure AI Foundry is a base URL, not a second client** (`foundry.py`).
   Any URL on a Foundry host is signed with `api-key` instead of Bearer and
   read as its `/openai/v1` surface, so embeddings, captions and transcripts
@@ -3566,7 +3572,14 @@ retirement's rename, to the indexer through `artifact_outbox`
 region that has `agent-memory` keeps it through its registry row and writes
 `/memory` in place. Published versions/receipts live independently of durable jobs.
 The scheduler prunes terminal job history after `artifacts.job_retention_days`
-(default 30); published outputs survive until deprecated/replaced. Saved base
+(default 30); published outputs survive until deprecated/replaced. **Clearing a
+job dismisses it** (`durable_jobs.dismissed_at`): gone from every listing, still
+read by its id until that retention. The tray's Clear used to delete the row,
+and on production a person clearing it 14 s after an agent's
+`compose_artifact` finished turned the agent's `get_job` into "Unknown job"
+(the store is authoritative for a finished job, so the process's own copy was
+not consulted; `job_publication.lookup` now falls back to it).
+`tests/test_jobs.py`. Saved base
 ranking bundles can be applied after reconfiguration and job deletion. Evidence
 numbering/rendering is centralized in `services/artifact_evidence.py`; preserve
 original code file bytes and carry local-to-global maps. See

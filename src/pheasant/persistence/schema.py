@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS durable_jobs (
   active INTEGER NOT NULL,
   updated_at TEXT NOT NULL,
   finished_at TEXT,
+  dismissed_at TEXT,
   PRIMARY KEY (kb_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_durable_jobs_retention ON durable_jobs(kb_id, active, finished_at);

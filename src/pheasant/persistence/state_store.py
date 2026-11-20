@@ -377,7 +377,7 @@ class StateStore:
                 "oauth_clients": "data_json",
                 "answer_streams": "updated_at",
                 "saved_artifacts": "publication_state",
-                "durable_jobs": "payload_json",
+                "durable_jobs": "dismissed_at",
                 "artifact_source_migrations": "original_config_json",
                 "artifact_versions": "payload_json",
                 "artifact_publications": "revision_id",
