@@ -619,9 +619,23 @@ def _judge_answer(state: dict, ctx: dict) -> dict:
     texts = state.get("evidence_texts") or {}
     used = [c for c in citations if c.get("used")] or citations
     lines = [f"QUESTION: {state['question']}", "", "ANSWER:", answer, "", "PASSAGES:"]
-    for citation in used:
-        text = texts.get(int(citation["index"])) or str(citation.get("snippet") or "")
-        lines += [f"[{citation['index']}] {citation.get('title') or ''}", text, ""]
+    headers = [f"[{citation['index']}] {citation.get('title') or ''}" for citation in used]
+    passages = [
+        texts.get(int(citation["index"])) or str(citation.get("snippet") or "") for citation in used
+    ]
+    # Fitted to the judge's context: sent whole, an artifact's 57 documents
+    # were a 422 on every call and the gate judged nothing.
+    # Everything sent but the passages, separators included (two per passage).
+    fitted = decider.fit("\n".join(lines + headers) + "\n\n" * len(headers), passages)
+    if fitted is None:
+        reason = f"the answer alone is longer than the judge's {decider.context_tokens:,} tokens"
+        entry = {"gate": "accept", "outcome": "skipped", "reason": reason}
+        if shadow:
+            return {"decision_log": _log(state, {**entry, "mode": "shadow"})}
+        return _accept_step(state, f"answer not judged ({reason})", entry)
+    for header, text in zip(headers, fitted, strict=True):
+        lines += [header, text, ""]
+    trimmed = sum(len(text) for text in passages) - sum(len(text) for text in fitted)
     questions = [
         decisions.predicate(
             "grounded",
@@ -659,8 +673,12 @@ def _judge_answer(state: dict, ctx: dict) -> dict:
         "input_tokens": result.input_tokens,
         "repairs": repairs,
         "draft_effort": state.get("draft_effort"),
+        **({"passages_cut_chars": trimmed} if trimmed else {}),
     }
     scores = f"grounded p={grounded:.2f}, responsive p={responsive:.2f}"
+    if trimmed:
+        # A judge reading less than the writer read underrates grounding; say so.
+        scores += f"; passages cut by {trimmed:,} characters to fit the judge"
     if shadow:
         decisions.record_shadow("accept", accepted)
         return {

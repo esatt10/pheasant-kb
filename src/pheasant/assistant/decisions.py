@@ -71,6 +71,11 @@ MODES = ("beta", "shadow", "off")
 GATES = ("sufficiency", "followup", "prune", "accept")
 #: What runs when nothing says otherwise (``assistant.decisions.gates``).
 DEFAULT_GATES = ("sufficiency", "followup", "accept")
+#: Tokens kept free of a judgement's input: the questions, the framing and
+#: the decision token itself.
+JUDGE_RESERVED_TOKENS = 2_048
+#: Characters per token when sizing an input, the conservative end.
+CHARS_PER_TOKEN = 3
 
 #: HTTP statuses that will not change by asking again: credentials, access,
 #: a model or endpoint that does not exist here. A 400 is deliberately not
@@ -266,6 +271,8 @@ class Decider:
     #: credential) / ``managed_identity`` (no key; a Foundry host signed with
     #: this process's identity) — reported, never the key itself.
     source: str = "environment"
+    #: The judge's context in tokens (``assistant.decisions.context_tokens``).
+    context_tokens: int = 32_768
     deadline_monotonic: float | None = None
     last_failure: str | None = field(default=None, compare=False, repr=False)
 
@@ -285,6 +292,36 @@ class Decider:
         """Why this process stopped asking this endpoint, if it did."""
         with _UNAVAILABLE_LOCK:
             return _UNAVAILABLE.get((self.endpoint, self.model))
+
+    def fit(self, fixed: str, passages: list[str]) -> list[str] | None:
+        """``passages`` cut so ``fixed`` plus them fits the judge's context.
+
+        Passages that fit their fair share keep every character; the rest
+        share what remains equally (water-filling), so one long document cannot
+        crowd out the others. ``None`` when ``fixed`` alone (the question and
+        the answer) leaves no room: a call that cannot fit is not made.
+        Characters per token is the conservative end (code and identifiers run
+        near 3), because an estimate that undercounts is a refused call.
+        """
+
+        room = (self.context_tokens - JUDGE_RESERVED_TOKENS) * CHARS_PER_TOKEN - len(fixed)
+        if room <= 0:
+            return None
+        if sum(len(text) for text in passages) <= room:
+            return list(passages)
+        caps = {index: len(text) for index, text in enumerate(passages)}
+        remaining, open_ = room, dict(caps)
+        while open_:
+            share = remaining // len(open_)
+            small = {index: size for index, size in open_.items() if size <= share}
+            if not small:
+                for index in open_:
+                    caps[index] = share
+                break
+            for index, size in small.items():
+                remaining -= size
+                del open_[index]
+        return [text[: caps[index]] for index, text in enumerate(passages)]
 
     def with_deadline(self, deadline: float | None) -> Decider:
         return replace(self, deadline_monotonic=deadline)
@@ -454,6 +491,7 @@ def resolve_decider(
         max_repairs=int(getattr(decisions, "max_repairs", 1)),
         repair_efforts=tuple(getattr(decisions, "repair_efforts", DEFAULT_REPAIR_EFFORTS) or ()),
         source=source,
+        context_tokens=int(getattr(decisions, "context_tokens", 32_768) or 32_768),
     )
 
 

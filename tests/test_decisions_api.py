@@ -1016,3 +1016,60 @@ def test_no_key_and_a_failed_endpoint_are_different_refusals(surfaces, monkeypat
     assert isinstance(mcp, DecisionsNotConfigured) and not mcp.retryable
     assert (http.status_code, http.json()["detail"]) == (503, str(mcp))
     assert "OPENAI_API_KEY" in str(mcp)
+
+
+# ------------------------------------------------------- the judge's context
+
+
+def test_fit_keeps_what_fits_and_shares_the_rest() -> None:
+    from pheasant.assistant.decisions import CHARS_PER_TOKEN, JUDGE_RESERVED_TOKENS
+
+    decider = _decider(context_tokens=4_096)
+    room = (4_096 - JUDGE_RESERVED_TOKENS) * CHARS_PER_TOKEN
+    assert decider.fit("q", ["a" * 10, "b" * 20]) == ["a" * 10, "b" * 20], "fits whole"
+    fitted = decider.fit("", ["s" * 100, "L" * 50_000, "M" * 50_000])
+    assert fitted[0] == "s" * 100, "a passage under its share keeps every character"
+    assert len(fitted[1]) == len(fitted[2]) == (room - 100) // 2
+    assert sum(map(len, fitted)) <= room
+    assert decider.fit("x" * room, ["anything"]) is None, "no room, no call"
+
+
+def test_a_long_artifacts_judgement_is_fitted_not_refused(monkeypatch) -> None:
+    """A composed artifact's acceptance check read all 57 documents the writer
+    read, and every call was a 422 ("exceeds the 32768-token context limit"):
+    the gate judged nothing and the trace said the endpoint was unavailable."""
+
+    from pheasant.assistant.decisions import CHARS_PER_TOKEN, JUDGE_RESERVED_TOKENS
+
+    hit = _hit("manual")
+    hit["chunks"] = [{"text_preview": "Reference text. " * 4_000}]
+    wire = _Wire({"sufficient": 0.95, "grounded": 0.9, "responsive": 0.9})
+    # An answer that leaves less room than its passage: the passage is cut.
+    answer = "Configure the relay as documented. " * 160 + "[1]"
+    decider = _decider(context_tokens=4_096)
+    result = _run(_Search({QUESTION: [hit]}), _LLM([answer]), decider, monkeypatch, wire)
+
+    accept = wire.requests[-1][1]
+    assert [q["name"] for q in accept["questions"]][:2] == ["grounded", "responsive"]
+    assert len(accept["input"]) <= (4_096 - JUDGE_RESERVED_TOKENS) * CHARS_PER_TOKEN
+    step = next(step for step in result.steps if step.name == "accept")
+    assert "answer accepted" in step.detail and "cut by" in step.detail
+    entry = next(entry for entry in result.decisions["calls"] if entry["gate"] == "accept")
+    assert entry["passages_cut_chars"] > 0
+
+
+def test_an_answer_longer_than_the_judge_is_not_sent(monkeypatch) -> None:
+    wire = _Wire({"sufficient": 0.95, "grounded": 0.9, "responsive": 0.9})
+    answer = "A very long artifact. " * 600 + "[1]"
+    result = _run(
+        _Search({QUESTION: [_hit("config")]}),
+        _LLM([answer]),
+        _decider(context_tokens=4_096),
+        monkeypatch,
+        wire,
+    )
+
+    asked = [wire.names(index)[0] for index in range(len(wire.requests))]
+    assert asked == ["sufficient"], "no acceptance request was made"
+    step = next(step for step in result.steps if step.name == "accept")
+    assert step.detail.startswith("answer not judged (the answer alone is longer")
