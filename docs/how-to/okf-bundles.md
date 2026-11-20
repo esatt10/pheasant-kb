@@ -43,7 +43,30 @@ everything beyond the required `type` as soft guidance. `type:` on its own is
 never enough, because Hugo uses it to route pages too.
 
 The shallowest qualifying directory wins and nothing nested in it is a second
-bundle, so one source can hold several sibling bundles. Indexing Google's
+bundle, so one source can hold several sibling bundles.
+
+For a directory with an `index.md`, the share is measured over **what that
+index lists**: the folders and files its entries name, plus the index's own
+folder. A repository that *is* a bundle (a root `index.md` listing `metrics/`,
+`tables/` ...) usually also carries developer docs, and measured over
+everything under the root they would sink it below 80% and leave only
+fragments as bundles. Hidden folders (`.github/`, `.changeset/`) are a
+repository's tooling and count either way.
+
+## Where a bundle can come from
+
+Any source that indexes Markdown: a folder, a repository (with the bundle at
+its root or in a subfolder), a cloud drive, or an upload. An upload is
+detected the same way whichever form it takes:
+
+- **A ZIP** of the bundle: its members keep their paths inside the archive
+  (`acme.zip/acme/metrics/index.md`).
+- **A folder**, dragged onto the drop zone or picked with **Choose a folder**,
+  or files sent with their relative paths (`POST /sources/upload` with each
+  part's filename set to `acme/metrics/index.md`, or MCP `submit_documents`):
+  the folder structure is kept. Before this, an upload kept only file names,
+  so three `index.md` files became `index.md`, `index-2.md` and `index-3.md`
+  and the bundle could not be seen. Indexing Google's
 whole `okf/` directory finds the four sample bundles and leaves the spec,
 README and prompt files alone.
 
@@ -74,6 +97,34 @@ second. A leading `/` is bundle-relative (§6.1), and the spec's own examples
 write `references/skills/run-on-bq.md` from inside `computations/`. A link
 that leaves the bundle is not a bundle relationship, and a broken link is
 counted on the bundle node (`broken_links`) rather than rejected.
+
+## What its nearest index says, at retrieval
+
+An index is where a bundle's curator records what a document's own
+frontmatter has not caught up with: an entry filed under **Deprecated**,
+"superseded by ...", "needs review", "updated 2026-07-01". Every Markdown
+document in a bundle has one `indexed_by` edge to its **nearest** index, the
+closest `index.md` in its own folder or above. The edge says whether that
+index lists the document and what the entry states, read by fixed rules with
+no model.
+
+When a search or an answer retrieves a passage from a bundle, it follows that
+edge (one hop) and the hit carries an `okf` block:
+
+| Field | Meaning |
+|---|---|
+| `index`, `levels` | The nearest index, and how many folders up it is |
+| `listed`, `index_says`, `index_text`, `stated_date` | Whether it lists the document, what the entry states (`superseded`, `deprecated`, `stale`, `draft`, `current`), its words, and a date it gives |
+| `status`, `stale_after`, `past_stale_after` | The document's own frontmatter, with `stale_after` checked against the clock now |
+| `verdict` | `superseded`, `deprecated`, `stale`, `draft`, `unlisted` or `current`. The index comes first; a passed `stale_after`, or an index date later than the document's last review, makes it `stale` |
+| `conflict`, `note` | Whether the index and the document disagree, and one sentence saying so |
+
+An answer's prompt carries the `verdict` and `note` under the passage
+(`OKF index check: superseded. metrics/index.md lists it as superseded: ...`),
+so the answer can say a source has been replaced rather than quote it as
+current. Only hits on `.md` files are looked up, in one read per search, so a
+region without bundles pays nothing. The verdict is computed when it is read
+and never stored, because it changes with the clock.
 
 ## What it looks like
 

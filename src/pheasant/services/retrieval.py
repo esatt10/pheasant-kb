@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pheasant.graph import okf_index
 from pheasant.search.criteria import (
     apply_retrieval_criteria,
     criteria_active,
@@ -399,6 +400,8 @@ def _search(
         # What the search was allowed to see, as resolved: a caller who named
         # `deploy.md` learns which documents that left out.
         payload["scope"] = scope.as_dict()
+    # A hit in an OKF bundle carries what its nearest index says of it.
+    okf_index.annotate(payload.get("results") or [], getattr(context, "graph", None))
     payload["graph_generation"] = getattr(context.engine, "loaded_graph_generation", None)
     payload["lineage"] = _lineage(
         context,

@@ -50,7 +50,8 @@ from urllib.request import ProxyHandler, Request, build_opener
 from pheasant.ingestion.landing import (
     StoredUpload,
     check_submission_bytes,
-    safe_filename,
+    safe_filename,  # noqa: F401 - re-exported
+    safe_relative_path,
     store_upload,
     upload_root,
 )
@@ -284,10 +285,9 @@ def _sanitised_relative(raw: str) -> str:
     """
 
     raw_parts = str(raw or "").replace("\\", "/").split("/")
-    parts = [part for part in raw_parts if part not in ("", ".", "..")]
-    if not parts:
+    if not [part for part in raw_parts if part not in ("", ".", "..")]:
         raise ValueError("A submitted item needs a relative path")
-    return "/".join(safe_filename(part, fallback="item") for part in parts)
+    return safe_relative_path(raw, fallback="item")
 
 
 def landing_zone_for_config(

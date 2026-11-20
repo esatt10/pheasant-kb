@@ -52,7 +52,21 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote
 
+from pheasant.graph import okf_index
 from pheasant.graph.enrichment import EnrichmentEdge, EnrichmentNode, _node_id, _slug_part
+from pheasant.graph.okf_detect import (  # noqa: F401 - re-exported for callers
+    BOILERPLATE_FILENAMES,
+    MIN_CONCEPT_SHARE,
+    MIN_CONCEPTS,
+    Bundle,
+    SourceArtifact,
+    _ancestors,
+    _depth_key,
+    _is_external,
+    _norm,
+    _within,
+    detect_bundles,
+)
 from pheasant.ingestion.okf import INDEX_FILENAME, LOG_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -82,38 +96,6 @@ OKF_EDGE_TYPES = frozenset(
     }
 )
 
-MIN_CONCEPTS = 2
-MIN_CONCEPT_SHARE = 0.8
-
-#: Files a repository carries whatever it holds. Neither concepts nor
-#: evidence against a bundle.
-BOILERPLATE_FILENAMES = frozenset(
-    {
-        "readme.md",
-        "changelog.md",
-        "contributing.md",
-        "license.md",
-        "code_of_conduct.md",
-        "security.md",
-    }
-)
-
-
-@dataclass(frozen=True)
-class SourceArtifact:
-    """One artifact of the source, as the planner needs it."""
-
-    node_id: str
-    relative_path: str
-    okf: dict[str, Any] | None
-
-
-@dataclass(frozen=True)
-class Bundle:
-    root: str
-    detection: str
-    okf_version: str | None
-
 
 @dataclass
 class OkfPlan:
@@ -122,75 +104,6 @@ class OkfPlan:
     nodes: list[EnrichmentNode] = field(default_factory=list)
     edges: list[EnrichmentEdge] = field(default_factory=list)
     bundles: list[dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
-class _DirStats:
-    concepts: int = 0
-    others: int = 0
-    signals: int = 0
-    has_log: bool = False
-
-
-def detect_bundles(artifacts: list[SourceArtifact]) -> list[Bundle]:
-    """The bundle roots in one source, shallowest first. Pure and deterministic."""
-
-    markdown = [a for a in artifacts if a.relative_path.lower().endswith(".md")]
-    stats: dict[str, _DirStats] = {}
-    listings: dict[str, dict[str, Any]] = {}
-    for artifact in markdown:
-        path = _norm(artifact.relative_path)
-        name = posixpath.basename(path).lower()
-        role = (artifact.okf or {}).get("role")
-        directory = posixpath.dirname(path)
-        if name == INDEX_FILENAME:
-            if role == "index":
-                listings[directory] = artifact.okf or {}
-            continue
-        if name == LOG_FILENAME:
-            if role == "log":
-                for ancestor in _ancestors(directory):
-                    stats.setdefault(ancestor, _DirStats()).has_log = True
-            continue
-        if name in BOILERPLATE_FILENAMES:
-            continue
-        is_concept = role == "concept"
-        signalled = bool((artifact.okf or {}).get("signals")) if is_concept else False
-        for ancestor in _ancestors(directory):
-            entry = stats.setdefault(ancestor, _DirStats())
-            if is_concept:
-                entry.concepts += 1
-                entry.signals += int(signalled)
-            else:
-                entry.others += 1
-
-    def conformant(directory: str, minimum: int = MIN_CONCEPTS) -> bool:
-        entry = stats.get(directory)
-        if entry is None or entry.concepts < minimum:
-            return False
-        return entry.concepts / (entry.concepts + entry.others) >= MIN_CONCEPT_SHARE
-
-    roots: list[Bundle] = []
-
-    def claimed(directory: str) -> bool:
-        return any(_within(directory, bundle.root) for bundle in roots)
-
-    explicit = sorted(
-        (d for d, listing in listings.items() if listing.get("okf_version")), key=_depth_key
-    )
-    for directory in explicit:
-        if not claimed(directory) and conformant(directory, minimum=1):
-            roots.append(Bundle(directory, "explicit", str(listings[directory]["okf_version"])))
-    for directory in sorted(listings, key=_depth_key):
-        if not claimed(directory) and conformant(directory):
-            roots.append(Bundle(directory, "index", None))
-    for directory in sorted(stats, key=_depth_key):
-        if claimed(directory) or any(_within(bundle.root, directory) for bundle in roots):
-            continue
-        entry = stats[directory]
-        if conformant(directory) and (entry.signals or entry.has_log):
-            roots.append(Bundle(directory, "conformant_tree", None))
-    return sorted(roots, key=lambda bundle: _depth_key(bundle.root))
 
 
 def plan_source(
@@ -434,6 +347,7 @@ class _BundlePlanner:
         for artifact in concepts:
             self._concept_edges(artifact)
         self._supersedes(concepts)
+        self._nearest_index_edges(members, reserved)
 
         trust = Counter(str(a.okf.get("trust_tier") or "unverified") for a in concepts)
         status = Counter(str(a.okf.get("status") or "stable") for a in concepts)
@@ -571,6 +485,16 @@ class _BundlePlanner:
                     "last_date": max(str(e.get("date") or "") for e in entries) or None,
                 },
             )
+
+    def _nearest_index_edges(
+        self, members: list[SourceArtifact], reserved: list[SourceArtifact]
+    ) -> None:
+        """``document --indexed_by--> nearest index.md`` (``okf_index.plan_edges``)."""
+
+        for source, target, attrs in okf_index.plan_edges(
+            members, reserved, self._resolve, self.bundle.root
+        ):
+            self._edge(source, target, okf_index.EDGE_TYPE, attrs)
 
     def _supersedes(self, concepts: list[SourceArtifact]) -> None:
         """``current --supersedes--> deprecated`` when the bundle says so in links.
@@ -735,26 +659,3 @@ def _concept_id(path: str, root: str) -> str:
 
     relative = path[len(root) + 1 :] if root else path
     return relative[:-3] if relative.lower().endswith(".md") else relative
-
-
-def _is_external(target: str) -> bool:
-    return "://" in target or target.lower().startswith(("mailto:", "data:"))
-
-
-def _norm(path: str) -> str:
-    return path.replace("\\", "/").strip("/")
-
-
-def _ancestors(directory: str) -> list[str]:
-    """``a/b`` → ``["", "a", "a/b"]``: every directory a file is under."""
-
-    parts = [part for part in directory.split("/") if part]
-    return [""] + ["/".join(parts[: index + 1]) for index in range(len(parts))]
-
-
-def _within(directory: str, root: str) -> bool:
-    return not root or directory == root or directory.startswith(root + "/")
-
-
-def _depth_key(directory: str) -> tuple[int, str]:
-    return (0 if not directory else directory.count("/") + 1, directory)

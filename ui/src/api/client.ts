@@ -442,6 +442,25 @@ async function saveDownload(path: string, fallback: string): Promise<string> {
   return name;
 }
 
+/** Where each uploaded file sits within the folder it came from. */
+const UPLOAD_PATHS = new WeakMap<File, string>();
+
+/** Remember a dropped file's path inside its folder (``acme/metrics/index.md``). */
+export function setUploadPath(file: File, path: string): void {
+  UPLOAD_PATHS.set(file, path);
+}
+
+/**
+ * The name an upload is sent under: its path inside the folder it was picked
+ * or dropped from, so a collection lands as a tree. An Open Knowledge Format
+ * bundle needs that: its `index.md` files and relative links only mean
+ * something in place. A loose file is sent under its own name.
+ */
+export function uploadPath(file: File): string {
+  const picked = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return UPLOAD_PATHS.get(file) || picked || file.name;
+}
+
 function qs(
   params: Record<string, string | number | boolean | string[] | undefined>,
 ): string {
@@ -1378,7 +1397,7 @@ export const api = {
   // needs the browser to set its own boundary header.
   uploadDocuments: async (files: File[], sourceName = "uploads"): Promise<UploadResponse> => {
     const form = new FormData();
-    for (const file of files) form.append("files", file, file.name);
+    for (const file of files) form.append("files", file, uploadPath(file));
     form.append("source_name", sourceName);
     form.append("sync_now", "true");
     form.append("wait", "false");
@@ -1414,7 +1433,7 @@ export const api = {
   ): Promise<UploadAccepted> =>
     new Promise((resolve, reject) => {
       const form = new FormData();
-      for (const file of files) form.append("files", file, file.name);
+      for (const file of files) form.append("files", file, uploadPath(file));
       form.append("source_name", sourceName);
       form.append("sync_now", "true");
       form.append("background", "true");

@@ -7327,3 +7327,14 @@ select.text-input {
     font-size: 16px;
   }
 }
+
+/* The drop zone's "Choose a folder": a folder keeps its tree when uploaded. */
+.upload__folder {
+  align-self: center;
+  margin-top: 6px;
+}
+@media (pointer: coarse) {
+  .upload__folder {
+    min-height: 40px;
+  }
+}

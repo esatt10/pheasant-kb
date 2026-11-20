@@ -4358,6 +4358,12 @@ def create_app(
                 [str(item) for item in parameters.get("node_ids") or []],
                 int(parameters.get("limit") or 8),
             )
+        elif operation == "okf_index":
+            from pheasant.graph.okf_index import collect as okf_index_collect
+
+            result = okf_index_collect(
+                graph_obj, [str(item) for item in parameters.get("artifact_ids") or []]
+            )
         elif operation == "memory_coverage":
             from pheasant.services.artifact_graph import coverage
 

@@ -108,6 +108,26 @@ def _truncate(name: str, fallback: str) -> str:
     return (clipped + suffix) or fallback
 
 
+def safe_relative_path(raw: str, *, fallback: str = "upload") -> str:
+    """A relative path that stays inside the upload directory, folders kept.
+
+    Each component is cleaned by :func:`safe_filename` (no leading dot, no
+    separators, no reserved names) and ``.``/``..``/empty components are
+    dropped, so ``../../etc/x`` is ``etc/x`` and nothing can leave the
+    directory. Folders are kept because a collection is more than its files:
+    an Open Knowledge Format bundle uploaded as a folder is a tree whose
+    ``index.md`` files and relative links only mean something in place, and
+    flattening it to basenames turned three ``index.md`` into ``index-2.md``
+    and ``index-3.md`` and broke every link.
+    """
+
+    raw_parts = unicodedata.normalize("NFC", str(raw or "")).replace("\\", "/").split("/")
+    parts = [part for part in raw_parts if part.strip() not in ("", ".", "..")]
+    if not parts:
+        return safe_filename("", fallback=fallback)
+    return "/".join(safe_filename(part, fallback=fallback) for part in parts)
+
+
 def unique_path(directory: Path, filename: str) -> Path:
     """``directory/filename``, suffixed if needed so nothing is overwritten.
 
@@ -219,15 +239,24 @@ def store_upload(
     take the next free suffix, as before.
     """
     check_submission_bytes(filename, data, max_bytes)
-    directory.mkdir(parents=True, exist_ok=True)
-    existing = identical_upload(directory, safe_filename(filename), data)
+    # A file uploaded from a folder keeps its folder (`safe_relative_path`).
+    relative = safe_relative_path(filename)
+    *folders, name = relative.split("/")
+    folder = directory.joinpath(*folders)
+    folder.mkdir(parents=True, exist_ok=True)
+    existing = identical_upload(folder, name, data)
     if existing is not None:
         return StoredUpload(
-            filename=existing.name, path=str(existing), size_bytes=len(data), unchanged=True
+            filename=existing.relative_to(directory).as_posix(),
+            path=str(existing),
+            size_bytes=len(data),
+            unchanged=True,
         )
-    target = unique_path(directory, safe_filename(filename))
+    target = unique_path(folder, name)
     target.write_bytes(data)
-    return StoredUpload(filename=target.name, path=str(target), size_bytes=len(data))
+    return StoredUpload(
+        filename=target.relative_to(directory).as_posix(), path=str(target), size_bytes=len(data)
+    )
 
 
 def identical_upload(directory: Path, filename: str, data: bytes) -> Path | None:

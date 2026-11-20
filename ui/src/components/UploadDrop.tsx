@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { startUpload, useBackground } from "../state/background";
+import { droppedFiles } from "./droppedFiles";
 
 /**
  * Drop supported files or ZIP archives here and they become a real source.
@@ -28,10 +29,11 @@ export function UploadDrop({
   const [dragging, setDragging] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
   const { transfers } = useBackground();
   const sending = transfers.filter((t) => t.source === sourceName && t.status === "uploading");
 
-  const send = (list: FileList | null) => {
+  const send = (list: FileList | File[] | null) => {
     const files = Array.from(list ?? []);
     if (files.length === 0) return;
     const started = startUpload(files, sourceName);
@@ -55,7 +57,10 @@ export function UploadDrop({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          send(event.dataTransfer.files);
+          // Folders keep their tree (`droppedFiles`); an OKF bundle needs it.
+          droppedFiles(event.dataTransfer)
+            .then(send)
+            .catch(() => send(event.dataTransfer.files));
         }}
         onClick={() => inputRef.current?.click()}
         role="button"
@@ -75,6 +80,17 @@ export function UploadDrop({
             event.target.value = "";
           }}
         />
+        <input
+          ref={folderRef}
+          type="file"
+          multiple
+          hidden
+          {...{ webkitdirectory: "", directory: "" }}
+          onChange={(event) => {
+            send(event.target.files);
+            event.target.value = "";
+          }}
+        />
         <strong>
           {sending.length > 0
             ? `Uploading ${sending.reduce((n, t) => n + t.names.length, 0)} file(s)… drop more any time`
@@ -83,8 +99,19 @@ export function UploadDrop({
         <span className="muted small">
           Markdown, PDF, Office, images, audio, code, configs, or a ZIP containing
           any mix of supported files in folders — or click to choose. ZIP members
-          are indexed separately in <code>{sourceName}</code>.
+          are indexed separately in <code>{sourceName}</code>. A folder keeps its
+          structure, so an Open Knowledge Format bundle is recognised.
         </span>
+        <button
+          type="button"
+          className="btn btn--small upload__folder"
+          onClick={(event) => {
+            event.stopPropagation();
+            folderRef.current?.click();
+          }}
+        >
+          Choose a folder
+        </button>
       </div>
 
       {note ? (

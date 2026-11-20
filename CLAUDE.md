@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 229 pytest modules, offline by design
+└── tests/                     ← 230 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -578,7 +578,22 @@ provenance, computation contracts, listings and log history as a **diff**
 owned by `enrichment_pass: "okf"`. It walks the source rather than the graph
 and retracts per edge, so a `references` edge sharing a pair survives.
 Staleness is not stored because it is a function of the clock.
-`docs/how-to/okf-bundles.md`.
+`docs/how-to/okf-bundles.md`. **Detection** (`graph/okf_detect.py`) measures
+an indexed directory's concept share over what its `index.md` lists, so a
+repository that *is* a bundle is not split by the developer docs beside it,
+and hidden folders (`.github/`) count either way. **Every bundle document's
+nearest index** is one `indexed_by` edge (`graph/okf_index.py`: whether that
+index lists it, by file or folder, and the entry's words read by a
+deterministic `classify` as superseded / deprecated / stale / draft / current
+/ a stated date; boilerplate gets none). At retrieval `okf_index.annotate`
+follows it one hop for every `.md` hit (`services.retrieval._search` and the
+answer retriever; one `remote_okf_index` call on a fleet) and gives the hit an
+`okf` block whose verdict puts the index first, says when it and the document
+disagree, and reads `stale_after` against the clock; `chat.build_prompt` adds
+it under the passage. **Uploads keep their folders**
+(`landing.safe_relative_path` in `store_upload`; the drop zone walks dropped
+folders and has a folder picker), so a bundle uploaded as files is detected
+like a folder or a ZIP. `tests/test_okf_index.py`.
 
 **Deletions are synced, not just additions.** An incremental sync removes
 what a complete listing no longer contains (`sync/vanished.py`, opt-in per

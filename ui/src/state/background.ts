@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api } from "../api/client";
+import { api, uploadPath } from "../api/client";
 
 /**
  * Background work that outlives the panel that started it.
@@ -49,7 +49,7 @@ function update(id: string, change: Partial<Transfer>): void {
 }
 
 function signatureOf(files: File[], source: string): string {
-  const parts = files.map((f) => `${f.name}:${f.size}:${f.lastModified}`).sort();
+  const parts = files.map((f) => `${uploadPath(f)}:${f.size}:${f.lastModified}`).sort();
   return `${source}|${parts.join("|")}`;
 }
 
@@ -61,7 +61,7 @@ export function startUpload(files: File[], source: string): boolean {
   const total = files.reduce((sum, f) => sum + f.size, 0);
   transfers = [
     ...transfers,
-    { id, source, names: files.map((f) => f.name), signature, loaded: 0, total, status: "uploading" },
+    { id, source, names: files.map(uploadPath), signature, loaded: 0, total, status: "uploading" },
   ];
   emit();
   api
