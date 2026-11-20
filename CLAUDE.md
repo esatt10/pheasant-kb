@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 232 pytest modules, offline by design
+└── tests/                     ← 233 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1399,6 +1399,22 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is
   written from its passages and the trace says so (`assistant.longform`).
+- **A long answer someone chose is deep research** (`assistant/workflows/deep.py`;
+  MCP `research_knowledge_base`, a job). `@detailed` / `@deep`, a pinned
+  `depth: "long"` (or `"deep"`, `routing.DEPTH_ALIASES`) or the UI's Detailed
+  length: `routing.deep_research(depth, depth_by)` is `long` *and* `pinned`, so
+  a long read off the words or the planner is today's long, byte-identical.
+  `DEEP_DEFAULTS` + `deep_options` over the depth profile, as compose's block
+  (a config-set key pins against profiles); `PLANNER_DEEP_RULE` plans one
+  query per aspect. It stops after a grade (`deep.stop_reason`, said as a
+  `research` step) on no passages, no new evidence, or spend + projected
+  write at 95% of the per-answer limit (`telemetry/answer_spend.py`: a
+  ContextVar the meter adds every priced call to; `models.deep_answer_spend_limit`,
+  5). A section not started at 100% is extractive (`longform.AnswerLimitReached`).
+  `max_concurrent_deep_answers` (2) per process is a counter in
+  `services.assistant.acquire` (`DEEP_RESEARCH_BUSY`, 429). Both limits are
+  `region_controls` fields, operator admin only, on the Controls tab, `PUT
+  /region/controls` and MCP `set_region_controls`. `tests/test_deep_research.py`.
 - **A new artifact is composed, not looked up** (intent `compose`, read off a
   leading build verb plus an artifact noun, or the planner). "Write the
   configuration that…" asks for something no passage contains, and every other

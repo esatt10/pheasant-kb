@@ -206,6 +206,9 @@ class Meter:
         # Priced now, with the price in force now: a price changed later
         # applies to later calls only.
         spent = GUARD.call_micros(model, fresh, written, cached)
+        from pheasant.telemetry import answer_spend
+
+        answer_spend.record(spent, model)  # a deep answer's own limit, if one is open
         with self._lock:
             row = self._rows.setdefault(self._key(kind, str(model or "")), Totals())
             row.requests += 1

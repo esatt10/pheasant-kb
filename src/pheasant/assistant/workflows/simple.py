@@ -69,6 +69,8 @@ class SimpleWorkflow:
             # Only when the route differs from what this workflow always did,
             # so a plain question's trace is the one it has always been.
             note = "; answered as medium in one call" if depth == "long" else ""
+            if routing.deep_research(depth, route.decided_by.get("depth")):
+                note += "; deep research needs the agentic workflow"
             steps.append(
                 WorkflowStep(name="classify", detail=f"{depth} answer — {route.why['depth']}{note}")
             )

@@ -59,6 +59,11 @@ CEILINGS: dict[str, int] = {
     # these cohesive with their owning retriever/workflow and hold a fixed cap.
     "assistant/retrieval.py": 1650,
     "assistant/workflows/agentic.py": 1600,
+    # The refusal vocabulary: the readiness contract publishes its code table
+    # by reading this one module (a refusal defined elsewhere is a code no
+    # client can learn, CLAUDE.md traps), so it is one unit by necessity.
+    # Crossed 800 with `DEEP_RESEARCH_BUSY`; new refusals are short classes.
+    "services/errors.py": 820,
     # Raised to 3206 for `backup`/`restore` refusing a Postgres region (whose
     # data is not under /state) with the refusal text `persistence/backup.py`
     # owns, instead of writing an archive that holds none of it.

@@ -276,6 +276,22 @@ export interface RegionControls {
     unpriced_models: string[];
     note: string | null;
   };
+  /** Deep research (`@detailed` / `@deep`): one answer's limit and how many run at once. */
+  deep_research: {
+    /** What one deep answer may spend; an operator admin's figure, null for anyone else. */
+    answer_spend_limit: number | null;
+    default_answer_spend_limit: number | null;
+    custom_answer_spend_limit: boolean;
+    currency: string | null;
+    /** Research wraps up when spend plus the projected write reaches this share. */
+    wrap_up_percent: number;
+    enforced: boolean;
+    /** Deep answers one api process runs at once; 0 is no separate cap. */
+    max_concurrent: number;
+    default_max_concurrent: number;
+    custom_max_concurrent: boolean;
+    note: string | null;
+  };
   updated_at: string | null;
   updated_by: string | null;
 }
@@ -283,8 +299,10 @@ export interface RegionControls {
 export interface RegionControlsChange {
   suspended?: boolean;
   reason?: string | null;
-  /** null returns to the deployment's default. */
+  /** null returns to the deployment's default, for this and the two below. */
   monthly_spend_limit?: number | null;
+  deep_answer_spend_limit?: number | null;
+  max_concurrent_deep_answers?: number | null;
 }
 
 /** A price per million tokens; null where the model states none. */

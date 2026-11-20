@@ -19,6 +19,7 @@ from pheasant.mcp_server.job_tools import register_job_tools
 from pheasant.mcp_server.model_tools import register_model_tools
 from pheasant.mcp_server.readiness_tools import register_readiness_tools
 from pheasant.mcp_server.region_tools import register_region_tools
+from pheasant.mcp_server.research_tools import register_research_tools
 from pheasant.mcp_server.source_url_tools import register_source_url_tools
 from pheasant.mcp_server.sync_control_tools import register_sync_control_tools
 from pheasant.mcp_server.sync_pipeline_tools import register_sync_pipeline_tools
@@ -643,6 +644,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_readiness_tools(mcp, tools, anticipated)
     register_assistant_tools(mcp, tools, anticipated, anticipated_resource)
     register_compose_tools(mcp, tools, anticipated)
+    register_research_tools(mcp, tools, anticipated)
 
     @mcp.tool()
     @anticipated

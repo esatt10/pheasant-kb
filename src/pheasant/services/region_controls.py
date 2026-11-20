@@ -1,4 +1,4 @@
-"""The operator's controls over one knowledge base: a kill switch and a spend limit.
+"""The operator's controls over one knowledge base: a kill switch and spend limits.
 
 One implementation behind ``GET``/``PUT /region/controls`` and MCP
 ``get_region_controls`` / ``set_region_controls`` (rule 13). The mechanisms
@@ -15,6 +15,12 @@ are ``telemetry/spend.py``; this is who may see and change them.
 
 The kill switch is enforced at the front door (``api/auth.py``); the limit at
 every model call, at the start of an answer, and by a sync that would embed.
+
+Deep research has two more, in the same row and behind the same rule: what one
+deep answer may spend (``deep_answer_spend_limit``, default 5, read by the
+research loop through ``telemetry/answer_spend.py``) and how many deep answers
+one process runs at once (``max_concurrent_deep_answers``, default 2, read by
+``services.assistant.acquire``).
 """
 
 from __future__ import annotations
@@ -33,13 +39,19 @@ from pheasant.services.errors import (
     OperatorRequired,
     SpendLimitRefused,
 )
-from pheasant.telemetry import spend
+from pheasant.telemetry import answer_spend, spend
 
 logger = logging.getLogger(__name__)
 
 #: The longest reason a suspension carries, shown to everyone it refuses.
 MAX_REASON = 280
-FIELDS = ("suspended", "reason", "monthly_spend_limit")
+FIELDS = (
+    "suspended",
+    "reason",
+    "monthly_spend_limit",
+    "deep_answer_spend_limit",
+    "max_concurrent_deep_answers",
+)
 
 
 def _is_operator(context: ServiceContext) -> bool:
@@ -107,24 +119,70 @@ def describe(context: ServiceContext) -> dict[str, Any]:
             "unpriced_models": (month["unpriced_models"] if month and operator else []),
             "note": note,
         },
+        "deep_research": _deep_research(config, saved, operator, metered, currency),
         "updated_at": saved.get("updated_at"),
         "updated_by": saved.get("updated_by") if operator else None,
     }
 
 
+def _deep_research(
+    config: Any, saved: dict[str, Any], operator: bool, metered: bool, currency: str
+) -> dict[str, Any]:
+    """The per-answer limit (an amount: the operator's) and the per-process cap."""
+
+    limit = answer_spend.effective_limit(config, saved)
+    note = None
+    if not metered:
+        note = (
+            "Usage metering is off (observability.usage), so a deep answer's spend is "
+            "not counted and its limit is not enforced."
+        )
+    elif limit is None:
+        note = "No per-answer limit: deep research runs until it has its answer."
+    return {
+        "answer_spend_limit": limit if operator else None,
+        "default_answer_spend_limit": answer_spend.configured_limit(config) if operator else None,
+        "custom_answer_spend_limit": "deep_answer_spend_limit" in saved,
+        "currency": currency if operator else None,
+        "wrap_up_percent": round(100 * answer_spend.WRAP_UP_SHARE),
+        "enforced": bool(metered and limit is not None),
+        "max_concurrent": answer_spend.effective_concurrency(config, saved),
+        "default_max_concurrent": answer_spend.configured_concurrency(config),
+        "custom_max_concurrent": saved.get("max_concurrent_deep_answers") is not None,
+        "note": note,
+    }
+
+
+def _amount(name: str, value: Any, ceiling: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise InvalidRequest(f"{name} is a number, or null for the default")
+    try:
+        amount = float(value)
+    except ValueError as exc:
+        raise InvalidRequest(f"{name} is a number, or null for the default") from exc
+    if not math.isfinite(amount) or amount < 0 or amount > ceiling:
+        raise InvalidRequest(f"{name} must be between 0 and {ceiling:,.0f}")
+    return round(amount, 2)
+
+
 def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
-    """Turn the kill switch on or off, or set the monthly limit (operator admin).
+    """Turn the kill switch on or off, or set the spend limits (operator admin).
 
     ``suspended`` (bool), ``reason`` (text shown to everyone refused, at most
-    280 characters), ``monthly_spend_limit`` (a figure in the catalog's
-    currency, 0 or more; ``null`` returns to the deployment's default).
+    280 characters), ``monthly_spend_limit`` and ``deep_answer_spend_limit``
+    (figures in the catalog's currency, 0 or more), and
+    ``max_concurrent_deep_answers`` (a whole number, 0 for no separate cap).
+    ``null`` returns any of the last three to the deployment's default.
     """
 
     require_permission("security.manage")
     if not _is_operator(context):
-        raise OperatorRequired("change the kill switch or the spend limit")
+        raise OperatorRequired("change the kill switch or the spend limits")
     if not isinstance(changes, dict) or not changes:
-        raise InvalidRequest("send suspended, reason and/or monthly_spend_limit")
+        raise InvalidRequest(
+            "send suspended, reason, monthly_spend_limit, deep_answer_spend_limit "
+            "and/or max_concurrent_deep_answers"
+        )
     unknown = sorted(set(changes) - set(FIELDS))
     if unknown:
         raise InvalidRequest(f"unknown control(s): {', '.join(unknown)}")
@@ -136,19 +194,34 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             saved.pop("monthly_spend_limit", None)
         else:
-            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-                raise InvalidRequest("monthly_spend_limit is a number, or null for the default")
-            try:
-                amount = float(value)
-            except ValueError as exc:
+            saved["monthly_spend_limit"] = _amount(
+                "monthly_spend_limit", value, spend.MAX_MONTHLY_LIMIT
+            )
+    if "deep_answer_spend_limit" in changes:
+        value = changes["deep_answer_spend_limit"]
+        if value is None:
+            saved.pop("deep_answer_spend_limit", None)
+        else:
+            saved["deep_answer_spend_limit"] = _amount(
+                "deep_answer_spend_limit", value, answer_spend.MAX_DEEP_ANSWER_LIMIT
+            )
+    if "max_concurrent_deep_answers" in changes:
+        value = changes["max_concurrent_deep_answers"]
+        if value is None:
+            saved.pop("max_concurrent_deep_answers", None)
+        else:
+            if isinstance(value, str) and value.strip().isdigit():
+                value = int(value.strip())
+            if isinstance(value, bool) or not isinstance(value, int):
                 raise InvalidRequest(
-                    "monthly_spend_limit is a number, or null for the default"
-                ) from exc
-            if not math.isfinite(amount) or amount < 0 or amount > spend.MAX_MONTHLY_LIMIT:
-                raise InvalidRequest(
-                    f"monthly_spend_limit must be between 0 and {spend.MAX_MONTHLY_LIMIT:,.0f}"
+                    "max_concurrent_deep_answers is a whole number, or null for the default"
                 )
-            saved["monthly_spend_limit"] = round(amount, 2)
+            if not 0 <= value <= answer_spend.MAX_DEEP_CONCURRENCY:
+                raise InvalidRequest(
+                    "max_concurrent_deep_answers must be between 0 and "
+                    f"{answer_spend.MAX_DEEP_CONCURRENCY}"
+                )
+            saved["max_concurrent_deep_answers"] = value
     if "reason" in changes:
         reason = changes["reason"]
         if reason is not None and not isinstance(reason, str):
@@ -170,10 +243,12 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
         saved["suspended"] = value
     spend.write_controls(context.config, context.state, saved, actor)
     logger.warning(
-        "region controls changed: by=%s suspended=%s limit=%s",
+        "region controls changed: by=%s suspended=%s limit=%s deep_limit=%s deep_cap=%s",
         actor,
         bool(saved.get("suspended")),
         saved.get("monthly_spend_limit", "default"),
+        saved.get("deep_answer_spend_limit", "default"),
+        saved.get("max_concurrent_deep_answers", "default"),
     )
     return describe(context)
 

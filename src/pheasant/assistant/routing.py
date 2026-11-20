@@ -182,9 +182,41 @@ class Route:
         }
 
 
+#: Other spellings a caller may pin a depth with. ``deep`` is ``long``: the
+#: depth whose pinned form is deep research (``workflows/deep.py``).
+DEPTH_ALIASES = {"deep": "long"}
+
+
 def _pinned(value: Any, allowed: tuple[str, ...]) -> str | None:
     text = str(value or "auto").strip().lower()
+    if allowed is DEPTHS:
+        text = DEPTH_ALIASES.get(text, text)
     return text if text in allowed else None
+
+
+def deep_research(depth: str | None, depth_by: str | None) -> bool:
+    """Whether an answer at ``depth`` is deep research: ``long``, *pinned*.
+
+    Pinned means someone chose it -- ``@detailed`` / ``@deep``, ``depth:
+    "long"`` (or ``"deep"``) on a request, the UI's Length picker. A ``long``
+    read off the question's words or chosen by the planner is today's long
+    answer, so research that takes minutes and costs several answers is
+    never started by a word nobody meant as a request for it.
+    """
+
+    return depth == "long" and depth_by == "pinned"
+
+
+def pinned_deep(question: str, requested: Any = None, *, keywords_on: bool = True) -> bool:
+    """Whether a question asks for deep research before anything is routed:
+    its leading keywords (unless ``assistant.keywords`` is off), else the
+    request's pinned depth. What admission (``services.assistant.acquire``)
+    reads, ahead of the workflow."""
+
+    from pheasant.assistant import keywords
+
+    leading = keywords.read(question or "").depth if keywords_on else None
+    return _pinned(leading or requested, DEPTHS) == "long"
 
 
 def classify_depth(question: str, configured: Any = None) -> tuple[str, str, str]:

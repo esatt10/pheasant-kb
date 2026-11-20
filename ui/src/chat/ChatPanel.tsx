@@ -68,7 +68,11 @@ const DEPTHS: { value: AnswerDepth | "auto"; label: string; title: string }[] = 
   { value: "auto", label: "Auto length", title: "Let each question decide how long its answer is" },
   { value: "short", label: "Short", title: "A direct answer" },
   { value: "medium", label: "Medium", title: "An overview in a few sections" },
-  { value: "long", label: "Long", title: "An outlined, sectioned write-up (slower)" },
+  {
+    value: "long",
+    label: "Detailed",
+    title: "Deep research: searches every aspect, then a sectioned write-up (takes minutes)",
+  },
 ];
 
 const SUGGESTIONS = [

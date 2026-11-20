@@ -6,7 +6,7 @@ can also make yourself:
 | Axis | Values | Decided by |
 |---|---|---|
 | **intent** | `knowledge` · `procedural` · `compose` · `inventory` · `search` | rules, then the planner ([answer shapes](agent-workflows.md#two-answer-shapes)); `inventory` by rules or `@pheasant` ([below](#questions-about-the-knowledge-base-itself)); `search` by `@search` |
-| **depth** | `short` (default) · `medium` · `long` | rules, then the planner; or pinned; or a [first-word keyword](#first-word-keywords) |
+| **depth** | `short` (default) · `medium` · `long` (pinned: [deep research](#deep-research)) | rules, then the planner; or pinned; or a [first-word keyword](#first-word-keywords) |
 | **visual** | `none` · `diagram` · `image`, and for a diagram a **shape** | rules; or pinned; or a keyword |
 | **form** | prose (default) · `table` · `list` · `steps` · `compare` · `quotes` · `brief` | a first-word keyword only |
 
@@ -42,6 +42,63 @@ Phrases that route: "briefly", "tl;dr" → short; "overview of", "compare",
 profile is an ordinary workflow option, so anything you set explicitly
 (`max_context_passages`, `max_sections`, `section_concurrency`,
 `deadline_seconds`, …) wins over the profile.
+
+### Deep research
+
+A `long` answer someone **chose** researches before it writes: `@detailed` or
+`@deep` as the first word, `depth: "long"` (or `"deep"`) on a request, the
+**Detailed** length in the chat box, or MCP `research_knowledge_base`. A `long`
+read off the question's words ("explain X in detail") or chosen by the planner
+is the long answer above, unchanged, because research takes minutes and costs
+several ordinary answers and should never start on a word nobody meant as a
+request for it. The answer's `route.research` is `"deep"` when it ran.
+
+| | Long, read off the words | Deep research (chosen) |
+|---|---|---|
+| Planning | up to 3 queries | the aspects a complete answer must cover, one query each (up to 10) |
+| Rounds | up to 4 | up to 6, each following up on what the evidence names (4 queries) |
+| Window | 24 passages | 48, each document's share proportional to its size, and read to match |
+| Writing | up to 5 sections of 1,200 tokens, 150 s | up to 8 sections of 2,000 tokens, 300 s |
+
+Research **stops early**, and the steps say which reason stopped it:
+
+* the evidence is judged sufficient (the loop's ordinary rule);
+* the knowledge base holds nothing for it: a planned round found no passages,
+  so nothing is outlined and the answer says what is missing;
+* a follow-up round added no new evidence, so another would not either;
+* **the cost**: what this answer has spent plus what writing it is projected
+  to cost reached 95% of the per-answer limit. Research then writes from what
+  it has.
+
+**Each deep answer has a spend limit**, `models.deep_answer_spend_limit` (5 in
+the catalog's currency), which an operator admin changes at runtime in the
+Admin page's **Controls** tab, `PUT /region/controls`
+(`{"deep_answer_spend_limit": 8}`) or MCP `set_region_controls`. The limit is
+checked where the loop decides something, not on every call: before another
+round (with the projected write counted), and before each section, so a
+section not yet started when the limit is reached is written from its passages
+instead, as a late section is. Calls already in flight finish, so an answer can
+pass the limit by what those cost and never by a call started after it. The
+closing step says what it spent of what limit. The monthly limit still applies
+on top. With usage metering off (`observability.usage`) nothing is priced and
+the step says the spend was not limited.
+
+**A few run at once.** One api process runs
+`assistant.latency.max_concurrent_deep_answers` (2) deep answers at a time,
+inside `max_concurrent_answers`; past it a deep question is refused with
+`429 DEEP_RESEARCH_BUSY` (retryable) while an ordinary one is still admitted.
+An operator admin changes it in the same places (`max_concurrent_deep_answers`,
+`0` for no separate cap).
+
+Its knobs are their own block, `deep_options`, laid over the deep defaults
+(`assistant/workflows/deep.py`) after the depth profile, like compose's
+`compose_options`: a key the config sets (the flagship's
+`max_context_passages: 16`) would otherwise pin it. Deep research needs the
+agentic workflow; the single-pass workflow answers as `medium` and says so.
+Compose is never deep research: an artifact has its own breadth and review.
+A deep answer runs for minutes, so the web UI's stream resumes after a drop
+(`answer_id`), and MCP agents use `research_knowledge_base`, a job followed
+with `wait_for_job` or `get_job`.
 
 ## Conversations
 
@@ -196,7 +253,7 @@ keywords later in a sentence and email addresses are just text.
 | `@remove <name>[,<name>…]` (`@archive`) | Remove documents from the index and keep them out of every later sync, by a name that matches one document (a file name, path, `source/path` or id; quote one with spaces). `@current @remove` removes the open document. A folder or connector document is archived and can be reinstated; an upload is deleted. No search, no model; the payload's `archive` is `POST /documents/archive`'s answer. A name matching several documents removes nothing and lists them. |
 | `@search <query>` | The ranked hybrid-search hits as a numbered table, every row a citation. No model writes anything, no history rewrite, `page N` goes deeper. |
 | `@brief`, `@table`, `@list`, `@steps`, `@compare`, `@quotes` | The shape of a written answer. Each adds one FORMAT instruction to the answering prompt; the grounding rules are unchanged, so every cell, bullet, step and quote still cites its passage. |
-| `@overview`, `@detailed` | Medium or long length, the same pins as `depth`. |
+| `@overview`, `@detailed` (`@deep`) | Medium length, or [deep research](#deep-research): the same pins as `depth`. |
 | `@compose` (`@build`, `@scaffold`) | A new artifact — a configuration, script or set of files — assembled from what the sources document, written in one pass and checked identifier by identifier before it returns; the same pin as `intent: compose`. |
 | `@diagram`, `@timeline`, `@flow`, `@mindmap`, `@sequence` … | A grounded picture, the same pins as `visual`; any diagram shape works by name. `@table` is the written table. |
 

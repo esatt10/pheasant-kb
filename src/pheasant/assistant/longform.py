@@ -34,6 +34,12 @@ from typing import Any
 from pheasant.assistant.chat import build_prompt, system_prompt_for
 from pheasant.assistant.replies import json_object
 from pheasant.assistant.workflows import WorkflowStep
+from pheasant.telemetry import answer_spend
+
+
+class AnswerLimitReached(RuntimeError):
+    """A deep answer's spend limit stopped a section before its model call."""
+
 
 OUTLINE_SYSTEM = """You plan a long, sectioned answer from retrieved passages.
 
@@ -242,6 +248,11 @@ def write_long(
     budget = int(options.get("section_output_tokens") or 1200)
 
     def write(section: dict, own: list[dict]) -> str:
+        # A deep answer at its own spend limit starts no more model calls: the
+        # section is written from its passages, as a late one is.
+        spend = answer_spend.current()
+        if spend is not None and spend.reached():
+            raise AnswerLimitReached(f"{spend.money(spend.limit)} answer limit reached")
         own_documents = {c["index"]: documents[c["index"]] for c in own if c["index"] in documents}
         return llm.complete(
             section_system,

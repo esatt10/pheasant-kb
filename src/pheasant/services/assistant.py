@@ -21,7 +21,6 @@ reading the workflow module's docstring. It lived in `api/app.py`, and
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,8 +30,12 @@ from pheasant.assistant.citation_targets import locate_all
 from pheasant.assistant.routing import record_visual
 from pheasant.connections import environment as connection_environment
 from pheasant.services import ServiceContext, usage_traces
+from pheasant.services.answer_admission import (  # noqa: F401 - re-exported for the routes
+    AnswerPermit,
+    acquire,
+    deep_spend,
+)
 from pheasant.services.errors import (
-    AssistantBusy,
     AssistantDeadline,
     AssistantDisabled,
     DecisionsNotConfigured,
@@ -43,39 +46,6 @@ from pheasant.services.errors import (
 from pheasant.services.region_controls import require_budget
 
 logger = logging.getLogger(__name__)
-_ADMISSION_LOCK = threading.Lock()
-_ADMISSION: dict[int, threading.BoundedSemaphore] = {}
-
-
-class AnswerPermit:
-    """An idempotent slot held until the answer worker actually exits."""
-
-    def __init__(self, semaphore: threading.BoundedSemaphore | None) -> None:
-        self._semaphore = semaphore
-        self._released = False
-        self._lock = threading.Lock()
-
-    def release(self) -> None:
-        with self._lock:
-            if self._released:
-                return
-            self._released = True
-        if self._semaphore is not None:
-            self._semaphore.release()
-
-
-def acquire(context: ServiceContext) -> AnswerPermit:
-    """Acquire the process-wide answer limit shared by HTTP, SSE, and MCP."""
-    assistant = getattr(context.config, "assistant", None)
-    latency = getattr(assistant, "latency", None)
-    limit = int(getattr(latency, "max_concurrent_answers", 0) or 0)
-    if limit <= 0:
-        return AnswerPermit(None)
-    with _ADMISSION_LOCK:
-        semaphore = _ADMISSION.setdefault(limit, threading.BoundedSemaphore(limit))
-    if not semaphore.acquire(blocking=False):
-        raise AssistantBusy()
-    return AnswerPermit(semaphore)
 
 
 def create_request_budget(context: ServiceContext, request: AnswerRequest):
@@ -246,7 +216,7 @@ def answer(
     from pheasant.assistant.conversation import normalize_history
 
     owns_permit = permit is None
-    owned_permit = permit or acquire(context)
+    owned_permit = permit or acquire(context, request)
     admission_ms = (time.perf_counter() - admission_started) * 1000
     from pheasant.request_budget import activate
 
@@ -265,7 +235,14 @@ def answer(
         from pheasant.search.vector_store import collect_query_embedding_metrics
 
         budget.check()
-        with activate(budget), collect_query_embedding_metrics() as embedding_metrics:
+        from pheasant.telemetry import answer_spend
+
+        research_spend = deep_spend(context, request)
+        with (
+            activate(budget),
+            answer_spend.scope(research_spend),
+            collect_query_embedding_metrics() as embedding_metrics,
+        ):
             from pheasant.services import model_routing
 
             answer_env = env if env is not None else connection_environment()
@@ -343,6 +320,10 @@ def answer(
             )
             if kept is not None:
                 payload["artifact"] = kept
+            if research_spend is not None:
+                route = payload.get("route") or {}
+                if route.get("research") == "deep":
+                    payload["research"] = {"mode": "deep", "spend": research_spend.summary()}
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000

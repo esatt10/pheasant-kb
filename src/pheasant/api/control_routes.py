@@ -21,16 +21,17 @@ from pheasant.telemetry.spend import SpendLimitReached
 def register_control_routes(app: FastAPI, *, services: Any) -> None:
     @app.get("/region/controls")
     def get_region_controls() -> dict:
-        """The kill switch and this month's model spend against its limit (Admin;
-        the amounts are an operator admin's)."""
+        """The kill switch, this month's model spend against its limit, and the
+        deep-research limits (Admin; the amounts are an operator admin's)."""
 
         return region_controls.describe(services)
 
     @app.put("/region/controls")
     def set_region_controls(body: dict[str, Any]) -> dict:
-        """Suspend or restore access, or set the monthly spend limit (operator
-        admin): ``suspended``, ``reason``, ``monthly_spend_limit`` (``null``
-        for the deployment's default)."""
+        """Suspend or restore access, or set the spend limits (operator admin):
+        ``suspended``, ``reason``, ``monthly_spend_limit``,
+        ``deep_answer_spend_limit`` and ``max_concurrent_deep_answers``
+        (``null`` for the deployment's default)."""
 
         return region_controls.update(services, body)
 

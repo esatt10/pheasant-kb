@@ -57,7 +57,8 @@ class ChatRequest(BaseModel):
     # The region keeps no chat state; continuity is what the caller sends.
     history: list[dict[str, Any]] = []
     # "short" / "medium" / "long", or "auto" (default) to read it off the
-    # question. See assistant.routing.
+    # question. A pinned "long" (or "deep") is deep research
+    # (assistant/workflows/deep.py). See assistant.routing.
     depth: str | None = None
     # "none" / "diagram" / "image", or "auto" to read it off the question.
     visual: str | None = None
@@ -183,7 +184,7 @@ def register_assistant_routes(
         handler_started = time.perf_counter()
         answer_request = req.service_request(artifact_channel(request))
         assistant_service.admit(services, answer_request)
-        permit = assistant_service.acquire(services)
+        permit = assistant_service.acquire(services, answer_request)
         budget = assistant_service.create_request_budget(services, answer_request)
         credential = session_keys().get(req.session_id)
         environ = connection_environment()
@@ -258,7 +259,7 @@ def register_assistant_routes(
         answer_request = req.service_request(artifact_channel(request))
         answer_resume.check_answer_id(req.answer_id)
         assistant_service.admit(services, answer_request)
-        permit = assistant_service.acquire(services)
+        permit = assistant_service.acquire(services, answer_request)
         budget = assistant_service.create_request_budget(services, answer_request)
 
         loop = asyncio.get_running_loop()
