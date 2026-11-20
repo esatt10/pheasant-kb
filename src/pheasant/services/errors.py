@@ -715,6 +715,50 @@ class OrganizationNotConnected(ServiceError):
         )
 
 
+class AccessSuspended(ServiceError):
+    """An operator admin turned the knowledge base's kill switch on.
+
+    Every request is refused but an operator admin's, who can turn it off
+    (``services/region_controls.py``). Not retryable: nothing the caller does
+    changes it.
+    """
+
+    status = 403
+    code = "ACCESS_SUSPENDED"
+
+    def __init__(self, reason: str | None = None) -> None:
+        tail = f" Reason: {reason}" if reason else ""
+        super().__init__(
+            "Access to this knowledge base is suspended by its operator; "
+            "an operator admin can restore it." + tail
+        )
+
+
+class OperatorRequired(ServiceError):
+    """A control only the region's operator holds, asked for by someone else."""
+
+    status = 403
+    code = "OPERATOR_REQUIRED"
+
+    def __init__(self, what: str) -> None:
+        super().__init__(
+            f"Only an operator admin (an Admin the deployment pinned, or the shared token) "
+            f"can {what}"
+        )
+
+
+class SpendLimitRefused(ServiceError):
+    """The month's model spend is at its limit (``telemetry/spend.py``).
+
+    The service layer's spelling of ``spend.SpendLimitReached``, raised before
+    an operation starts spending; the wires raise that one mid-call, and both
+    carry this code.
+    """
+
+    status = 402
+    code = "SPEND_LIMIT_REACHED"
+
+
 def transient_refusal(exc: BaseException) -> ServiceError | None:
     """The retryable refusal ``exc`` amounts to, or ``None`` if it is not one.
 

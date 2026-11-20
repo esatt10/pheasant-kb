@@ -79,6 +79,7 @@ nav:
       - Replace memory with artifacts: how-to/artifact-migration.md
       - Agent memory (deprecated): how-to/agent-memory.md
       - Configure sources: how-to/sources.md
+      - OneDrive and SharePoint: how-to/sharepoint-onedrive.md
       - Add a site adapter (JavaScript-only pages): how-to/site-adapters.md
       - Ingest PDFs & Word documents: how-to/document-ingest.md
       - Extract a taxonomy from structured documents: how-to/structured-documents.md

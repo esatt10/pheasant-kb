@@ -22,6 +22,7 @@ from pheasant.api.artifact_routes import register_artifact_routes
 from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.connection_routes import register_connection_routes
+from pheasant.api.control_routes import register_control_routes
 from pheasant.api.fleet_routes import register_fleet_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
@@ -1513,11 +1514,14 @@ def create_app(
                 return True
             return path in {"/", "/index.html", "/pheasant.png"} or path.startswith("/assets/")
 
+        from pheasant.services.region_controls import suspension
+
         install_guard(
             app,
             identity_service,
             public_paths=auth_public_paths,
             is_public_ui_request=is_public_ui_request,
+            suspended=lambda: suspension(config),
         )
 
     def _record_stream_answer(parent: Any, req: Any, answer: Any, started: Any) -> None:
@@ -2080,6 +2084,7 @@ def create_app(
     register_region_routes(app, services=services)
     register_access_routes(app, services=services)
     register_model_routes(app, services=services)
+    register_control_routes(app, services=services)
     register_fleet_routes(app, services=services)
     register_job_routes(app, services=services, jobs=jobs)
     from pheasant.services import fleet as fleet_service
@@ -4352,6 +4357,12 @@ def create_app(
                 graph_obj,
                 [str(item) for item in parameters.get("node_ids") or []],
                 int(parameters.get("limit") or 8),
+            )
+        elif operation == "okf_index":
+            from pheasant.graph.okf_index import collect as okf_index_collect
+
+            result = okf_index_collect(
+                graph_obj, [str(item) for item in parameters.get("artifact_ids") or []]
             )
         elif operation == "memory_coverage":
             from pheasant.services.artifact_graph import coverage

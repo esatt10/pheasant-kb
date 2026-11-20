@@ -94,8 +94,16 @@ class AssistantDecisionsSettings(ModelMixin):
     #: ``["low"]`` with ``max_repairs: 2`` escalates to full effort only when
     #: the cheap rewrite is rejected too. The default is one cheap rewrite.
     repair_efforts: list[str] = field(default_factory=lambda: list(DEFAULT_REPAIR_EFFORTS))
+    #: The judge's context, in tokens, the decision token included. A
+    #: judgement's input is fitted to it (``Decider.fit``) rather than sent
+    #: whole: a composed artifact's acceptance check read all 57 documents the
+    #: writer read and every call was refused with a 422, so the gate never
+    #: judged one. 32,768 is Microsoft-Decision-1's and ``gpt-6-luna``'s.
+    context_tokens: int = 32_768
 
     def __post_init__(self) -> None:
+        if int(self.context_tokens) < 4_096:
+            raise ValueError("assistant.decisions.context_tokens must be at least 4096")
         if self.mode not in {"beta", "shadow", "off"}:
             raise ValueError("assistant.decisions.mode must be 'beta', 'shadow' or 'off'")
         if self.api not in {"decisions", "systemone"}:

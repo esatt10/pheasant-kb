@@ -113,11 +113,13 @@ image-only scanned PDFs need an authored `<file>.extract.txt` sidecar.
 Start the server with no sources and the UI shows an empty state with three
 ways forward: paste a path or URL, drop files in, or copy a one-line command.
 
-- **Drop files or ZIP archives in.** Files land in a directory under
+- **Drop files, folders or archives in.** Files land in a directory under
   `/state/uploads`, which is registered as an ordinary `document_folder`
   source — the same connector → chunk → graph pipeline as everything else,
-  removable by deleting the source. Supported files inside ZIP folders are
-  indexed separately. No path to type, no directory to mount.
+  removable by deleting the source. A dropped or picked folder keeps its
+  structure. Supported files inside a ZIP or tar archive (`.tar`, `.tar.gz`,
+  `.tgz`, `.tar.bz2`, `.tar.xz`) are indexed separately. No path to type, no
+  directory to mount.
 - **Paste a path.** pheasant detects what it is (folder, Obsidian vault, git
   checkout or clone URL, web page, connector).
 - **Change your mind.** Settings has purpose-built panels for the

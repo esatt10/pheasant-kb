@@ -6907,6 +6907,16 @@ select.text-input {
   margin-bottom: calc(12px * var(--sp));
   flex-wrap: wrap;
 }
+.admin-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6px * var(--sp));
+}
+@media (pointer: coarse) {
+  .admin-toolbar__actions .btn {
+    min-height: 40px;
+  }
+}
 .admin-stats { flex-wrap: wrap; }
 .admin-stats .stat { min-width: 130px; }
 .admin-form {
@@ -7178,4 +7188,153 @@ select.text-input {
   font-size: max(11px, calc(12px * var(--fs)));
   line-height: 1.55;
   white-space: pre;
+}
+
+/* ---- Admin: the operator's controls (kill switch, monthly spend limit) ---- */
+.controls-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--sp));
+}
+.controls-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(8px * var(--sp));
+}
+.controls-card__head .section__title {
+  margin: 0;
+}
+.controls-card__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: calc(10px * var(--sp));
+}
+.controls-card__form .field {
+  flex: 1 1 240px;
+  max-width: 420px;
+  min-width: 0;
+}
+.controls-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--sp));
+}
+.controls-meter {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.controls-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+.controls-meter--reached > span {
+  background: var(--danger);
+}
+.controls-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: calc(10px * var(--sp));
+  margin: 0;
+}
+.controls-figures dt {
+  font-size: max(11px, calc(12px * var(--fs)));
+  color: var(--muted);
+}
+.controls-figures dd {
+  margin: 2px 0 0;
+  font-size: calc(16px * var(--fs));
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+@media (pointer: coarse) {
+  .controls-card .btn,
+  .controls-card .text-input {
+    min-height: 44px;
+  }
+  .controls-card .text-input {
+    font-size: 16px;
+  }
+}
+
+/* The kill switch's answer, over the whole page rather than in every panel. */
+.suspended-notice {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--bg-sunken) 92%, transparent);
+}
+.suspended-notice__card {
+  max-width: 480px;
+  width: 100%;
+  padding: calc(24px * var(--sp));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+}
+.suspended-notice__card h1 {
+  margin: 0 0 8px;
+  font-size: calc(20px * var(--fs));
+}
+.suspended-notice__card p {
+  margin: 0 0 16px;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+.suspended-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (pointer: coarse) {
+  .suspended-notice__actions .btn {
+    min-height: 44px;
+  }
+}
+
+/* ---- Admin: model prices ---- */
+.prices-table td {
+  vertical-align: middle;
+}
+.prices-input {
+  width: 7em;
+  min-width: 0;
+}
+.prices-history summary {
+  cursor: pointer;
+  color: var(--text-soft);
+}
+.prices-history ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+@media (pointer: coarse) {
+  .prices-table .btn,
+  .prices-input {
+    min-height: 40px;
+  }
+  .prices-input {
+    font-size: 16px;
+  }
+}
+
+/* The drop zone's "Choose a folder": a folder keeps its tree when uploaded. */
+.upload__folder {
+  align-self: center;
+  margin-top: 6px;
+}
+@media (pointer: coarse) {
+  .upload__folder {
+    min-height: 40px;
+  }
 }

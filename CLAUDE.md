@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 226 pytest modules, offline by design
+└── tests/                     ← 232 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -578,7 +578,27 @@ provenance, computation contracts, listings and log history as a **diff**
 owned by `enrichment_pass: "okf"`. It walks the source rather than the graph
 and retracts per edge, so a `references` edge sharing a pair survives.
 Staleness is not stored because it is a function of the clock.
-`docs/how-to/okf-bundles.md`.
+`docs/how-to/okf-bundles.md`. **Detection** (`graph/okf_detect.py`) measures
+an indexed directory's concept share over what its `index.md` lists, so a
+repository that *is* a bundle is not split by the developer docs beside it,
+and hidden folders (`.github/`) count either way. **Every bundle document's
+nearest index** is one `indexed_by` edge (`graph/okf_index.py`: whether that
+index lists it, by file or folder, and the entry's words read by a
+deterministic `classify` as superseded / deprecated / stale / draft / current
+/ a stated date; boilerplate gets none). At retrieval `okf_index.annotate`
+follows it one hop for every `.md` hit (`services.retrieval._search` and the
+answer retriever; one `remote_okf_index` call on a fleet) and gives the hit an
+`okf` block whose verdict puts the index first, says when it and the document
+disagree, and reads `stale_after` against the clock; `chat.build_prompt` adds
+it under the passage. **Uploads keep their folders**
+(`landing.safe_relative_path` in `store_upload`; the drop zone walks dropped
+folders and has a folder picker), so a bundle uploaded as files is detected
+like a folder or an archive. **Archives are ZIP or tar** (`sync/zip_archive.py`:
+`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz`, nesting across formats,
+one adapter per format behind one set of safety rules); the outermost tar is
+indexed once per process, a compressed one decompressed once into a bounded
+temporary file, so members are read by seeking rather than by decompressing
+again each time. `tests/test_okf_index.py`, `tests/test_tar_archives.py`.
 
 **Deletions are synced, not just additions.** An incremental sync removes
 what a complete listing no longer contains (`sync/vanished.py`, opt-in per
@@ -693,11 +713,24 @@ source as registered now (`SourceRegistry.adopt`), and a publish digests the
 registered config into the task id, so an indexer never syncs a stale copy.
 
 **Connectors** resolve by `sources[].type` through entry points, so a
-third-party plugin needs no dispatch code here. One ships first-party: Google
-Drive (Notion, Slack, Confluence and IMAP were removed for the initial product,
-as were the `s3` and `obsidian_vault` built-ins; `config/retired.py` keeps old
-configs loading). `pheasant.testing.ConnectorConformance`
-is the public quality bar.
+third-party plugin needs no dispatch code here. Two ship first-party: Google
+Drive and **OneDrive/SharePoint** (Notion, Slack, Confluence and IMAP were
+removed for the initial product, as were the `s3` and `obsidian_vault`
+built-ins; `config/retired.py` keeps old configs loading).
+`pheasant.testing.ConnectorConformance` is the public quality bar.
+**OneDrive/SharePoint** (`type: sharepoint`, `connectors/sharepoint.py` over
+`connectors/graph_client.py`; a `microsoft_365` connection,
+`connections/microsoft.py`) is one source per site whose `urls` are any pasted
+links (`connectors/sharepoint_urls.py` reads a link's shape without a request,
+and names the source after the site so a second link joins it, like a web
+collection's host): libraries and folders walked (shared folders from another
+drive too), lists as one Markdown document per item with each attachment
+beside it under `Lists/<list>/<id>-<title>/` and wiki-linked from it, modern
+pages rendered from their canvas as HTML (a page snapshot, so the viewer shows
+it). Attachments are SharePoint REST, a second audience: a sign-in's refresh
+token redeemed for the host (`oauth.token_for_scopes`). A link that cannot be
+read is an `_unreadable/` item and makes that pass not a complete listing, so
+nothing is pruned; a 401 fails the source. `tests/test_sharepoint_connector.py`.
 
 ### Where the graph lives
 
@@ -1458,7 +1491,13 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   runtime questions. Lab A/B, same code: p50 8.71 → 5.70 s, p90 10.30 → 7.02 s,
   fact coverage unchanged. `prune` (per-passage relevance) exists and is off:
   it saved no time and, with the cheap draft, cost a detail.
-  `tests/test_decisions_api.py`.
+  `tests/test_decisions_api.py`. **A judgement's input is fitted to the
+  judge's context** (`assistant.decisions.context_tokens`, 32,768;
+  `Decider.fit`: what fits its share is kept whole, the rest share the
+  remainder, and the acceptance step says how much was cut). The compose
+  shape's acceptance check read every document the writer read, unbounded, and
+  every call was a 422 reported as "decisions unavailable"; an answer longer
+  than the context alone is not sent.
 - **Azure AI Foundry is a base URL, not a second client** (`foundry.py`).
   Any URL on a Foundry host is signed with `api-key` instead of Bearer and
   read as its `/openai/v1` surface, so embeddings, captions and transcripts
@@ -1694,7 +1733,14 @@ operator provisions, the users decide.
   MCP rebinds any `principal` parameter to the caller; each level carries KQL naming its trace
   ids (`OperationId` in the App Insights tables) and a JSONL export. Nothing
   is materialized: the window is the depth, and `hot_retention_days` bounds
-  it, said in `retention`. `tests/test_usage_traces.py`.
+  it, said in `retention`. `tests/test_usage_traces.py`. A diagram asked for
+  on its own (`services.assistant.visualize`) annotates its row the same way
+  (`usage_traces.visual_trace` / `annotate_visual`: the request as
+  `query_text`, the UI's `conversation_id`, model, tokens, steps), or the
+  Questions view hid it. The Usage tab's measures leave as files through
+  `services/usage_export.py` (`GET /usage/export`, MCP `export_usage`: a ZIP of
+  CSVs or JSON, the month's spend included) and the traces through MCP
+  `export_usage_traces` too (paged JSON lines). `tests/test_admin_exports.py`.
 - **An Admin chooses the default models at runtime** (`models.set_defaults`,
   `models.effective`; `PUT /models/defaults`, MCP `set_default_models`, the
   Models tab's Make default). A `region_settings` row laid over the catalog
@@ -1712,6 +1758,41 @@ operator provisions, the users decide.
   record the operator answers: nothing in pheasant provisions. Each stack
   mirrors its usage totals into the directory, which is how the operator
   reads the whole fleet at once. `tests/test_fleet.py`.
+- **An operator holds a kill switch and a monthly spend limit**
+  (`telemetry/spend.py`, `services/region_controls.py`, `region_settings`
+  section `region_controls`; `GET`/`PUT /region/controls`, MCP
+  `get_region_controls` / `set_region_controls`, the Admin page's Controls tab).
+  Changing either is an *operator admin's* (`usage.is_operator`: the shared
+  token, or an Admin pinned in `role_assignments`), not a granted Admin's
+  (`OPERATOR_REQUIRED`). The switch is enforced in `api/auth.py`'s guard after
+  the identity is bound: everyone else gets `403 ACCESS_SUSPENDED` within
+  `CONTROLS_TTL_SECONDS` (5) on every replica. The limit (default
+  `models.monthly_spend_limit: 500`, per calendar month UTC, per knowledge
+  base) costs `usage_daily` plus this process's unflushed meter rows at the
+  catalog's prices; `providers.note_model_call` and the embedding client's
+  `_post_with_retry` refuse each call past it (`SPEND_LIMIT_REACHED`, 402),
+  `services.assistant.admit` refuses an answer before it starts, and
+  `sync/limits.blocks` skips a growing sync that would embed, beside the size
+  limit. The guard binds with the meter (`METER.bind_for`), so it exists in
+  every process that builds an engine. What it reads is append-only in the
+  database (`usage_ledger.protect`, run from `migrate_derived_indexes` every
+  boot and by the fleet directory): triggers refuse `DELETE`, `TRUNCATE` and an
+  `UPDATE` that lowers a count or changes a key, and a dropped trigger comes
+  back on the next start. A flush the database refuses requeues exactly the
+  rows it did not write (`usage_ledger.PartialWrite`), and a test fails if any
+  statement in the tree deletes or updates `usage_daily`.
+  `tests/test_region_controls.py`. **Cost is fixed when a call is made**:
+  `METER.model_call` prices it with `spend.GUARD.call_micros` (the catalog's
+  price, or an operator's runtime override, `services/model_prices.py`,
+  `region_settings` section `model_prices`, with a change history) and the
+  cost rides with its tokens into `usage_daily.cost_micros`. Reports, the
+  limit and the fleet read the stored cost; current prices only price a row
+  never written since costs were stored, which the first write to it
+  (`usage_ledger._FROZEN`, in the upsert) or the first start
+  (`GUARD.freeze_history`, marker `usage_cost_frozen_v1`) prices once. The
+  trigger lets a cost be set where there was none, never lowered or cleared.
+  `GET`/`PUT /models/prices`, MCP `get_model_prices` / `set_model_prices`, the
+  Models tab's Prices. `tests/test_model_prices.py`.
 - **A knowledge base can have a size limit, and one check holds it**
   (`storage.knowledge_base_limit_gb`, unset by default;
   `persistence/size_limit.py`, `services/size_guard.py`). The measure is
@@ -3491,7 +3572,14 @@ retirement's rename, to the indexer through `artifact_outbox`
 region that has `agent-memory` keeps it through its registry row and writes
 `/memory` in place. Published versions/receipts live independently of durable jobs.
 The scheduler prunes terminal job history after `artifacts.job_retention_days`
-(default 30); published outputs survive until deprecated/replaced. Saved base
+(default 30); published outputs survive until deprecated/replaced. **Clearing a
+job dismisses it** (`durable_jobs.dismissed_at`): gone from every listing, still
+read by its id until that retention. The tray's Clear used to delete the row,
+and on production a person clearing it 14 s after an agent's
+`compose_artifact` finished turned the agent's `get_job` into "Unknown job"
+(the store is authoritative for a finished job, so the process's own copy was
+not consulted; `job_publication.lookup` now falls back to it).
+`tests/test_jobs.py`. Saved base
 ranking bundles can be applied after reconfiguration and job deletion. Evidence
 numbering/rendering is centralized in `services/artifact_evidence.py`; preserve
 original code file bytes and carry local-to-global maps. See

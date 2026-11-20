@@ -133,6 +133,8 @@ class VisualRequest(BaseModel):
     source_name: str | None = None
     principal: str | None = None
     principal_groups: list[str] = []
+    #: The UI's conversation, so the usage trace files the drawing under it.
+    conversation_id: str | None = None
 
 
 class AssessRequest(BaseModel):
@@ -397,6 +399,7 @@ def register_assistant_routes(
                 source_name=req.source_name,
                 principal=req.principal,
                 principal_groups=req.principal_groups,
+                conversation_id=req.conversation_id,
             ),
             credential=session_keys().get(req.session_id),
             env=connection_environment(),

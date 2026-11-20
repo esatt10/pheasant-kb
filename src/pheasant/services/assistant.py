@@ -27,8 +27,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pheasant.assistant.citation_targets import locate_all
+from pheasant.assistant.routing import record_visual
 from pheasant.connections import environment as connection_environment
-from pheasant.services import ServiceContext
+from pheasant.services import ServiceContext, usage_traces
 from pheasant.services.errors import (
     AssistantBusy,
     AssistantDeadline,
@@ -38,6 +40,7 @@ from pheasant.services.errors import (
     EmptyQuestion,
     InvalidRequest,
 )
+from pheasant.services.region_controls import require_budget
 
 logger = logging.getLogger(__name__)
 _ADMISSION_LOCK = threading.Lock()
@@ -180,6 +183,7 @@ def admit(context: ServiceContext, request: AnswerRequest) -> None:
         raise AssistantDisabled()
     if not (request.question or "").strip():
         raise EmptyQuestion()
+    require_budget()  # at the month's spend limit, before any model is called
     from pheasant.assistant.conversation import HistoryError, normalize_history
 
     try:
@@ -342,8 +346,6 @@ def answer(
             payload["admission_ms"] = admission_ms
             payload["runtime_timings"] = budget.timings()
             payload["server_processing_ms"] = (time.perf_counter() - server_started) * 1000
-            from pheasant.services import usage_traces
-
             # Its models, route and steps onto the ledger row: the usage drill-down.
             usage_traces.annotate_answer(request, payload)
             answered = True
@@ -398,6 +400,7 @@ class VisualRequest:
     principal_groups: list[str] | None = None
     source_name: str | None = None
     max_passages: int = 8
+    conversation_id: str | None = None  # the UI's, so the trace joins its session
 
 
 def visualize(
@@ -460,39 +463,38 @@ def visualize(
     figures = answering.number_figures(with_full_captions(context.state, found_figures), citations)
     kind = (request.kind or "").strip().lower() or None
     llm = answering.resolve_llm(context.config, credential, env)
-    visual = answering.visual_for(
-        text,
-        "image" if kind == "image" else "diagram",
-        citations=citations,
-        facts=facts,
-        figures=figures,
-        llm=llm,
-        kind=kind,
-        documents=answering.visual_documents(
-            citations,
-            state=context.state,
-            knowledge_base=kb_id,
-            graph=context.graph,
-            config=context.config,
+    with usage_traces.visual_trace(request) as trace:  # the drill-down's row for it
+        visual = answering.visual_for(
+            text,
+            "image" if kind == "image" else "diagram",
+            citations=citations,
+            facts=facts,
+            figures=figures,
+            llm=llm,
+            kind=kind,
+            documents=answering.visual_documents(
+                citations,
+                state=context.state,
+                knowledge_base=kb_id,
+                graph=context.graph,
+                config=context.config,
+            )
+            if llm is not None
+            else None,
         )
-        if llm is not None
-        else None,
-    )
     if visual is not None and visual.get("type") == "diagram" and citations:
         visual["redraw"] = answering.redraw_handle(text, citations, kb_id)
-    from pheasant.assistant.routing import record_visual
-
     record_visual(visual)
-    from pheasant.assistant.citation_targets import locate_all
-
-    return locate_all(
-        {
-            "request": text,
-            "visual": visual,
-            "citations": citations,
-            "facts": facts,
-            "figures": figures,
-        }
+    return trace.finish(
+        locate_all(
+            {
+                "request": text,
+                "visual": visual,
+                "citations": citations,
+                "facts": facts,
+                "figures": figures,
+            }
+        )
     )
 
 
@@ -693,6 +695,7 @@ def assess_evidence(
     question = (request.question or "").strip()
     if not question:
         raise EmptyQuestion()
+    require_budget()
     if not isinstance(request.passages, list) or not request.passages:
         raise InvalidRequest("passages must be a non-empty list of {text, title}")
     if len(request.passages) > MAX_ASSESS_PASSAGES:

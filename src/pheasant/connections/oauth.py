@@ -1,4 +1,4 @@
-"""Sign in with a service: GitHub, Microsoft (Azure DevOps), GitLab, Google.
+"""Sign in with a service: GitHub, Microsoft (Azure DevOps, Microsoft 365), GitLab, Google.
 
 One authorization-code flow (with PKCE) for every provider that has one; a
 provider differs only in its :class:`OAuthSpec` -- where to send the browser,
@@ -59,6 +59,9 @@ class OAuthSpec:
     extra: dict[str, str] = field(default_factory=dict)
     #: Git signs a remote with ``Authorization: bearer`` rather than basic.
     git_bearer: bool = False
+    #: Microsoft's identity platform: a ``{tenant}`` in the endpoints, and a
+    #: refresh that names its scopes (one refresh token serves several APIs).
+    microsoft: bool = False
 
     def endpoint(self, url: str, tenant: str | None) -> str:
         return url.replace("{tenant}", tenant or "common")
@@ -97,6 +100,27 @@ MICROSOFT_DEVOPS = OAuthSpec(
     secret_required=False,
     extra={"prompt": "select_account"},
     git_bearer=True,
+    microsoft=True,
+)
+#: OneDrive and SharePoint through Microsoft Graph, read-only. SharePoint's own
+#: REST API (list item attachments, which Graph v1.0 does not serve) is reached
+#: with the same refresh token: :func:`token_for_scopes`.
+MICROSOFT_365 = OAuthSpec(
+    service="Microsoft 365",
+    authorize_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
+    token_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+    scopes=(
+        "https://graph.microsoft.com/Files.Read.All",
+        "https://graph.microsoft.com/Sites.Read.All",
+        "https://graph.microsoft.com/User.Read",
+        "offline_access",
+    ),
+    client_id_env="MICROSOFT_OAUTH_CLIENT_ID",
+    client_secret_env="MICROSOFT_OAUTH_CLIENT_SECRET",
+    register_url="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+    secret_required=False,
+    extra={"prompt": "select_account"},
+    microsoft=True,
 )
 GITLAB = OAuthSpec(
     service="GitLab",
@@ -269,7 +293,7 @@ def access_token_for(
             _keep(persist, cached[2])
         return cached[0]
     form = {**_client_form(secret), "refresh_token": refresh, "grant_type": "refresh_token"}
-    if spec is MICROSOFT_DEVOPS:
+    if spec.microsoft:
         form["scope"] = " ".join(spec.scopes)
     body = _post(spec.endpoint(spec.token_url, secret.get("tenant")), form)
     renewed = _with_tokens(secret, body)
@@ -290,6 +314,46 @@ def _keep(persist: Callable[[dict[str, Any]], None], renewed: dict[str, Any]) ->
         pass
 
 
+#: (refresh-token digest, scopes) -> (access token, expiry), for another API's token
+_scoped: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def token_for_scopes(spec: OAuthSpec, secret: dict[str, Any], scopes: tuple[str, ...]) -> str:
+    """An access token for *another* API, redeemed from a Microsoft sign-in.
+
+    Microsoft's refresh token is not tied to one resource: the same grant
+    redeemed with ``https://contoso.sharepoint.com/AllSites.Read`` is a token
+    SharePoint's own REST API accepts, where the Graph token is refused. The
+    refresh token it returns is not kept: the original stays valid, and the
+    Graph token's refresh is the one :func:`access_token_for` rotates.
+    """
+
+    if not spec.microsoft:
+        raise OAuthError(f"{spec.service} issues tokens for one API only")
+    refresh = str(secret.get("refresh_token") or "")
+    if not refresh:
+        raise OAuthError(f"this {spec.service} connection holds no sign-in to redeem")
+    key = (hashlib.sha256(refresh.encode("utf-8")).hexdigest(), " ".join(scopes))
+    with _lock:
+        cached = _scoped.get(key)
+    if cached and cached[1] - REFRESH_MARGIN_SECONDS > time.time():
+        return cached[0]
+    form = {
+        **_client_form(secret),
+        "refresh_token": refresh,
+        "grant_type": "refresh_token",
+        "scope": " ".join(scopes),
+    }
+    body = _post(spec.endpoint(spec.token_url, secret.get("tenant")), form)
+    token = str(body.get("access_token") or "")
+    if not token:
+        raise OAuthError(f"{spec.service} answered without an access token")
+    with _lock:
+        _scoped[key] = (token, time.time() + float(body.get("expires_in") or 3600))
+    return token
+
+
 def forget_cached_tokens() -> None:
     with _lock:
         _cache.clear()
+        _scoped.clear()

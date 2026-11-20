@@ -12,14 +12,19 @@ through the normal chunk → embed → graph path like any other file.
 | RTF | `.rtf` | Must carry the `{\rtf` signature to be read |
 | EPUB | `.epub` | Read in **spine order**, not filename order |
 
-ZIP archives in filesystem-backed sources can contain any mix of supported
-text, code, documents, images and audio in nested directories. Each supported
-member is indexed separately under a path such as `bundle.zip/guides/start.pdf`;
-the archive itself is not a searchable document. ZIPs are read in place, without
-extracting files to disk.
+Archives in filesystem-backed sources can contain any mix of supported
+text, code, documents, images and audio in nested directories: ZIP (`.zip`)
+and tar, plain or compressed (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`,
+`.tar.xz`/`.txz`). Each supported member is indexed separately under a path
+such as `bundle.zip/guides/start.pdf` or `bundle.tgz/guides/start.pdf`; the
+archive itself is not a searchable document. Archives are read in place,
+without extracting files to disk. A compressed tar is decompressed once per
+indexing process into a temporary file (at most 8 GiB inflated), so reading
+its members one by one does not decompress it again for each.
 
-A ZIP inside a ZIP is a folder too: its members are indexed under
-`bundle.zip/notebooks.zip/page-1.md`, up to four archives deep. A nested
+An archive inside an archive is a folder too, whatever the two formats: its
+members are indexed under `bundle.zip/notebooks.tgz/page-1.md`, up to four
+archives deep. A nested
 archive is inflated in memory to be opened, so it may be at most 256 MiB.
 One that cannot be opened (damaged, encrypted, too large or too deep) is
 reported as an unreadable file with the reason, on the Syncs page and in
@@ -32,11 +37,14 @@ archives it opened or could not, and which extensions it skipped (the sync's
 (the taxonomy view's Remove folder on the archive, or each document) removes
 the archive itself: its file is deleted, and the same name can be uploaded
 again. The source's include/exclude patterns apply to member paths. Explicitly
-including `**/*.zip` admits every supported member in an archive; including
+including `**/*.zip` (or `**/*.tgz`, `**/*.tar.gz` ...) admits every supported
+member in an archive; including
 only `**/*.pdf` admits PDF members. The configured individual file limit
-applies to both the compressed archive and every member; ZIP members retain a
-1 GiB safety ceiling even with `full_scan`. When enabled, source total-size
-and count limits also bound archive expansion. Encrypted ZIP members are skipped.
+applies to both the compressed archive and every member; archive members
+retain a 1 GiB safety ceiling even with `full_scan`. When enabled, source
+total-size and count limits also bound archive expansion. Encrypted ZIP members
+are skipped, and so are a tar's links, devices and any entry whose path is
+absolute or leaves the archive (`..`).
 
 Not supported: `.pages`, `.numbers`, `.key`, `.odt`/`.ods`/`.odp`, and
 pre-Word-97 `.doc`. Those extensions are not accepted at all, so they are

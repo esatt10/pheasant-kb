@@ -170,12 +170,14 @@ class SourceRegistry:
                 str(source["type"]),
                 str(source["path"]),
             )
+            from pheasant.sync.zip_archive import is_archive
+
             if upload_dir is not None and upload_dir.is_dir():
                 try:
                     source["uploaded_archives"] = sorted(
                         entry.name
                         for entry in islice(upload_dir.iterdir(), 1000)
-                        if entry.is_file() and entry.suffix.lower() == ".zip"
+                        if entry.is_file() and is_archive(entry.name)
                     )[:20]
                 except OSError:
                     source["uploaded_archives"] = []

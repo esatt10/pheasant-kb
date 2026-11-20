@@ -131,7 +131,7 @@ CEILINGS: dict[str, int] = {
     # Raised to 1263 for the hook that appends tables' DDL kept beside their
     # own modules (`persistence/access_grants.py`, `usage_ledger.py`): new
     # tables go there, not here.
-    "persistence/schema.py": 1263,
+    "persistence/schema.py": 1264,  # + durable_jobs.dismissed_at (a cleared job stays readable)
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.

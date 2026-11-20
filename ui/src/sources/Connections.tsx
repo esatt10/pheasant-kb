@@ -19,9 +19,14 @@ export function useConnections() {
 }
 
 /** The provider whose hosts serve `target`, when it is a repository URL. */
+const MICROSOFT_365_LINK =
+  /^https?:\/\/([^/?#]+\.)?(sharepoint\.com|sharepoint\.us|1drv\.ms|onedrive\.live\.com)([/?#]|$)/i;
+
 export function providerForTarget(target: string, providers: ConnectionProvider[]): string | null {
   const trimmed = target.trim();
   if (/^gdrive:/i.test(trimmed)) return "google_drive";
+  // OneDrive and SharePoint by host: a site, a library, a list, a sharing link.
+  if (MICROSOFT_365_LINK.test(trimmed)) return "microsoft_365";
   let host = "";
   try {
     host = new URL(trimmed).hostname.toLowerCase();
@@ -309,9 +314,14 @@ export function SourceSignIn({
   const detected = providerForTarget(target, providers);
 
   // A pasted URL on a host whose account is connected reads with it: say so
-  // by opening that toggle, rather than leaving the choice invisible.
+  // by opening that toggle, rather than leaving the choice invisible. A
+  // SharePoint or OneDrive link is never public, so its toggle opens either way.
   useEffect(() => {
-    if (detected && connections.some((c) => c.provider === detected)) setActive(detected);
+    if (
+      detected &&
+      (detected === "microsoft_365" || connections.some((c) => c.provider === detected))
+    )
+      setActive(detected);
   }, [detected, connections.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const provider = providers.find((p) => p.id === active) ?? null;

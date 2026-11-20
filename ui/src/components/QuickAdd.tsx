@@ -9,6 +9,7 @@ const EXAMPLES = [
   { label: "A folder", value: "/workspace/notes" },
   { label: "A git repo", value: "https://github.com/owner/repo" },
   { label: "A docs site", value: "https://docs.example.com/guide" },
+  { label: "A SharePoint site", value: "https://contoso.sharepoint.com/sites/team" },
   { label: "Every subfolder", value: "/workspace/clients/*" },
 ];
 
@@ -119,7 +120,8 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
 
           <p className="muted small" style={{ margin: 0 }}>
             pheasant detects what it is — repository, Obsidian vault, notes folder,
-            document folder, web collection, bucket or connector — then indexes it. The
+            document folder, web collection, SharePoint or OneDrive link, or connector —
+            then indexes it. A second link into the same SharePoint site joins it. The
             equivalent command is <code>pheasant up {target.trim() || "<target>"}</code>.
             Registration is immediate; indexing continues in the background and its
             progress shows up on the Sources page (and the "Syncing…" indicator at the
@@ -153,10 +155,11 @@ export function QuickAdd({ onClose, onAdded }: { onClose: () => void; onAdded: (
           ) : null}
 
           <details className="upload-fallback">
-            <summary>…or upload files or a ZIP instead</summary>
+            <summary>…or upload files, a folder, or an archive instead</summary>
             <p className="muted small" style={{ margin: "8px 0" }}>
-              No path, no mount. Files and ZIP archives become a normal source;
-              supported files inside ZIP folders are indexed separately.
+              No path, no mount. Files, folders and archives (ZIP, .tar, .tar.gz,
+              .tgz, .tar.bz2, .tar.xz) become a normal source; supported files
+              inside an archive's folders are indexed separately.
             </p>
             <UploadDrop
               onUploaded={() => {

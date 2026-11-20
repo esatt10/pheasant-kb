@@ -61,6 +61,10 @@ import type {
   AccessPerson,
   CapacityRequest,
   FleetReport,
+  ModelPrice,
+  ModelPrices,
+  RegionControls,
+  RegionControlsChange,
   UsageReport,
   TraceCalls,
   UsageSelection,
@@ -110,6 +114,7 @@ const API_BASE = import.meta.env.VITE_PHEASANT_API_BASE ?? "/api";
 const API_TOKEN_KEY = "pheasant.api.token";
 const API_AUTH_REQUIRED_EVENT = "pheasant:api-auth-required";
 const API_AUTH_CHANGED_EVENT = "pheasant:api-auth-changed";
+const ACCESS_SUSPENDED_EVENT = "pheasant:access-suspended";
 
 /**
  * The fleet's front-door token belongs to the browser session, not durable
@@ -186,6 +191,15 @@ export function onApiAuthRequired(listener: () => void): () => void {
   const handler = () => listener();
   window.addEventListener(API_AUTH_REQUIRED_EVENT, handler);
   return () => window.removeEventListener(API_AUTH_REQUIRED_EVENT, handler);
+}
+
+/** The kill switch refused this tab (`ACCESS_SUSPENDED`): the listener gets
+ * the region's own sentence, which carries the operator's reason. */
+export function onAccessSuspended(listener: (message: string) => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = (event: Event) => listener((event as CustomEvent<string>).detail);
+  window.addEventListener(ACCESS_SUSPENDED_EVENT, handler);
+  return () => window.removeEventListener(ACCESS_SUSPENDED_EVENT, handler);
 }
 
 export function onApiAuthChanged(listener: () => void): () => void {
@@ -392,6 +406,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       code = typeof fields.code === "string" ? fields.code : null;
       retryable = fields.retryable === true;
     }
+    if (code === "ACCESS_SUSPENDED" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(ACCESS_SUSPENDED_EVENT, { detail }));
+    }
     throw new ApiError(detail, response.status, code, retryable);
   }
   if (response.status === 204) return undefined as T;
@@ -399,6 +416,49 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(invalidJsonResponse(requestPath, contentType), response.status);
   }
   return body as T;
+}
+
+/** Fetch a download with this tab's credential and hand it to the browser to
+ * save under the name the server gave it. Returns that name. */
+async function saveDownload(path: string, fallback: string): Promise<string> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: requestHeaders(undefined, false),
+  });
+  if (response.status === 401) signalApiAuthRequired();
+  if (!response.ok) {
+    const detail = await response.json().then((body) => body?.detail).catch(() => null);
+    throw new ApiError(detail ? String(detail) : `${response.status} ${response.statusText}`, response.status);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? fallback;
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return name;
+}
+
+/** Where each uploaded file sits within the folder it came from. */
+const UPLOAD_PATHS = new WeakMap<File, string>();
+
+/** Remember a dropped file's path inside its folder (``acme/metrics/index.md``). */
+export function setUploadPath(file: File, path: string): void {
+  UPLOAD_PATHS.set(file, path);
+}
+
+/**
+ * The name an upload is sent under: its path inside the folder it was picked
+ * or dropped from, so a collection lands as a tree. An Open Knowledge Format
+ * bundle needs that: its `index.md` files and relative links only mean
+ * something in place. A loose file is sent under its own name.
+ */
+export function uploadPath(file: File): string {
+  const picked = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return UPLOAD_PATHS.get(file) || picked || file.name;
 }
 
 function qs(
@@ -646,6 +706,19 @@ export const api = {
       { method: "DELETE" },
     ),
   usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
+  /** Each model's price per million tokens, override and history (operator admin). */
+  modelPrices: () => request<ModelPrices>("/models/prices"),
+  /** Set or clear prices by catalog id, from now on (operator admin). */
+  setModelPrices: (prices: Record<string, Partial<ModelPrice> | null>) =>
+    request<ModelPrices>("/models/prices", { method: "PUT", body: JSON.stringify({ prices }) }),
+  /** The kill switch and this month's model spend against its limit (Admin). */
+  regionControls: () => request<RegionControls>("/region/controls"),
+  /** Suspend or restore access, or set the monthly limit (operator admin). */
+  setRegionControls: (change: RegionControlsChange) =>
+    request<RegionControls>("/region/controls", {
+      method: "PUT",
+      body: JSON.stringify(change),
+    }),
   /** The sessions behind a usage row (Admin), read only when asked for. */
   usageSessions: (
     days: number,
@@ -671,26 +744,11 @@ export const api = {
     const path = session
       ? `/usage/sessions/${encodeURIComponent(session)}/export${qs({ days, calls, match: searched })}`
       : `/usage/traces/export${qs({ days, calls, match: searched, ...personFilter(filter) })}`;
-    const response = await fetch(`${API_BASE}${path}`, {
-      headers: requestHeaders(undefined, false),
-    });
-    if (response.status === 401) signalApiAuthRequired();
-    if (!response.ok) {
-      const detail = await response.json().then((body) => body?.detail).catch(() => null);
-      throw new ApiError(detail ? String(detail) : `${response.status} ${response.statusText}`, response.status);
-    }
-    const disposition = response.headers.get("content-disposition") ?? "";
-    const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? "pheasant-traces.jsonl";
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = name;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    return name;
+    return saveDownload(path, "pheasant-traces.jsonl");
   },
+  /** Save the Usage tab's measures as a file (Admin): a ZIP of CSVs, or JSON. */
+  downloadUsageExport: (days: number, format: "csv" | "json") =>
+    saveDownload(`/usage/export${qs({ days, format })}`, `pheasant-usage.${format === "csv" ? "zip" : "json"}`),
   fleet: () => request<FleetReport>("/fleet"),
   createKnowledgeBase: (body: { name: string; description?: string; admins?: string[] }) =>
     request<{
@@ -943,6 +1001,8 @@ export const api = {
     kind?: string | null;
     session_id?: string | null;
     source_name?: string | null;
+    /** The conversation it was asked in, so the usage trace files it there. */
+    conversation_id?: string | null;
   }) =>
     request<VisualResponse>("/assistant/visual", {
       method: "POST",
@@ -1337,7 +1397,7 @@ export const api = {
   // needs the browser to set its own boundary header.
   uploadDocuments: async (files: File[], sourceName = "uploads"): Promise<UploadResponse> => {
     const form = new FormData();
-    for (const file of files) form.append("files", file, file.name);
+    for (const file of files) form.append("files", file, uploadPath(file));
     form.append("source_name", sourceName);
     form.append("sync_now", "true");
     form.append("wait", "false");
@@ -1373,7 +1433,7 @@ export const api = {
   ): Promise<UploadAccepted> =>
     new Promise((resolve, reject) => {
       const form = new FormData();
-      for (const file of files) form.append("files", file, file.name);
+      for (const file of files) form.append("files", file, uploadPath(file));
       form.append("source_name", sourceName);
       form.append("sync_now", "true");
       form.append("background", "true");

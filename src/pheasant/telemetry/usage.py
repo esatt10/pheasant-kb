@@ -84,6 +84,13 @@ class Totals:
     reasoning_tokens: int = 0
     duration_ms: float = 0.0
     buckets: list[int] = field(default_factory=lambda: [0] * (len(BUCKETS_MS) + 1))
+    #: What these calls cost when they were made, in millionths of the
+    #: catalog's currency; ``None`` while none of them had a price.
+    cost_micros: int | None = None
+
+
+def _add_cost(held: int | None, more: int | None) -> int | None:
+    return held if more is None else (held or 0) + more
 
 
 def bucket_of(milliseconds: float) -> int:
@@ -103,6 +110,9 @@ class Meter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._rows: dict[Key, Totals] = {}
+        #: Rows a flush has taken but not yet written: still counted by the
+        #: spend guard, which would otherwise see them in neither place.
+        self._inflight: dict[Key, Totals] = {}
         self._target: tuple[Any, str] | None = None
         #: A second ledger the same totals are added to: a fleet's directory,
         #: so the operator reads every knowledge base in one place.
@@ -125,8 +135,12 @@ class Meter:
 
     def bind_for(self, config: Any, state: Any) -> None:
         """:meth:`bind` when ``observability.usage`` is on, mirrored into the
-        fleet directory when this stack is part of one."""
+        fleet directory when this stack is part of one. Binds the kill switch
+        and spend limit (``telemetry/spend.py``) too, whatever is metered."""
 
+        from pheasant.telemetry.spend import GUARD
+
+        GUARD.bind(config, state)
         if not config.observability.usage:
             return
         mirror = None
@@ -148,6 +162,7 @@ class Meter:
             self._target = None
             self._mirror = None
             self._rows.clear()
+            self._inflight = {}
 
     def _key(self, kind: str, model: str) -> Key:
         from pheasant.security.identity import current_identity
@@ -184,15 +199,43 @@ class Meter:
         if self._target is None:
             return
         cached = _int(cached_input_tokens)
-        fresh = _int(input_tokens) - (cached if cached_included else 0)
+        fresh = max(0, _int(input_tokens) - (cached if cached_included else 0))
+        written = _int(output_tokens)
+        from pheasant.telemetry.spend import GUARD
+
+        # Priced now, with the price in force now: a price changed later
+        # applies to later calls only.
+        spent = GUARD.call_micros(model, fresh, written, cached)
         with self._lock:
             row = self._rows.setdefault(self._key(kind, str(model or "")), Totals())
             row.requests += 1
-            row.input_tokens += max(0, fresh)
-            row.output_tokens += _int(output_tokens)
+            row.input_tokens += fresh
+            row.output_tokens += written
             row.cached_input_tokens += cached
             row.reasoning_tokens += _int(reasoning_tokens)
+            row.cost_micros = _add_cost(row.cost_micros, spent)
         self._maybe_flush()
+
+    def pending_model_rows(self, since_day: str) -> list[dict[str, Any]]:
+        """This process's model calls not yet written to the ledger, from ``since_day``.
+
+        What the spend guard adds to the ledger's total so a process sees its
+        own spend at once rather than a flush later.
+        """
+
+        with self._lock:
+            held = [*self._rows.items(), *self._inflight.items()]
+        return [
+            {
+                "model": key[2],
+                "input_tokens": totals.input_tokens,
+                "output_tokens": totals.output_tokens,
+                "cached_input_tokens": totals.cached_input_tokens,
+                "cost_micros": totals.cost_micros,
+            }
+            for key, totals in held
+            if key[1] in MODEL_KINDS and key[0] >= since_day
+        ]
 
     def operation(self, name: str, seconds: float, *, ok: bool = True) -> None:
         """Count one answer or search and where its duration falls."""
@@ -224,6 +267,22 @@ class Meter:
             with self._lock:
                 self._flushing = False
 
+    def _requeue(self, rows: dict[Key, Totals]) -> None:
+        """Put rows a flush could not write back into what is pending."""
+
+        with self._lock:
+            for key, totals in rows.items():
+                held = self._rows.setdefault(key, Totals())
+                held.requests += totals.requests
+                held.errors += totals.errors
+                held.input_tokens += totals.input_tokens
+                held.output_tokens += totals.output_tokens
+                held.cached_input_tokens += totals.cached_input_tokens
+                held.reasoning_tokens += totals.reasoning_tokens
+                held.duration_ms += totals.duration_ms
+                held.buckets = [a + b for a, b in zip(held.buckets, totals.buckets, strict=True)]
+                held.cost_micros = _add_cost(held.cost_micros, totals.cost_micros)
+
     def flush(self) -> int:
         """Write what is pending as one additive upsert; rows written."""
 
@@ -231,21 +290,46 @@ class Meter:
             target, mirror, rows = self._target, self._mirror, self._rows
             self._rows = {}
             self._flushed_at = time.monotonic()
+            if target is not None and rows:
+                self._inflight = rows
         if target is None or not rows:
             return 0
         from pheasant.persistence import usage_ledger
+        from pheasant.telemetry.spend import GUARD
 
-        if mirror is not None:
-            try:
-                usage_ledger.add(mirror, target[1], rows)
-            except Exception:  # noqa: BLE001 - the region's own ledger still gets them
-                logger.debug("usage totals could not be mirrored to the fleet directory")
+        # The price in force now, for tokens a row held before costs were
+        # stored; each call's own cost was fixed when it was made.
+        price_of = GUARD.price_of
         try:
-            usage_ledger.add(target[0], target[1], rows)
-        except Exception:  # noqa: BLE001 - a lost interval of counts must never fail a request
-            logger.debug("usage totals could not be written; dropped %d rows", len(rows))
-            return 0
-        return len(rows)
+            if mirror is not None:
+                try:
+                    usage_ledger.add(mirror, target[1], rows, price_of)
+                except Exception:  # noqa: BLE001 - the region's own ledger still gets them
+                    logger.debug("usage totals could not be mirrored to the fleet directory")
+            try:
+                usage_ledger.add(target[0], target[1], rows, price_of)
+            except Exception as exc:  # noqa: BLE001 - counting must never fail a request
+                # Kept for the next flush rather than dropped: these totals are
+                # what the spend limit is read from, so a database that was
+                # briefly unreachable must not make spend disappear. Only the
+                # rows not yet written, so a retry adds each exactly once.
+                unwritten = getattr(exc, "remaining", rows)
+                self._requeue(unwritten)
+                logger.warning(
+                    "usage totals could not be written (%s); %d row(s) kept for the next flush",
+                    type(getattr(exc, "cause", exc)).__name__,
+                    len(unwritten),
+                )
+                return len(rows) - len(unwritten)
+            return len(rows)
+        finally:
+            # The ledger now holds them: the spend guard reads it afresh rather
+            # than from a total cached before the write.
+            from pheasant.telemetry.spend import GUARD
+
+            GUARD.forget()
+            with self._lock:
+                self._inflight = {}
 
 
 #: The process's meter. Module-level like `metrics.REGISTRY`, for the same

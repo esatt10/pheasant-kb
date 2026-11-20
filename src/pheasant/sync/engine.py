@@ -37,7 +37,6 @@ from pheasant.ingestion.walk import (
     aggregate_depth_counts,
     walk_source,
 )
-from pheasant.persistence import size_limit
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.persistence.manifest import ManifestStore
 from pheasant.persistence.paths import StatePaths
@@ -53,7 +52,7 @@ from pheasant.search.vector_store import (
 from pheasant.security import corpus_policy
 from pheasant.synapse.events import EventStream, RouterWebhook
 from pheasant.synapse.publisher import ContractPublisher
-from pheasant.sync import archived
+from pheasant.sync import archived, limits
 from pheasant.sync import health as read_health
 from pheasant.sync.cancellation import (
     SyncCancelled,
@@ -218,7 +217,7 @@ class SyncEngine:
         self.paths = paths or StatePaths.from_config(config)
         self.paths.ensure()
         self.state = state or StateStore.from_config(self.config, self.paths.sqlite)
-        usage_meter.bind_for(config, self.state)  # metering, wherever an engine runs
+        usage_meter.bind_for(config, self.state)  # metering and its spend limit, everywhere
         self.state.migrate()
         # Every secret this process reads (a git token, a model key, a Drive
         # sign-in) can now come from a connection in this store.
@@ -1990,7 +1989,7 @@ class SyncEngine:
             # not a failure, so a queued task for it finishes instead of retrying.
             logger.info("%s: sync skipped, its pipeline was deleted", source_name)
             return SyncResult(source_name, 0, 0, 0, 0, "skipped", {"reason": "pipeline deleted"})
-        if full := size_limit.blocks(self.config, self.state, mode, source_name):
+        if full := limits.blocks(self.config, self.state, mode, source_name):
             return SyncResult(source_name, 0, 0, 0, 0, "skipped", full)
         self._ensure_modal_handlers(source)
         # A container restart must never re-index by itself, but a config edit

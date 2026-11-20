@@ -26,6 +26,7 @@ import re
 from typing import Any
 
 from pheasant.assistant.providers import PROVIDERS
+from pheasant.graph.okf_index import prompt_note
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -479,6 +480,7 @@ def build_citations(results: list[dict], limit: int) -> list[dict]:
                 # returns the citation shape it always did.
                 **({"memory": result["memory"]} if result.get("memory") else {}),
                 **({"artifact": result["artifact"]} if result.get("artifact") else {}),
+                **({"okf": result["okf"]} if result.get("okf") else {}),
                 "used": False,
             }
         )
@@ -518,6 +520,7 @@ def passages_to_citations(passages: list, limit: int) -> list[dict]:
                 **({"source_type": passage.source_type} if passage.source_type else {}),
                 **({"memory": passage.memory} if passage.memory else {}),
                 **({"artifact": passage.artifact} if passage.artifact else {}),
+                **({"okf": passage.okf} if getattr(passage, "okf", None) else {}),
                 "used": False,
             }
         )
@@ -814,7 +817,7 @@ def build_prompt(
             asserted = remembered.get("asserted_at") or "unknown time"
             scope = remembered.get("scope") or "unknown scope"
             header += f" — remembered ({scope}, asserted {asserted})"
-        lines.append(header)
+        lines.append(header + prompt_note(citation.get("okf")))
         document = documents.get(citation["index"])
         if document is not None:
             described = document.describe()

@@ -30,6 +30,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from pheasant.config.schema import SourceConfig, SourceType
+from pheasant.connectors.sharepoint_urls import is_microsoft_url, sharepoint_target
 from pheasant.git_auth import (
     git_env as _signed_git_env,
 )
@@ -412,6 +413,8 @@ def resolve_target(
     if forced is SourceType.repository and "://" in spec or is_git_url(spec):
         return _git_target(spec, clone_root, name=name)
     parsed = urlparse(spec)
+    if parsed.scheme in ("http", "https") and forced is None and is_microsoft_url(spec):
+        return sharepoint_target(spec, workspace, name=name)
     if parsed.scheme in ("http", "https"):
         if forced is SourceType.api:
             target = _web_target(spec, workspace, name=name)
@@ -449,10 +452,10 @@ def joins_collection(target_type: object, existing_type: object) -> bool:
     A web (or API) target is named after its host, so a second page of one
     site resolves to the name of the first. That is the same collection, and
     the page belongs in it; anything else with a clashing name is a different
-    source.
+    source; a SharePoint link (named after its site) joins the same way.
     """
 
-    collections = {SourceType.web_collection.value, SourceType.api.value}
+    collections = {SourceType.web_collection.value, SourceType.api.value, "sharepoint"}
     kind = getattr(target_type, "value", target_type)
     return kind in collections and getattr(existing_type, "value", existing_type) == kind
 

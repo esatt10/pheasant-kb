@@ -221,9 +221,12 @@ def register_connection_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         """Add a source from one string, the way the web UI's Add box does.
 
         ``target`` is a folder path, a repository URL (github.com, gitlab.com,
-        dev.azure.com ...), a web page URL, ``gdrive:`` for a Google Drive, or a
-        glob of folders with ``split``. ``connection`` names the account to
-        read it with (a private repository's token, a Drive sign-in), from
+        dev.azure.com ...), a web page URL, ``gdrive:`` for a Google Drive, any
+        OneDrive or SharePoint link (a site, its Site contents, a library, a
+        folder, a list, a page or a sharing link; one source per site, so a
+        second link into a site joins it), or a glob of folders with ``split``.
+        ``connection`` names the account to read it with (a private
+        repository's token, a Drive or Microsoft 365 sign-in), from
         ``list_connections``. Detects the type, clones what needs cloning,
         registers and (with ``sync_now``) starts indexing; follow it with
         ``wait_for_sync``."""

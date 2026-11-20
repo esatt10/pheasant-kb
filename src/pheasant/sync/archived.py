@@ -66,11 +66,14 @@ def admit(state: Any, source_name: str, items: list[Any]) -> tuple[list[Any], li
 
 
 def archive_of(relative_path: str) -> str | None:
-    """The uploaded archive a member's path is inside (its first ``.zip`` folder)."""
+    """The uploaded archive a member's path is inside (its first archive folder:
+    ``.zip``, ``.tar``, ``.tar.gz`` ...)."""
+
+    from pheasant.sync.zip_archive import is_archive
 
     parts = relative_path.split("/")
     for index, part in enumerate(parts[:-1]):
-        if part.lower().endswith(".zip"):
+        if is_archive(part):
             return "/".join(parts[: index + 1])
     return None
 

@@ -126,7 +126,10 @@ operation across the UI, HTTP and MCP. Reader can consume and generate output,
 but cannot manage sources, publish artifacts or run tuning. Contributor has
 application/content control; Admin also manages security and infrastructure. MCP's
 `tools/list` shows each caller only the tools its role may call
-([MCP tools](mcp_tools.md#which-tools-a-caller-is-shown)).
+([MCP tools](mcp_tools.md#which-tools-a-caller-is-shown)). An operator admin also
+holds a **kill switch** that refuses every caller but an operator admin at the
+front door (`ACCESS_SUSPENDED`), and a monthly model **spend limit**
+([Controls](how-to/hosted-regions.md#a-kill-switch-and-a-monthly-spend-limit)).
 
 `security.entra` adds verified people beside the shared token; it does not
 replace it. With it on, the guard in front of the HTTP API and `/mcp`

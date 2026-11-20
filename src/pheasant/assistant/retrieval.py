@@ -159,6 +159,10 @@ class Passage:
     memory: dict | None = None
     raw: dict = field(default_factory=dict, repr=False)
     artifact: dict | None = None
+    # What the passage's nearest OKF index says of it (`graph/okf_index.py`):
+    # carried so the prompt can say a document is listed as superseded or
+    # stale even when the document's own frontmatter has not caught up.
+    okf: dict | None = None
 
     def key(self) -> str:
         return str(self.chunk_id or self.node_id or self.title)
@@ -592,6 +596,9 @@ class PheasantRetriever:
                     {"query": query, "mode": mode, "arm": str(arm)} for arm in failed_arms
                 )
         hits = payload.get("results", [])
+        from pheasant.graph.okf_index import annotate as okf_annotate
+
+        okf_annotate(hits, self.graph)  # each hit's nearest OKF index, one hop
         if filtering:
             from pheasant.search.criteria import apply_retrieval_criteria
 
@@ -822,6 +829,7 @@ class PheasantRetriever:
             source_type=(item.get("source_type") or provenance.get("source_type")) or None,
             memory=item.get("memory") or None,
             artifact=item.get("artifact") or None,
+            okf=item.get("okf") or None,
             raw=item,
         )
 

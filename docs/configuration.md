@@ -1283,10 +1283,16 @@ are the only models and nothing here is consulted.
 | `default_embedding` | string \| null | `null` | What a new region indexes with. A running region's choice is a row in `/state`, changed with `PUT /models/embedding`. |
 | `selectable` | bool | `true` | Whether a caller may pick per question. Off, naming anything but the default is refused. |
 | `currency` | string | `USD` | The currency the prices below are stated in. A label, not a conversion. |
+| `monthly_spend_limit` | number \| null | `500` | What the knowledge base may spend on chat, judgement and embedding calls per calendar month (UTC), in `currency` at the prices below. At it, model calls are refused (`SPEND_LIMIT_REACHED`) until the 1st or until an operator admin raises it (`PUT /region/controls`, which overrides this at runtime). `null`: no limit. A model with no stated price counts nothing. See [the kill switch and spend limit](how-to/hosted-regions.md#a-kill-switch-and-a-monthly-spend-limit). |
 
 Every entry also takes `input_price`, `output_price` and `cached_input_price` (per
 million tokens; embeddings take `input_price` only). They are what the operator
-states they pay, never looked up, and are what `GET /usage` reports cost from.
+states they pay, never looked up. Each call is costed with the price in force
+when it is made and the cost is stored with its tokens, so `GET /usage`, the
+spend limit and every export keep what was spent at the price it was charged
+at. An operator admin overrides a price at runtime, without a redeploy
+(`PUT /models/prices`, MCP `set_model_prices`, the Models tab); the change
+applies to later calls only.
 
 Ids must be unique within a list and a default must be one of them; a config
 that breaks either does not load. An entry on an Azure AI Foundry host with no
@@ -2262,6 +2268,7 @@ p50 for a sufficiency check that took 1.20 s through `/chat/completions`.
 | `draft_reasoning_effort` | `none` \| `low` \| null | `low` | Effort for the first draft (`gpt-6-luna` only). |
 | `max_repairs` | integer | `1` | Rewrites after a rejected draft. |
 | `repair_efforts` | list of `none` \| `low` \| `full` | `[low]` | Effort for each rewrite in turn (`gpt-6-luna` only); a rewrite past the end of the list is at `full`, the assistant's own effort. `[]` rewrites at full effort, which was the default before it was measured; `[low]` with `max_repairs: 2` escalates to full effort only if the cheap rewrite is rejected too. Measured below. |
+| `context_tokens` | int ≥ 4096 | `32768` | The judge's context in tokens. A judgement's input is fitted to it rather than sent whole: passages that fit their share keep every character and the rest share what remains, and the acceptance step says how much was cut. An answer longer than the context on its own is not sent (`answer not judged`). Before this, a composed artifact's check read every document the writer read and was refused with a 422. |
 | `api` | `decisions` \| `systemone` | `decisions` | `decisions` is OpenAI's Decisions API, on api.openai.com or a `gpt-6-luna` deployment on Azure AI Foundry. `systemone` is Microsoft-Decision-1 on Foundry (`{resource}/providers/microsoft/v1/systemone`), translated to and from the same questions; recalibrate the thresholds for it. See [Use Azure AI Foundry models](pheasant-kb/foundry.md). |
 | `model`, `base_url`, `api_key_env`, `timeout_seconds` | | `gpt-6-luna`, inherited, inherited, `10` | The key is `api_key_env` if named, else the answering model's own credential when that is OpenAI or Azure AI Foundry (`provider: azure`), else `OPENAI_API_KEY`. With no key, a Foundry `base_url` is called with the process's managed identity where it has one (a Foundry resource with `local_auth_enabled = false`). On Foundry `model` is the deployment name. |
 

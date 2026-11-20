@@ -159,7 +159,10 @@ def lookup(registry: Any, job_id: str) -> dict | None:
         local.get("active") or not getattr(store, "authoritative_terminal", False)
     ):
         return local
-    return store.get(job_id) if store is not None else None
+    stored = store.get(job_id) if store is not None else None
+    # The store speaks for a finished job, but it cannot speak for one it does
+    # not hold (a write that failed): this process still has the result.
+    return stored if stored is not None else local
 
 
 def merge_visible(store: Any, local: dict, shared: list[dict]) -> dict:

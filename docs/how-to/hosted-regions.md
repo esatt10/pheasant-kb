@@ -210,6 +210,15 @@ tab) reads them back for an Admin:
 - **Size**: documents, chunks and indexed bytes against
   `storage.knowledge_base_limit_gb`, and whether the knowledge base is full.
 
+**Export CSV** and **Export JSON** on the Usage tab save these measures, and
+this month's spend against its limit, as a file: a ZIP with one CSV per table
+(`totals`, `by_day`, `by_model`, `by_organization`, `by_channel`, `people`,
+`latency`, `spend`) plus `report.json`, or one JSON document. The same file is
+`GET /usage/export?days=&format=csv|json` and MCP `export_usage`, which returns
+it as `content` (base64 for the ZIP) with its `filename`. The amounts follow the
+page's rule: cost and spend are null in an export by an Admin a customer
+granted.
+
 ### The traces behind the totals
 
 With `observability.interactions` on, every model, organization and person in
@@ -230,7 +239,15 @@ call made outside one stands alone. Each level offers:
   or a session's own time span. Copy it into the workspace's Logs. Spans carry
   no person, by design; the ledger is what joins a person to their traces.
 - **Export JSONL.** The selection's ledger rows, one call per line, attributes
-  included.
+  included. MCP's `export_usage_traces` returns the same rows in pages of
+  2,000 (`offset`, `has_more`), for an admin agent that cannot take a download.
+
+A diagram asked for on its own (the chat's **Draw a diagram**, a redraw in
+another shape, MCP `create_visual`) is a call like any question: its request
+is the row's question, its conversation is the session, and its trace shows
+the passages it drew from, the model and tokens that drew it, and what came
+out (a diagram and its shape, the graph's edges when the model's drawing
+could not be used, or why nothing was drawn).
 
 The drill-down reads **Questions** by default: the questions and searches the
 totals count. On a live region nearly every ledger row is the interface
@@ -257,6 +274,74 @@ granted sees the same activity and tokens with `cost: null`.
 Counting adds no database write to a request: totals are held in memory and
 written in one additive statement at most every 30 seconds, on shutdown, and
 before a read. A process that is killed loses at most that interval.
+
+## A kill switch and a monthly spend limit
+
+Two controls the operator holds over each knowledge base, in the Admin page's
+**Controls** tab, `GET`/`PUT /region/controls` and MCP `get_region_controls` /
+`set_region_controls`. An Admin reads them; only an **operator admin** changes
+them: the shared token, the local operator, or an Admin the deployment pinned
+(`security.entra.role_assignments`). An Admin granted inside the region is
+refused with `403 OPERATOR_REQUIRED`, and sees whether access is suspended and
+the share of the limit used, never the amounts.
+
+**The kill switch** cuts access at once. Every request, from the UI, the HTTP
+API or MCP, is refused with `403 ACCESS_SUSPENDED` and the reason the operator
+gave, except an operator admin's, so whoever turned it on can turn it off.
+`/auth/me` and `/auth/logout` still answer, and the web UI shows one "Access is
+paused" page instead of a failing panel each. Every replica reads it within 5
+seconds. Indexing, saved content and grants are untouched; to remove one person,
+revoke their grant instead.
+
+```bash
+curl -X PUT $URL/region/controls -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"suspended": true, "reason": "Billing review"}'
+curl -X PUT $URL/region/controls ... -d '{"suspended": false}'
+```
+
+**The spend limit** is what one knowledge base may spend on models in a
+calendar month (UTC): its answering, judgement and embedding calls at the prices
+the catalog states. It defaults to `models.monthly_spend_limit` (500), and an
+operator admin raises or lowers it at runtime (`{"monthly_spend_limit": 750}`;
+`null` returns to the default). At the limit:
+
+| What | Happens |
+| --- | --- |
+| Answers, `assess_evidence`, dictation | Refused before they start: `402 SPEND_LIMIT_REACHED` |
+| Any other chat, judgement or embedding call | Refused before it is sent |
+| A sync that would embed new content (`incremental`, `full`) | Skipped, with `reason: spend limit reached`; nothing retries it |
+| Search | Answers from text and graph; the vector arm drops out |
+| Browsing, reading, exports | Unchanged |
+
+Spend is counted from the usage totals (`observability.usage`, which must be
+on) plus each process's calls not yet written, so a limit can be passed by what
+is in flight across the replicas at that moment and never by more. A model with
+no stated price counts nothing and is named in the reply. On the 1st the month
+starts over. Each knowledge base of a fleet has its own switch and its own limit.
+
+**Prices are set at runtime and apply from then on.** Each call is costed when
+it is made, at the price in force then, and the cost is stored with its tokens.
+When a provider changes its price, an operator admin changes it in the Models
+tab's **Prices** section (`PUT /models/prices` with `{"prices": {"gpt-6-luna":
+{"input": 2.5, "output": 10}}}`, or MCP `set_model_prices`). Fields you leave
+out keep the catalog's, `null` returns a model to the catalog's price, and every
+replica charges the new price within 5 seconds. Nothing already spent is
+repriced: the month so far, the Usage tab and every export keep what each call
+cost when it was made. The section keeps a history of who changed which price,
+when, from what to what. Totals recorded before a release stored costs are
+priced once, on its first start, at the prices in force then.
+
+**The totals it reads cannot be taken back.** `usage_daily` is append-only in
+the database itself, on SQLite and Postgres alike, and so is the fleet
+directory's mirror of it. Triggers refuse every `DELETE`, every `TRUNCATE` and
+any `UPDATE` that lowers a count or moves a row to another day, person or
+knowledge base, whoever sends it: the region, a script or a statement typed
+into the database. The region only ever adds to a total. Each start checks the
+triggers and puts back any that are missing. A write the database refuses
+(a dropped connection, say) keeps its rows for the next flush instead of
+losing them. Only the database's owner can get past this, by dropping the
+triggers or restoring an older backup, and that owner can already raise the
+limit.
 
 ## A size limit
 

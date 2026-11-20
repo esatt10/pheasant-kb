@@ -138,6 +138,7 @@ dev = [
 
 [project.entry-points."pheasant.connectors"]
 gdrive = "pheasant.connectors.gdrive:GDriveConnector"
+sharepoint = "pheasant.connectors.sharepoint:SharePointConnector"
 
 [project.scripts]
 pheasant = "pheasant.cli:app"

@@ -247,3 +247,69 @@ export interface UsageSession {
   retention: TraceRetention;
   kql: string;
 }
+
+/** The operator's controls over one knowledge base (`GET /region/controls`). */
+export interface RegionControls {
+  knowledge_base: string;
+  /** Whether the caller may change them: an operator admin only. */
+  can_change: boolean;
+  access: {
+    /** The kill switch: on, everyone but an operator admin is refused. */
+    suspended: boolean;
+    reason: string | null;
+    since: string | null;
+    by: string | null;
+  };
+  spend: {
+    month: string;
+    resets_on: string;
+    /** The amounts are an operator admin's; null for anyone else. */
+    currency: string | null;
+    spent: number | null;
+    limit: number | null;
+    default_limit: number | null;
+    custom_limit: boolean;
+    remaining: number | null;
+    percent_used: number | null;
+    reached: boolean;
+    enforced: boolean;
+    unpriced_models: string[];
+    note: string | null;
+  };
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export interface RegionControlsChange {
+  suspended?: boolean;
+  reason?: string | null;
+  /** null returns to the deployment's default. */
+  monthly_spend_limit?: number | null;
+}
+
+/** A price per million tokens; null where the model states none. */
+export interface ModelPrice {
+  input: number | null;
+  output: number | null;
+  cached_input: number | null;
+}
+
+/** What each catalog model costs, and who changed it (`GET /models/prices`, operator admin). */
+export interface ModelPrices {
+  knowledge_base: string;
+  currency: string;
+  unit: string;
+  models: {
+    id: string;
+    kind: "chat" | "decision" | "embedding";
+    label: string;
+    model: string;
+    catalog: ModelPrice;
+    override: Partial<ModelPrice> | null;
+    effective: ModelPrice | null;
+  }[];
+  history: { at: string; by: string; model: string; from: ModelPrice | null; to: ModelPrice | null }[];
+  updated_at: string | null;
+  updated_by: string | null;
+  note: string;
+}

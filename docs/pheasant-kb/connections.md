@@ -10,6 +10,7 @@ still wins.
 |---|---|---|
 | **GitHub**, **GitLab**, **Azure DevOps**: sign in with GitHub, GitLab or Microsoft, or a personal access token | Paste a private repository URL into **+ Add source** | Clones and fetches, signed for that host only |
 | **Google Drive**: sign in with Google, a service account key, or an access token | Add `gdrive:` | Each Drive sync; a sign-in is refreshed as it expires |
+| **Microsoft 365** (OneDrive, SharePoint): sign in with Microsoft, an app registration, or an access token | Paste any OneDrive or SharePoint link ([how](../how-to/sharepoint-onedrive.md)) | Each sync of that site; a sign-in also reads list attachments |
 | **API token**: a bearer token | Add an `api` or web source with the connection | Every request that source makes |
 | **OpenAI**, **Azure AI Foundry**, **Anthropic**, **Gemini**: an API key | Nothing more | Embeddings, answers, judgements, captions, dictation |
 | **Environment variable**: any name a setting reads | Nothing more | That setting (`api_key_env` and friends) |
@@ -91,6 +92,7 @@ seconds (`security.connections.cache_seconds`).
 
 Each service with a sign-in shows it as the first option in its panel, beside
 the token: **Sign in with GitHub**, **Sign in with Microsoft** (Azure DevOps),
+**Sign in with Microsoft 365** (OneDrive and SharePoint),
 **Sign in with GitLab**, **Sign in with Google** (Drive). Pressing it opens the
 service's own sign-in page and comes back to the Sources page connected. The
 password never reaches the region; what is sealed is the token the service
@@ -106,6 +108,7 @@ shows the exact value when no client is set.
 |---|---|---|---|
 | GitHub | [New OAuth app](https://github.com/settings/applications/new): "Authorization callback URL" is the callback | `repo read:user` | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` |
 | Microsoft (Azure DevOps) | An Entra app registration: platform *Mobile and desktop applications* with the callback as redirect URI, accounts in any directory and personal Microsoft accounts, API permission Azure DevOps `user_impersonation` | Azure DevOps, `offline_access` | `MICROSOFT_OAUTH_CLIENT_ID` (a public client: no secret) |
+| Microsoft 365 (OneDrive, SharePoint) | The same app registration, with delegated Microsoft Graph `Files.Read.All`, `Sites.Read.All`, `User.Read` and SharePoint `AllSites.Read` (list attachments) | Graph read, `offline_access` | `MICROSOFT_OAUTH_CLIENT_ID` |
 | GitLab | [Applications](https://gitlab.com/-/user_settings/applications), confidential | `read_repository read_user` | `GITLAB_OAUTH_CLIENT_ID`, `GITLAB_OAUTH_CLIENT_SECRET` |
 | Google | [Credentials](https://console.cloud.google.com/apis/credentials): OAuth client *Web application*, Drive API enabled | `drive.readonly` | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` |
 

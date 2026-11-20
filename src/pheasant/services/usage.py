@@ -35,6 +35,7 @@ from pheasant.security.authorization import require_permission
 from pheasant.security.identity import current_identity
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, ServiceError
+from pheasant.telemetry import spend
 from pheasant.telemetry import usage as metering
 
 MAX_DAYS = 366
@@ -65,37 +66,9 @@ def is_operator(config: Any) -> bool:
     return identity.tenant_id == settings.tenant_id and pinned.get(identity.subject) == "Admin"
 
 
-def _prices(config: Any) -> dict[str, tuple[float | None, float | None, float | None]]:
-    """``{wire model or id: (input, output, cached input)}`` per million tokens."""
-
-    models = getattr(config, "models", None)
-    prices: dict[str, tuple[float | None, float | None, float | None]] = {}
-    if models is None:
-        return prices
-    for entry in [*models.chat, *models.decisions, *models.embeddings]:
-        price = (
-            entry.input_price,
-            getattr(entry, "output_price", None),
-            getattr(entry, "cached_input_price", None),
-        )
-        if price[0] is None and price[1] is None:
-            continue
-        for name in {entry.model, entry.id}:
-            prices.setdefault(str(name), price)
-    return prices
-
-
-def _cost(row: dict[str, Any], prices: dict[str, Any]) -> float | None:
-    price = prices.get(row["model"])
-    if price is None:
-        return None
-    fresh, written, cached = price
-    cached = cached if cached is not None else fresh
-    return (
-        row["input_tokens"] * (fresh or 0.0)
-        + row["output_tokens"] * (written or 0.0)
-        + row["cached_input_tokens"] * (cached or 0.0)
-    ) / 1_000_000
+#: One pricing rule for the totals and the spend limit (``telemetry/spend.py``).
+_prices = spend.prices
+_cost = spend.cost
 
 
 def _percentile(buckets: list[int], fraction: float) -> int | None:
@@ -166,7 +139,15 @@ def describe(context: ServiceContext, *, days: int = 30) -> dict[str, Any]:
     kb_id = config.knowledge_base_id
     rows = usage_ledger.window(context.state, kb_id, first.isoformat(), today.isoformat())
     show_cost = is_operator(config)
-    prices = _prices(config) if show_cost else {}
+    # Each row's cost was fixed when its calls were made; the prices in force
+    # now only price a row recorded before costs were stored.
+    prices = (
+        spend.effective_prices(
+            config, spend.read_price_overrides(config, context.state).get("prices")
+        )
+        if show_cost
+        else {}
+    )
     home = config.security.entra.tenant_id
     names = {home: "operator", "": "(indexing and shared credentials)"}
     for tenant, org in access_grants.snapshot(context.state, kb_id).orgs.items():

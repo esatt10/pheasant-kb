@@ -521,6 +521,19 @@ class RemoteGraph:
             or []
         )
 
+    def remote_okf_index(self, artifact_ids: list[str]) -> dict[str, Any]:
+        # What each hit's nearest OKF index says decorates a search; like
+        # figures, a congested graph must not hold the search for it.
+        return dict(
+            self.client.query(
+                "okf_index",
+                timeout_seconds=min(self.client.timeout, 3.0),
+                retries=0,
+                artifact_ids=artifact_ids,
+            )
+            or {}
+        )
+
     def remote_memory_coverage(self, artifact_ids: list[str]) -> dict[str, Any]:
         return dict(self.client.query("memory_coverage", artifact_ids=artifact_ids))
 

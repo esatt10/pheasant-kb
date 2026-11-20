@@ -121,6 +121,10 @@ def open_store(config: Any) -> Any | None:
             backend = open_backend(backend="postgres", dsn=dsn, pool_size=2)
         store = StateStore(backend=backend)
         store.backend.executescript(FLEET_SCHEMA)
+        # The directory's mirror of every stack's usage is append-only too.
+        from pheasant.persistence import usage_ledger
+
+        usage_ledger.protect(store)
         _STORES[target] = store
         return store
 

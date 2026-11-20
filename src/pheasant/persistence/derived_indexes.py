@@ -20,8 +20,16 @@ HIERARCHY_EDGE_TYPE = "contains"
 
 
 def migrate_derived_indexes(store: Any) -> None:
-    """Every derived index, each once. Safe to call on every boot."""
+    """Every derived index, each once. Safe to call on every boot.
 
+    Also the usage ledger's append-only triggers, which ride here because this
+    is the one step every migrate path runs on both backends; they are checked
+    on every boot rather than marked done (``usage_ledger.protect``).
+    """
+
+    from pheasant.persistence import usage_ledger
+
+    usage_ledger.protect(store)
     _artifact_terms_node_lookup(store)
     _graph_edges_hierarchy(store)
     _graph_artifact_lookup(store)

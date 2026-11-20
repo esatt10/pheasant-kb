@@ -394,7 +394,10 @@ def test_finished_job_notifications_can_be_cleared(loaded_config, config_path: P
 
     assert client.delete(f"/jobs/{active.id}").status_code == 409
     assert client.delete(f"/jobs/{finished.id}").json() == {"cleared": 1}
-    assert client.get(f"/jobs/{finished.id}").status_code == 404
+    # Cleared from the tray, still read by its id: a person dismissing their
+    # notifications must not delete a result an agent was handed the id of.
+    assert client.get(f"/jobs/{finished.id}").json()["status"] == "succeeded"
+    assert client.delete(f"/jobs/{finished.id}").json() == {"cleared": 0}
 
     failed = registry.create("sync", "Failed", ["docs"])
     registry.finish(failed.id, "failed", error="boom")
@@ -626,3 +629,44 @@ def test_the_heartbeat_reaps_an_orphan_but_never_its_own_job(tmp_path, monkeypat
         time.sleep(0.05)
     assert raw["status"] == "failed"
     assert json.loads((tmp_path / "jobs" / "idx-mine.json").read_text())["active"] is True
+
+
+def test_clearing_the_tray_does_not_take_an_agents_result(loaded_config, config_path: Path) -> None:
+    """Found on production: an agent's ``compose_artifact`` finished, the person
+    watching the web UI cleared their finished notifications 14 s later, and the
+    agent's next ``get_job`` was "Unknown job" -- the result deleted before it
+    was read, and ``list_jobs`` empty. A clear dismisses; the id still reads."""
+
+    client = TestClient(create_app(config=loaded_config, config_path=config_path))
+    agent = PheasantTools(loaded_config)
+    try:
+        job = agent.jobs.create("compose", "Composing: graph_client.py", ["compose"])
+        agent.jobs.finish(job.id, result={"files": [{"name": "graph_client.py"}]})
+
+        assert client.delete("/jobs").json()["cleared"] >= 1, "the tray's Clear"
+        assert agent.get_job(job.id)["result"]["files"][0]["name"] == "graph_client.py"
+        assert job.id not in {entry["id"] for entry in agent.list_jobs()["jobs"]}
+        assert client.get(f"/jobs/{job.id}").json()["status"] == "succeeded"
+    finally:
+        agent.jobs.close()
+
+
+def test_a_durable_jobs_table_from_before_dismissal_is_widened(tmp_path: Path) -> None:
+    from pheasant.persistence.durable_jobs import DurableJobStore
+    from pheasant.persistence.state_store import StateStore
+
+    state = StateStore(tmp_path / "state.db")
+    state.migrate()
+    state.conn.execute("DROP TABLE durable_jobs")
+    state.conn.execute(
+        "CREATE TABLE durable_jobs (kb_id TEXT NOT NULL, id TEXT NOT NULL, "
+        "payload_json TEXT NOT NULL, active INTEGER NOT NULL, updated_at TEXT NOT NULL, "
+        "finished_at TEXT, PRIMARY KEY (kb_id, id))"
+    )
+    state.conn.commit()
+    state.migrate()
+    assert "dismissed_at" in state.backend.table_columns("durable_jobs")
+    store = DurableJobStore(state, "kb")
+    store.write({"id": "old", "active": False, "finished_at": "2026-11-20T04:55:42Z"})
+    assert store.clear_finished() == {"old"}
+    assert store.get("old") is not None and store.list() == []

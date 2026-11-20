@@ -192,7 +192,7 @@ export function SourceRail({
                 </span>
                 <span className="source-item__path">
                   {source.uploaded_archives?.length
-                    ? `ZIP: ${source.uploaded_archives.join(", ")}`
+                    ? `Archives: ${source.uploaded_archives.join(", ")}`
                     : source.path}
                 </span>
               </button>
