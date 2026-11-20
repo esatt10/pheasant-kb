@@ -292,6 +292,20 @@ export interface RegionControls {
     custom_max_concurrent: boolean;
     note: string | null;
   };
+  /** Answers of any kind one api process runs at once; absent from older servers. */
+  answers?: {
+    /** 0 is no answer limit (the deployment turned admission off). */
+    max_concurrent: number;
+    default_max_concurrent: number;
+    custom_max_concurrent: boolean;
+    /** The highest figure an operator admin may set. */
+    max_allowed: number;
+    /** How long a question waits for a slot before ASSISTANT_BUSY. */
+    wait_seconds: number;
+    /** The server's request limit, which refuses first past it; null for none. */
+    request_limit: number | null;
+    note: string | null;
+  };
   updated_at: string | null;
   updated_by: string | null;
 }
@@ -303,6 +317,7 @@ export interface RegionControlsChange {
   monthly_spend_limit?: number | null;
   deep_answer_spend_limit?: number | null;
   max_concurrent_deep_answers?: number | null;
+  max_concurrent_answers?: number | null;
 }
 
 /** A price per million tokens; null where the model states none. */

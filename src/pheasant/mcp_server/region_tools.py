@@ -40,6 +40,7 @@ class RegionTools:
         monthly_spend_limit: float | str | None = None,
         deep_answer_spend_limit: float | str | None = None,
         max_concurrent_deep_answers: int | str | None = None,
+        max_concurrent_answers: int | str | None = None,
     ) -> dict:
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import region_controls
@@ -55,6 +56,7 @@ class RegionTools:
             ("monthly_spend_limit", monthly_spend_limit),
             ("deep_answer_spend_limit", deep_answer_spend_limit),
             ("max_concurrent_deep_answers", max_concurrent_deep_answers),
+            ("max_concurrent_answers", max_concurrent_answers),
         ):
             if value is not None:
                 default = str(value).strip().lower() == "default"
@@ -98,6 +100,9 @@ def register_region_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         may spend (``answer_spend_limit``, default 5; research wraps up at
         ``wrap_up_percent``) and how many run at once per api process
         (``max_concurrent``, default 2).
+        ``answers`` is how many answers of any kind one api process runs at once
+        (``max_concurrent``) and how long the next one waits for a slot before
+        ASSISTANT_BUSY (``wait_seconds``).
         ``can_change`` says whether the caller may call set_region_controls.
         """
 
@@ -112,6 +117,7 @@ def register_region_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         monthly_spend_limit: float | str | None = None,
         deep_answer_spend_limit: float | str | None = None,
         max_concurrent_deep_answers: int | str | None = None,
+        max_concurrent_answers: int | str | None = None,
     ) -> dict:
         """Suspend or restore access, or set the spend limits (operator admin only).
 
@@ -123,7 +129,10 @@ def register_region_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         answer may spend (0 or more, or "default"); research wraps up at 95% of
         it. ``max_concurrent_deep_answers`` is how many deep answers one api
         process runs at once (0 for no separate cap, or "default"); past it a
-        caller gets DEEP_RESEARCH_BUSY, retryable. Only an operator admin (an
+        caller gets DEEP_RESEARCH_BUSY, retryable. ``max_concurrent_answers`` is
+        how many answers of any kind one api process runs at once (1 to 256, or
+        "default"); past it a question waits briefly for a slot, then gets
+        ASSISTANT_BUSY, retryable. Only an operator admin (an
         Admin the deployment pinned, or the shared token) may call it:
         OPERATOR_REQUIRED otherwise. Returns get_region_controls.
         """
@@ -135,4 +144,5 @@ def register_region_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             monthly_spend_limit,
             deep_answer_spend_limit,
             max_concurrent_deep_answers,
+            max_concurrent_answers,
         )

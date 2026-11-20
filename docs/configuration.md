@@ -2070,7 +2070,7 @@ HTTP 429 with `Retry-After` and the stable `ASSISTANT_BUSY` code.
 | `short_deadline_seconds` | number \| null | `null` | End-to-end budget for short answers. |
 | `medium_deadline_seconds` | number \| null | `null` | End-to-end budget for medium answers. |
 | `long_deadline_seconds` | number \| null | `null` | End-to-end budget for long answers and visual work. |
-| `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. |
+| `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. An operator admin overrides it at runtime (`max_concurrent_answers` in `PUT /region/controls`, 1 to 256), and every replica follows within seconds. |
 | `admission_wait_seconds` | number | `15` | With every answer slot taken, how long a new answer waits for one before `429 ASSISTANT_BUSY`. An answer mostly waits on model calls, so a slot usually frees within seconds; `0` refuses at once. Deep research's own cap still refuses at once. |
 | `max_concurrent_deep_answers` | integer | `2` | [Deep research](how-to/conversations-and-visuals.md#deep-research) answers one process runs at once, within `max_concurrent_answers`; past it a deep question is `429 DEEP_RESEARCH_BUSY` (retryable). `0`: no separate cap. An operator admin overrides it at runtime (`PUT /region/controls`). |
 

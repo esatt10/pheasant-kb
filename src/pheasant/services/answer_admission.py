@@ -20,6 +20,12 @@ loop (``acquire_waiting``) so a request that disconnects while waiting holds
 nothing, and every other caller waits on a condition. Deep research's own cap
 still refuses at once: it is the operator's cost decision, and its refusal
 offers an ordinary answer instead.
+
+The answer limit is ``assistant.latency.max_concurrent_answers`` unless an
+operator admin set one in the region controls (``max_concurrent_answers``,
+``services/region_controls.py``), which every replica follows within
+``CONTROLS_TTL_SECONDS``. A lowered limit admits nobody new until enough of the
+running answers finish; nothing running is cut off.
 """
 
 from __future__ import annotations
@@ -44,6 +50,9 @@ _SLOT_FREED = threading.Condition(_ADMISSION_LOCK)
 _ACTIVE = 0
 #: How often a request waiting on the event loop looks for a free slot.
 _POLL_SECONDS = 0.25
+#: The most answers an operator admin may let one process run at once. Past
+#: ``server.api.max_concurrent_requests`` the request limit refuses first.
+MAX_ANSWER_CONCURRENCY = 256
 #: Deep-research answers running in this process. A count rather than a
 #: semaphore because its limit is the operator's and changes at runtime: a
 #: lowered limit admits nobody new until enough of the running ones finish.
@@ -110,6 +119,27 @@ def _latency(context: ServiceContext) -> Any:
     return getattr(getattr(context.config, "assistant", None), "latency", None)
 
 
+def configured_answer_limit(config: Any) -> int:
+    """The deployment's answer limit; ``0`` turns admission off."""
+
+    latency = getattr(getattr(config, "assistant", None), "latency", None)
+    return max(0, int(getattr(latency, "max_concurrent_answers", 0) or 0))
+
+
+def effective_answer_limit(config: Any, saved: dict[str, Any]) -> int:
+    """Answers one process may run at once: the operator's figure, else the deployment's."""
+
+    if saved.get("max_concurrent_answers") is not None:
+        return int(saved["max_concurrent_answers"])
+    return configured_answer_limit(config)
+
+
+def _answer_limit(context: ServiceContext) -> int:
+    from pheasant.telemetry.spend import GUARD
+
+    return effective_answer_limit(context.config, GUARD.controls())
+
+
 def _wait_seconds(context: ServiceContext) -> float:
     return max(0.0, float(getattr(_latency(context), "admission_wait_seconds", 0) or 0))
 
@@ -131,7 +161,7 @@ def acquire(
     deep = request is not None and is_deep(request, context.config)
     if deep and not _deep_slot(context):
         raise DeepResearchBusy()
-    limit = int(getattr(_latency(context), "max_concurrent_answers", 0) or 0)
+    limit = _answer_limit(context)
     if limit <= 0:
         return AnswerPermit(deep=deep)
     deadline = time.monotonic() + (_wait_seconds(context) if wait is None else max(0.0, wait))

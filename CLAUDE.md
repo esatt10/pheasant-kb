@@ -1536,7 +1536,11 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   an error for an answer that would have started seconds later; an answer
   waits on models, not CPU, so the models' quota is the ceiling to raise
   first. The routes wait on the event loop (`acquire_waiting`), so a request
-  that disconnects while waiting holds no slot. `staged_retrieval` runs one hybrid search
+  that disconnects while waiting holds no slot. The cap is also an operator
+  admin's region control (`max_concurrent_answers`, 1-256, the Controls tab's
+  Answers at once), read through `spend.GUARD.controls()` per answer, so a
+  replica follows a change within 5 s and a lowered figure cuts off nothing
+  running. `staged_retrieval` runs one hybrid search
   before planning, `combine_grade_and_answer` grades and writes a short answer
   in one validated call, and `embeddings.query_*` give the vector arm a tighter
   failure budget than indexing. `multi_search` drops standalone vector/graph

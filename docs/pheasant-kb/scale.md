@@ -142,7 +142,10 @@ reads Postgres and the vector store.
   spends most of its time waiting on the model, not on the api's CPU (four deep
   answers at once on a 2-vCPU api finished within 4 s of one alone), so the
   ceiling is usually the models' tokens-per-minute quota: raise that first,
-  then this.
+  then this. An operator admin can change it while the stack runs, on the
+  Admin page's Controls tab (**Answers at once**) or with
+  `PUT /region/controls` `{"max_concurrent_answers": N}`; the file's value is
+  the default it returns to.
 - **Memory** (4096m) covers the in-memory vector matrix (below), result sets,
   and MCP uploads, which are parsed in memory up to
   `server.mcp.max_request_body_size_mb` (1024 in pheasant-kb). If agents do not

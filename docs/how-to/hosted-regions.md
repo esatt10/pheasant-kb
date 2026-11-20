@@ -330,6 +330,18 @@ returns either to the deployment's default. A granted Admin sees the
 concurrency figure and not the amount.
 [Deep research](conversations-and-visuals.md#deep-research) has the detail.
 
+**So does every answer.** `max_concurrent_answers` (default
+`assistant.latency.max_concurrent_answers`, 16 on pheasant-kb) is how many
+questions of any kind one api process answers at once, set on the same
+Controls tab (**Answers at once**) by an operator admin, 1 to 256, or `null`
+for the default. Past it a question waits up to
+`assistant.latency.admission_wait_seconds` (15) for a slot, then gets
+`429 ASSISTANT_BUSY`. A lowered figure cuts off nothing running; it admits
+nobody new until enough answers finish. An answer mostly waits on the models,
+so their tokens-per-minute quota is usually the ceiling to raise first, and
+past `server.api.max_concurrent_requests` the request limit refuses before
+this one does (the tab says so). Every Admin sees the figure.
+
 **Prices are set at runtime and apply from then on.** Each call is costed when
 it is made, at the price in force then, and the cost is stored with its tokens.
 When a provider changes its price, an operator admin changes it in the Models

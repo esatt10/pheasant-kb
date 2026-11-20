@@ -20,7 +20,11 @@ Deep research has two more, in the same row and behind the same rule: what one
 deep answer may spend (``deep_answer_spend_limit``, default 5, read by the
 research loop through ``telemetry/answer_spend.py``) and how many deep answers
 one process runs at once (``max_concurrent_deep_answers``, default 2, read by
-``services.assistant.acquire``).
+``services.assistant.acquire``). And answers of every kind have one: how many
+one process runs at once (``max_concurrent_answers``, pheasant-kb's default 16,
+read by ``services.answer_admission``). It is not an amount, so any Admin sees
+it; only an operator admin changes it, because it is what bounds the model
+calls one replica holds open.
 """
 
 from __future__ import annotations
@@ -33,6 +37,11 @@ from typing import Any
 from pheasant.security.authorization import require_permission
 from pheasant.security.identity import current_identity
 from pheasant.services import ServiceContext
+from pheasant.services.answer_admission import (
+    MAX_ANSWER_CONCURRENCY,
+    configured_answer_limit,
+    effective_answer_limit,
+)
 from pheasant.services.errors import (
     AccessSuspended,
     InvalidRequest,
@@ -51,6 +60,7 @@ FIELDS = (
     "monthly_spend_limit",
     "deep_answer_spend_limit",
     "max_concurrent_deep_answers",
+    "max_concurrent_answers",
 )
 
 
@@ -120,6 +130,7 @@ def describe(context: ServiceContext) -> dict[str, Any]:
             "note": note,
         },
         "deep_research": _deep_research(config, saved, operator, metered, currency),
+        "answers": _answers(config, saved),
         "updated_at": saved.get("updated_at"),
         "updated_by": saved.get("updated_by") if operator else None,
     }
@@ -153,6 +164,43 @@ def _deep_research(
     }
 
 
+def _answers(config: Any, saved: dict[str, Any]) -> dict[str, Any]:
+    """How many answers one api process runs at once, and how long the next one waits."""
+
+    limit = effective_answer_limit(config, saved)
+    latency = getattr(getattr(config, "assistant", None), "latency", None)
+    wait = float(getattr(latency, "admission_wait_seconds", 0) or 0)
+    api = getattr(getattr(config, "server", None), "api", None)
+    requests = int(getattr(api, "max_concurrent_requests", 0) or 0)
+    note = None
+    if limit <= 0:
+        note = "No answer limit: every question starts at once, bounded only by the request limit."
+    elif requests and limit > requests:
+        note = (
+            f"The request limit ({requests} per server) is lower, so past {requests} "
+            "questions it refuses first."
+        )
+    return {
+        "max_concurrent": limit,
+        "default_max_concurrent": configured_answer_limit(config),
+        "custom_max_concurrent": saved.get("max_concurrent_answers") is not None,
+        "max_allowed": MAX_ANSWER_CONCURRENCY,
+        "wait_seconds": wait,
+        "request_limit": requests or None,
+        "note": note,
+    }
+
+
+def _whole(name: str, value: Any, low: int, high: int) -> int:
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise InvalidRequest(f"{name} is a whole number, or null for the default")
+    if not low <= value <= high:
+        raise InvalidRequest(f"{name} must be between {low} and {high}")
+    return value
+
+
 def _amount(name: str, value: Any, ceiling: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise InvalidRequest(f"{name} is a number, or null for the default")
@@ -171,8 +219,10 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
     ``suspended`` (bool), ``reason`` (text shown to everyone refused, at most
     280 characters), ``monthly_spend_limit`` and ``deep_answer_spend_limit``
     (figures in the catalog's currency, 0 or more), and
-    ``max_concurrent_deep_answers`` (a whole number, 0 for no separate cap).
-    ``null`` returns any of the last three to the deployment's default.
+    ``max_concurrent_deep_answers`` (a whole number, 0 for no separate cap),
+    and ``max_concurrent_answers`` (answers of any kind one process runs at
+    once, 1 to 256). ``null`` returns any of the last four to the deployment's
+    default.
     """
 
     require_permission("security.manage")
@@ -180,8 +230,8 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
         raise OperatorRequired("change the kill switch or the spend limits")
     if not isinstance(changes, dict) or not changes:
         raise InvalidRequest(
-            "send suspended, reason, monthly_spend_limit, deep_answer_spend_limit "
-            "and/or max_concurrent_deep_answers"
+            "send suspended, reason, monthly_spend_limit, deep_answer_spend_limit, "
+            "max_concurrent_deep_answers and/or max_concurrent_answers"
         )
     unknown = sorted(set(changes) - set(FIELDS))
     if unknown:
@@ -210,18 +260,19 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             saved.pop("max_concurrent_deep_answers", None)
         else:
-            if isinstance(value, str) and value.strip().isdigit():
-                value = int(value.strip())
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise InvalidRequest(
-                    "max_concurrent_deep_answers is a whole number, or null for the default"
-                )
-            if not 0 <= value <= answer_spend.MAX_DEEP_CONCURRENCY:
-                raise InvalidRequest(
-                    "max_concurrent_deep_answers must be between 0 and "
-                    f"{answer_spend.MAX_DEEP_CONCURRENCY}"
-                )
-            saved["max_concurrent_deep_answers"] = value
+            saved["max_concurrent_deep_answers"] = _whole(
+                "max_concurrent_deep_answers", value, 0, answer_spend.MAX_DEEP_CONCURRENCY
+            )
+    if "max_concurrent_answers" in changes:
+        value = changes["max_concurrent_answers"]
+        if value is None:
+            saved.pop("max_concurrent_answers", None)
+        else:
+            # Not 0: turning the bound off on a running replica is one setting
+            # away from every question holding model calls open at once.
+            saved["max_concurrent_answers"] = _whole(
+                "max_concurrent_answers", value, 1, MAX_ANSWER_CONCURRENCY
+            )
     if "reason" in changes:
         reason = changes["reason"]
         if reason is not None and not isinstance(reason, str):
@@ -243,12 +294,14 @@ def update(context: ServiceContext, changes: dict[str, Any]) -> dict[str, Any]:
         saved["suspended"] = value
     spend.write_controls(context.config, context.state, saved, actor)
     logger.warning(
-        "region controls changed: by=%s suspended=%s limit=%s deep_limit=%s deep_cap=%s",
+        "region controls changed: by=%s suspended=%s limit=%s deep_limit=%s deep_cap=%s "
+        "answer_cap=%s",
         actor,
         bool(saved.get("suspended")),
         saved.get("monthly_spend_limit", "default"),
         saved.get("deep_answer_spend_limit", "default"),
         saved.get("max_concurrent_deep_answers", "default"),
+        saved.get("max_concurrent_answers", "default"),
     )
     return describe(context)
 

@@ -16,8 +16,8 @@ const money = (amount: number | null, currency: string | null) => {
 /**
  * The operator's controls over this knowledge base: a kill switch that cuts
  * everyone's access but an operator admin's, a monthly limit on what it spends
- * on models, and deep research's two limits (what one answer may spend, and
- * how many run at once). An Admin sees them; only an operator admin (one the
+ * on models, how many answers one server runs at once, and deep research's two
+ * limits (what one answer may spend, and how many run at once). An Admin sees them; only an operator admin (one the
  * deployment pinned, or the shared token) changes them, and the server says
  * which this caller is (`can_change`).
  */
@@ -50,6 +50,7 @@ export function ControlsPanel() {
       ) : null}
       <KillSwitch data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
       <SpendLimit data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
+      <AnswerLimit data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
       <DeepResearchLimits
         data={data}
         busy={change.isPending}
@@ -251,6 +252,109 @@ function SpendLimit({
                     ? `Back to ${money(spend.default_limit, spend.currency)}`
                     : "Back to the deployment's setting"
                 }
+              >
+                Use the default
+              </button>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+function AnswerLimit({
+  data,
+  busy,
+  onChange,
+}: {
+  data: RegionControls;
+  busy: boolean;
+  onChange: (body: RegionControlsChange) => void;
+}) {
+  const answers = data.answers;
+  const [concurrent, setConcurrent] = useState(String(answers?.max_concurrent ?? ""));
+  useEffect(() => {
+    setConcurrent(String(answers?.max_concurrent ?? ""));
+  }, [answers?.max_concurrent]);
+  if (!answers) return null;
+  const parsed = Number(concurrent);
+  const valid =
+    concurrent.trim() !== "" &&
+    Number.isInteger(parsed) &&
+    parsed >= 1 &&
+    parsed <= answers.max_allowed;
+  const changed = valid && parsed !== answers.max_concurrent;
+  return (
+    <section className="section controls-card" aria-labelledby="controls-answers">
+      <div className="controls-card__head">
+        <h2 className="section__title" id="controls-answers">
+          Answers at once
+        </h2>
+        <span className="pill">
+          {answers.max_concurrent > 0 ? `${answers.max_concurrent} per server` : "No limit"}
+        </span>
+      </div>
+      <p className="muted small">
+        How many questions one server answers at the same time. With every slot taken, the next
+        question waits up to {answers.wait_seconds} seconds for one and is then told to try again.
+        An answer mostly waits on the models, so the usual ceiling is the models&apos; quota: raise
+        that before raising this.
+      </p>
+      {answers.note ? <div className="banner banner--info">{answers.note}</div> : null}
+      <dl className="controls-figures">
+        <div>
+          <dt>At once, per server</dt>
+          <dd>
+            {answers.max_concurrent > 0 ? answers.max_concurrent : "No limit"}
+            {!answers.custom_max_concurrent ? (
+              <span className="muted small"> (deployment default)</span>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Wait for a slot</dt>
+          <dd>{answers.wait_seconds} s</dd>
+        </div>
+      </dl>
+      {data.can_change ? (
+        <form
+          className="controls-card__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (changed) onChange({ max_concurrent_answers: parsed });
+          }}
+        >
+          <label className="field">
+            <span>Answers at once, per server (1 to {answers.max_allowed})</span>
+            <input
+              className="text-input"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={answers.max_allowed}
+              step={1}
+              value={concurrent}
+              onChange={(event) => setConcurrent(event.target.value)}
+            />
+          </label>
+          <div className="controls-card__actions">
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={busy || !valid || !changed}
+            >
+              Save answer limit
+            </button>
+            {answers.custom_max_concurrent ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => onChange({ max_concurrent_answers: null })}
+                title={`Back to ${
+                  answers.default_max_concurrent > 0 ? answers.default_max_concurrent : "no limit"
+                } at once`}
               >
                 Use the default
               </button>
