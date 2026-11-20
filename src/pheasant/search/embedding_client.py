@@ -415,6 +415,10 @@ class OpenAISpecEmbedder:
     def _post_with_retry(self, request: Request) -> dict[str, Any]:
         """POST with bounded exponential backoff on *transient* failures.
 
+        Refused before anything is sent once the month's model spend has
+        reached its limit (``telemetry/spend.py``): every embedding request,
+        for indexing and for a query, passes here.
+
         Indexing a large corpus is hundreds of HTTPS calls — 12,667 files of
         microsoft/vscode took over 200 — and without this a single flaky one
         aborts the whole sync. That is not hypothetical: a real run died ~45
@@ -431,6 +435,9 @@ class OpenAISpecEmbedder:
         is a malformed request; retrying either burns time and money to fail
         the same way, so both surface immediately.
         """
+        from pheasant.telemetry.spend import GUARD
+
+        GUARD.check()
         delay = self.retry_backoff_seconds
         transient_attempt = 0
         rate_limit_attempt = 0

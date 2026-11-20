@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useSession } from "../state/session";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { VisualResponse } from "../api/types";
@@ -78,8 +79,10 @@ export function McpAppFrame({
   });
 
   // Latest values for the message handler, which is registered once.
-  const latest = useRef({ result, onAsk, onRedrawn, onSaved, theme, mode, maySave });
-  latest.current = { result, onAsk, onRedrawn, onSaved, theme, mode, maySave };
+  // The conversation the view was opened in: a redraw's trace is filed there.
+  const conversationId = useSession().state.conversationId;
+  const latest = useRef({ result, onAsk, onRedrawn, onSaved, theme, mode, maySave, conversationId });
+  latest.current = { result, onAsk, onRedrawn, onSaved, theme, mode, maySave, conversationId };
   // The visual the view is showing, so the host does not send it back the
   // picture it just drew itself.
   const shown = useRef<unknown>(null);
@@ -172,6 +175,7 @@ export function McpAppFrame({
                 request: args.request,
                 node_ids: Array.isArray(args.node_ids) ? args.node_ids.map(String) : [],
                 kind: typeof args.kind === "string" ? args.kind : null,
+                conversation_id: latest.current.conversationId ?? null,
               });
               reply(message.id, { content: [], structuredContent: drawn });
               shown.current = drawn.visual;

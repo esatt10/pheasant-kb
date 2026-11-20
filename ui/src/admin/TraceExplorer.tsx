@@ -337,6 +337,11 @@ function CallCard({ call }: { call: UsageCall }) {
             {trace.models.chat}
           </span>
         ) : null}
+        {trace?.route?.intent === "visual" ? (
+          <span className="pill" title="A diagram asked for: the shape drawn">
+            diagram · {trace.route.visual ?? "none"}
+          </span>
+        ) : null}
         {trace?.route?.depth ? (
           <span className="pill" title="How long an answer was asked for">
             {trace.route.depth}

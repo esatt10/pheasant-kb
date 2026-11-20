@@ -782,6 +782,7 @@ function AnswerTurn({
           .slice(0, 12),
         session_id: sessionId,
         source_name: sourceName,
+        conversation_id: state.conversationId,
       }),
     onSuccess: onDrawn,
   });

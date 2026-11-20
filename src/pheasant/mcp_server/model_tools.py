@@ -49,6 +49,39 @@ class ModelTools:
 
         return usage.describe(self.services, days=days)
 
+    def export_usage(self, knowledge_base: str, days: int = 30, format: str = "csv") -> dict:  # noqa: A002
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import usage_export
+
+        return usage_export.export_usage(self.services, days=days, format=format)
+
+    def export_usage_traces(  # noqa: PLR0913 - one argument per filter, as on HTTP
+        self,
+        knowledge_base: str,
+        days: int = 7,
+        person: str | None = None,
+        organization: str | None = None,
+        model: str | None = None,
+        session: str | None = None,
+        calls: str = "questions",
+        match: str | None = None,
+        offset: int = 0,
+    ) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import usage_export
+
+        return usage_export.export_traces(
+            self.services,
+            days=days,
+            principal=person,
+            organization=organization,
+            model=model,
+            session_key=session,
+            calls=calls,
+            match=match,
+            offset=offset,
+        )
+
     def set_default_models(
         self, knowledge_base: str, chat: str | None = None, decision: str | None = None
     ) -> dict:
@@ -164,6 +197,50 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         with no price. USAGE_NOT_ENABLED means the region keeps no totals."""
 
         return tools.get_usage(knowledge_base, days)
+
+    @mcp.tool()
+    @anticipated
+    def export_usage(knowledge_base: str, days: int = 30, format: str = "csv") -> dict:  # noqa: A002
+        """The Admin page's usage measures as one file (Admin only).
+
+        ``format`` "csv" is a ZIP (``encoding: base64``) holding one CSV per
+        section of get_usage (totals, by_day, by_model, by_organization,
+        by_channel, people, latency), ``spend.csv`` (this month's model spend
+        against its limit and whether access is suspended, from
+        get_region_controls) and ``report.json``; "json" is the same as one
+        document (``encoding: utf-8``). Returns ``filename``, ``media_type``,
+        ``encoding``, ``content`` and ``bytes``: decode ``content`` and write it
+        to ``filename``. Cost and spend amounts are null unless you operate the
+        region. Same operation as GET /usage/export."""
+
+        return tools.export_usage(knowledge_base, days, format)
+
+    @mcp.tool()
+    @anticipated
+    def export_usage_traces(  # noqa: PLR0913 - one argument per filter, as on HTTP
+        knowledge_base: str,
+        days: int = 7,
+        person: str | None = None,
+        organization: str | None = None,
+        model: str | None = None,
+        session: str | None = None,
+        calls: str = "questions",
+        match: str | None = None,
+        offset: int = 0,
+    ) -> dict:
+        """The interaction ledger's rows behind the usage totals, as JSON lines (Admin only).
+
+        Filter as list_usage_sessions does (``person``, ``organization``,
+        ``model``, ``calls``, ``match``) or name one ``session``. Returns
+        ``filename``, ``content`` (one JSON object per line, oldest first,
+        attributes included: models, route, steps, tokens), ``rows`` and
+        ``has_more``: while it is true call again with ``offset=next_offset``
+        (2,000 rows a page). The same rows as GET /usage/traces/export and
+        GET /usage/sessions/{session}/export."""
+
+        return tools.export_usage_traces(
+            knowledge_base, days, person, organization, model, session, calls, match, offset
+        )
 
     @mcp.tool()
     @anticipated

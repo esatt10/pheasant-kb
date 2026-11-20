@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { UsageReport, UsageTotals } from "../api/admin";
 import { TraceExplorer, type TraceTarget } from "./TraceExplorer";
@@ -44,6 +44,9 @@ export function UsagePanel() {
   const [metric, setMetric] = useState<Metric>("questions");
   // A usage row being followed into its traces; the period above is the depth.
   const [target, setTarget] = useState<TraceTarget | null>(null);
+  const exported = useMutation({
+    mutationFn: (format: "csv" | "json") => api.downloadUsageExport(days, format),
+  });
   const usage = useQuery({
     queryKey: ["usage", days],
     queryFn: () => api.usage(days),
@@ -85,7 +88,30 @@ export function UsagePanel() {
         <span className="muted small">
           {data.window.from} to {data.window.to} (UTC)
         </span>
+        <div className="admin-toolbar__actions">
+          {(["csv", "json"] as const).map((format) => (
+            <button
+              key={format}
+              type="button"
+              className="btn btn--small"
+              disabled={exported.isPending}
+              onClick={() => exported.mutate(format)}
+              title={
+                format === "csv"
+                  ? "Every table on this tab, and this month's spend, as CSV files in a ZIP"
+                  : "Every measure on this tab, and this month's spend, as one JSON file"
+              }
+            >
+              {exported.isPending && exported.variables === format
+                ? "Exporting…"
+                : `Export ${format.toUpperCase()}`}
+            </button>
+          ))}
+        </div>
       </div>
+      {exported.isError ? (
+        <div className="banner banner--error">{(exported.error as Error).message}</div>
+      ) : null}
       {target ? (
         <TraceExplorer days={days} target={target} onClose={() => setTarget(null)} />
       ) : (

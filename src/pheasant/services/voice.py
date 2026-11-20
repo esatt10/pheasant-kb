@@ -203,6 +203,9 @@ def start_voice_session(
     reason = _unavailable_reason(context, credential, env)
     if reason is not None:
         raise VoiceNotConfigured(reason)
+    from pheasant.services.region_controls import require_budget
+
+    require_budget()  # a dictation is a paid transcription session
     settings = _settings(context)
     if transport(settings) == "relay":
         return _issue_relay_ticket(context, settings)

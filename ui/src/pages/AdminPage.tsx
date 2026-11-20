@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { AccessPanel } from "../admin/AccessPanel";
+import { ControlsPanel } from "../admin/ControlsPanel";
 import { FleetPanel } from "../admin/FleetPanel";
 import { ModelsPanel } from "../admin/ModelsPanel";
 import { UsagePanel } from "../admin/UsagePanel";
 import { usePermissions } from "../state/permissions";
 
-type Tab = "access" | "models" | "usage" | "fleet";
+type Tab = "access" | "models" | "usage" | "controls" | "fleet";
 
 const TABS: { id: Tab; label: string; permission: string }[] = [
   // Granting is a Contributor's too; the rest is an Admin's.
   { id: "access", label: "Access", permission: "settings.manage" },
   { id: "models", label: "Models", permission: "security.manage" },
   { id: "usage", label: "Usage", permission: "security.manage" },
+  // Read by an Admin; changed by an operator admin only (the server says which).
+  { id: "controls", label: "Controls", permission: "security.manage" },
   { id: "fleet", label: "Knowledge bases", permission: "security.manage" },
 ];
 
@@ -58,6 +61,7 @@ export function AdminPage() {
       {current.id === "access" ? <AccessPanel /> : null}
       {current.id === "models" ? <ModelsPanel /> : null}
       {current.id === "usage" ? <UsagePanel /> : null}
+      {current.id === "controls" ? <ControlsPanel /> : null}
       {current.id === "fleet" ? <FleetPanel /> : null}
     </div>
   );

@@ -141,6 +141,13 @@ _called_model: ContextVar[str | None] = ContextVar("pheasant_called_model", defa
 
 
 def note_model_call(model: str | None = None) -> None:
+    """Say a provider call is about to go out: counted, and refused past the
+    month's spend limit (``telemetry/spend.py``). Every chat and judgement
+    request calls this immediately before sending, so it is the one gate."""
+
+    from pheasant.telemetry.spend import GUARD
+
+    GUARD.check()
     _called_model.set(model)
     usage = _active_usage.get()
     if usage is not None:

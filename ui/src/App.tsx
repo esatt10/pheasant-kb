@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { JobsTray } from "./components/JobsTray";
 import { RegionBanner } from "./components/RegionBanner";
+import { SuspendedNotice } from "./components/SuspendedNotice";
 import { Notebook } from "./pages/Notebook";
 import { GraphPage } from "./pages/GraphPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
@@ -47,6 +48,7 @@ export function App() {
           </Routes>
         </main>
         <JobsTray />
+        <SuspendedNotice />
       </div>
       </PermissionProvider>
     </SessionProvider>

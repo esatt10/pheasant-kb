@@ -1694,7 +1694,14 @@ operator provisions, the users decide.
   MCP rebinds any `principal` parameter to the caller; each level carries KQL naming its trace
   ids (`OperationId` in the App Insights tables) and a JSONL export. Nothing
   is materialized: the window is the depth, and `hot_retention_days` bounds
-  it, said in `retention`. `tests/test_usage_traces.py`.
+  it, said in `retention`. `tests/test_usage_traces.py`. A diagram asked for
+  on its own (`services.assistant.visualize`) annotates its row the same way
+  (`usage_traces.visual_trace` / `annotate_visual`: the request as
+  `query_text`, the UI's `conversation_id`, model, tokens, steps), or the
+  Questions view hid it. The Usage tab's measures leave as files through
+  `services/usage_export.py` (`GET /usage/export`, MCP `export_usage`: a ZIP of
+  CSVs or JSON, the month's spend included) and the traces through MCP
+  `export_usage_traces` too (paged JSON lines). `tests/test_admin_exports.py`.
 - **An Admin chooses the default models at runtime** (`models.set_defaults`,
   `models.effective`; `PUT /models/defaults`, MCP `set_default_models`, the
   Models tab's Make default). A `region_settings` row laid over the catalog
@@ -1712,6 +1719,23 @@ operator provisions, the users decide.
   record the operator answers: nothing in pheasant provisions. Each stack
   mirrors its usage totals into the directory, which is how the operator
   reads the whole fleet at once. `tests/test_fleet.py`.
+- **An operator holds a kill switch and a monthly spend limit**
+  (`telemetry/spend.py`, `services/region_controls.py`, `region_settings`
+  section `region_controls`; `GET`/`PUT /region/controls`, MCP
+  `get_region_controls` / `set_region_controls`, the Admin page's Controls tab).
+  Changing either is an *operator admin's* (`usage.is_operator`: the shared
+  token, or an Admin pinned in `role_assignments`), not a granted Admin's
+  (`OPERATOR_REQUIRED`). The switch is enforced in `api/auth.py`'s guard after
+  the identity is bound: everyone else gets `403 ACCESS_SUSPENDED` within
+  `CONTROLS_TTL_SECONDS` (5) on every replica. The limit (default
+  `models.monthly_spend_limit: 500`, per calendar month UTC, per knowledge
+  base) costs `usage_daily` plus this process's unflushed meter rows at the
+  catalog's prices; `providers.note_model_call` and the embedding client's
+  `_post_with_retry` refuse each call past it (`SPEND_LIMIT_REACHED`, 402),
+  `services.assistant.admit` refuses an answer before it starts, and
+  `sync/limits.blocks` skips a growing sync that would embed, beside the size
+  limit. The guard binds with the meter (`METER.bind_for`), so it exists in
+  every process that builds an engine. `tests/test_region_controls.py`.
 - **A knowledge base can have a size limit, and one check holds it**
   (`storage.knowledge_base_limit_gb`, unset by default;
   `persistence/size_limit.py`, `services/size_guard.py`). The measure is

@@ -125,8 +125,12 @@ class Meter:
 
     def bind_for(self, config: Any, state: Any) -> None:
         """:meth:`bind` when ``observability.usage`` is on, mirrored into the
-        fleet directory when this stack is part of one."""
+        fleet directory when this stack is part of one. Binds the kill switch
+        and spend limit (``telemetry/spend.py``) too, whatever is metered."""
 
+        from pheasant.telemetry.spend import GUARD
+
+        GUARD.bind(config, state)
         if not config.observability.usage:
             return
         mirror = None
@@ -193,6 +197,25 @@ class Meter:
             row.cached_input_tokens += cached
             row.reasoning_tokens += _int(reasoning_tokens)
         self._maybe_flush()
+
+    def pending_model_rows(self, since_day: str) -> list[dict[str, Any]]:
+        """This process's model calls not yet written to the ledger, from ``since_day``.
+
+        What the spend guard adds to the ledger's total so a process sees its
+        own spend at once rather than a flush later.
+        """
+
+        with self._lock:
+            return [
+                {
+                    "model": key[2],
+                    "input_tokens": totals.input_tokens,
+                    "output_tokens": totals.output_tokens,
+                    "cached_input_tokens": totals.cached_input_tokens,
+                }
+                for key, totals in self._rows.items()
+                if key[1] in MODEL_KINDS and key[0] >= since_day
+            ]
 
     def operation(self, name: str, seconds: float, *, ok: bool = True) -> None:
         """Count one answer or search and where its duration falls."""

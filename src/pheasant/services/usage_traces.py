@@ -35,7 +35,9 @@ people asked.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -147,6 +149,132 @@ def annotate_answer(request: Any, payload: dict[str, Any], *, event: Any = None)
             "steps": steps,
         }
     except Exception:  # noqa: BLE001 - observation must never fail an answer
+        return
+
+
+class VisualTrace:
+    """What :func:`visual_trace` measured of one diagram request."""
+
+    def __init__(self, request: Any) -> None:
+        self.request = request
+        self.started = time.perf_counter()
+        self.drawing_started: float | None = None
+        self.searched_seconds: float | None = None
+        self.usage: Any = None
+
+    def finish(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Put the diagram's request and shape on the ledger row; return ``payload``."""
+
+        annotate_visual(self.request, payload, self)
+        return payload
+
+
+@contextmanager
+def visual_trace(request: Any) -> Iterator[VisualTrace]:
+    """Measure a diagram request's drawing: the time it took and the tokens the
+    model reported (``providers.collect_token_usage``), for :func:`annotate_visual`."""
+
+    from pheasant.assistant.providers import collect_token_usage
+
+    trace = VisualTrace(request)
+    trace.drawing_started = time.perf_counter()
+    trace.searched_seconds = trace.drawing_started - trace.started
+    with collect_token_usage() as usage:
+        trace.usage = usage
+        yield trace
+
+
+def annotate_visual(request: Any, payload: dict[str, Any], trace: Any = None) -> None:
+    """Put a diagram request on the ledger row its call is filling in.
+
+    A diagram asked for after an answer (the chat's "Draw a diagram", a
+    redraw in another shape, MCP ``create_visual``) is a call of its own, and
+    without this its row carried no question: the drill-down's Questions view
+    hid it and nothing said what was drawn. The request becomes the row's
+    ``query_text``, a one-line outcome its ``answer_text``, and the trace the
+    same shape an answer's has (models, route, tokens, steps), so the Usage
+    drill-down shows it beside the conversation's answers. Best-effort.
+    """
+
+    from pheasant.telemetry.interactions import current_event
+
+    event = current_event()
+    if event is None or getattr(event, "handed_over", False):
+        return
+    try:
+        text = str(getattr(request, "request", "") or "")
+        if not event.query_text:
+            event.query_text = text
+        if not event.session_id and getattr(request, "conversation_id", None):
+            event.session_id = str(request.conversation_id)[:200]
+        visual = payload.get("visual") or {}
+        diagram = visual.get("diagram") or {}
+        status = str(visual.get("status") or "none")
+        drawn = diagram.get("kind") or ("images" if visual.get("type") == "images" else None)
+        grounding = visual.get("grounding") or {}
+        if status == "ok" and drawn == "images":
+            outcome = f"Showed {len(visual.get('figures') or [])} image(s)"
+        elif status == "ok":
+            outcome = (
+                f"Drew a {drawn} diagram, {diagram.get('title') or 'untitled'}: "
+                f"{grounding.get('cited', 0)} cited and {grounding.get('inferred', 0)} "
+                "inferred element(s)"
+            )
+        else:
+            outcome = f"No diagram: {visual.get('reason') or 'nothing to draw from'}"
+        if visual.get("fallback_from"):
+            outcome += f" (drawn from the graph; the {visual['fallback_from']} could not)"
+        if not event.answer_text:
+            event.answer_text = outcome
+        usage = getattr(trace, "usage", None)
+        model = getattr(usage, "model", None) if usage is not None else None
+        tokens = {
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        }
+        drawing = (
+            time.perf_counter() - trace.drawing_started
+            if trace is not None and trace.drawing_started is not None
+            else None
+        )
+        named = len(getattr(request, "node_ids", None) or [])
+        steps = [
+            {
+                "name": "passages",
+                "detail": (f"{named} named passage(s)" if named else "searched for the request")
+                + f"; {len(payload.get('citations') or [])} to draw from",
+                "passages": len(payload.get("citations") or []),
+                "duration_seconds": getattr(trace, "searched_seconds", None),
+            },
+            {
+                "name": "draw",
+                "detail": outcome[:MAX_STEP_DETAIL],
+                "model": model,
+                "duration_seconds": drawing,
+                **tokens,
+            },
+        ]
+        if model:
+            event.attributes["chat_model"] = model.split(", ")[0]
+        event.attributes["visual"] = {
+            "requested_kind": getattr(request, "kind", None),
+            "kind": drawn,
+            "status": status,
+            "reason": visual.get("reason"),
+            "fallback_from": visual.get("fallback_from"),
+            "grounding": grounding or None,
+            "named_passages": named,
+        }
+        event.attributes["answer"] = {
+            "models": {"chat": model, "decision": None},
+            "route": {"intent": "visual", "depth": None, "visual": drawn or "none"},
+            "workflow": "visual",
+            "status": status,
+            "citations": len(payload.get("citations") or []),
+            "tokens": tokens,
+            "steps": steps,
+        }
+    except Exception:  # noqa: BLE001 - observation must never fail a drawing
         return
 
 

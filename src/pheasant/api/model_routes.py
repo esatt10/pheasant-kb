@@ -152,3 +152,33 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
         from pheasant.services import usage as usage_service
 
         return usage_service.describe(services, days=days)
+
+    @app.get("/usage/export")
+    def export_usage(days: int = 30, format: str = "csv", download: bool = True):  # noqa: A002
+        """The Admin page's measures as one file (Admin): ``csv`` (a ZIP of one
+        table per section, plus ``report.json``) or ``json``. ``download=false``
+        returns the JSON envelope MCP ``export_usage`` returns instead."""
+
+        import base64
+
+        from fastapi.responses import Response
+
+        from pheasant.services import usage_export
+
+        exported = usage_export.export_usage(services, days=days, format=format)
+        if not download:
+            return exported
+        content = exported["content"]
+        data = (
+            base64.b64decode(content)
+            if exported["encoding"] == "base64"
+            else content.encode("utf-8")
+        )
+        return Response(
+            data,
+            media_type=exported["media_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{exported["filename"]}"',
+                "Cache-Control": "no-store",
+            },
+        )

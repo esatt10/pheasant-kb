@@ -247,3 +247,42 @@ export interface UsageSession {
   retention: TraceRetention;
   kql: string;
 }
+
+/** The operator's controls over one knowledge base (`GET /region/controls`). */
+export interface RegionControls {
+  knowledge_base: string;
+  /** Whether the caller may change them: an operator admin only. */
+  can_change: boolean;
+  access: {
+    /** The kill switch: on, everyone but an operator admin is refused. */
+    suspended: boolean;
+    reason: string | null;
+    since: string | null;
+    by: string | null;
+  };
+  spend: {
+    month: string;
+    resets_on: string;
+    /** The amounts are an operator admin's; null for anyone else. */
+    currency: string | null;
+    spent: number | null;
+    limit: number | null;
+    default_limit: number | null;
+    custom_limit: boolean;
+    remaining: number | null;
+    percent_used: number | null;
+    reached: boolean;
+    enforced: boolean;
+    unpriced_models: string[];
+    note: string | null;
+  };
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export interface RegionControlsChange {
+  suspended?: boolean;
+  reason?: string | null;
+  /** null returns to the deployment's default. */
+  monthly_spend_limit?: number | null;
+}

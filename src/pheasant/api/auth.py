@@ -55,6 +55,19 @@ AUTH_PUBLIC_PATHS = frozenset(
     }
 )
 MCP_SCOPE = "pheasant"
+#: Answered while access is suspended, so a refused page can say who the
+#: person is and sign them out.
+SUSPENSION_EXEMPT_PATHS = frozenset({"/auth/me", "/auth/logout"})
+
+
+def _bound_call(identity: Identity, check: Any) -> Any:
+    """Run ``check`` on a worker thread with ``identity`` bound, as a handler would."""
+
+    token = bind_identity(identity)
+    try:
+        return check()
+    finally:
+        reset_identity(token)
 
 
 def _base_url(request: Request, service: IdentityService) -> str:
@@ -71,8 +84,16 @@ def install_guard(
     *,
     public_paths: frozenset[str],
     is_public_ui_request: Any,
+    suspended: Any = None,
 ) -> None:
-    """Require a credential on every request that is not exempt."""
+    """Require a credential on every request that is not exempt.
+
+    ``suspended`` is the kill switch (``services/region_controls.suspension``):
+    called with the caller's identity bound, it returns the refusal for anyone
+    but an operator admin while access is suspended. ``/auth/me`` and
+    ``/auth/logout`` still answer, so a refused person's page can say who they
+    are and why, and sign them out.
+    """
 
     @app.middleware("http")
     async def require_identity(request, call_next):  # type: ignore[no-untyped-def]
@@ -116,6 +137,23 @@ def install_guard(
 
         refresh_token = _REFRESH.set(lambda _identity: service.authenticate(supplied))
         try:
+            refusal = (
+                await run_in_threadpool(_bound_call, identity, suspended)
+                if suspended is not None and path not in SUSPENSION_EXEMPT_PATHS
+                else None
+            )
+            if refusal is not None:
+                access_log.info(
+                    "%s %s 403 principal=%s suspended", request.method, path, identity.principal
+                )
+                return JSONResponse(
+                    status_code=refusal.status,
+                    content={
+                        "detail": str(refusal),
+                        "code": refusal.code,
+                        "retryable": refusal.retryable,
+                    },
+                )
             response = await call_next(request)
         finally:
             _REFRESH.reset(refresh_token)

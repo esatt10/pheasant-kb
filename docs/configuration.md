@@ -1283,6 +1283,7 @@ are the only models and nothing here is consulted.
 | `default_embedding` | string \| null | `null` | What a new region indexes with. A running region's choice is a row in `/state`, changed with `PUT /models/embedding`. |
 | `selectable` | bool | `true` | Whether a caller may pick per question. Off, naming anything but the default is refused. |
 | `currency` | string | `USD` | The currency the prices below are stated in. A label, not a conversion. |
+| `monthly_spend_limit` | number \| null | `500` | What the knowledge base may spend on chat, judgement and embedding calls per calendar month (UTC), in `currency` at the prices below. At it, model calls are refused (`SPEND_LIMIT_REACHED`) until the 1st or until an operator admin raises it (`PUT /region/controls`, which overrides this at runtime). `null`: no limit. A model with no stated price counts nothing. See [the kill switch and spend limit](how-to/hosted-regions.md#a-kill-switch-and-a-monthly-spend-limit). |
 
 Every entry also takes `input_price`, `output_price` and `cached_input_price` (per
 million tokens; embeddings take `input_price` only). They are what the operator
