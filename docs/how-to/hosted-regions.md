@@ -319,6 +319,18 @@ is in flight across the replicas at that moment and never by more. A model with
 no stated price counts nothing and is named in the reply. On the 1st the month
 starts over. Each knowledge base of a fleet has its own switch and its own limit.
 
+**The totals it reads cannot be taken back.** `usage_daily` is append-only in
+the database itself, on SQLite and Postgres alike, and so is the fleet
+directory's mirror of it. Triggers refuse every `DELETE`, every `TRUNCATE` and
+any `UPDATE` that lowers a count or moves a row to another day, person or
+knowledge base, whoever sends it: the region, a script or a statement typed
+into the database. The region only ever adds to a total. Each start checks the
+triggers and puts back any that are missing. A write the database refuses
+(a dropped connection, say) keeps its rows for the next flush instead of
+losing them. Only the database's owner can get past this, by dropping the
+triggers or restoring an older backup, and that owner can already raise the
+limit.
+
 ## A size limit
 
 ```yaml

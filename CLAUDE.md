@@ -1735,7 +1735,14 @@ operator provisions, the users decide.
   `services.assistant.admit` refuses an answer before it starts, and
   `sync/limits.blocks` skips a growing sync that would embed, beside the size
   limit. The guard binds with the meter (`METER.bind_for`), so it exists in
-  every process that builds an engine. `tests/test_region_controls.py`.
+  every process that builds an engine. What it reads is append-only in the
+  database (`usage_ledger.protect`, run from `migrate_derived_indexes` every
+  boot and by the fleet directory): triggers refuse `DELETE`, `TRUNCATE` and an
+  `UPDATE` that lowers a count or changes a key, and a dropped trigger comes
+  back on the next start. A flush the database refuses requeues exactly the
+  rows it did not write (`usage_ledger.PartialWrite`), and a test fails if any
+  statement in the tree deletes or updates `usage_daily`.
+  `tests/test_region_controls.py`.
 - **A knowledge base can have a size limit, and one check holds it**
   (`storage.knowledge_base_limit_gb`, unset by default;
   `persistence/size_limit.py`, `services/size_guard.py`). The measure is

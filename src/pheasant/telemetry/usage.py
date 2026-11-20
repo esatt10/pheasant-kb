@@ -252,6 +252,21 @@ class Meter:
             with self._lock:
                 self._flushing = False
 
+    def _requeue(self, rows: dict[Key, Totals]) -> None:
+        """Put rows a flush could not write back into what is pending."""
+
+        with self._lock:
+            for key, totals in rows.items():
+                held = self._rows.setdefault(key, Totals())
+                held.requests += totals.requests
+                held.errors += totals.errors
+                held.input_tokens += totals.input_tokens
+                held.output_tokens += totals.output_tokens
+                held.cached_input_tokens += totals.cached_input_tokens
+                held.reasoning_tokens += totals.reasoning_tokens
+                held.duration_ms += totals.duration_ms
+                held.buckets = [a + b for a, b in zip(held.buckets, totals.buckets, strict=True)]
+
     def flush(self) -> int:
         """Write what is pending as one additive upsert; rows written."""
 
@@ -273,9 +288,19 @@ class Meter:
                     logger.debug("usage totals could not be mirrored to the fleet directory")
             try:
                 usage_ledger.add(target[0], target[1], rows)
-            except Exception:  # noqa: BLE001 - a lost interval of counts must never fail a request
-                logger.debug("usage totals could not be written; dropped %d rows", len(rows))
-                return 0
+            except Exception as exc:  # noqa: BLE001 - counting must never fail a request
+                # Kept for the next flush rather than dropped: these totals are
+                # what the spend limit is read from, so a database that was
+                # briefly unreachable must not make spend disappear. Only the
+                # rows not yet written, so a retry adds each exactly once.
+                unwritten = getattr(exc, "remaining", rows)
+                self._requeue(unwritten)
+                logger.warning(
+                    "usage totals could not be written (%s); %d row(s) kept for the next flush",
+                    type(getattr(exc, "cause", exc)).__name__,
+                    len(unwritten),
+                )
+                return len(rows) - len(unwritten)
             return len(rows)
         finally:
             # The ledger now holds them: the spend guard reads it afresh rather

@@ -354,3 +354,152 @@ def test_both_surfaces_read_and_set_the_same_controls(served):
     assert json.loads(reset["result"]["content"][0]["text"])["spend"]["limit"] == 500.0
     refused = _mcp_body(_mcp(client, READER, "set_region_controls", {"suspended": True}))
     assert "permission required" in json.dumps(refused)
+
+
+# ------------------------------------------- the ledger behind the number
+
+
+def _ledger_rows(state: Any) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in state.rows(
+            "SELECT model, requests, input_tokens FROM usage_daily ORDER BY model", ()
+        )
+    ]
+
+
+def _assert_append_only(state: Any) -> None:
+    """What the spend limit reads can be added to and never taken away."""
+
+    day = TODAY.isoformat()
+    _spend_rows(state, day=day, model="gpt-6-luna", input_tokens=1000)
+    _spend_rows(state, day=day, model="gpt-6-luna", input_tokens=500)
+    assert _ledger_rows(state) == [{"model": "gpt-6-luna", "requests": 2, "input_tokens": 1500}]
+    attempts = (
+        "DELETE FROM usage_daily",
+        "DELETE FROM usage_daily WHERE model='gpt-6-luna'",
+        "UPDATE usage_daily SET input_tokens=0",
+        "UPDATE usage_daily SET requests=requests-1",
+        "UPDATE usage_daily SET day='1999-01-01'",
+        "UPDATE usage_daily SET kb_id='elsewhere'",
+    )
+    for statement in attempts:
+        with pytest.raises(Exception, match="append-only"):
+            state.execute(statement)
+        state.backend.rollback() if hasattr(state.backend, "rollback") else None
+    assert _ledger_rows(state) == [{"model": "gpt-6-luna", "requests": 2, "input_tokens": 1500}]
+    state.execute("UPDATE usage_daily SET input_tokens=input_tokens+1")  # raising is allowed
+    usage_ledger.add(
+        state,
+        "kb",
+        {(day, "chat", "gpt-6-luna", "", "someone", "ui"): Totals(requests=1, input_tokens=-900)},
+    )
+    assert _ledger_rows(state)[0]["input_tokens"] == 1501, "a negative report adds nothing"
+
+
+def test_the_usage_ledger_is_append_only(region):
+    _assert_append_only(region.state)
+
+
+def test_a_dropped_trigger_comes_back_on_the_next_start(region):
+    state = region.state
+    state.execute("DROP TRIGGER usage_daily_no_delete")
+    state.migrate()
+    _spend_rows(state, day=TODAY.isoformat(), model="gpt-6-luna", input_tokens=10)
+    with pytest.raises(Exception, match="append-only"):
+        state.execute("DELETE FROM usage_daily")
+
+
+@pytest.mark.skipif(
+    not __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
+    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
+)
+def test_the_usage_ledger_is_append_only_on_a_real_postgres(tmp_path):
+    from pheasant.persistence.backends import open_backend
+
+    backend = open_backend(
+        backend="postgres", dsn=__import__("os").environ["PHEASANT_TEST_POSTGRES_DSN"]
+    )
+    state = StateStore(backend=backend)
+    try:
+        state.migrate()
+        state.migrate()  # the second boot finds the triggers and leaves them
+        state.execute("ALTER TABLE usage_daily DISABLE TRIGGER usage_daily_append_only")
+        state.execute("DELETE FROM usage_daily WHERE kb_id='kb'")
+        state.execute("ALTER TABLE usage_daily ENABLE TRIGGER usage_daily_append_only")
+        _assert_append_only(state)
+        with pytest.raises(Exception, match="append-only"):
+            state.execute("TRUNCATE usage_daily")
+    finally:
+        state.close()
+
+
+def test_nothing_in_the_code_deletes_or_lowers_usage(tmp_path):
+    """The only statement that writes ``usage_daily`` is the additive upsert."""
+
+    import re
+
+    from tests.conftest import REPO_ROOT
+
+    pattern = re.compile(r"(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|UPDATE)\s+usage_daily", re.I)
+    offenders = []
+    for folder in ("src", "deploy", "scripts"):
+        for path in (REPO_ROOT / folder).rglob("*"):
+            if path.suffix not in {".py", ".sh", ".sql", ".tftpl"} or not path.is_file():
+                continue
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+            ):
+                if pattern.search(line) and "usage_ledger.py" not in str(path):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
+    assert offenders == []
+
+
+def test_a_failed_flush_keeps_what_it_did_not_write(region, monkeypatch):
+    """A briefly unreachable database must not make spend disappear, and a
+    retry must not count a row twice."""
+
+    state = region.state
+    METER.bind(state, "kb")
+    try:
+        monkeypatch.setattr(METER, "_maybe_flush", lambda: None)
+        METER.model_call("chat", "gpt-6-luna", 1000)
+        METER.model_call("embedding", "text-embedding-3-small", 400)
+        write = usage_ledger._add_one
+        calls = {"n": 0}
+
+        def flaky(state_: Any, kb_id: str, key: Any, totals: Any) -> None:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise ConnectionError("database went away")
+            write(state_, kb_id, key, totals)
+
+        monkeypatch.setattr(usage_ledger, "_add_one", flaky)
+        assert METER.flush() == 1, "the first row landed, the second did not"
+        assert len(METER.pending_model_rows(spend.month_start())) == 1, "kept, not dropped"
+        monkeypatch.setattr(usage_ledger, "_add_one", write)
+        assert METER.flush() == 1
+        rows = {
+            row["model"]: row["input_tokens"]
+            for row in state.rows("SELECT model, input_tokens FROM usage_daily", ())
+        }
+        assert rows == {"gpt-6-luna": 1000, "text-embedding-3-small": 400}, "each exactly once"
+    finally:
+        METER.unbind(state)
+
+
+def test_the_fleet_directorys_mirror_is_append_only_too(tmp_path):
+    from types import SimpleNamespace
+
+    from pheasant.persistence import fleet_store
+
+    config = SimpleNamespace(
+        fleet=SimpleNamespace(enabled=True, slot="kb-01", path=tmp_path / "fleet.db", dsn_env="")
+    )
+    store = fleet_store.open_store(config)
+    try:
+        _spend_rows(store, day=TODAY.isoformat(), model="gpt-6-luna", input_tokens=5)
+        with pytest.raises(Exception, match="append-only"):
+            store.execute("DELETE FROM usage_daily")
+    finally:
+        fleet_store.close_all()
