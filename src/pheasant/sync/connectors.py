@@ -226,9 +226,11 @@ class FilesystemConnector(SourceConnector):
         from pheasant.ingestion.walk import SyncBudgetExceeded, budget_message
 
         budget = WalkBudget.from_settings(self.source.limits)
-        # The include globs select members, not just the ZIP container. Let
-        # the walk discover archives even when only inner extensions match.
-        include = [*self.source.include, "**/*.zip", "**/*.ZIP"]
+        # The include globs select members, not just the archive. Let the walk
+        # discover archives (ZIP and tar) even when only inner extensions match.
+        from pheasant.sync.zip_archive import ARCHIVE_GLOBS
+
+        include = [*self.source.include, *ARCHIVE_GLOBS]
         report = walk_source(
             root,
             include=include,
@@ -249,7 +251,9 @@ class FilesystemConnector(SourceConnector):
         for path in report.files:
             relative = path.relative_to(root if root.is_dir() else root.parent).as_posix()
             stat = path.stat()
-            if path.suffix.lower() == ".zip":
+            from pheasant.sync.zip_archive import archive_mime, is_archive
+
+            if is_archive(path.name):
                 from pheasant.sync.zip_archive import MAX_ARCHIVE_MEMBER_BYTES, ArchiveError, scan
 
                 archive_selected = _match_any(
@@ -266,7 +270,7 @@ class FilesystemConnector(SourceConnector):
                             identity=f"filesystem:{self.source.name}:{relative}",
                             relative_path=relative,
                             uri=_path_uri(path),
-                            mime_type="application/zip",
+                            mime_type=archive_mime(path.name),
                             size_bytes=stat.st_size,
                             mtime=_timestamp(stat.st_mtime),
                             metadata={"path": str(path), "archive_error": str(exc)},
@@ -302,7 +306,7 @@ class FilesystemConnector(SourceConnector):
                                 identity=f"filesystem:{self.source.name}:{virtual}",
                                 relative_path=virtual,
                                 uri=f"{_path_uri(path)}#{quote(member_name, safe='/')}",
-                                mime_type="application/zip",
+                                mime_type=archive_mime(member_name),
                                 size_bytes=info.file_size,
                                 mtime=_timestamp(stat.st_mtime),
                                 metadata={"archive_path": str(path), "archive_error": info.error},

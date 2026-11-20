@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 230 pytest modules, offline by design
+└── tests/                     ← 231 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -593,7 +593,12 @@ disagree, and reads `stale_after` against the clock; `chat.build_prompt` adds
 it under the passage. **Uploads keep their folders**
 (`landing.safe_relative_path` in `store_upload`; the drop zone walks dropped
 folders and has a folder picker), so a bundle uploaded as files is detected
-like a folder or a ZIP. `tests/test_okf_index.py`.
+like a folder or an archive. **Archives are ZIP or tar** (`sync/zip_archive.py`:
+`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz`, nesting across formats,
+one adapter per format behind one set of safety rules); the outermost tar is
+indexed once per process, a compressed one decompressed once into a bounded
+temporary file, so members are read by seeking rather than by decompressing
+again each time. `tests/test_okf_index.py`, `tests/test_tar_archives.py`.
 
 **Deletions are synced, not just additions.** An incremental sync removes
 what a complete listing no longer contains (`sync/vanished.py`, opt-in per

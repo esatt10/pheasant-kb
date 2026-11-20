@@ -3,7 +3,7 @@ import { startUpload, useBackground } from "../state/background";
 import { droppedFiles } from "./droppedFiles";
 
 /**
- * Drop supported files or ZIP archives here and they become a real source.
+ * Drop supported files, folders, or ZIP or tar archives here and they become a real source.
  *
  * The zero-setup path: no path to type, no directory to mount, no source type
  * to pick. Files are posted to `/sources/upload`, land in a directory under
@@ -94,12 +94,13 @@ export function UploadDrop({
         <strong>
           {sending.length > 0
             ? `Uploading ${sending.reduce((n, t) => n + t.names.length, 0)} file(s)… drop more any time`
-            : "Drop files or ZIP archives here"}
+            : "Drop files, folders, or ZIP or tar archives here"}
         </strong>
         <span className="muted small">
-          Markdown, PDF, Office, images, audio, code, configs, or a ZIP containing
-          any mix of supported files in folders — or click to choose. ZIP members
-          are indexed separately in <code>{sourceName}</code>. A folder keeps its
+          Markdown, PDF, Office, images, audio, code, configs, or a ZIP or tar
+          archive (.tar, .tar.gz, .tgz, .tar.bz2, .tar.xz) holding any mix of them in
+          folders — or click to choose. Archive members are indexed separately in{" "}
+          <code>{sourceName}</code>. A folder keeps its
           structure, so an Open Knowledge Format bundle is recognised.
         </span>
         <button

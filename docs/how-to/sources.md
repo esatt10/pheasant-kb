@@ -34,7 +34,7 @@ Three routes reach the same place, so pick whichever fits:
 | `repository` | A git repository (branch/commit-aware, dependency graph) |
 | `markdown_folder` | A folder of Markdown notes, an Obsidian vault included (wiki links and `![[embeds]]` resolve) |
 | `document_folder` | Mixed supported text, documents, images, audio and ZIPs |
-| `single_file` | One file, including a ZIP of mixed supported files |
+| `single_file` | One file, including a ZIP or tar archive of mixed supported files |
 | `web_collection` | A set of web URLs |
 | `memory` | Agent-memory records (see [Agent memory](agent-memory.md)) |
 | `gdrive` | Google Drive docs + text files (`connector.api_key_env`, default `GDRIVE_TOKEN`) |
@@ -48,10 +48,12 @@ warning), so an existing config or registered source keeps working. `s3`,
 `notion`, `slack`, `confluence` and `imap` were removed: a source of one of
 those types still loads, and its sync is refused with what to do instead.
 
-Filesystem-backed sources can also index ZIP archives with nested folders of
-supported files. Use `pheasant up path/to/archive.zip`, upload a ZIP, or add
-`"**/*.zip"` to a folder source's `include` list. Each member keeps a stable
-`archive.zip/path/to/file` identity. See [document ingestion](document-ingest.md)
+Filesystem-backed sources can also index archives with nested folders of
+supported files: ZIP, and tar plain or compressed (`.tar`, `.tar.gz`, `.tgz`,
+`.tar.bz2`, `.tar.xz`). Use `pheasant up path/to/archive.zip`, upload an
+archive, or add `"**/*.zip"` (or `"**/*.tgz"` ...) to a folder source's
+`include` list. Each member keeps a stable `archive.zip/path/to/file`
+identity. See [document ingestion](document-ingest.md)
 for filtering and limits.
 
 UI uploads appear under their source (normally `uploads`). The Sources page and

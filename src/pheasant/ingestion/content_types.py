@@ -2,12 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+#: Archive endings an include pattern may name (`sync/zip_archive.py` reads them).
+_ARCHIVE_ENDINGS = (
+    ".zip",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tbz",
+    ".tar.xz",
+    ".txz",
+)
+
 
 def source_includes_zip(source: object) -> bool:
-    """An explicit ZIP include may contain any supported file type."""
+    """An explicit archive include (ZIP or tar) may contain any supported file type."""
 
     return any(
-        str(pattern).replace("\\", "/").lower().rstrip("/").endswith(".zip")
+        str(pattern).replace("\\", "/").lower().rstrip("/").endswith(_ARCHIVE_ENDINGS)
         for pattern in getattr(source, "include", ()) or ()
     )
 

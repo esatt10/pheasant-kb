@@ -59,8 +59,9 @@ Any source that indexes Markdown: a folder, a repository (with the bundle at
 its root or in a subfolder), a cloud drive, or an upload. An upload is
 detected the same way whichever form it takes:
 
-- **A ZIP** of the bundle: its members keep their paths inside the archive
-  (`acme.zip/acme/metrics/index.md`).
+- **An archive** of the bundle, ZIP or tar (`.tar`, `.tar.gz`, `.tgz`,
+  `.tar.bz2`, `.tar.xz`): its members keep their paths inside the archive
+  (`acme.tgz/acme/metrics/index.md`).
 - **A folder**, dragged onto the drop zone or picked with **Choose a folder**,
   or files sent with their relative paths (`POST /sources/upload` with each
   part's filename set to `acme/metrics/index.md`, or MCP `submit_documents`):
