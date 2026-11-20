@@ -139,7 +139,15 @@ def describe(context: ServiceContext, *, days: int = 30) -> dict[str, Any]:
     kb_id = config.knowledge_base_id
     rows = usage_ledger.window(context.state, kb_id, first.isoformat(), today.isoformat())
     show_cost = is_operator(config)
-    prices = _prices(config) if show_cost else {}
+    # Each row's cost was fixed when its calls were made; the prices in force
+    # now only price a row recorded before costs were stored.
+    prices = (
+        spend.effective_prices(
+            config, spend.read_price_overrides(config, context.state).get("prices")
+        )
+        if show_cost
+        else {}
+    )
     home = config.security.entra.tenant_id
     names = {home: "operator", "": "(indexing and shared credentials)"}
     for tenant, org in access_grants.snapshot(context.state, kb_id).orgs.items():

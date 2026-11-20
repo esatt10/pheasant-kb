@@ -19,6 +19,14 @@ is the database owner's: dropping the triggers, or restoring a backup
 ``answer`` / ``search`` (an operation's count and latency histogram, ``b0`` to
 ``b9`` cut at ``telemetry.usage.BUCKETS_MS``). ``input_tokens`` is input *not*
 served from a provider's cache; ``cached_input_tokens`` is the rest.
+
+**``cost_micros`` is what the row's calls cost when they were made**, in
+millionths of the catalog's currency, at the prices in force at each call
+(``telemetry/spend.py``). A price changed later applies to later calls only.
+``NULL`` means never priced: a model with no stated price, or a row written
+before costs were stored. The first write to such a row prices its existing
+tokens once, at the price in force then, inside the same statement
+(``_UPSERT``), and from then on the cost only grows.
 """
 
 from __future__ import annotations
@@ -53,6 +61,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   b7 INTEGER NOT NULL DEFAULT 0,
   b8 INTEGER NOT NULL DEFAULT 0,
   b9 INTEGER NOT NULL DEFAULT 0,
+  cost_micros BIGINT,
   PRIMARY KEY (kb_id, day, kind, model, tenant_id, principal, channel)
 );
 """
@@ -68,11 +77,21 @@ _SUMS = (
     "duration_ms",
     *(f"b{i}" for i in range(10)),
 )
-_COLUMNS = (*_KEYS, *_SUMS)
+_COLUMNS = (*_KEYS, *_SUMS, "cost_micros")
+#: The cost of tokens already on a row that was never priced, at a price
+#: passed as three parameters (input, output, cached input; per million tokens,
+#: which is micros per token). NULL when the model has no price.
+_FROZEN = (
+    "CAST(ROUND(usage_daily.input_tokens * ? + usage_daily.output_tokens * ? "
+    "+ usage_daily.cached_input_tokens * ?) AS BIGINT)"
+)
 _UPSERT = (
     f"INSERT INTO usage_daily({','.join(_COLUMNS)}) VALUES({','.join('?' * len(_COLUMNS))}) "
     f"ON CONFLICT({','.join(_KEYS)}) DO UPDATE SET "
     + ", ".join(f"{name}=usage_daily.{name}+excluded.{name}" for name in _SUMS)
+    + ", cost_micros = CASE WHEN usage_daily.cost_micros IS NULL AND excluded.cost_micros IS NULL "
+    f"THEN NULL ELSE COALESCE(usage_daily.cost_micros, {_FROZEN}, 0) "
+    "+ COALESCE(excluded.cost_micros, 0) END"
 )
 
 
@@ -86,8 +105,18 @@ class PartialWrite(Exception):
         self.cause = cause
 
 
-def add(state: Any, kb_id: str, rows: dict[tuple[str, ...], Any]) -> None:
+def add(
+    state: Any,
+    kb_id: str,
+    rows: dict[tuple[str, ...], Any],
+    price_of: Any = None,
+) -> None:
     """Add ``{(day, kind, model, tenant, principal, channel): Totals}`` to the ledger.
+
+    A ``Totals`` carries its calls' cost (``cost_micros``) as priced when they
+    were made. ``price_of(model)`` is the price in force now, as ``(input,
+    output, cached input)`` per million tokens or ``None``: it prices only
+    tokens a row held before costs were stored, once.
 
     Counts are never negative here: a provider reporting one would otherwise
     be refused by the append-only trigger and take the whole batch with it.
@@ -97,12 +126,13 @@ def add(state: Any, kb_id: str, rows: dict[tuple[str, ...], Any]) -> None:
     keys = list(rows)
     for index, key in enumerate(keys):
         try:
-            _add_one(state, kb_id, key, rows[key])
+            price = price_of(key[2]) if price_of is not None else None
+            _add_one(state, kb_id, key, rows[key], price)
         except Exception as exc:
             raise PartialWrite({k: rows[k] for k in keys[index:]}, exc) from exc
 
 
-def _add_one(state: Any, kb_id: str, key: tuple[str, ...], totals: Any) -> None:
+def _add_one(state: Any, kb_id: str, key: tuple[str, ...], totals: Any, price: Any = None) -> None:
     day, kind, model, tenant, principal, channel = key
     sums = (
         totals.requests,
@@ -114,19 +144,53 @@ def _add_one(state: Any, kb_id: str, key: tuple[str, ...], totals: Any) -> None:
         totals.duration_ms,
         *totals.buckets,
     )
+    cost = getattr(totals, "cost_micros", None)
+    fresh, written, cached = _rates(price)
     state.execute(
         _UPSERT,
-        (kb_id, day, kind, model, tenant, principal, channel, *(max(0, v) for v in sums)),
+        (
+            kb_id,
+            day,
+            kind,
+            model,
+            tenant,
+            principal,
+            channel,
+            *(max(0, v) for v in sums),
+            None if cost is None else max(0, int(cost)),
+            fresh,
+            written,
+            cached,
+        ),
     )
+
+
+def _rates(price: Any) -> tuple[float | None, float | None, float | None]:
+    """A price's three rates for SQL: all ``None`` for an unpriced model, and a
+    missing field of a priced one as ``0`` (cached input as the input rate),
+    since one ``NULL`` would make the whole sum ``NULL``."""
+
+    if price is None:
+        return None, None, None
+    fresh, written, cached = price
+    if fresh is None and written is None:
+        return None, None, None
+    fresh = fresh or 0.0
+    return fresh, written or 0.0, cached if cached is not None else fresh
 
 
 #: What the triggers say when they refuse; no ``?`` or ``:`` (the Postgres
 #: compiler rewrites those outside literals, and a function body is not one).
 APPEND_ONLY = "usage_daily is append-only, a usage total is never deleted or lowered"
-#: A row changed to another key, or a count lowered: what an UPDATE may not do.
+#: A row changed to another key, a count lowered, or a stored cost lowered or
+#: cleared: what an UPDATE may not do. Pricing a never-priced row is allowed.
 _LOWERED = " OR ".join(
     [*(f"NEW.{key} IS DISTINCT FROM OLD.{key}" for key in _KEYS)]
     + [f"NEW.{name} < OLD.{name}" for name in _SUMS]
+    + [
+        "(OLD.cost_micros IS NOT NULL AND "
+        "(NEW.cost_micros IS NULL OR NEW.cost_micros < OLD.cost_micros))"
+    ]
 )
 _SQLITE_TRIGGERS = (
     "CREATE TRIGGER IF NOT EXISTS usage_daily_no_delete BEFORE DELETE ON usage_daily "
@@ -165,7 +229,16 @@ def protect(store: Any) -> None:
     triggers takes no table lock.
     """
 
+    columns = store.backend.table_columns("usage_daily")
+    if columns and "cost_micros" not in columns:
+        # Additive and once; a region created before costs were stored.
+        store.conn.execute("ALTER TABLE usage_daily ADD COLUMN cost_micros BIGINT")
+        store.conn.commit()
     if store.dialect.is_postgres:
+        # Replaced every boot (it takes no table lock), so a changed rule
+        # reaches a region whose triggers already exist.
+        store.conn.execute(_PG_FUNCTION)
+        store.conn.commit()
         present = {
             str(row["tgname"])
             for row in store.rows(
@@ -176,13 +249,37 @@ def protect(store: Any) -> None:
         }
         if set(_PG_TRIGGERS) <= present:
             return
-        store.conn.execute(_PG_FUNCTION)
         for statement in _PG_TRIGGERS.values():
             store.conn.execute(statement)
     else:
         for statement in _SQLITE_TRIGGERS:
             store.conn.execute(statement)
     store.conn.commit()
+
+
+def freeze_costs(state: Any, kb_id: str, prices: dict[str, Any]) -> int:
+    """Price every never-priced row of a model that has a price now; rows changed.
+
+    Run once when costs start being stored (``telemetry.spend``), so a total
+    recorded before then is fixed at the price in force at that moment rather
+    than repriced by every later change. The append-only trigger allows it:
+    it sets a cost where there was none and lowers nothing.
+    """
+
+    changed = 0
+    for model, price in prices.items():
+        fresh, written, cached = _rates(price)
+        if fresh is None:
+            continue
+        frozen = _FROZEN.replace("usage_daily.", "")
+        _, count = state.backend.statement(
+            f"UPDATE usage_daily SET cost_micros = {frozen} "
+            "WHERE kb_id=? AND model=? AND cost_micros IS NULL",
+            (fresh, written, cached, kb_id, model),
+        )
+        state.backend.commit()
+        changed += count
+    return changed
 
 
 def window(state: Any, kb_id: str, first_day: str, last_day: str) -> list[dict[str, Any]]:

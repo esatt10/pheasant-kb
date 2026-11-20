@@ -286,3 +286,30 @@ export interface RegionControlsChange {
   /** null returns to the deployment's default. */
   monthly_spend_limit?: number | null;
 }
+
+/** A price per million tokens; null where the model states none. */
+export interface ModelPrice {
+  input: number | null;
+  output: number | null;
+  cached_input: number | null;
+}
+
+/** What each catalog model costs, and who changed it (`GET /models/prices`, operator admin). */
+export interface ModelPrices {
+  knowledge_base: string;
+  currency: string;
+  unit: string;
+  models: {
+    id: string;
+    kind: "chat" | "decision" | "embedding";
+    label: string;
+    model: string;
+    catalog: ModelPrice;
+    override: Partial<ModelPrice> | null;
+    effective: ModelPrice | null;
+  }[];
+  history: { at: string; by: string; model: string; from: ModelPrice | null; to: ModelPrice | null }[];
+  updated_at: string | null;
+  updated_by: string | null;
+  note: string;
+}

@@ -319,6 +319,18 @@ is in flight across the replicas at that moment and never by more. A model with
 no stated price counts nothing and is named in the reply. On the 1st the month
 starts over. Each knowledge base of a fleet has its own switch and its own limit.
 
+**Prices are set at runtime and apply from then on.** Each call is costed when
+it is made, at the price in force then, and the cost is stored with its tokens.
+When a provider changes its price, an operator admin changes it in the Models
+tab's **Prices** section (`PUT /models/prices` with `{"prices": {"gpt-6-luna":
+{"input": 2.5, "output": 10}}}`, or MCP `set_model_prices`). Fields you leave
+out keep the catalog's, `null` returns a model to the catalog's price, and every
+replica charges the new price within 5 seconds. Nothing already spent is
+repriced: the month so far, the Usage tab and every export keep what each call
+cost when it was made. The section keeps a history of who changed which price,
+when, from what to what. Totals recorded before a release stored costs are
+priced once, on its first start, at the prices in force then.
+
 **The totals it reads cannot be taken back.** `usage_daily` is append-only in
 the database itself, on SQLite and Postgres alike, and so is the fleet
 directory's mirror of it. Triggers refuse every `DELETE`, every `TRUNCATE` and

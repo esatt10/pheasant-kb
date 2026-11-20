@@ -7301,3 +7301,29 @@ select.text-input {
     min-height: 44px;
   }
 }
+
+/* ---- Admin: model prices ---- */
+.prices-table td {
+  vertical-align: middle;
+}
+.prices-input {
+  width: 7em;
+  min-width: 0;
+}
+.prices-history summary {
+  cursor: pointer;
+  color: var(--text-soft);
+}
+.prices-history ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+@media (pointer: coarse) {
+  .prices-table .btn,
+  .prices-input {
+    min-height: 40px;
+  }
+  .prices-input {
+    font-size: 16px;
+  }
+}

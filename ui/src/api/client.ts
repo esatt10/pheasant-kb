@@ -61,6 +61,8 @@ import type {
   AccessPerson,
   CapacityRequest,
   FleetReport,
+  ModelPrice,
+  ModelPrices,
   RegionControls,
   RegionControlsChange,
   UsageReport,
@@ -685,6 +687,11 @@ export const api = {
       { method: "DELETE" },
     ),
   usage: (days: number) => request<UsageReport>(`/usage${qs({ days })}`),
+  /** Each model's price per million tokens, override and history (operator admin). */
+  modelPrices: () => request<ModelPrices>("/models/prices"),
+  /** Set or clear prices by catalog id, from now on (operator admin). */
+  setModelPrices: (prices: Record<string, Partial<ModelPrice> | null>) =>
+    request<ModelPrices>("/models/prices", { method: "PUT", body: JSON.stringify({ prices }) }),
   /** The kill switch and this month's model spend against its limit (Admin). */
   regionControls: () => request<RegionControls>("/region/controls"),
   /** Suspend or restore access, or set the monthly limit (operator admin). */

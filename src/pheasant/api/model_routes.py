@@ -143,6 +143,26 @@ def register_model_routes(app: FastAPI, *, services: Any) -> None:
             },
         )
 
+    @app.get("/models/prices")
+    def get_model_prices() -> dict:
+        """Each catalog model's price per million tokens: the catalog's, any
+        runtime override and the one in force, with the change history
+        (operator admin)."""
+
+        from pheasant.services import model_prices
+
+        return model_prices.describe(services)
+
+    @app.put("/models/prices")
+    def set_model_prices(body: dict[str, Any]) -> dict:
+        """Set or clear prices by catalog id (operator admin): ``{"prices": {id:
+        {input, output, cached_input} | null}}``. Applies to calls made from
+        now on; what was already spent keeps its price."""
+
+        from pheasant.services import model_prices
+
+        return model_prices.update(services, body)
+
     @app.get("/usage")
     def usage(days: int = 30) -> dict:
         """Tokens by model, questions, searches, people, latency and size over

@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 228 pytest modules, offline by design
+└── tests/                     ← 229 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1742,7 +1742,18 @@ operator provisions, the users decide.
   back on the next start. A flush the database refuses requeues exactly the
   rows it did not write (`usage_ledger.PartialWrite`), and a test fails if any
   statement in the tree deletes or updates `usage_daily`.
-  `tests/test_region_controls.py`.
+  `tests/test_region_controls.py`. **Cost is fixed when a call is made**:
+  `METER.model_call` prices it with `spend.GUARD.call_micros` (the catalog's
+  price, or an operator's runtime override, `services/model_prices.py`,
+  `region_settings` section `model_prices`, with a change history) and the
+  cost rides with its tokens into `usage_daily.cost_micros`. Reports, the
+  limit and the fleet read the stored cost; current prices only price a row
+  never written since costs were stored, which the first write to it
+  (`usage_ledger._FROZEN`, in the upsert) or the first start
+  (`GUARD.freeze_history`, marker `usage_cost_frozen_v1`) prices once. The
+  trigger lets a cost be set where there was none, never lowered or cleared.
+  `GET`/`PUT /models/prices`, MCP `get_model_prices` / `set_model_prices`, the
+  Models tab's Prices. `tests/test_model_prices.py`.
 - **A knowledge base can have a size limit, and one check holds it**
   (`storage.knowledge_base_limit_gb`, unset by default;
   `persistence/size_limit.py`, `services/size_guard.py`). The measure is

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { CatalogModel } from "../api/types";
+import { PricesSection } from "./PricesSection";
 
 /**
  * The models this region offers, and what an Admin decides about them.
@@ -130,8 +131,14 @@ export function ModelsPanel() {
         provisioned={data.deployment_defaults?.decision ?? null}
         canSet={Boolean(data.can_set_defaults)}
       />
+      <PricesSection />
     </>
   );
+}
+
+/** Whether an error is the server saying this caller is not the operator. */
+export function operatorOnly(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "OPERATOR_REQUIRED";
 }
 
 function ModelList({

@@ -49,6 +49,18 @@ class ModelTools:
 
         return usage.describe(self.services, days=days)
 
+    def get_model_prices(self, knowledge_base: str) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import model_prices
+
+        return model_prices.describe(self.services)
+
+    def set_model_prices(self, knowledge_base: str, prices: dict) -> dict:
+        self._require_knowledge_base(knowledge_base)
+        from pheasant.services import model_prices
+
+        return model_prices.update(self.services, {"prices": prices})
+
     def export_usage(self, knowledge_base: str, days: int = 30, format: str = "csv") -> dict:  # noqa: A002
         self._require_knowledge_base(knowledge_base)
         from pheasant.services import usage_export
@@ -197,6 +209,33 @@ def register_model_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         with no price. USAGE_NOT_ENABLED means the region keeps no totals."""
 
         return tools.get_usage(knowledge_base, days)
+
+    @mcp.tool()
+    @anticipated
+    def get_model_prices(knowledge_base: str) -> dict:
+        """What each catalog model costs per million tokens (operator admin only).
+
+        For each model (``kind`` chat, decision or embedding): ``catalog`` (the
+        deployment's price), ``override`` (one set at runtime, if any) and
+        ``effective`` (the one charged now; null is unpriced), plus
+        ``history``, newest first: who changed which price, when, from what to
+        what. Same operation as GET /models/prices."""
+
+        return tools.get_model_prices(knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def set_model_prices(knowledge_base: str, prices: dict) -> dict:
+        """Set or clear model prices at runtime (operator admin only).
+
+        ``prices`` maps a catalog id (from get_model_prices) to ``{"input": ...,
+        "output": ..., "cached_input": ...}`` per million tokens in the
+        catalog's currency (the fields you omit keep the catalog's), or to
+        null to go back to the catalog's price. A price applies to calls made
+        after it is set: what was already spent keeps the price it was charged
+        at, in the spend limit and every report. Returns get_model_prices."""
+
+        return tools.set_model_prices(knowledge_base, prices)
 
     @mcp.tool()
     @anticipated

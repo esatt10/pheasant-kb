@@ -158,9 +158,9 @@ def test_this_processs_unwritten_calls_count_at_once(region, monkeypatch):
         seen_while_writing: list[Any] = []
         write = usage_ledger.add
 
-        def writing(target: Any, kb_id: str, rows: Any) -> None:
+        def writing(target: Any, kb_id: str, rows: Any, *rest: Any) -> None:
             seen_while_writing.append(spend.GUARD.over())
-            write(target, kb_id, rows)
+            write(target, kb_id, rows, *rest)
 
         monkeypatch.setattr(usage_ledger, "add", writing)
         assert METER.flush() == 1
@@ -468,11 +468,11 @@ def test_a_failed_flush_keeps_what_it_did_not_write(region, monkeypatch):
         write = usage_ledger._add_one
         calls = {"n": 0}
 
-        def flaky(state_: Any, kb_id: str, key: Any, totals: Any) -> None:
+        def flaky(state_: Any, kb_id: str, key: Any, totals: Any, *rest: Any) -> None:
             calls["n"] += 1
             if calls["n"] == 2:
                 raise ConnectionError("database went away")
-            write(state_, kb_id, key, totals)
+            write(state_, kb_id, key, totals, *rest)
 
         monkeypatch.setattr(usage_ledger, "_add_one", flaky)
         assert METER.flush() == 1, "the first row landed, the second did not"

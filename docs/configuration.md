@@ -1287,7 +1287,12 @@ are the only models and nothing here is consulted.
 
 Every entry also takes `input_price`, `output_price` and `cached_input_price` (per
 million tokens; embeddings take `input_price` only). They are what the operator
-states they pay, never looked up, and are what `GET /usage` reports cost from.
+states they pay, never looked up. Each call is costed with the price in force
+when it is made and the cost is stored with its tokens, so `GET /usage`, the
+spend limit and every export keep what was spent at the price it was charged
+at. An operator admin overrides a price at runtime, without a redeploy
+(`PUT /models/prices`, MCP `set_model_prices`, the Models tab); the change
+applies to later calls only.
 
 Ids must be unique within a list and a default must be one of them; a config
 that breaks either does not load. An entry on an Azure AI Foundry host with no

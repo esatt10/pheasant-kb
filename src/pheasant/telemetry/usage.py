@@ -84,6 +84,13 @@ class Totals:
     reasoning_tokens: int = 0
     duration_ms: float = 0.0
     buckets: list[int] = field(default_factory=lambda: [0] * (len(BUCKETS_MS) + 1))
+    #: What these calls cost when they were made, in millionths of the
+    #: catalog's currency; ``None`` while none of them had a price.
+    cost_micros: int | None = None
+
+
+def _add_cost(held: int | None, more: int | None) -> int | None:
+    return held if more is None else (held or 0) + more
 
 
 def bucket_of(milliseconds: float) -> int:
@@ -192,14 +199,21 @@ class Meter:
         if self._target is None:
             return
         cached = _int(cached_input_tokens)
-        fresh = _int(input_tokens) - (cached if cached_included else 0)
+        fresh = max(0, _int(input_tokens) - (cached if cached_included else 0))
+        written = _int(output_tokens)
+        from pheasant.telemetry.spend import GUARD
+
+        # Priced now, with the price in force now: a price changed later
+        # applies to later calls only.
+        spent = GUARD.call_micros(model, fresh, written, cached)
         with self._lock:
             row = self._rows.setdefault(self._key(kind, str(model or "")), Totals())
             row.requests += 1
-            row.input_tokens += max(0, fresh)
-            row.output_tokens += _int(output_tokens)
+            row.input_tokens += fresh
+            row.output_tokens += written
             row.cached_input_tokens += cached
             row.reasoning_tokens += _int(reasoning_tokens)
+            row.cost_micros = _add_cost(row.cost_micros, spent)
         self._maybe_flush()
 
     def pending_model_rows(self, since_day: str) -> list[dict[str, Any]]:
@@ -217,6 +231,7 @@ class Meter:
                 "input_tokens": totals.input_tokens,
                 "output_tokens": totals.output_tokens,
                 "cached_input_tokens": totals.cached_input_tokens,
+                "cost_micros": totals.cost_micros,
             }
             for key, totals in held
             if key[1] in MODEL_KINDS and key[0] >= since_day
@@ -266,6 +281,7 @@ class Meter:
                 held.reasoning_tokens += totals.reasoning_tokens
                 held.duration_ms += totals.duration_ms
                 held.buckets = [a + b for a, b in zip(held.buckets, totals.buckets, strict=True)]
+                held.cost_micros = _add_cost(held.cost_micros, totals.cost_micros)
 
     def flush(self) -> int:
         """Write what is pending as one additive upsert; rows written."""
@@ -279,15 +295,19 @@ class Meter:
         if target is None or not rows:
             return 0
         from pheasant.persistence import usage_ledger
+        from pheasant.telemetry.spend import GUARD
 
+        # The price in force now, for tokens a row held before costs were
+        # stored; each call's own cost was fixed when it was made.
+        price_of = GUARD.price_of
         try:
             if mirror is not None:
                 try:
-                    usage_ledger.add(mirror, target[1], rows)
+                    usage_ledger.add(mirror, target[1], rows, price_of)
                 except Exception:  # noqa: BLE001 - the region's own ledger still gets them
                     logger.debug("usage totals could not be mirrored to the fleet directory")
             try:
-                usage_ledger.add(target[0], target[1], rows)
+                usage_ledger.add(target[0], target[1], rows, price_of)
             except Exception as exc:  # noqa: BLE001 - counting must never fail a request
                 # Kept for the next flush rather than dropped: these totals are
                 # what the spend limit is read from, so a database that was
