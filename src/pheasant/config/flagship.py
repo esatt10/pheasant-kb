@@ -150,7 +150,7 @@ FLAGSHIP_DEFAULTS: dict[str, Any] = {
             "transports": {"stdio": False, "streamable_http": True, "sse": False},
         },
         "api": {
-            "max_concurrent_requests": 32,
+            "max_concurrent_requests": 64,
             "drain_seconds": 20,
             "cors_origins": [
                 "http://localhost:5173",
@@ -271,7 +271,7 @@ FLAGSHIP_DEFAULTS: dict[str, Any] = {
                 },
             }
         },
-        "latency": {"max_concurrent_answers": 4},
+        "latency": {"max_concurrent_answers": 16},
         "retrieval": {
             "max_rounds": 2,
             "per_query_results": 10,

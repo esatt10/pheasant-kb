@@ -53,7 +53,7 @@ standalone is selected:
 | `pheasant.environment` | `compose` | `local` |
 | `server.mcp.max_request_body_size_mb` | `1024` | `64` |
 | `server.mcp.transports` | `{"stdio": false, "streamable_http": true, "sse": false}` | `{"stdio": true, "streamable_http": true, "sse": false}` |
-| `server.api.max_concurrent_requests` | `32` | `0` |
+| `server.api.max_concurrent_requests` | `64` | `0` |
 | `server.api.drain_seconds` | `20` | `0` |
 | `server.api.cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000", "http://api:8765", "http://host.docker.internal:8765"]` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000"]` |
 | `storage.backend` | `postgres` | `sqlite` |
@@ -140,7 +140,7 @@ standalone is selected:
 | `assistant.workflow_options.agentic.compose_options.chars_per_passage` | `4000` | unset |
 | `assistant.workflow_options.agentic.compose_options.context_budget_chars` | `400000` | unset |
 | `assistant.workflow_options.agentic.compose_options.max_output_tokens` | `24000` | unset |
-| `assistant.latency.max_concurrent_answers` | `4` | `0` |
+| `assistant.latency.max_concurrent_answers` | `16` | `0` |
 | `assistant.retrieval.max_rounds` | `2` | `3` |
 | `assistant.retrieval.per_query_results` | `10` | `8` |
 | `assistant.retrieval.max_context_passages` | `16` | `12` |
@@ -2071,6 +2071,7 @@ HTTP 429 with `Retry-After` and the stable `ASSISTANT_BUSY` code.
 | `medium_deadline_seconds` | number \| null | `null` | End-to-end budget for medium answers. |
 | `long_deadline_seconds` | number \| null | `null` | End-to-end budget for long answers and visual work. |
 | `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. |
+| `admission_wait_seconds` | number | `15` | With every answer slot taken, how long a new answer waits for one before `429 ASSISTANT_BUSY`. An answer mostly waits on model calls, so a slot usually frees within seconds; `0` refuses at once. Deep research's own cap still refuses at once. |
 | `max_concurrent_deep_answers` | integer | `2` | [Deep research](how-to/conversations-and-visuals.md#deep-research) answers one process runs at once, within `max_concurrent_answers`; past it a deep question is `429 DEEP_RESEARCH_BUSY` (retryable). `0`: no separate cap. An operator admin overrides it at runtime (`PUT /region/controls`). |
 
 The lab starts with 10-second short/medium safety deadlines, a 180-second long

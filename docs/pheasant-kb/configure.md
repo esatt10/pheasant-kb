@@ -132,7 +132,7 @@ a host directory instead, and `GITHUB_TOKEN` for private repositories.
 | `search.vector_store.resident` | `true` | Keeps every vector in the api tier's memory for an exact, fast scan. See [the vector store](scale.md#the-vector-store). |
 | `search.vector_store.ann_index` | `ivf_hnsw_sq` | An approximate index for when vectors do not fit in memory. It trades recall for speed. |
 | `assistant.retrieval.max_rounds` | `2` | Up to one follow-up search when the evidence is judged insufficient. |
-| `assistant.latency.max_concurrent_answers` | `4` | Answers in flight at once; beyond it the API answers `429 ASSISTANT_BUSY`. |
+| `assistant.latency.max_concurrent_answers` | `16` | Answers in flight at once; beyond it a new answer waits up to `admission_wait_seconds` (15) for a slot, then the API answers `429 ASSISTANT_BUSY`. |
 
 Ranking parameters are better changed by the tuning plane than by hand: it
 measures, gates and records each change. See

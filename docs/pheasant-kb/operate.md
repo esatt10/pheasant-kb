@@ -206,7 +206,7 @@ root. Starting fresh under the new names instead means a full re-index.
 | `range of CPUs is from 0.01 to N` on start | A `*_CPUS` value exceeds the host's cores. Lower it in `.env`. |
 | The indexer logs `429` from OpenAI | Your rate limit. Lower `sync.concurrency.max_parallel_embeddings`. |
 | A sync stays `awaiting_claim` in `GET /queue` | The indexer is not running or not healthy: `docker compose ps indexer`, then its logs. |
-| Answers return `429 ASSISTANT_BUSY` | More concurrent answers than `assistant.latency.max_concurrent_answers`. Retry, or raise it with the api's CPUs. |
+| Answers return `429 ASSISTANT_BUSY` | More concurrent answers than `assistant.latency.max_concurrent_answers` for longer than `admission_wait_seconds`. Retry, or raise it (after the models' quota, which is usually the real ceiling). |
 | A folder you mounted is refused as a source | It must be mounted under `/data` on the indexer and api ([Configure](configure.md#index-a-folder-on-the-host)). |
 
 More in [Troubleshooting](../troubleshooting.md).

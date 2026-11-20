@@ -549,6 +549,89 @@ def test_answer_admission_is_shared_bounded_and_idempotent() -> None:
     second.release()
 
 
+def _admission_context(limit: int, wait: float):
+    latency = SimpleNamespace(max_concurrent_answers=limit, admission_wait_seconds=wait)
+    return SimpleNamespace(config=SimpleNamespace(assistant=SimpleNamespace(latency=latency)))
+
+
+def test_a_full_process_makes_an_answer_wait_for_the_next_free_slot() -> None:
+    """Found on the hosted region: a fifth asker beside four answers was
+    refused at once, for an answer that would have started seconds later."""
+
+    from pheasant.services.assistant import acquire
+
+    context = _admission_context(1, 5.0)
+    held = acquire(context)
+    threading.Timer(0.2, held.release).start()
+    started = time.monotonic()
+    admitted = acquire(context)
+    waited = time.monotonic() - started
+    admitted.release()
+    assert 0.15 <= waited < 3.0
+
+
+def test_a_slot_that_does_not_free_in_time_is_refused() -> None:
+    from pheasant.services.assistant import acquire
+    from pheasant.services.errors import AssistantBusy
+
+    context = _admission_context(1, 0.2)
+    held = acquire(context)
+    try:
+        started = time.monotonic()
+        with pytest.raises(AssistantBusy):
+            acquire(context)
+        assert time.monotonic() - started >= 0.15
+    finally:
+        held.release()
+
+
+def test_waiting_on_the_event_loop_blocks_nothing_and_leaks_nothing() -> None:
+    import asyncio
+
+    from pheasant.services.assistant import acquire, acquire_waiting
+
+    context = _admission_context(1, 5.0)
+
+    async def scenario() -> None:
+        held = acquire(context)
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        beat = asyncio.ensure_future(ticker())
+        asyncio.get_running_loop().call_later(0.2, held.release)
+        admitted = await acquire_waiting(context)
+        assert ticks >= 5, "the loop kept running while the request waited"
+        # A request cancelled while waiting (its client left) holds nothing.
+        waiting = asyncio.ensure_future(acquire_waiting(context))
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        admitted.release()
+        beat.cancel()
+
+    asyncio.run(scenario())
+    acquire(context, wait=0).release()  # the one slot is free again
+
+
+def test_a_limit_changed_at_runtime_strands_no_permit() -> None:
+    from pheasant.services.assistant import acquire
+
+    context = _admission_context(1, 0.0)
+    first = acquire(context)
+    context.config.assistant.latency.max_concurrent_answers = 2
+    second = acquire(context)  # admitted at once under the raised limit
+    first.release()
+    second.release()
+    context.config.assistant.latency.max_concurrent_answers = 1
+    acquire(context).release()
+
+
 def test_generated_visual_uses_the_long_request_budget() -> None:
     from types import SimpleNamespace
 

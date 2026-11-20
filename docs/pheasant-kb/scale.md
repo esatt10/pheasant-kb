@@ -133,11 +133,16 @@ The api service serves the UI, the HTTP API and MCP. It holds no graph, and
 reads Postgres and the vector store.
 
 - **Concurrent requests** are capped by `server.api.max_concurrent_requests`
-  (32). Beyond it the API answers `429` with `Retry-After` instead of slowing
+  (64). Beyond it the API answers `429` with `Retry-After` instead of slowing
   down. `pheasant_requests_capacity_remaining` shows the headroom.
 - **Concurrent answers** are capped separately by
-  `assistant.latency.max_concurrent_answers` (4), because each one holds model
-  calls open for seconds. Raise it with `PHEASANT_API_CPUS`.
+  `assistant.latency.max_concurrent_answers` (16), because each one holds model
+  calls open for seconds. With every slot taken a new answer waits up to
+  `admission_wait_seconds` (15) for one before `429 ASSISTANT_BUSY`. An answer
+  spends most of its time waiting on the model, not on the api's CPU (four deep
+  answers at once on a 2-vCPU api finished within 4 s of one alone), so the
+  ceiling is usually the models' tokens-per-minute quota: raise that first,
+  then this.
 - **Memory** (4096m) covers the in-memory vector matrix (below), result sets,
   and MCP uploads, which are parsed in memory up to
   `server.mcp.max_request_body_size_mb` (1024 in pheasant-kb). If agents do not
@@ -258,7 +263,7 @@ PHEASANT_POSTGRES_CPUS=4.0
 ```
 
 Raise `search.vector_store.resident_max_mb` to fit the vectors (6 KB per
-chunk), and `assistant.latency.max_concurrent_answers` with the api's CPUs.
+chunk), and `assistant.latency.max_concurrent_answers` with the models' quota.
 
 ### Beyond one host
 

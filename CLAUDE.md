@@ -1529,8 +1529,14 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
 - **Latency is bounded, not promised.** `assistant.latency` (all off by
   default) gives short/medium/long answers an end-to-end deadline that starts
   before history rewriting (`request_budget.py`) and a per-process cap on
-  active answers shared by HTTP, SSE and MCP; over it the refusal is
-  `ASSISTANT_BUSY` (429, retryable). `staged_retrieval` runs one hybrid search
+  active answers shared by HTTP, SSE and MCP (pheasant-kb: 16); over it an
+  answer waits up to `admission_wait_seconds` (15) for a slot, then the
+  refusal is `ASSISTANT_BUSY` (429, retryable). The cap was 4 and refused at
+  once, so a fifth person asking beside four answers on the hosted region got
+  an error for an answer that would have started seconds later; an answer
+  waits on models, not CPU, so the models' quota is the ceiling to raise
+  first. The routes wait on the event loop (`acquire_waiting`), so a request
+  that disconnects while waiting holds no slot. `staged_retrieval` runs one hybrid search
   before planning, `combine_grade_and_answer` grades and writes a short answer
   in one validated call, and `embeddings.query_*` give the vector arm a tighter
   failure budget than indexing. `multi_search` drops standalone vector/graph

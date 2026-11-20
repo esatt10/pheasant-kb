@@ -184,7 +184,7 @@ def register_assistant_routes(
         handler_started = time.perf_counter()
         answer_request = req.service_request(artifact_channel(request))
         assistant_service.admit(services, answer_request)
-        permit = assistant_service.acquire(services, answer_request)
+        permit = await assistant_service.acquire_waiting(services, answer_request)
         budget = assistant_service.create_request_budget(services, answer_request)
         credential = session_keys().get(req.session_id)
         environ = connection_environment()
@@ -259,7 +259,7 @@ def register_assistant_routes(
         answer_request = req.service_request(artifact_channel(request))
         answer_resume.check_answer_id(req.answer_id)
         assistant_service.admit(services, answer_request)
-        permit = assistant_service.acquire(services, answer_request)
+        permit = await assistant_service.acquire_waiting(services, answer_request)
         budget = assistant_service.create_request_budget(services, answer_request)
 
         loop = asyncio.get_running_loop()

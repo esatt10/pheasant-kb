@@ -33,6 +33,7 @@ from pheasant.services import ServiceContext, usage_traces
 from pheasant.services.answer_admission import (  # noqa: F401 - re-exported for the routes
     AnswerPermit,
     acquire,
+    acquire_waiting,
     deep_spend,
 )
 from pheasant.services.errors import (
