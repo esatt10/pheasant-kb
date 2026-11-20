@@ -335,8 +335,13 @@ def test_an_answer_at_the_limit_is_refused_on_both_surfaces(served):
     )
     text = json.dumps(reply)
     assert "monthly model spend limit" in text and http.json()["detail"][:60] in text
+    # Search spends nothing, so the limit does not refuse it. Whether it finds
+    # the note depends on the app's background startup sync having indexed it
+    # yet (CI's 3.11 leg once searched first), so the claim is the refusal's
+    # absence, not a hit.
     searched = client.post("/search", json={"query": "pheasants roost"}, headers=READER)
-    assert searched.status_code == 200 and searched.json()["results"], "text search still works"
+    assert searched.status_code == 200, searched.text
+    assert "results" in searched.json() and "code" not in searched.json()
 
 
 def test_both_surfaces_read_and_set_the_same_controls(served):
