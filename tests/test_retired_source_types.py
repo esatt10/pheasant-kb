@@ -33,7 +33,7 @@ def test_removed_type_loads_and_is_refused_at_sync_with_the_reason(
     tmp_path: Path, type_name: str
 ) -> None:
     source = _load({"name": f"old-{type_name}", "type": type_name})
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     with pytest.raises(ConnectorUnavailable, match="removed type"):
         connector_for_source(source, state)

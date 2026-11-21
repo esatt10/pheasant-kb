@@ -105,7 +105,6 @@ storage:
   # 0 = save at end of sync only.
   graph_checkpoint_seconds: 60
   compression: zstd
-  sqlite_path: /state/pheasant.db
   graph_path: /state/graphs
   manifest_path: /state/manifests
   max_state_size_gb: 10

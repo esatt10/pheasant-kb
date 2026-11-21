@@ -1018,6 +1018,7 @@ def test_remote_and_thread_executors_produce_identical_state(
     assert shape(remote_artifacts) == shape(thread_artifacts)
 
 
+@pytest.mark.usefixtures("no_state_database")
 def test_the_worker_cli_reports_a_missing_grpc_extra_instead_of_a_traceback(
     tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

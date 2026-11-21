@@ -22,7 +22,7 @@ import pytest
 
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import RankingParameters
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.tuning import refusion
 from tests.conftest import run_sync
 

@@ -16,7 +16,6 @@ Acceptance:
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import shutil
@@ -25,13 +24,10 @@ import time
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
-from pheasant.cli import main
 from pheasant.config.loader import load_config
-from pheasant.deployment.host import render_compose
 from pheasant.targets import (
     ResolvedTarget,
     TargetError,
@@ -704,202 +700,6 @@ def test_duplicate_names_are_disambiguated(tmp_path: Path, roots) -> None:
 
 
 # --------------------------------------------------------------------- `up` e2e
-
-
-def test_up_indexes_multiple_targets_and_is_idempotent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    notes = tmp_path / "notes"
-    shutil.copytree(SAMPLE_WORKSPACE, notes)
-    clients = tmp_path / "clients"
-    for name in ("acme", "globex"):
-        (clients / name).mkdir(parents=True)
-        (clients / name / "brief.md").write_text(f"# {name} brief\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    assert main(["up", str(notes), str(clients / "*"), "--no-serve"]) == 0
-    output = capsys.readouterr().out
-
-    config_path = tmp_path / "pheasant.yaml"
-    cfg = load_config(config_path)
-    assert [s.name for s in cfg.sources] == ["notes", "acme", "globex"]
-    assert cfg.sources[1].type.value == "markdown_folder"
-    # Every local target is reachable under the security allowlist.
-    roots = {str(p) for p in cfg.security.allow_workspace_roots}
-    assert str(clients / "acme") in roots
-
-    counts = _sync_counts(output)
-    assert len(counts) == 3
-    assert all(indexed > 0 for indexed, _ in counts)
-
-    first_bytes = config_path.read_bytes()
-    assert main(["up", str(notes), str(clients / "*"), "--no-serve"]) == 0
-    second = capsys.readouterr().out
-    assert config_path.read_bytes() == first_bytes, "config is never rewritten"
-    assert all(indexed == 0 and skipped > 0 for indexed, skipped in _sync_counts(second))
-
-
-def test_up_splits_a_parent_directory_into_one_source_each(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    parent = tmp_path / "projects"
-    for name in ("alpha", "beta"):
-        (parent / name).mkdir(parents=True)
-        (parent / name / "readme.md").write_text(f"# {name}\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    assert main(["up", str(parent), "--split", "--no-serve"]) == 0
-    capsys.readouterr()
-    cfg = load_config(tmp_path / "pheasant.yaml")
-    assert [s.name for s in cfg.sources] == ["alpha", "beta"]
-
-
-def test_up_rejects_a_target_that_does_not_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert main(["up", str(tmp_path / "missing"), "--no-serve"]) == 1
-
-
-def test_generated_multi_source_config_round_trips_through_yaml(tmp_path: Path, roots) -> None:
-    """Globs and URLs in a generated config must survive the YAML round trip."""
-    from pheasant.quickstart import render_up_config
-
-    notes = tmp_path / "notes"
-    notes.mkdir()
-    (notes / "a.md").write_text("# a", encoding="utf-8")
-    clone_root, workspace = roots
-    targets = resolve_targets(
-        [str(notes), "https://docs.example.com/guide"],
-        clone_root=clone_root,
-        workspace=workspace,
-    )
-    config_path = tmp_path / "pheasant.yaml"
-
-    text = render_up_config(targets, config_path)
-    assert text == render_up_config(targets, config_path), "rendering is deterministic"
-
-    raw = yaml.safe_load(text)
-    assert [s["name"] for s in raw["sources"]] == ["notes", "docs-example-com"]
-    assert raw["sources"][0]["include"] == ["**/*.md", "**/*.markdown"]
-    assert raw["sources"][1]["urls"] == ["https://docs.example.com/guide"]
-
-
-# --------------------------------------------------------------------- `host`
-
-
-def test_host_generates_compose_and_container_config_without_docker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    notes = tmp_path / "notes"
-    notes.mkdir()
-    (notes / "a.md").write_text("# a\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    args = argparse.Namespace(
-        path=[str(notes)],
-        config="pheasant.yaml",
-        name=None,
-        port=9100,
-        ui_port=9200,
-        profile="quickstart",
-        split=False,
-        output="docker-compose.pheasant.yml",
-        image=None,
-        ui_image=None,
-        no_ui=False,
-        print_only=True,
-    )
-    from pheasant.deployment.host import host_stack
-
-    assert host_stack(args) == 0
-    capsys.readouterr()
-
-    compose = yaml.safe_load((tmp_path / "docker-compose.pheasant.yml").read_text(encoding="utf-8"))
-    services = compose["services"]
-    assert services["pheasant"]["ports"] == ["9100:8765"]
-    assert services["pheasant-ui"]["ports"] == ["9200:80"]
-    # The local source is mounted read-only at a stable container path.
-    assert any(v.endswith("/sources/notes:ro") for v in services["pheasant"]["volumes"])
-    # State survives `docker compose down`.
-    assert any(v.endswith(":/state") for v in services["pheasant"]["volumes"])
-
-    container_config = yaml.safe_load(
-        (tmp_path / "pheasant.container.yaml").read_text(encoding="utf-8")
-    )
-    assert container_config["sources"][0]["path"] == "/sources/notes"
-    assert container_config["pheasant"]["state_path"] == "/state"
-    assert "/sources/notes" in container_config["security"]["allow_workspace_roots"]
-    # Regression: the host-side pheasant.yaml pins server.host to 127.0.0.1
-    # (quickstart profile) so bare `pheasant start` never answers on the LAN.
-    # The *container* config must not inherit that -- uvicorn binding
-    # loopback inside the container makes it unreachable from the
-    # pheasant-ui sidecar over the compose network (502 from nginx), even
-    # though the pheasant container's own healthcheck still passes because
-    # it curls itself over that same loopback.
-    host_config = yaml.safe_load((tmp_path / "pheasant.yaml").read_text(encoding="utf-8"))
-    assert host_config["server"]["host"] == "127.0.0.1"
-    assert container_config["server"]["host"] == "0.0.0.0"
-
-
-def test_host_pins_the_ui_image_and_builds_it_from_a_checkout(tmp_path: Path) -> None:
-    """The UI sidecar must resolve to a real image, and to the current one.
-
-    `latest` is never re-pulled once Docker has it locally, which is how an
-    upgraded stack keeps serving a months-old bundle; and a source checkout can
-    be ahead of any published tag, so it gets a build context too.
-    """
-    from pheasant.deployment.host import DEFAULT_UI_IMAGE, local_ui_context
-    from pheasant.version import __version__
-
-    assert DEFAULT_UI_IMAGE == f"ghcr.io/esatt10/pheasant-ui:{__version__}"
-
-    target = ResolvedTarget(
-        name="notes", type="markdown_folder", path=str(tmp_path / "notes"), description="d"
-    )
-    kwargs = {
-        "config_path": tmp_path / "c.yaml",
-        "state_dir": tmp_path / ".pheasant",
-        "port": 8765,
-        "ui_port": 8080,
-    }
-
-    ui = yaml.safe_load(render_compose([target], **kwargs))["services"]["pheasant-ui"]
-    assert ui["image"] == DEFAULT_UI_IMAGE
-    assert "build" not in ui, "no build stanza without a checkout to build from"
-
-    built = yaml.safe_load(render_compose([target], ui_build_context="/repo/ui", **kwargs))
-    assert built["services"]["pheasant-ui"]["build"] == {"context": "/repo/ui"}
-
-    # An explicit --ui-image is a deliberate choice of a published bundle.
-    pinned = yaml.safe_load(
-        render_compose([target], ui_image="my/ui:1.0", ui_build_context="/repo/ui", **kwargs)
-    )
-    assert pinned["services"]["pheasant-ui"]["image"] == "my/ui:1.0"
-    assert "build" not in pinned["services"]["pheasant-ui"]
-
-    # This repo IS a checkout, so the fallback resolves to its ui/ directory.
-    assert local_ui_context() == str(Path(__file__).resolve().parents[1] / "ui")
-
-
-def test_host_can_omit_the_ui_sidecar(tmp_path: Path) -> None:
-    target = ResolvedTarget(
-        name="notes", type="markdown_folder", path=str(tmp_path / "notes"), description="d"
-    )
-    compose = yaml.safe_load(
-        render_compose(
-            [target],
-            config_path=tmp_path / "c.yaml",
-            state_dir=tmp_path / ".pheasant",
-            port=8765,
-            ui_port=8080,
-            include_ui=False,
-        )
-    )
-    assert set(compose["services"]) == {"pheasant"}
-
-
-# --------------------------------------------------------------------- HTTP
 
 
 def test_quick_add_registers_and_syncs_a_pasted_path(loaded_config, tmp_path: Path) -> None:

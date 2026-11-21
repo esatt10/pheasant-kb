@@ -209,9 +209,9 @@ def test_process_workers_preserve_the_exact_published_generation(
     serial = SyncEngine(_config(tmp_path, workspace, state_name="serial-state", file_workers=1))
     try:
         serial.sync_source("docs", "full")
+        serial_generation = serial.graph_store.published_generation(serial.config.knowledge_base_id)
     finally:
         serial.close()
-    serial_generation = serial.graph_store.published_generation(serial.config.knowledge_base_id)
 
     parallel = SyncEngine(
         _config(
@@ -224,11 +224,11 @@ def test_process_workers_preserve_the_exact_published_generation(
     )
     try:
         parallel.sync_source("docs", "full")
+        parallel_generation = parallel.graph_store.published_generation(
+            parallel.config.knowledge_base_id
+        )
     finally:
         parallel.close()
-    parallel_generation = parallel.graph_store.published_generation(
-        parallel.config.knowledge_base_id
-    )
 
     assert serial_generation is not None and parallel_generation is not None
     assert parallel_generation["generation_id"] == serial_generation["generation_id"]

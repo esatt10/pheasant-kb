@@ -239,10 +239,12 @@ def cost(row: dict[str, Any], table: dict[str, Any]) -> float | None:
         return None
     fresh, written, cached = price
     cached = cached if cached is not None else fresh
+    # int(): Postgres returns a SUM over integers as numeric (a Decimal), which
+    # does not multiply by a float price.
     return (
-        row["input_tokens"] * (fresh or 0.0)
-        + row["output_tokens"] * (written or 0.0)
-        + row["cached_input_tokens"] * (cached or 0.0)
+        int(row["input_tokens"] or 0) * (fresh or 0.0)
+        + int(row["output_tokens"] or 0) * (written or 0.0)
+        + int(row["cached_input_tokens"] or 0) * (cached or 0.0)
     ) / 1_000_000
 
 

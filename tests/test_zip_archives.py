@@ -32,7 +32,7 @@ def _connector(tmp_path: Path, **source_overrides: object) -> FilesystemConnecto
             ]
         }
     )
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     return FilesystemConnector(config.effective_source(config.sources[0]), state)
 
 

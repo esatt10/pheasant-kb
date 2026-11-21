@@ -43,7 +43,7 @@ QUERIES = [
 
 
 def test_concurrent_rows_calls_never_return_a_row_with_the_wrong_shape(tmp_path) -> None:
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     errors: list[BaseException] = []
@@ -100,7 +100,7 @@ def test_each_thread_gets_its_own_connection(tmp_path) -> None:
     """
 
     workers = 8
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     seen: dict[int, int] = {}
@@ -147,7 +147,7 @@ def test_a_slow_read_does_not_block_a_concurrent_read(tmp_path) -> None:
     it.
     """
 
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     slow_started = threading.Event()

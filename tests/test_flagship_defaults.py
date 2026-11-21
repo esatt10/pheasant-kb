@@ -57,7 +57,7 @@ def test_the_standalone_table_is_the_values_written_in_the_schema() -> None:
     written = _dump(PheasantConfig())
     written["pheasant"]["defaults"] = STANDALONE
     # The three state paths are derived from pheasant.state_path on load.
-    for key in ("sqlite_path", "graph_path", "manifest_path"):
+    for key in ("graph_path", "manifest_path"):
         written["storage"][key] = built["storage"][key]
     assert built == written
 
@@ -75,18 +75,18 @@ def test_without_a_selection_the_flagship_is_the_default(monkeypatch: pytest.Mon
 def test_a_config_choice_beats_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(DEFAULTS_ENV, FLAGSHIP)
     config = PheasantConfig.model_validate({"pheasant": {"defaults": STANDALONE}})
-    assert (config.pheasant.defaults, config.storage.backend) == (STANDALONE, "sqlite")
+    assert (config.pheasant.defaults, config.sync.queue.backend) == (STANDALONE, "local")
     monkeypatch.setenv(DEFAULTS_ENV, STANDALONE)
     config = PheasantConfig.model_validate({"pheasant": {"defaults": FLAGSHIP}})
-    assert (config.pheasant.defaults, config.storage.backend) == (FLAGSHIP, "postgres")
+    assert (config.pheasant.defaults, config.sync.queue.backend) == (FLAGSHIP, "nats")
 
 
 def test_a_set_value_beats_the_table() -> None:
     with using_defaults(FLAGSHIP):
         config = PheasantConfig.model_validate(
-            {"storage": {"backend": "sqlite"}, "sources": [], "assistant": {"model": None}}
+            {"storage": {"pool_size": 3}, "sources": [], "assistant": {"model": None}}
         )
-    assert config.storage.backend == "sqlite"
+    assert config.storage.pool_size == 3
     assert config.sources == []
     assert config.assistant.model is None
     assert config.sync.queue.backend == "nats"
@@ -117,7 +117,7 @@ def test_the_layered_loader_starts_from_the_files_table(
     path = tmp_path / "pheasant.yaml"
     path.write_text("pheasant:\n  defaults: standalone\n", encoding="utf-8")
     config = load_layered_config(path)
-    assert (config.storage.backend, config.sync.queue.backend) == ("sqlite", "local")
+    assert (config.storage.backend, config.sync.queue.backend) == ("postgres", "local")
     assert not config.search.embeddings.enabled
 
 
@@ -126,7 +126,7 @@ def test_the_wizard_records_the_table_it_answered_on(
 ) -> None:
     from pheasant.setup_wizard import Wizard
 
-    for table, backend in ((FLAGSHIP, "postgres"), (STANDALONE, "sqlite")):
+    for table, queue in ((FLAGSHIP, "nats"), (STANDALONE, "local")):
         wizard = Wizard(accept_defaults=True, preset={"pheasant.defaults": table})
         wizard.run()
         capsys.readouterr()
@@ -134,7 +134,7 @@ def test_the_wizard_records_the_table_it_answered_on(
         assert data["pheasant"]["defaults"] == table
         # Read back with the environment pointing the other way.
         monkeypatch.setenv(DEFAULTS_ENV, STANDALONE if table == FLAGSHIP else FLAGSHIP)
-        assert PheasantConfig.model_validate(data).storage.backend == backend
+        assert PheasantConfig.model_validate(data).sync.queue.backend == queue
 
 
 # -- every shipped config names its table -------------------------------------
@@ -245,7 +245,7 @@ def test_the_flagship_indexes_and_searches_on_stub_models(tmp_path: Path) -> Non
                     "workspace_root": str(tmp_path),
                     "exports_path": str(tmp_path / "exports"),
                 },
-                "storage": {"dsn_env": "PHEASANT_TEST_POSTGRES_DSN", "lexical_index": lexical},
+                "storage": {"dsn_env": "PHEASANT_DATABASE_URL", "lexical_index": lexical},
                 "search": {
                     "embeddings": {"provider": "stub"},
                     "vector_store": {"path": str(tmp_path / "state" / "vectors")},
@@ -294,24 +294,6 @@ def test_the_flagship_indexes_and_searches_on_stub_models(tmp_path: Path) -> Non
 # things that build a one-process deployment (`pheasant up`, and the image
 # writing its own config when nothing is mounted) build on standalone and
 # record it, unless PHEASANT_DEFAULTS asks otherwise.
-
-
-def test_pheasant_up_writes_a_standalone_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from pheasant.quickstart import render_up_config
-
-    (tmp_path / "notes").mkdir()
-    (tmp_path / "notes" / "a.md").write_text("# A\n", encoding="utf-8")
-    monkeypatch.delenv(DEFAULTS_ENV, raising=False)
-    rendered = yaml.safe_load(render_up_config(tmp_path / "notes", tmp_path / "pheasant.yaml"))
-    assert rendered["pheasant"]["defaults"] == STANDALONE
-    config = PheasantConfig.model_validate(rendered)
-    assert (config.storage.backend, config.sync.queue.enabled) == ("sqlite", False)
-
-    monkeypatch.setenv(DEFAULTS_ENV, FLAGSHIP)
-    rendered = yaml.safe_load(render_up_config(tmp_path / "notes", tmp_path / "pheasant.yaml"))
-    assert rendered["pheasant"]["defaults"] == FLAGSHIP
 
 
 @pytest.mark.skipif(not Path("/bin/sh").exists(), reason="needs a POSIX sh")
@@ -372,28 +354,16 @@ def test_the_configuration_reference_lists_the_current_defaults(
     )
 
 
-def test_pheasant_init_writes_a_standalone_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    from pheasant.config.loader import render_init_config
-
-    monkeypatch.delenv(DEFAULTS_ENV, raising=False)
-    rendered = yaml.safe_load(render_init_config("quickstart"))
-    assert rendered["pheasant"]["defaults"] == STANDALONE
-    assert rendered["storage"]["backend"] == "sqlite"
-
-
 def test_a_default_dump_does_not_pin_the_derived_state_paths() -> None:
-    """`pheasant up` dumps the defaults, moves `state_path`, and builds again;
-    a dumped `/state/pheasant.db` would keep every write in the old place."""
+    """A caller that dumps the defaults, moves `state_path` and builds again
+    must not find `/state/graphs` pinned in the dump."""
 
     from pheasant.config.flagship import default_config_data
 
     for table in (FLAGSHIP, STANDALONE):
         data = default_config_data(table)
-        assert all(
-            data["storage"][key] is None for key in ("sqlite_path", "graph_path", "manifest_path")
-        )
+        assert all(data["storage"][key] is None for key in ("graph_path", "manifest_path"))
         data["pheasant"]["state_path"] = "/elsewhere"
         assert (
-            PheasantConfig.model_validate(data).storage.sqlite_path
-            == Path("/elsewhere") / "pheasant.db"
+            PheasantConfig.model_validate(data).storage.graph_path == Path("/elsewhere") / "graphs"
         )

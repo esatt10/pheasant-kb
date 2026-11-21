@@ -142,7 +142,7 @@ def migrate_lexical_index(store: Any) -> None:
     reader.
     """
 
-    if store.lexical_index is None or not store.backend.dialect.is_postgres:
+    if store.lexical_index is None:
         return
     wanted = bm25_index_name(store.bm25_counts) if store.bm25_counts else None
     present = {

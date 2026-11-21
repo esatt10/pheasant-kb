@@ -1,25 +1,16 @@
-"""The scale-out backend must be tested on every change, not on some of them.
+"""The suite runs on PostgreSQL in every job that runs it.
 
-Postgres is a *selectable backend* (rule 7) and therefore the one with the
-weaker signal: the offline suite runs on SQLite, so a dialect divergence is
-invisible here by construction. The project's own history is the argument —
-a declared FK a maintenance path deliberately violates, a discarded
-`cursor.rowcount`, and a SQLite-only `INSERT OR IGNORE`, none of which the
-offline suite could see and all three of which one real Postgres run found on
-the first try.
+The state store is PostgreSQL and `tests/conftest.py` clones a migrated
+template database per test, so a pytest job without a server exits before the
+first test. These tests pin the CI shape that follows from it: every job that
+runs pytest starts `deploy/postgres` (PostgreSQL 17 with pg_textsearch
+preloaded) and names it in ``PHEASANT_TEST_POSTGRES_DSN``; the main quality
+job runs the whole suite, unfiltered, on every pull request, with
+``PHEASANT_REQUIRE_PG_TEXTSEARCH`` turning that suite's skips into failures.
 
-Postgres used to run only in the evaluation, memory and tuning workflows, each
-behind a `paths:` filter. That made backend coverage a function of which files
-a change happened to touch, and the gap was not hypothetical: three of the
-modules carrying dialect branching matched no filter at all, among them
-`sync/locks.py` — the per-source lease that several indexers rest on, and the
-exact file where a `rowcount` divergence once made a claim fail on SQLite and
-pass on Postgres.
-
-These tests pin the fix rather than the symptom. They do not enumerate which
-modules need Postgres — a curated list is what went stale the first time. They
-assert that *some* job runs the suite against a real Postgres on every pull
-request, with nothing narrowing it.
+History it keeps closed: Postgres once ran only in path-filtered workflows, so
+whether the fleet's backend was tested depended on which files a change
+touched — and `sync/locks.py`, the per-source lease, matched no filter at all.
 """
 
 from __future__ import annotations
@@ -33,12 +24,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
-
-#: Constructs that behave differently, or do not exist, across the two
-#: dialects. Deliberately the same grep an operator would run.
-DIALECT_MARKERS = re.compile(
-    r"backend ==|is_postgres|ON CONFLICT|GREATEST|NULLIF|ts_rank|INSERT OR IGNORE"
-)
 
 DSN_VARIABLE = "PHEASANT_TEST_POSTGRES_DSN"
 
@@ -118,27 +103,44 @@ def test_some_job_runs_postgres_on_every_pull_request() -> None:
     )
 
 
-def test_that_job_runs_the_lexical_default_rather_than_skipping_it() -> None:
-    """The Postgres default lexical arm needs an extension stock Postgres lacks.
+def _quality_job() -> dict[str, Any]:
+    return _workflow("ci.yml")["jobs"]["python-quality"]
+
+
+def _job_env(job: dict[str, Any]) -> dict[str, Any]:
+    env = dict(job.get("env") or {})
+    for step in job.get("steps") or []:
+        env.update(step.get("env") or {})
+    return env
+
+
+def test_the_quality_job_runs_the_lexical_default_rather_than_skipping_it() -> None:
+    """The default lexical arm needs an extension stock Postgres lacks.
 
     On a server without pg_textsearch its suite skips, and a skip reads like a
     pass. The job must run an image that has it and set the variable that
     turns those skips into failures.
     """
 
-    for workflow, name, job in _unfiltered_postgres_jobs():
-        env = dict(job.get("env") or {})
-        for step in job.get("steps") or []:
-            env.update(step.get("env") or {})
-        assert str(env.get(REQUIRE_PG_TEXTSEARCH)) == "1", (
-            f"{workflow}:{name} runs Postgres without {REQUIRE_PG_TEXTSEARCH}=1, so the "
-            "default lexical arm's tests may skip there"
-        )
-        assert _builds_pheasant_postgres(job), (
-            f"{workflow}:{name} does not run deploy/postgres, the image that preloads pg_textsearch"
-        )
-        step = next(s for s in job["steps"] if s.get("uses") == POSTGRES_ACTION)
-        assert "if" not in step, f"{workflow}:{name} starts Postgres only conditionally"
+    job = _quality_job()
+    assert str(_job_env(job).get(REQUIRE_PG_TEXTSEARCH)) == "1"
+    assert _builds_pheasant_postgres(job), "python-quality does not run deploy/postgres"
+    step = next(s for s in job["steps"] if s.get("uses") == POSTGRES_ACTION)
+    assert "if" not in step, "python-quality starts Postgres only conditionally"
+
+
+def test_every_job_that_runs_pytest_runs_postgres() -> None:
+    """Without a server the conftest exits; a job without one tests nothing."""
+
+    missing = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        for name, job in (_workflow(path.name).get("jobs") or {}).items():
+            commands = " ".join(str(step.get("run") or "") for step in job.get("steps") or [])
+            if "pytest" not in commands:
+                continue
+            if not (_runs_postgres(job) and _sets_the_dsn(job)):
+                missing.append(f"{path.name}:{name}")
+    assert not missing, f"these jobs run pytest with no Postgres: {missing}"
 
 
 def test_the_postgres_action_builds_the_shipped_image() -> None:
@@ -177,49 +179,16 @@ def test_no_shipped_path_runs_the_timescale_image() -> None:
     assert not offenders, f"the Timescale image is back in: {sorted(set(offenders))}"
 
 
-def test_that_job_runs_the_whole_suite_rather_than_a_curated_list() -> None:
-    """A list of dialect-sensitive tests is the same staleness, one level down.
+def test_the_quality_job_runs_the_whole_suite_rather_than_a_curated_list() -> None:
+    """A list of tests to run is a list somebody has to remember to update."""
 
-    The suite skips its Postgres-gated cases without the DSN and runs them with
-    it, so pointing the job at everything costs one extra run and needs no
-    maintenance at all.
-    """
-
-    for workflow, name, job in _unfiltered_postgres_jobs():
-        commands = " ".join(str(step.get("run") or "") for step in job.get("steps") or [])
-        assert "pytest" in commands, f"{workflow}:{name} sets the DSN but runs no tests"
-        # `pytest -q` with no paths and no `-k`: anything narrower is a list
-        # somebody has to remember to update.
-        narrowed = re.search(r"pytest[^\n|&]*\s(-k\s|tests/)", commands)
-        assert not narrowed, (
-            f"{workflow}:{name} narrows the Postgres run to a subset "
-            f"({narrowed.group(0).strip()!r}). Run the whole suite: the curated list is "
-            "the thing that went stale the first time."
-        )
-
-
-def test_every_dialect_branching_module_is_reached() -> None:
-    """The measurement that justified the job, kept live.
-
-    Not a list of modules to maintain — it is derived from the source each
-    time — so a new module with a dialect branch is covered the moment it
-    exists, and this test says so rather than needing an edit.
-    """
-
-    modules = [
-        path
-        for path in sorted((REPO_ROOT / "src" / "pheasant").rglob("*.py"))
-        if DIALECT_MARKERS.search(path.read_text(encoding="utf-8"))
-    ]
-    assert modules, "no dialect branching found at all — has the seam moved?"
-
-    # An unfiltered job reaches every file by definition; the assertion is that
-    # such a job exists, which is what makes the derivation above hold for
-    # modules nobody thought about.
-    assert _unfiltered_postgres_jobs(), (
-        f"{len(modules)} modules carry dialect branching and no unfiltered job "
-        "exercises them against Postgres"
-    )
+    job = _quality_job()
+    commands = " ".join(str(step.get("run") or "") for step in job.get("steps") or [])
+    assert "pytest" in commands
+    narrowed = re.search(r"pytest[^\n|&]*\s(-k\s|tests/)", commands)
+    assert not narrowed, f"python-quality narrows the suite ({narrowed.group(0).strip()!r})"
+    trigger = _pull_request_trigger(_workflow("ci.yml"))
+    assert trigger is not None and not trigger.get("paths") and not trigger.get("paths-ignore")
 
 
 @pytest.mark.parametrize("workflow", ["evaluation.yml", "memory.yml", "tuning.yml"])

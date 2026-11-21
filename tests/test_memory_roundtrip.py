@@ -43,6 +43,8 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.sync import log_queue as lq
 from pheasant.sync.queue import drain
 
+pytestmark = pytest.mark.module_database
+
 #: Phase timings, printed at the end so CI has a number to report.
 TIMINGS: dict[str, float] = {}
 

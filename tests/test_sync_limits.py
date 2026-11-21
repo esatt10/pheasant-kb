@@ -452,19 +452,3 @@ def test_secret_exclusion_can_be_turned_off_explicitly(tmp_path: Path, home: Pat
 # ---------------------------------------------------------------------------
 # Bind address
 # ---------------------------------------------------------------------------
-
-
-def test_quickstart_config_binds_loopback(tmp_path: Path) -> None:
-    """A laptop install must not answer the whole network unauthenticated."""
-
-    import yaml
-
-    from pheasant.quickstart import render_up_config
-
-    notes = tmp_path / "notes"
-    notes.mkdir()
-    (notes / "a.md").write_text("# a", encoding="utf-8")
-
-    rendered = yaml.safe_load(render_up_config(notes, tmp_path / "pheasant.yaml"))
-
-    assert rendered["server"]["host"] == "127.0.0.1"

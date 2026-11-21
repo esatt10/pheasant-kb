@@ -172,8 +172,7 @@ def test_indexer_orchestration_has_one_leader_and_fails_over(tmp_path: Path) -> 
         def stop(self) -> None:
             self.running = False
 
-    path = tmp_path / "leadership.db"
-    stores = [StateStore(path), StateStore(path)]
+    stores = [StateStore(), StateStore()]
     for store in stores:
         store.migrate()
     service_sets = [[Service(), Service(), Service()] for _ in stores]
@@ -248,11 +247,13 @@ def test_the_api_role_starts_with_a_queue(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("role", ["all", "indexer", "graph", "worker"])
-def test_other_roles_need_no_queue(tmp_path: Path, role: str) -> None:
+def test_other_roles_need_no_queue(tmp_path: Path, role: str, monkeypatch: Any) -> None:
     """Only `api` depends on a queue: the rest can index or do nothing."""
 
-    # No sources for the worker: it is the one role that refuses to hold a
-    # source list at all, which the allow-list tests below cover directly.
+    # No sources and no state credential for the worker: it is the one role
+    # that refuses to hold either, which the allow-list tests below cover.
+    if role == "worker":
+        monkeypatch.delenv("PHEASANT_DATABASE_URL", raising=False)
     config = _config(
         tmp_path,
         state_name=f"noqueue-{role}",
@@ -892,7 +893,10 @@ def test_background_services_start_only_for_their_roles(tmp_path: Path, monkeypa
     assert sorted(run_for("api")) == ["refresher", "ui"]
     assert sorted(run_for("indexer")) == ["drainer", "scheduler", "watcher"]
     assert sorted(run_for("graph")) == ["refresher"]
-    assert sorted(run_for("worker")) == []
+    # A worker is `pheasant worker --transport grpc`: the HTTP app would open
+    # the state database, which a worker holds no credential for.
+    with pytest.raises(RoleConfigurationError, match="pheasant worker"):
+        run_for("worker")
     # The log tier runs one thing and nothing else -- no watcher, no
     # scheduler, no index drainer, no UI. That isolation *is* the tier.
     assert sorted(run_for("logger")) == ["log-drainer"]
@@ -1117,16 +1121,11 @@ def test_a_worker_refuses_every_credential_it_can_never_use(
     assert fragment in str(refusal.value)
 
 
-def test_a_worker_refuses_a_state_backend_and_a_source_list(tmp_path: Path) -> None:
-    """Both mean the same thing: this process is running the indexer's config."""
+@pytest.mark.usefixtures("no_state_database")
+def test_a_worker_refuses_a_source_list(tmp_path: Path) -> None:
+    """A source list means this process is running the indexer's config."""
 
     config = _fleet_config(tmp_path, server={"host": "127.0.0.1", "role": "worker"})
-    config.storage.backend = "postgres"
-    with pytest.raises(RoleConfigurationError) as refusal:
-        validate_role(resolve_role(config, "worker"), config)
-    assert "storage.backend" in str(refusal.value)
-
-    config.storage.backend = "sqlite"
     config.sources = [
         SourceConfig(name="notes", type=SourceType.markdown_folder, path=tmp_path / "notes")
     ]
@@ -1135,6 +1134,7 @@ def test_a_worker_refuses_a_state_backend_and_a_source_list(tmp_path: Path) -> N
     assert "source" in str(refusal.value)
 
 
+@pytest.mark.usefixtures("no_state_database")
 def test_a_worker_may_hold_its_own_front_door_key(tmp_path: Path, monkeypatch: Any) -> None:
     """The forbidden list is credentials to *elsewhere*, not this process's own.
 
@@ -1148,6 +1148,7 @@ def test_a_worker_may_hold_its_own_front_door_key(tmp_path: Path, monkeypatch: A
     validate_role(resolve_role(config, "worker"), config)
 
 
+@pytest.mark.usefixtures("no_state_database")
 def test_a_grpc_worker_needs_no_token_for_an_api_it_does_not_serve(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

@@ -31,6 +31,8 @@ from pheasant.ingestion.media import MediaStore, media_store_for_config
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services.errors import ServiceError
 
+pytestmark = pytest.mark.module_database
+
 FIXTURE_IMAGE = Path(__file__).parent / "fixtures" / "sample_workspace" / "images" / "diagram.png"
 FIXTURE_CAPTION = FIXTURE_IMAGE.with_name(FIXTURE_IMAGE.name + ".caption.txt")
 DESIGN = "file:gallery:docs/design.md:branch=none"

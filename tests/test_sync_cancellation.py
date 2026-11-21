@@ -117,7 +117,7 @@ def test_a_cancelled_sync_keeps_what_it_committed_and_the_next_pass_completes_it
         assert engine.state.get_source("docs")["last_status"] == "cancelled"
         assert engine.state.get_fingerprint("source:docs") is None
         events = engine.state.rows(
-            "SELECT event_type FROM sync_events WHERE source_id='docs' ORDER BY rowid"
+            "SELECT event_type FROM sync_events WHERE source_id='docs' ORDER BY finished_at, id"
         )
         assert [str(e["event_type"]) for e in events] == ["sync.cancelled"]
         # And the run left nothing behind to cancel the next one.

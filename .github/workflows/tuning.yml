@@ -89,7 +89,6 @@ jobs:
       fail-fast: false
       matrix:
         backend:
-          - sqlite
           - postgres
 
     steps:
@@ -99,7 +98,6 @@ jobs:
       # PostgreSQL 17 with pg_textsearch preloaded, built from deploy/postgres
       # (the image every shipped Postgres runs).
       - name: Start PostgreSQL
-        if: matrix.backend == 'postgres'
         uses: ./.github/actions/pheasant-postgres
         with:
           database: pheasant_tuning
@@ -113,15 +111,11 @@ jobs:
       - name: Install pheasant and the extras the plane crosses
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,mcp,postgres]"
+          python -m pip install -e ".[dev,mcp]"
 
       - name: Run the tuning suites
         env:
-          # Only the postgres leg points at the service; the sqlite leg must
-          # stay on SQLite, which is the default every user gets — and the one
-          # where a conditional claim reading `rowcount` was silently broken
-          # until `SqliteBackend.statement` was given a real one.
-          PHEASANT_TEST_POSTGRES_DSN: ${{ matrix.backend == 'postgres' && 'postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_tuning' || '' }}
+          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_tuning
           # Defence in depth. Nothing in the indexing path may reach a model,
           # and nothing in this plane may either: a tuning batch replays real
           # queries, and a stray provider key would turn a CI job into a
@@ -158,11 +152,20 @@ jobs:
   equivalence:
     name: Re-fusion is the real fusion
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_equivalence
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_equivalence
     timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_equivalence
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -203,11 +206,20 @@ jobs:
   standalone:
     name: A region that never turns it on is unchanged
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_standalone
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_standalone
     timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_standalone
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -215,7 +227,7 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # Core only: no [postgres], no [vector], and deliberately no [tuning].
+      # Core only: no [vector], and deliberately no [tuning].
       # This is the install every default user has, and the plane has to be
       # inert on it — including its MLflow sink, which must degrade to a
       # warning rather than an ImportError at module scope.
@@ -237,7 +249,7 @@ jobs:
           python - <<'PY'
           from pheasant.config.schema import PheasantConfig
           from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
-          from pheasant.search.sqlite_store import _BM25_WEIGHTS, _TS_RANK_WEIGHTS
+          from pheasant.search.text_store import _BM25_WEIGHTS, _TS_RANK_WEIGHTS
 
           # The literals these constants had before `search.ranking` existed.
           # A change here re-ranks every region that never opened the block,
@@ -272,11 +284,20 @@ jobs:
   lifecycle:
     name: The CLI against a real region
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_lifecycle
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_lifecycle
     timeout-minutes: 20
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_lifecycle
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -310,11 +331,20 @@ jobs:
   stress:
     name: Contention, not the happy path
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_stress
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_stress
     timeout-minutes: 25
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_stress
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -348,11 +378,20 @@ jobs:
   benchmark:
     name: The plane against a public benchmark
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_benchmark
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_benchmark
     timeout-minutes: 30
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_benchmark
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -429,6 +468,9 @@ jobs:
   render:
     name: The tuning page renders
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_render
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_render
     timeout-minutes: 20
 
     # Split from `ui` because they answer different questions and need
@@ -440,6 +482,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_render
 
       - name: Set up Python
         uses: actions/setup-python@v5

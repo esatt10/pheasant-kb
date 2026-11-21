@@ -483,7 +483,7 @@ def test_a_taxonomy_source_is_prepared_by_the_fleet_and_matches_local(
 
     def indexed(engine: SyncEngine) -> list[tuple[Any, ...]]:
         return [
-            tuple(row)
+            tuple(row.values())
             for row in engine.state.rows(
                 "SELECT id, text, start_line, end_line, heading_path FROM chunks ORDER BY id", ()
             )

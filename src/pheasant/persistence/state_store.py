@@ -3,14 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import sqlite3
 import time
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from pheasant.persistence.backends import SqliteBackend, StateBackend, open_backend
+from pheasant.persistence.backends import PostgresBackend, StateBackend, open_backend
 from pheasant.persistence.derived_indexes import migrate_derived_indexes
 from pheasant.persistence.lexical_index import (
     bm25_repeat_counts,
@@ -19,25 +17,8 @@ from pheasant.persistence.lexical_index import (
 )
 from pheasant.persistence.schema import schema_for
 from pheasant.persistence.secrets import resolve_dsn
-from pheasant.persistence.sql import SQLITE
 
 logger = logging.getLogger(__name__)
-
-#: How long a statement waits for a competing writer before giving up.
-#:
-#: Was 5 s, which is fine when the only writer is a short sync. It is **not**
-#: fine during a multi-hour index of a large repository with the UI open: the
-#: sync worker writes continuously in one process while the API server serves
-#: `/overview`, `/jobs` and `/graph/slice` polls in another, and a 12,667-file
-#: run of microsoft/vscode died on
-#:
-#:     sqlite3.OperationalError: database is locked
-#:
-#: after ~40 minutes. WAL lets readers and one writer coexist, but checkpoints
-#: and the enrichment pass's multi-statement transactions still take the write
-#: lock long enough to blow a 5-second budget under that load. Waiting a minute
-#: costs nothing when the alternative is losing the whole index.
-BUSY_TIMEOUT_MS = 60_000
 
 #: The columns both write-path fold lookups read (Phase 1/3). One string so
 #: `find_canonical_record` and `foldable_record` cannot disagree on the
@@ -60,10 +41,6 @@ def _basename(path: str | None) -> str:
     return text.rsplit("/", 1)[-1] if "/" in text else text
 
 
-#: Re-exported for callers that referenced ``state_store.SCHEMA``; the
-#: definitions now live in :mod:`pheasant.persistence.schema`, per dialect.
-SCHEMA = schema_for(SQLITE)
-
 # Bump whenever the core DDL or an additive migration changes. Postgres fleet
 # members use the marker to avoid replaying the complete schema at startup.
 # 3: idx_sync_events_source. 4: idx_artifacts_source.
@@ -72,36 +49,17 @@ SCHEMA_VERSION = "6"
 
 
 class StateStore:
-    """SQLite-backed state, one connection per thread.
+    """The region's operational state: one PostgreSQL database.
 
-    WAL mode (set below) is SQLite's sanctioned way to let multiple threads
-    read the same database truly concurrently — but only when each thread
-    uses its *own* connection/cursor. An earlier version of this class shared
-    one `sqlite3.Connection` across every thread: the search paths
-    (text/vector/graph) run in parallel across threads (hybrid.py's per-mode
-    pool, nested inside multi_search's per-query pool for the agentic
-    workflow), and overlapping execute()+fetch calls on one shared connection
-    interleaved cursor state, handing back a Row missing an expected column
-    (reproduced as `row["chunk_id"]` raising IndexError from
-    vector_store.search() under concurrent load). The fix at the time was a
-    lock serializing every read through `rows()` — correct, but it throws
-    away the concurrency WAL mode exists to provide: with four queries
-    fanning out across three search modes, a global lock turned an
-    embarrassingly-parallel retrieve step into a mostly-serial one (measured:
-    the first, multi-query retrieve of an agentic run took 22-29s; a later
-    single-query retrieve over the same data took 1.3-2s).
-
-    Thread-local connections remove the shared state instead of locking
-    around it: every thread gets its own connection and cursor, so there is
-    nothing left to interleave, and reads run genuinely in parallel again.
-    Writes still only ever happen from the sync worker process (a different
-    process entirely — see sync/worker.py), so this process's connections are
-    all readers as far as WAL's MVCC snapshot isolation is concerned.
+    Every process of a region (api, graph, indexer, logger) reads and writes
+    it through a pooled :class:`~pheasant.persistence.backends.PostgresBackend`;
+    a preparation worker holds no credential for it. SQL here is written with
+    ``?`` placeholders and compiled for Postgres by
+    :class:`~pheasant.persistence.sql.Dialect`.
     """
 
     def __init__(
         self,
-        path: str | Path | None = None,
         *,
         backend: StateBackend | None = None,
         lexical_index: str | None = None,
@@ -109,11 +67,8 @@ class StateStore:
     ):
         """Open the store.
 
-        ``path`` is what every existing caller passes and still means "a
-        SQLite file here". ``backend`` is the Phase-35.2 seam: pass a
-        :class:`~pheasant.persistence.backends.StateBackend` (see
-        :func:`from_config`) to run on Postgres instead. Exactly one is
-        required.
+        ``backend`` defaults to the database ``PHEASANT_DATABASE_URL`` names;
+        :meth:`from_config` builds the one a region's config asks for.
 
         ``lexical_index`` is ``storage.lexical_index``. ``None`` — every caller
         that is not :meth:`from_config` — means "not configured here", and
@@ -125,13 +80,10 @@ class StateStore:
         """
 
         if backend is None:
-            if path is None:
-                raise ValueError("StateStore needs either a path or a backend")
-            backend = SqliteBackend(path)
+            # The region's database, from the environment variable every
+            # deployment sets (storage.dsn_env's default).
+            backend = PostgresBackend(resolve_dsn(None))
         self.backend = backend
-        # Kept for the many callers that read `store.path` (backups, logging,
-        # the migration command). None on a backend that has no file.
-        self.path = getattr(backend, "path", None)
         if lexical_index is not None:
             lexical_index = validate_lexical_index(lexical_index, backend.dialect)
         self.lexical_index = lexical_index
@@ -139,21 +91,20 @@ class StateStore:
         #: this store does not rank with pg_textsearch. The search path uses
         #: the index only while the ranking in force has these same weights.
         self.bm25_counts = (
-            bm25_repeat_counts(tuple(lexical_weights))
-            if lexical_index == "pg_textsearch" and backend.dialect.is_postgres
-            else None
+            bm25_repeat_counts(tuple(lexical_weights)) if lexical_index == "pg_textsearch" else None
         )
 
     @classmethod
-    def from_config(cls, config: Any, path: str | Path | None = None) -> StateStore:
-        """Build the store the config asks for.
-
-        Falls back to ``path`` for the SQLite default so a caller can keep
-        passing the location it already computed from :class:`StatePaths`.
-        """
+    def from_config(cls, config: Any) -> StateStore:
+        """Build the store the config asks for: ``storage.dsn_env``'s database."""
 
         storage = getattr(config, "storage", None)
-        backend_name = str(getattr(storage, "backend", "sqlite") or "sqlite")
+        backend_name = str(getattr(storage, "backend", "postgres") or "postgres").lower()
+        if backend_name != "postgres":
+            raise ValueError(
+                f"storage.backend is {backend_name!r}; the state store is PostgreSQL "
+                "(SQLite was removed in 2.0). Set storage.backend: postgres, or delete the key."
+            )
         lexical_index = str(getattr(storage, "lexical_index", "") or "pg_textsearch")
         # The base weights, before any tuning overlay: the index is built at
         # boot from what the config says, and a bundle that moves a column
@@ -162,13 +113,9 @@ class StateStore:
 
         base = RankingParameters.from_config(config)
         weights = (base.title_weight, base.path_weight, base.heading_weight, base.text_weight)
-        if backend_name.lower() != "postgres":
-            return cls(path, lexical_index=lexical_index, lexical_weights=weights)
         return cls(
             backend=open_backend(
-                path,
-                backend="postgres",
-                dsn=resolve_dsn(storage),
+                resolve_dsn(storage),
                 pool_size=int(getattr(storage, "pool_size", 10) or 10),
             ),
             lexical_index=lexical_index,
@@ -181,79 +128,16 @@ class StateStore:
 
     @property
     def conn(self):
-        """The live connection.
+        """The live connection: a connection-shaped adapter over the pool.
 
-        On SQLite this is the real ``sqlite3.Connection``, unchanged. On
-        Postgres it is a connection-shaped adapter, so the 76 ``self.conn``
-        uses below — including ten ``with self.conn:`` transaction blocks —
-        work on both without being rewritten. Rewriting them would have put 76
-        freshly edited lines on the default path to gain nothing.
+        ``with self.conn:`` holds one connection for a transaction; a bare
+        ``self.conn.execute`` runs on this thread's connection.
         """
 
         return self.backend.conn
 
     def migrate(self) -> None:
-        if self.backend.dialect.is_postgres:
-            self._migrate_postgres()
-            return
-        self.backend.executescript(schema_for(self.backend.dialect))
-        migrate_derived_indexes(self)
-        # Step 32.1 — one-shot idempotent column add (additive; existing rows
-        # keep acl NULL = "source expressed no ACL", the pre-32 semantics).
-        if "acl" not in self.backend.table_columns("artifacts"):
-            self.conn.execute("ALTER TABLE artifacts ADD COLUMN acl TEXT")
-        # Phase 1 (agent-speed memory compaction) — one-shot idempotent
-        # column adds. Existing rows keep canon_key NULL (never reinforced
-        # against, since nothing can match a NULL) and observations 0/
-        # last_seen NULL/variants NULL, which are exactly the pre-Phase-1
-        # values for a record that predates reinforcement. `canon_key` is
-        # recomputed for every row on the next projection rebuild regardless
-        # (it is derived, not earned — see schema.py), so leaving it NULL
-        # here is only ever a transient state until that next sync.
-        memory_columns = self.backend.table_columns("memory_records")
-        if memory_columns and "canon_key" not in memory_columns:
-            self.conn.execute("ALTER TABLE memory_records ADD COLUMN canon_key TEXT")
-        if memory_columns and "observations" not in memory_columns:
-            self.conn.execute(
-                "ALTER TABLE memory_records ADD COLUMN observations INTEGER NOT NULL DEFAULT 0"
-            )
-        if memory_columns and "last_seen" not in memory_columns:
-            self.conn.execute("ALTER TABLE memory_records ADD COLUMN last_seen TEXT")
-        if memory_columns and "variants" not in memory_columns:
-            self.conn.execute("ALTER TABLE memory_records ADD COLUMN variants TEXT")
-        # Only safe to create once the column above is guaranteed present —
-        # either it was in this database's original CREATE TABLE, or the
-        # ALTER just above added it. See the comment in schema.py.
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memory_records_canon_key ON memory_records(canon_key)"
-        )
-        # Phase 3 — same shape. Existing rows keep tier='hot' (their default
-        # is exactly the pre-Phase-3 state: a record nothing has clustered
-        # yet is not demoted) and subsumed_by NULL.
-        if memory_columns and "tier" not in memory_columns:
-            self.conn.execute(
-                "ALTER TABLE memory_records ADD COLUMN tier TEXT NOT NULL DEFAULT 'hot'"
-            )
-        if memory_columns and "subsumed_by" not in memory_columns:
-            self.conn.execute("ALTER TABLE memory_records ADD COLUMN subsumed_by TEXT")
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memory_records_tier ON memory_records(tier, scope)"
-        )
-        # The observation plane's free-text and result-path columns. Guarded
-        # like every other additive column here: `executescript` creates the
-        # table only when it is absent, so a /state written before these
-        # existed keeps the old shape unless something adds them.
-        interaction_columns = self.backend.table_columns("interaction_events")
-        if interaction_columns and "answer_text" not in interaction_columns:
-            self.conn.execute("ALTER TABLE interaction_events ADD COLUMN answer_text TEXT")
-        if interaction_columns and "result_paths_json" not in interaction_columns:
-            self.conn.execute("ALTER TABLE interaction_events ADD COLUMN result_paths_json TEXT")
-        self._migrate_evaluation_progress()
-        self._migrate_tuning_control()
-        self._migrate_saved_artifacts()
-        self._migrate_chunk_pages()
-        self.conn.commit()
-        self._migrate_fts_titles()
+        self._migrate_postgres()
 
     #: The evaluation run's durable progress columns, added after the table
     #: shipped. Guarded like every other additive column: `CREATE TABLE IF NOT
@@ -444,50 +328,6 @@ class StateStore:
                 ("core", SCHEMA_VERSION, datetime.now(UTC).isoformat()),
             )
             self.conn.commit()
-
-    def _migrate_fts_titles(self) -> None:
-        """Re-point ``chunks_fts.title`` at the file's basename.
-
-        It used to hold the full relative path — the identical string already
-        in ``path`` — so a filename carried no signal BM25 could weight
-        separately, and searching "readme" ranked by body brevity instead of
-        by name. Rebuilding is safe and needs no re-index: ``chunks_fts`` is a
-        derived cache over ``chunks`` + ``artifacts``, exactly like the graph
-        node index, so it can be regenerated from the tables that are the
-        truth. No user data is touched.
-
-        One-shot and idempotent: the presence of a '/' in any stored title is
-        the old format, and after the rebuild there is nothing left to detect.
-        """
-        if self.backend.dialect.fulltext != "fts5":
-            # Postgres derives its search vector from `chunks` directly, so
-            # there is no separate FTS table whose titles could be stale.
-            return
-        try:
-            stale = self.conn.execute(
-                "SELECT 1 FROM chunks_fts WHERE title LIKE '%/%' LIMIT 1"
-            ).fetchone()
-        except sqlite3.Error:  # table absent or FTS5 unavailable — nothing to do
-            return
-        if stale is None:
-            return
-        with self.conn:
-            self.conn.execute("DELETE FROM chunks_fts")
-            self.conn.execute(
-                """INSERT INTO chunks_fts(
-                       chunk_id, source_id, artifact_id, title, path, heading_path, text)
-                   SELECT chunks.id, chunks.source_id, chunks.artifact_id,
-                          replace(
-                              COALESCE(artifacts.relative_path, artifacts.path),
-                              rtrim(COALESCE(artifacts.relative_path, artifacts.path),
-                                    replace(COALESCE(artifacts.relative_path, artifacts.path),
-                                            '/', '')),
-                              ''),
-                          COALESCE(artifacts.relative_path, artifacts.path),
-                          COALESCE(chunks.heading_path, ''),
-                          chunks.text
-                   FROM chunks JOIN artifacts ON artifacts.id = chunks.artifact_id"""
-            )
 
     def get_fingerprint(self, scope: str) -> str | None:
         """What this scope was last indexed with, or None if never recorded."""
@@ -771,7 +611,7 @@ class StateStore:
                         chunk["artifact_id"],
                         # title = basename, path = full relative path. Two
                         # distinct signals so BM25 can weight a filename match
-                        # above a body match (see sqlite_store._BM25_WEIGHTS);
+                        # above a body match (see text_store._BM25_WEIGHTS);
                         # storing the same string twice made them one.
                         title,
                         path,
@@ -1649,7 +1489,7 @@ class StateStore:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Most-recent-first sync events, by their own times (`rowid` is SQLite's)."""
+        """Most-recent-first sync events, by their own times."""
         where = ""
         params: list[Any] = []
         if source_id:
@@ -1773,10 +1613,8 @@ class StateStore:
     def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
         """Run raw SQL. The escape hatch 57 call sites across the codebase use.
 
-        Routed through the backend so the statement is translated for the
-        active dialect (``?`` → ``%s``, ``GROUP_CONCAT`` → ``string_agg``).
-        On SQLite the translation is a no-op and this executes byte-identical
-        SQL over the same connection it always did.
+        Routed through the backend so the statement is compiled for Postgres
+        (``?`` → ``$n``, ``GROUP_CONCAT`` → ``string_agg``).
         """
 
         return self.backend.rows(sql, params)
@@ -1798,11 +1636,9 @@ class StateStore:
         """Run a write that returns rows (``UPDATE ... RETURNING``) and commit.
 
         Not a convenience over :meth:`rows`: routing a write through the read
-        path leaves the implicit transaction **open**, so on SQLite the WAL
-        write lock is held until the connection happens to commit something
-        else. Every other thread then blocks for the full ``busy_timeout``,
-        and — worse for a queue — the claim is not visible to another process
-        at all, which is the one property the durable queue exists to have.
+        path leaves its transaction **open**, so the claim is not visible to
+        another process, which is the one property the durable queue exists
+        to have.
         """
 
         # `statement`, not `rows`: on a pooled backend a read may hand the

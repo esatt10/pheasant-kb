@@ -95,7 +95,7 @@ def _config(
 def _store(config: PheasantConfig) -> StateStore:
     paths = StatePaths.from_config(config)
     paths.ensure()
-    store = StateStore(paths.sqlite)
+    store = StateStore()
     store.migrate()
     return store
 
@@ -721,11 +721,7 @@ def test_a_child_installs_a_source_with_thousands_of_urls(tmp_path: Path) -> Non
         timeout=300,
     )
     assert report.get("status") not in {"failed", "timeout"}, report
-    store = StateStore(
-        StatePaths.from_config(
-            PheasantConfig.model_validate(yaml.safe_load(config_path.read_text(encoding="utf-8")))
-        ).sqlite
-    )
+    store = StateStore()
     try:
         installed = json.loads(store.get_source("web")["config_json"])
         assert installed["urls"] == urls
@@ -774,7 +770,9 @@ def test_the_claim_statement_is_race_free_on_postgres(tmp_path: Path) -> None:
     stores = []
 
     def new_store() -> StateStore:
-        store = StateStore(backend=PostgresBackend(POSTGRES_DSN, pool_size=4))
+        store = StateStore(
+            backend=PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=4)
+        )
         stores.append(store)
         return store
 

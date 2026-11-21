@@ -3,12 +3,10 @@
 #   docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up -d \
 #     --scale indexer=1 --scale worker=4
 #
-# `docker-compose.yml` (one container, role `all`) remains the default and
-# needs no infrastructure. This file is the other trade: Postgres, NATS
-# JetStream, a shared state volume, and four tiers that scale independently.
-# It is worth it past
-# the point where one container stops being enough — see
-# docs/how-to/capacity-planning.md — and not before.
+# The generic fleet the CI smoke tests run: Postgres, NATS JetStream, a shared
+# state volume, and four tiers that scale independently. pheasant-kb
+# (`compose.yaml` at the root) is the same topology with its own sizing and
+# secrets, and is the one to deploy.
 #
 # The tiers and why they are separate:
 #

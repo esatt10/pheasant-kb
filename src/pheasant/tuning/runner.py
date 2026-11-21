@@ -1117,7 +1117,7 @@ def _repointed(searcher: Any, ranking: RankingParameters) -> Any:
     """
 
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     return HybridSearch(
         SearchStore(searcher.store.state, ranking=ranking),

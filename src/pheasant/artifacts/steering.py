@@ -46,7 +46,7 @@ MAX_ALIAS_TERMS = 8
 MAX_RULES = 64
 
 #: How a rule's trigger is broken up so it can be compared against a tokenized
-#: query. This must agree with `search.sqlite_store._query_tokens`, which keeps
+#: query. This must agree with `search.text_store._query_tokens`, which keeps
 #: runs matching ``[A-Za-z][A-Za-z0-9_]{1,}`` and additionally splits each run on
 #: ``[_\W]+``. Splitting on whitespace/underscore/hyphen alone — as this did —
 #: covers `filewatch daemon` and `pheasant-flock` but leaves every other

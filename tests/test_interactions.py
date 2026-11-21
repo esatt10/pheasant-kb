@@ -62,7 +62,7 @@ def _isolate_tracing() -> Any:
 
 @pytest.fixture
 def state(tmp_path: Path) -> StateStore:
-    store = StateStore(tmp_path / "p.db")
+    store = StateStore()
     store.migrate()
     return store
 
@@ -676,44 +676,6 @@ def test_exporter_headers_come_from_an_environment_variable_never_the_config() -
 # --------------------------------------------------------------------------
 # The read-only /state case, which only exists in a container
 # --------------------------------------------------------------------------
-
-
-def test_a_read_only_state_is_detected_and_never_written(monkeypatch: Any, tmp_path: Path) -> None:
-    """`docker-compose.scale.yml` mounts `/state:ro` on API replicas so the
-    indexer is the only writer. Under SQLite that means an API replica must
-    not try -- and it must not need an operator to have configured per-role
-    what the mount already decided.
-
-    The probe is exercised here by faking the filesystem answer; the real
-    thing was checked against an actual read-only bind mount, which the kernel
-    reports unwritable even to uid 0 (unlike bare permission bits, which root
-    bypasses).
-    """
-
-    from pheasant.api.app import _state_is_writable
-
-    config = PheasantConfig()
-    config.storage.sqlite_path = tmp_path / "state" / "p.db"
-
-    # `sys.modules`, not `import pheasant.api.app as ...`: the package's
-    # __init__ binds `app = None`, which shadows the submodule attribute.
-    import sys
-
-    monkeypatch.setattr(sys.modules["pheasant.api.app"].os, "access", lambda path, mode: False)
-    assert _state_is_writable(config, object()) is False
-
-    # Postgres does not care what the state volume allows: the ledger is in
-    # the database, which is why the shipped fleet needs no spool at all.
-    config.storage.backend = "postgres"
-    assert _state_is_writable(config, object()) is True
-
-
-def test_a_writable_state_is_detected(tmp_path: Path) -> None:
-    from pheasant.api.app import _state_is_writable
-
-    config = PheasantConfig()
-    config.storage.sqlite_path = tmp_path / "p.db"
-    assert _state_is_writable(config, object()) is True
 
 
 # --------------------------------------------------------------------------

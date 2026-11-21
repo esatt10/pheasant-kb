@@ -21,7 +21,7 @@ ones most likely to earn their keep:
 from __future__ import annotations
 
 import json
-import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -124,7 +124,7 @@ def test_export_writes_one_parquet_per_table_plus_a_manifest(indexed: Any, tmp_p
 
     manifest = json.loads((out / analytics.MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["kb_id"] == "export-kb"
-    assert manifest["state_backend"] == "sqlite"
+    assert manifest["state_backend"] == "postgres"
     assert sorted(manifest["exported"]) == sorted(analytics.DEFAULT_TABLES)
     assert report["tables"]
 
@@ -499,19 +499,6 @@ def test_cli_exports_and_queries_end_to_end(tmp_path: Path, capsys: pytest.Captu
     assert {row["relative_path"] for row in payload} == set(CORPUS)
 
 
-def test_cli_export_without_indexed_state_is_actionable(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
-    """The honest answer to exporting an unindexed region is "run sync", not a
-    missing-table error from inside DuckDB."""
-
-    from pheasant.cli import main
-
-    config = _write_config(tmp_path)
-    assert main(["export", "parquet", "-c", str(config)]) == 1
-    assert "run `pheasant sync` first" in capsys.readouterr().err.lower()
-
-
 def test_cli_lists_exportable_tables(capsys: pytest.CaptureFixture) -> None:
     from pheasant.cli import main
 
@@ -524,44 +511,59 @@ def test_cli_lists_exportable_tables(capsys: pytest.CaptureFixture) -> None:
 # --- opening state, on whichever backend ------------------------------------
 
 
-def test_open_state_names_a_missing_sqlite_file(tmp_path: Path) -> None:
-    """On SQLite, "which file did you mean" is the whole question."""
+@pytest.fixture()
+def empty_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """A database with no pheasant tables: up, and never synced."""
 
-    config = _config(tmp_path)
-    with pytest.raises(analytics.StateUnavailable, match="Run `pheasant sync` first"):
-        analytics.open_state(config, tmp_path / "state" / "nothing-here.db")
+    import uuid
+
+    from tests.conftest import _admin_execute, _drop_database, database_dsn
+
+    name = f"pheasant_empty_{uuid.uuid4().hex[:12]}"
+    _admin_execute(f'CREATE DATABASE "{name}"')
+    monkeypatch.setenv("PHEASANT_DATABASE_URL", database_dsn(name))
+    yield name
+    _drop_database(name)
 
 
-def test_open_state_rejects_an_empty_database(tmp_path: Path) -> None:
-    """A file that exists but holds no pheasant tables is "not synced yet",
-    not "no such table: chunks" from inside the Parquet writer."""
+def test_cli_export_without_indexed_state_is_actionable(
+    tmp_path: Path, capsys: pytest.CaptureFixture, empty_database: str
+) -> None:
+    """The honest answer to exporting an unindexed region is "run sync", not a
+    missing-table error from inside DuckDB."""
 
-    empty = tmp_path / "empty.db"
-    empty.parent.mkdir(parents=True, exist_ok=True)
-    sqlite3.connect(empty).close()
+    from pheasant.cli import main
+
+    config = _write_config(tmp_path)
+    assert main(["export", "parquet", "-c", str(config)]) == 1
+    assert "run `pheasant sync` first" in capsys.readouterr().err.lower()
+
+
+def test_open_state_rejects_an_empty_database(tmp_path: Path, empty_database: str) -> None:
+    """A database that is up but holds no pheasant tables is "not synced yet",
+    not "relation chunks does not exist" from inside the Parquet writer."""
+
     with pytest.raises(analytics.StateUnavailable, match="no pheasant tables yet"):
-        analytics.open_state(_config(tmp_path), empty)
+        analytics.open_state(_config(tmp_path))
 
 
-def test_open_state_distinguishes_unreadable_from_unsynced(tmp_path: Path) -> None:
+def test_open_state_distinguishes_unreadable_from_unsynced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """ "Cannot open this at all" must not be reported as "nothing indexed yet".
 
-    `SqliteBackend.table_columns` swallows a driver error and answers with an
-    empty set, so a probe built on it turns an unopenable database into a
-    confident, wrong diagnosis. The live case is a read-only `/state`: SQLite
-    needs to create its `-wal`/`-shm` sidecars even to read, so a `:ro` mount
-    fails with "unable to open database file" while the tables sit right
-    there. A directory in the database's place reproduces the same error
-    portably, without needing a mount.
+    `table_columns` swallows a driver error and answers with an empty set, so a
+    probe built on it would turn an unreachable database into a confident,
+    wrong diagnosis.
     """
 
-    unopenable = tmp_path / "state" / "pheasant.db"
-    unopenable.mkdir(parents=True)
+    from tests.conftest import database_dsn
+
+    monkeypatch.setenv("PHEASANT_DATABASE_URL", database_dsn("pheasant_does_not_exist"))
     with pytest.raises(analytics.StateUnavailable) as raised:
-        analytics.open_state(_config(tmp_path), unopenable)
+        analytics.open_state(_config(tmp_path))
     message = str(raised.value)
-    assert "could not open the SQLite state" in message
-    assert "read-only" in message, "the likeliest cause has to be named"
+    assert "could not read the state database" in message
     assert "no pheasant tables yet" not in message
 
 
@@ -574,11 +576,11 @@ def test_open_state_explains_a_missing_postgres_dsn(tmp_path: Path) -> None:
     config.storage.backend = "postgres"
     config.storage.dsn_env = "PHEASANT_TEST_DSN_THAT_IS_NOT_SET"
     with pytest.raises(analytics.StateUnavailable, match="PHEASANT_TEST_DSN_THAT_IS_NOT_SET"):
-        analytics.open_state(config, tmp_path / "unused.db")
+        analytics.open_state(config)
 
 
 def test_open_state_returns_a_usable_store(indexed: Any, tmp_path: Path) -> None:
-    state = analytics.open_state(indexed.config, indexed.state.path)
+    state = analytics.open_state(indexed.config)
     try:
         assert state.rows("SELECT count(*) AS n FROM artifacts")[0]["n"] > 0
     finally:

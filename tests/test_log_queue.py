@@ -43,7 +43,7 @@ from pheasant.telemetry.interactions import InteractionEvent, QueueSink, SpoolSi
 
 @pytest.fixture
 def state(tmp_path: Path) -> StateStore:
-    store = StateStore(tmp_path / "p.db")
+    store = StateStore()
     store.migrate()
     return store
 
@@ -397,7 +397,9 @@ def _pg_stores() -> tuple[Any, list[Any]]:
     stores: list[Any] = []
 
     def new_store() -> StateStore:
-        store = StateStore(backend=PostgresBackend(POSTGRES_DSN, pool_size=6))
+        store = StateStore(
+            backend=PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=6)
+        )
         stores.append(store)
         return store
 
@@ -608,8 +610,7 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
     import sys
     import textwrap
 
-    db = tmp_path / "p.db"
-    store = StateStore(db)
+    store = StateStore()
     store.migrate()
     QueueSink(LogQueue(store), kb_id="kb").write([_event(1), _event(2), _event(3)])
     store.close()
@@ -619,12 +620,12 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
         [
             sys.executable,
             "-c",
-            textwrap.dedent(f"""
+            textwrap.dedent("""
                 from pheasant.persistence.state_store import StateStore
                 from pheasant.sync.log_queue import LogQueue, handle_batch, hot_row_count
                 from pheasant.sync.queue import drain
 
-                store = StateStore({str(db)!r})
+                store = StateStore()
                 store.migrate()
                 written = drain(
                     LogQueue(store),
@@ -644,7 +645,7 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
     assert drained.stdout.split() == ["3", "3"]
 
     # And the first process sees the result, not a stale view of its own.
-    store = StateStore(db)
+    store = StateStore()
     try:
         assert hot_row_count(store) == 3
         assert LogQueue(store).depth()[DONE] == 1

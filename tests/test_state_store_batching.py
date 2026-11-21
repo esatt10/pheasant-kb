@@ -30,29 +30,19 @@ postgres = pytest.mark.skipif(
 )
 
 
-def _reset(dsn: str) -> None:
-    from pheasant.persistence import pg_driver
-
-    with pg_driver.connect(dsn, autocommit=True) as conn:
-        conn.query("DROP SCHEMA public CASCADE")
-        conn.query("CREATE SCHEMA public")
-
-
 def _store(kind: str, tmp_path: Path, *, pool_size: int = 2) -> StateStore:
-    if kind == "sqlite":
-        store = StateStore(tmp_path / "state.sqlite")
-    else:
-        from pheasant.persistence.backends import PostgresBackend
+    from pheasant.persistence.backends import PostgresBackend
 
-        _reset(DSN)
-        store = StateStore(backend=PostgresBackend(DSN, pool_size=pool_size))
+    store = StateStore(
+        backend=PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=pool_size)
+    )
     store.migrate()
     store.upsert_knowledge_base("kb", "kb", None, "hash", "now")
     store.upsert_source("docs", "kb", "docs", "markdown_folder", "/docs", True, {})
     return store
 
 
-BACKENDS = ["sqlite", pytest.param("postgres", marks=postgres)]
+BACKENDS = ["postgres"]
 
 ARTIFACT_ID = "file:docs:guide/setup.md:branch=main"
 
@@ -308,7 +298,7 @@ def test_a_standalone_read_sends_no_transaction_statements(tmp_path: Path) -> No
 
     store = _store("postgres", tmp_path)
     try:
-        with pg_driver.connect(DSN, autocommit=True) as admin:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
             try:
                 admin.query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
                 admin.query("SELECT pg_stat_statements_reset()")

@@ -7,7 +7,6 @@ Everything here is offline and deterministic.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ import pytest
 from pheasant.config.loader import load_config
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.simple import SimpleMultiDiGraph
-from pheasant.persistence.backup import create_backup, restore_backup
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import run_sync
@@ -219,80 +217,3 @@ def _fts_hits(cfg: PheasantConfig, query: str) -> list:
         return list(result.get("results", []))
     finally:
         engine.close()
-
-
-def test_backup_restore_round_trip(config_path: Path, tmp_path: Path) -> None:
-    cfg = _build_state(config_path)
-    original_nodes, original_edges = _engine_counts(cfg)
-    assert original_nodes > 0 and original_edges > 0
-
-    query = "architecture"
-    original_hits = _fts_hits(cfg, query)
-    assert original_hits, "expected the fixture workspace to answer an FTS query"
-
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-    assert archive.exists()
-    # Original state dir must be untouched by backup.
-    assert (cfg.state_path / "pheasant.db").exists()
-
-    # Restore into a fresh state dir and rebind config to it.
-    fresh_state = tmp_path / "restored-state"
-    restore_backup(archive, fresh_state)
-
-    restored_cfg = load_config(config_path)
-    restored_cfg.pheasant.state_path = fresh_state
-    restored_cfg.storage.sqlite_path = fresh_state / "pheasant.db"
-    restored_cfg.storage.graph_path = fresh_state / "graphs"
-    restored_cfg.storage.manifest_path = fresh_state / "manifests"
-
-    restored_nodes, restored_edges = _engine_counts(restored_cfg)
-    assert (restored_nodes, restored_edges) == (original_nodes, original_edges)
-
-    restored_hits = _fts_hits(restored_cfg, query)
-    assert [h.get("chunk_id") for h in restored_hits] == [h.get("chunk_id") for h in original_hits]
-
-    # integrity_check on the restored db.
-    conn = sqlite3.connect(fresh_state / "pheasant.db")
-    try:
-        row = conn.execute("PRAGMA integrity_check").fetchone()
-    finally:
-        conn.close()
-    assert row[0] == "ok"
-
-
-def test_restore_refuses_nonempty_without_force(config_path: Path, tmp_path: Path) -> None:
-    cfg = _build_state(config_path)
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-
-    target = tmp_path / "occupied-state"
-    target.mkdir()
-    sentinel = target / "do-not-touch.txt"
-    sentinel.write_text("precious user data", encoding="utf-8")
-
-    with pytest.raises(FileExistsError):
-        restore_backup(archive, target)
-    # Target left completely untouched.
-    assert sentinel.read_text(encoding="utf-8") == "precious user data"
-    assert list(target.iterdir()) == [sentinel]
-
-
-def test_restore_force_swaps_cleanly_and_preserves_original(
-    config_path: Path, tmp_path: Path
-) -> None:
-    cfg = _build_state(config_path)
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-
-    target = tmp_path / "occupied-state"
-    target.mkdir()
-    (target / "old-marker.txt").write_text("old", encoding="utf-8")
-
-    restore_backup(archive, target, force=True, now="2026-06-18T05:00:00Z")
-    assert (target / "pheasant.db").exists()
-    assert not (target / "old-marker.txt").exists()
-    # The old directory is preserved aside, never deleted.
-    preserved = list(tmp_path.glob("occupied-state.replaced-*"))
-    assert preserved, "expected the displaced state dir to be preserved"
-    assert (preserved[0] / "old-marker.txt").read_text(encoding="utf-8") == "old"

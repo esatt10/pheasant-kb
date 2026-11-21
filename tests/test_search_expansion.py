@@ -34,6 +34,8 @@ from pheasant.services.errors import InvalidRequest
 from pheasant.sync import connector_registry
 from pheasant.sync.connectors import ConnectorItem, ConnectorPayload, SourceConnector
 
+pytestmark = pytest.mark.module_database
+
 CORPUS = {
     "app/main.py": (
         "from app import util\nfrom app.util import helper\n\n\ndef run():\n    return helper()\n"

@@ -31,7 +31,7 @@ from pheasant.search.graph_search import search_graph
 from pheasant.search.memory_hits import annotate_memory, prefer_memory
 from pheasant.search.observability import observe_search, should_sample, stage_digest
 from pheasant.search.ranking import DEFAULT_RANKING, RankingParameters
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.search.vector_store import VectorSearcher
 from pheasant.security.authorization import scoped_principal
 from pheasant.telemetry.interactions import annotate_current
@@ -285,7 +285,7 @@ class HybridSearch:
                 state = getattr(self.store, "state", None)
                 dialect = getattr(state, "dialect", None)
                 admitted = False
-                if dialect is not None and dialect.is_postgres:
+                if dialect is not None:
                     from pheasant.request_budget import DeadlineExceeded, remaining_seconds
 
                     remaining = remaining_seconds()

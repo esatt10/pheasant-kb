@@ -686,16 +686,9 @@ def apply_bundle(state: Any, kb_id: str, bundle_id: str, *, applied_by: str) -> 
     from pheasant.artifacts.publications import publish
 
     with state.conn:
-        if state.backend.dialect.is_postgres:
-            state.conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtext(?))", ("pheasant:tuning:" + kb_id,)
-            )
-        else:
-            # Acquire SQLite's writer slot before reading the incumbent.
-            state.conn.execute(
-                "UPDATE tuning_bundles SET applied_by=applied_by WHERE kb_id=? AND bundle_id=?",
-                (kb_id, bundle_id),
-            )
+        state.conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(?))", ("pheasant:tuning:" + kb_id,)
+        )
         previous = active_overlay(state, kb_id)
         state.conn.execute(
             "UPDATE tuning_bundles SET superseded_at=? "

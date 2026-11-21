@@ -60,7 +60,9 @@ def digest_of_query(state: Any, sql: str, params: tuple[Any, ...] = ()) -> str:
     seen = False
     for row in state.rows(sql, params):
         seen = True
-        for value in tuple(row):
+        # The values, in column order. A row is a mapping: iterating it gives
+        # the column names, which are the same for every state.
+        for value in row.values():
             hasher.update(b"" if value is None else str(value).encode("utf-8"))
             hasher.update(b"\x1f")
         hasher.update(b"\x1e")

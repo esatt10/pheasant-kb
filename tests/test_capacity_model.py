@@ -114,7 +114,7 @@ def test_search_returns_each_document_once_after_a_resync(tmp_path: Path) -> Non
     """
 
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     engine = SyncEngine(_config(tmp_path, state_name="dedupe", files=5))
     try:
@@ -140,7 +140,7 @@ def test_an_incremental_sync_still_replaces_changed_content(tmp_path: Path) -> N
     """
 
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     config = _config(tmp_path, state_name="incremental", files=3)
     engine = SyncEngine(config)
@@ -487,37 +487,3 @@ def test_the_capacity_sweep_runs_and_reports_every_axis() -> None:
             assert point[key] is not None, f"{key} missing"
     assert report["caveats"], "a sweep with a synthetic fixture must state its caveats"
     assert report["model"]["nodes_per_file"] == NODES_PER_FILE
-
-
-def test_the_state_breakdown_attributes_the_database_correctly(tmp_path: Path) -> None:
-    """The breakdown is the point: one total would hide which part grows."""
-
-    from pheasant.sync.benchmark import _directory_bytes
-
-    engine = SyncEngine(_config(tmp_path, state_name="breakdown", files=4))
-    try:
-        engine.sync_source("docs", "full")
-        state_root = Path(engine.config.pheasant.state_path)
-    finally:
-        engine.close()
-
-    buckets = _directory_bytes(state_root)
-    assert buckets["database"] > 0, "the SQLite database was not attributed"
-    # On the default backend the graph *is* rows in that database, so the
-    # graph directory holds only snapshots. The split by directory therefore
-    # no longer separates them, which is a fact about where the graph lives
-    # rather than a gap in the measurement — `graph_nodes` in the same report
-    # is what sizes it, through `GRAPH_ROW_BYTES_PER_NODE`.
-    assert buckets["graph"] == 0, "the row backend keeps no graph file"
-    assert sum(buckets.values()) > 0
-
-    legacy = SyncEngine(
-        _config(tmp_path, state_name="breakdown-file", files=4, graph_format="node_link_json")
-    )
-    try:
-        legacy.sync_source("docs", "full")
-        legacy_root = Path(legacy.config.pheasant.state_path)
-    finally:
-        legacy.close()
-    legacy_buckets = _directory_bytes(legacy_root)
-    assert legacy_buckets["graph"] > 0, "the file backend's graph was not attributed"

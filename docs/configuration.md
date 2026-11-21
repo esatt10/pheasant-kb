@@ -56,7 +56,7 @@ standalone is selected:
 | `server.api.max_concurrent_requests` | `64` | `0` |
 | `server.api.drain_seconds` | `20` | `0` |
 | `server.api.cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000", "http://api:8765", "http://host.docker.internal:8765"]` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000"]` |
-| `storage.backend` | `postgres` | `sqlite` |
+| `storage.backend` | `postgres` | `postgres` |
 | `storage.pool_size` | `16` | `10` |
 | `storage.graph_checkpoint_seconds` | `120` | `60` |
 | `storage.graph_checkpoint_max_seconds` | `300` | `1800` |

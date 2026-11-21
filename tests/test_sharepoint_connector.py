@@ -540,7 +540,7 @@ def test_unreadable_attachments_are_said_in_the_item(
 
 
 def _state(tmp_path: Path) -> StateStore:
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     return state
 

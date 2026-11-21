@@ -66,5 +66,5 @@ def test_wait_returns_at_once_and_ensure_creates_only_what_is_missing() -> None:
         )  # fmt: skip
         assert result.returncode == 0, result.stderr
     finally:
-        with pg_driver.connect(DSN, autocommit=True) as conn:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
             conn.execute_script(f'DROP DATABASE IF EXISTS "{name}"')

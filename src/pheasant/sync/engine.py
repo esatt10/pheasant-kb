@@ -77,7 +77,7 @@ from pheasant.sync.fingerprint import (
 )
 from pheasant.sync.graph_events import notifier_from_config as graph_notifier_from_config
 from pheasant.sync.graph_history import snapshot_after_sync
-from pheasant.sync.locks import EngineLease, SourceLease, source_lock
+from pheasant.sync.locks import SourceLease, source_lock
 from pheasant.sync.pacing import serve_yield
 from pheasant.sync.pdf_split import attach_fleet_pages, reads_locally
 from pheasant.sync.pipeline import beat_sources, default_interval, startup_sources
@@ -205,7 +205,6 @@ class SyncEngine:
         config: PheasantConfig,
         paths: StatePaths | None = None,
         state: StateStore | None = None,
-        lease: EngineLease | None = None,
         *,
         load_persisted_graph: bool = True,
         defer_persisted_graph_load: bool = False,
@@ -214,7 +213,7 @@ class SyncEngine:
         self.config = config
         self.paths = paths or StatePaths.from_config(config)
         self.paths.ensure()
-        self.state = state or StateStore.from_config(self.config, self.paths.sqlite)
+        self.state = state or StateStore.from_config(self.config)
         usage_meter.bind_for(config, self.state)  # metering and its spend limit, everywhere
         self.state.migrate()
         # Every secret this process reads (a git token, a model key, a Drive
@@ -222,15 +221,10 @@ class SyncEngine:
         from pheasant import connections
 
         connections.install(self.config, self.state)
-        # Single-writer lease (Synapse 21.2): acquired lazily on the first
-        # sync so read-only engines (e.g. docker-exec MCP stdio beside a
-        # running server) keep working against a served state directory.
-        self.lease = lease or EngineLease(self.paths.state)
         # In-process serialization across all writers (watcher, scheduler,
         # API startup executor, HTTP /sync). Preparation may run concurrently;
         # only state/graph/vector commits take this mutex.
         self._sync_mutex = threading.RLock()
-        self._lease_mutex = threading.Lock()
         SourceRegistry(self.config, self.state).initialize()
         self.manifests = ManifestStore(self.paths.manifests, self.state)
         self.graph_store = GraphStore(
@@ -322,7 +316,7 @@ class SyncEngine:
         self.node_index = NodeIndex(self.state)
 
     def close(self) -> None:
-        """Persist in-flight graph work, release the lease, close the store.
+        """Persist in-flight graph work and close the store.
 
         Called from the server's shutdown path, so `docker compose stop`
         keeps whatever the running sync had built instead of discarding it.
@@ -337,7 +331,6 @@ class SyncEngine:
             except Exception as exc:  # pragma: no cover - shutdown must not raise
                 logger.warning("Could not flush vector store on shutdown: %s", exc)
         usage_meter.unbind(self.state)
-        self.lease.release()
         from pheasant.sync.history_publisher import close as close_history
 
         close_history(self)
@@ -2461,31 +2454,20 @@ class SyncEngine:
     def _source_write_lock(self, source_name: str):
         """Hold everything needed to write one source, then release it.
 
-        Exclusion is per **source** on a shared backend and per **process** on
-        SQLite. Postgres arbitrates concurrent writers itself, so two indexers
-        can commit two different sources at once — which is the point of the
-        35.2 seam. SQLite genuinely permits one writer per file, so the
-        whole-state :class:`EngineLease` there is an accurate model rather than
-        a limitation to route around.
-
-        The on-disk ``source_lock`` is held in both cases: it excludes two
-        *threads* of one process, which no database lease addresses.
+        Exclusion is per **source**: the :class:`SourceLease` row in the state
+        database, so two indexers can commit two different sources at once.
+        The on-disk ``source_lock`` excludes two *threads* of one process,
+        which no database lease addresses.
         """
 
         timeout = float(self.config.sync.concurrency.lock_timeout_seconds or 0)
-        lease = None
-        if self.state.dialect.is_postgres:
-            lease = SourceLease(self.state, source_name)
-            lease.acquire(wait_timeout_s=timeout)
-        else:
-            with self._lease_mutex:
-                self.lease.acquire()
+        lease = SourceLease(self.state, source_name)
+        lease.acquire(wait_timeout_s=timeout)
         try:
             with source_lock(self.paths.locks, source_name, timeout_s=timeout):
                 yield
         finally:
-            if lease is not None:
-                lease.release()
+            lease.release()
 
     def _graph_capacity_notice(self) -> dict[str, Any] | None:
         """Say something once a graph outgrows one container (Phase 35.3).
@@ -2559,7 +2541,7 @@ class SyncEngine:
     def search_context(self, query: str, max_results: int = 10) -> dict:
         from pheasant.search.hybrid import HybridSearch
         from pheasant.search.ranking import resolver_for
-        from pheasant.search.sqlite_store import SearchStore
+        from pheasant.search.text_store import SearchStore
 
         return HybridSearch(
             SearchStore(self.state, ranking=resolver_for(self.config, self.state)),

@@ -378,7 +378,6 @@ class StorageSettings(ModelMixin):
     #: recoverable; an unbounded interval on a very large graph is not.
     graph_checkpoint_max_seconds: int = 1_800
     compression: str = "zstd"
-    sqlite_path: Path | None = None
     graph_path: Path | None = None
     manifest_path: Path | None = None
     max_state_size_gb: float = 10
@@ -389,13 +388,11 @@ class StorageSettings(ModelMixin):
     #: Not ``max_state_size_gb``, which bounds snapshot history by eviction.
     knowledge_base_limit_gb: float | None = None
 
-    # -- Phase 35.2: where state actually lives -------------------------------
-    #: ``sqlite`` (default) or ``postgres``. SQLite is a file and permits one
-    #: writer process per knowledge base, which is pheasant's hard scaling
-    #: ceiling; Postgres is what lets 35.4 give each *source* its own lease so
-    #: several indexers can commit at once. Leaving this alone keeps a region
-    #: byte-identical to pre-35.2 and needing no infrastructure at all.
-    backend: str = "sqlite"
+    # -- where state lives ---------------------------------------------------
+    #: Always ``postgres``: the state store is PostgreSQL 17 with pg_textsearch
+    #: preloaded (``deploy/postgres``). Kept so existing configs that name it
+    #: still load; anything else is refused when the store is opened.
+    backend: str = "postgres"
     #: Name of the environment variable holding the libpq DSN. A DSN carries a
     #: password, so — like every other credential in pheasant — only the
     #: variable *name* is ever written to YAML. There is deliberately no field
@@ -501,7 +498,7 @@ class VectorStoreSettings(ModelMixin):
 class SearchRankingSettings(ModelMixin):
     """The numbers ranking reads. Every default is the shipped constant.
 
-    These were module constants in ``pheasant.search.sqlite_store`` and
+    These were module constants in ``pheasant.search.text_store`` and
     ``pheasant.search.hybrid`` until the tuning plane needed to address them:
     a parameter no surface can name is a parameter no experiment can change.
     Leaving this whole block unset reproduces the 2026-08-03 retrieval
@@ -2031,7 +2028,6 @@ class PheasantConfig(ModelMixin):
                 )
             )
         state = cfg.pheasant.state_path
-        cfg.storage.sqlite_path = cfg.storage.sqlite_path or state / "pheasant.db"
         cfg.storage.graph_path = cfg.storage.graph_path or state / "graphs"
         cfg.storage.manifest_path = cfg.storage.manifest_path or state / "manifests"
         cfg.pheasant.defaults = table

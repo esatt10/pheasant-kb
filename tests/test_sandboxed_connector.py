@@ -42,7 +42,7 @@ def test_connector_for_source_routes_to_the_sandboxed_tier(tmp_path: Path) -> No
     root = tmp_path / "content"
     root.mkdir()
     (root / "a.txt").write_text("alpha")
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     connector = connector_for_source(_make_source(root), state)
     assert isinstance(connector, SandboxedConnector)
@@ -51,7 +51,7 @@ def test_connector_for_source_routes_to_the_sandboxed_tier(tmp_path: Path) -> No
 def test_native_runtime_default_does_not_route_to_the_sandbox(tmp_path: Path) -> None:
     root = tmp_path / "content"
     root.mkdir()
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     source = SourceConfig(name="native-example", type=SourceType.repository, path=root)
     connector = connector_for_source(source, state)
@@ -62,7 +62,7 @@ def test_the_guest_actually_transforms_content_not_a_pass_through(tmp_path: Path
     root = tmp_path / "content"
     root.mkdir()
     (root / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     connector = SandboxedConnector(_make_source(root), state)
     items = connector.list_items()

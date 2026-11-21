@@ -1,36 +1,26 @@
-"""Storage backends behind :class:`~pheasant.persistence.state_store.StateStore`.
+"""The storage backend behind :class:`~pheasant.persistence.state_store.StateStore`.
 
-Phase 35.2. The seam exists because one writer process per knowledge base is
-pheasant's hard scaling ceiling (``sync/locks.py``'s ``EngineLease``), and
-SQLite is why: it has no notion of a second process committing concurrently to
-the same file beyond serialized writes. Postgres removes that constraint, so
-35.4 can give each *source* its own lease and let N indexers commit at once.
+The state store is PostgreSQL (17, with pg_textsearch preloaded:
+``deploy/postgres``). :class:`StateBackend` is the interface the store and
+its tests program against; :class:`PostgresBackend` is the implementation.
 
-**SQLite stays the default and stays byte-identical.** CLAUDE.md rule 7 —
-standalone mode is sacred — is not satisfied by "SQLite still works if you
-configure it"; it is satisfied by the SQLite path executing the same SQL over
-the same connections it always did. So :class:`SqliteBackend` is the previous
-``StateStore`` connection handling moved, not rewritten, and
-:meth:`Dialect.translate` is a no-op for it.
-
-Both backends hand back rows that support ``row["col"]`` *and* ``row[0]``,
-because pheasant's call sites use both and quietly breaking the positional ones
-is exactly the kind of failure that reaches production.
+Rows support ``row["col"]`` *and* ``row[0]``, because pheasant's call sites
+use both and quietly breaking the positional ones is exactly the kind of
+failure that reaches production. A row is a mapping, so iterating one gives
+its column names: ``row.values()`` is its values.
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 import threading
 import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from pheasant.persistence.pg_liveness import is_disconnect
-from pheasant.persistence.sql import POSTGRES, SQLITE, Dialect, Row
+from pheasant.persistence.sql import POSTGRES, Dialect, Row
 from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
@@ -137,107 +127,6 @@ class StateBackend(ABC):
         """Something safe to log. Never includes a password."""
 
         return self.dialect.name
-
-
-class SqliteBackend(StateBackend):
-    """One SQLite connection per thread.
-
-    WAL mode is SQLite's sanctioned way to let multiple threads read the same
-    database truly concurrently — but only when each thread uses its *own*
-    connection. An earlier version shared one connection across every thread:
-    the search paths (text/vector/graph) run in parallel, and overlapping
-    execute()+fetch calls interleaved cursor state, handing back a Row missing
-    an expected column. Locking around it was correct but threw away the
-    concurrency WAL exists to provide (measured: a multi-query retrieve took
-    22-29s where a single-query one over the same data took 1.3-2s).
-    Thread-local connections remove the shared state instead of locking it.
-    """
-
-    dialect = SQLITE
-
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
-        # Every connection ever opened, so close() can close all of them — not
-        # just whichever thread happens to call close().
-        self._all_conns: list[sqlite3.Connection] = []
-        self._registry_lock = threading.Lock()
-
-    @property
-    def conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(self.path, check_same_thread=True)
-            conn.row_factory = sqlite3.Row
-            # Crash/concurrency safety (Synapse step 21.2): WAL survives
-            # kill -9 mid-write, busy_timeout rides out concurrent readers,
-            # synchronous=NORMAL is the sanctioned WAL durability level.
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn = conn
-            with self._registry_lock:
-                self._all_conns.append(conn)
-        return conn
-
-    def rows(self, sql: str, params: tuple[Any, ...] = ()) -> list[Row]:
-        # sqlite3.Row already satisfies the dual-access contract, so it is
-        # returned as-is: converting would allocate on every read for nothing.
-        return self.conn.execute(sql, params).fetchall()  # type: ignore[return-value]
-
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
-        self.conn.execute(sql, params)
-
-    def statement(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[Row], int]:
-        """``(rows, rowcount)`` with a *real* rowcount.
-
-        Overridden rather than inherited, and the base's default is why. That
-        default returns ``rowcount=0`` unconditionally — harmless while only
-        :class:`PostgresBackend` implemented this, and a live defect the moment
-        anything reads the count on SQLite. A conditional claim
-        (``UPDATE ... WHERE status <> 'running'``, the pattern every lease and
-        every batch claim in this codebase uses) decides on that number, so
-        inheriting the default would make the claim always report "I did not
-        get it" on the default backend and work correctly on Postgres.
-
-        That is the mirror image of the failure mode this file has already
-        produced twice — SQLite tolerant, Postgres fatal — and it is the worse
-        direction, because the offline suite runs on SQLite.
-        """
-
-        cursor = self.conn.execute(sql, params)
-        rows = cursor.fetchall() if cursor.description else []
-        return rows, int(cursor.rowcount or 0)  # type: ignore[return-value]
-
-    def executemany(self, sql: str, seq: list[tuple[Any, ...]]) -> None:
-        self.conn.executemany(sql, seq)
-
-    def executescript(self, script: str) -> None:
-        self.conn.executescript(script)
-
-    def commit(self) -> None:
-        self.conn.commit()
-
-    def close(self) -> None:
-        with self._registry_lock:
-            conns, self._all_conns = self._all_conns, []
-        for conn in conns:
-            try:
-                conn.close()
-            except Exception:  # pragma: no cover - already-closed is fine
-                pass
-        self._local = threading.local()
-
-    def table_columns(self, table: str) -> set[str]:
-        try:
-            return {row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")}
-        except sqlite3.Error:
-            return set()
-
-    @property
-    def description(self) -> str:
-        return f"sqlite:{self.path}"
 
 
 class _PgResult:
@@ -776,26 +665,12 @@ class PostgresBackend(StateBackend):
         return "postgres"
 
 
-def open_backend(
-    path: str | Path | None = None,
-    *,
-    backend: str = "sqlite",
-    dsn: str | None = None,
-    pool_size: int = 10,
-) -> StateBackend:
-    """Build the configured backend.
+def open_backend(dsn: str, *, pool_size: int = 10) -> StateBackend:
+    """The state database: PostgreSQL at ``dsn``."""
 
-    ``path`` is what every existing caller passes, and with the default
-    ``backend`` it produces exactly the SQLite store they had before.
-    """
-
-    if str(backend or "sqlite").lower() == "postgres":
-        if not dsn:
-            raise ValueError(
-                "storage.backend is 'postgres' but no DSN was resolved. Set "
-                "storage.dsn_env to the name of an environment variable holding it."
-            )
-        return PostgresBackend(dsn, pool_size=pool_size)
-    if path is None:
-        raise ValueError("the sqlite backend needs a database path")
-    return SqliteBackend(path)
+    if not dsn:
+        raise ValueError(
+            "no DSN was resolved for the state database. Set storage.dsn_env to the "
+            "name of an environment variable holding a PostgreSQL connection string."
+        )
+    return PostgresBackend(dsn, pool_size=pool_size)

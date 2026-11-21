@@ -85,7 +85,7 @@ def _engine(
     root: Path, site: _Site, names: list[str], store: str = "sqlite", **extra: Any
 ) -> SyncEngine:
     storage = (
-        {"storage": {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}}
+        {"storage": {"backend": "postgres", "dsn_env": "PHEASANT_DATABASE_URL"}}
         if store == "postgres"
         else {}
     )

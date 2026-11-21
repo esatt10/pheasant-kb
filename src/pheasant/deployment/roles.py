@@ -302,14 +302,6 @@ def _validate_worker_surface(config: object) -> None:
     use for, so holding one can only ever be a mistake or a compromise.
     """
 
-    backend = str(getattr(getattr(config, "storage", None), "backend", "") or "").lower()
-    if backend and backend != "sqlite":
-        raise RoleConfigurationError(
-            f"role 'worker' resolves storage.backend: {backend!r}. A preparation worker "
-            "opens no state store — it is handed bytes and returns chunks — so a "
-            "database backend here means this process is running the wrong config. "
-            "Point it at worker.yaml (deploy/compose/worker.yaml)."
-        )
     sources = getattr(config, "sources", None) or []
     if sources:
         names = ", ".join(str(getattr(item, "name", item)) for item in list(sources)[:3])

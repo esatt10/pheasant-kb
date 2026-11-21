@@ -1,17 +1,18 @@
-"""A searchable index of graph nodes, in SQLite.
+"""A searchable index of graph nodes, in the state database.
 
 Graph-mode search used to score every node in memory. That is O(nodes) per
 query and it does not care how selective the query is: on a 500k-node graph a
 single search cost 2.5s idle and over 10s while indexing ran, and the agent
 loop issues several per question. Chunk text has never had this problem —
-it lives in an FTS5 index — so graph nodes get the same treatment.
+it lives in a full-text index — so graph nodes get the same treatment: a
+``tsvector`` column with a GIN index.
 
 The index is a **cache derived from the graph**, never a second source of
 truth. It can be deleted at any time and rebuilt from the in-memory graph, and
 graph search falls back to the in-memory scan whenever it is empty or
 unavailable. That keeps the graph the only thing that has to be correct.
 
-One semantic change, deliberate: FTS matches tokens and prefixes where the old
+One semantic change, deliberate: it matches tokens and prefixes where the old
 scan matched arbitrary substrings, so a query for ``exec`` finds
 ``executor`` (token prefix) but no longer finds ``myexecutor`` (infix). This
 is the same matching the text search over chunks has always used, and the
@@ -27,20 +28,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS graph_nodes_fts USING fts5(
-  node_id UNINDEXED,
-  source_id UNINDEXED,
-  body,
-  tokenize='unicode61'
-);
-"""
-
-#: Postgres has no FTS5. Same table name and columns so every write below is
-#: unchanged, plus a generated search vector and its GIN index. ``simple``
-#: (not ``english``) matches FTS5's unicode61 tokenizer: no stemming, no
-#: stopword removal — stemming here would silently change which graph nodes a
-#: query reaches.
+#: A generated search vector and its GIN index. ``simple`` (not ``english``):
+#: no stemming, no stopword removal — stemming here would silently change
+#: which graph nodes a query reaches.
 POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS graph_nodes_fts (
   node_id TEXT PRIMARY KEY,
@@ -55,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_graph_nodes_fts_vector
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_fts_source ON graph_nodes_fts(source_id);
 """
 
-#: FTS5 treats these as syntax; a query built from user text must not.
+#: tsquery treats these as syntax; a query built from user text must not.
 _UNSAFE = re.compile(r"[^\w\s]", re.UNICODE)
 
 
@@ -65,34 +55,29 @@ class NodeIndex:
     def __init__(self, state: Any) -> None:
         self.state = state
         self._ready = False
-        dialect = getattr(state, "dialect", None)
-        self._postgres = bool(dialect is not None and dialect.is_postgres)
         # Sticky "there is something in here". A query only needs to know
-        # empty-vs-not, and COUNT(*) over an FTS5 table is a full scan — on a
-        # 577k-row index that was costing more than the search it guarded.
+        # empty-vs-not, and COUNT(*) is a full scan — on a 577k-row index that
+        # was costing more than the search it guarded.
         # Only ever flips false→true, and writes set it directly.
         self._populated = False
 
     def ensure(self) -> bool:
-        """Create the table if needed. False when FTS5 is unavailable."""
+        """Create the table if needed. False when it cannot be created."""
 
         if self._ready:
             return True
         try:
-            if self._postgres:
-                # Most processes only need to discover the cache another
-                # process created. The re-check under the schema lock closes
-                # the first-start race without replaying catalog DDL from
-                # every API/indexer/sync child.
-                if "node_id" not in self.state.backend.table_columns("graph_nodes_fts"):
-                    with self.state.backend.schema_lock():
-                        if "node_id" not in self.state.backend.table_columns("graph_nodes_fts"):
-                            self.state.conn.executescript(POSTGRES_SCHEMA)
-            else:
-                self.state.conn.executescript(SCHEMA)
+            # Most processes only need to discover the cache another process
+            # created. The re-check under the schema lock closes the
+            # first-start race without replaying catalog DDL from every
+            # API/indexer/sync child.
+            if "node_id" not in self.state.backend.table_columns("graph_nodes_fts"):
+                with self.state.backend.schema_lock():
+                    if "node_id" not in self.state.backend.table_columns("graph_nodes_fts"):
+                        self.state.conn.executescript(POSTGRES_SCHEMA)
             self.state.conn.commit()
             self._ready = True
-        except Exception as exc:  # pragma: no cover - SQLite without FTS5
+        except Exception as exc:  # pragma: no cover - a database refusing DDL
             logger.warning("graph node index unavailable (%s); using the in-memory scan", exc)
             self._ready = False
         return self._ready
@@ -114,8 +99,7 @@ class NodeIndex:
             return True
         if not self.ensure():
             return False
-        probe = "node_id" if self._postgres else "rowid"
-        self._populated = bool(self.state.rows(f"SELECT {probe} FROM graph_nodes_fts LIMIT 1"))
+        self._populated = bool(self.state.rows("SELECT node_id FROM graph_nodes_fts LIMIT 1"))
         return self._populated
 
     def replace_all(self, nodes: Iterable[tuple[str, str, str]]) -> int:
@@ -123,19 +107,7 @@ class NodeIndex:
 
         if not self.ensure():
             return 0
-        if self._postgres:
-            return self._replace_all_postgres(nodes)
-        written = 0
-        with self.state.conn:
-            self.state.conn.execute("DELETE FROM graph_nodes_fts")
-            for batch in _batched(nodes, 2000):
-                self.state.conn.executemany(
-                    "INSERT INTO graph_nodes_fts (node_id, source_id, body) VALUES (?,?,?)",
-                    batch,
-                )
-                written += len(batch)
-        self._populated = written > 0
-        return written
+        return self._replace_all_postgres(nodes)
 
     def _replace_all_postgres(self, nodes: Iterable[tuple[str, str, str]]) -> int:
         """Reconcile through a temporary stage instead of delete/reinsert.
@@ -210,27 +182,7 @@ class NodeIndex:
         if not self.ensure():
             return 0
         upserts = list(upserts)
-        if self._postgres:
-            return self._apply_postgres(upserts, removals)
-        touched = [node_id for node_id, _source, _body in upserts]
-        touched.extend(removals)
-        if not touched:
-            return 0
-        with self.state.conn:
-            for batch in _batched(iter(touched), 500):
-                placeholders = ",".join("?" for _ in batch)
-                self.state.conn.execute(
-                    f"DELETE FROM graph_nodes_fts WHERE node_id IN ({placeholders})",
-                    tuple(batch),
-                )
-            for batch in _batched(iter(upserts), 2000):
-                self.state.conn.executemany(
-                    "INSERT INTO graph_nodes_fts (node_id, source_id, body) VALUES (?,?,?)",
-                    batch,
-                )
-        if upserts:
-            self._populated = True
-        return len(upserts)
+        return self._apply_postgres(upserts, removals)
 
     def _apply_postgres(
         self,
@@ -281,25 +233,17 @@ class NodeIndex:
 
         if not self.ensure():
             return None
-        match = _match_expression(tokens)
-        if not match:
+        expression = _tsquery_expression(tokens)
+        if not expression:
             return None
         if not self.populated():
             return None
-        if self._postgres:
-            # tsquery, not MATCH. Prefix search is `word:*`, and the terms are
-            # OR'd exactly as the FTS5 expression does — same recall, different
-            # spelling. Building this from the already-sanitized tokens rather
-            # than translating the FTS5 string keeps one source of truth for
-            # what a term is.
-            sql = (
-                "SELECT node_id FROM graph_nodes_fts, to_tsquery('simple', ?) q "
-                "WHERE search_vector @@ q"
-            )
-            params: list[Any] = [_tsquery_expression(tokens)]
-        else:
-            sql = "SELECT node_id FROM graph_nodes_fts WHERE graph_nodes_fts MATCH ?"
-            params = [match]
+        # An OR of prefix terms (`word:*`).
+        sql = (
+            "SELECT node_id FROM graph_nodes_fts, to_tsquery('simple', ?) q "
+            "WHERE search_vector @@ q"
+        )
+        params: list[Any] = [expression]
         if source_name:
             sql += " AND source_id = ?"
             params.append(source_name)
@@ -339,24 +283,12 @@ class NodeIndex:
         sql, params = built
         try:
             found = [str(row["node_id"]) for row in self.state.rows(sql, tuple(params))]
-        except Exception as exc:  # a malformed MATCH must not fail the search
+        except Exception as exc:  # a malformed query must not fail the search
             logger.debug("node index query failed (%s); falling back to scan", exc)
             return None
         if found:
             return found
         return found if self.still_populated() else None
-
-
-def _match_expression(tokens: list[str]) -> str:
-    """An OR of prefix terms, with FTS5 syntax characters stripped."""
-
-    terms = []
-    for token in tokens:
-        cleaned = _UNSAFE.sub(" ", token).strip()
-        for word in cleaned.split():
-            if len(word) > 1:
-                terms.append(f'"{word}"*')
-    return " OR ".join(dict.fromkeys(terms))
 
 
 def _batched(items: Iterable[Any], size: int) -> Iterable[list[Any]]:
@@ -371,13 +303,7 @@ def _batched(items: Iterable[Any], size: int) -> Iterable[list[Any]]:
 
 
 def _tsquery_expression(tokens: list[str]) -> str:
-    """The Postgres twin of :func:`_match_expression`.
-
-    Same tokens, same OR semantics, same prefix matching — spelled ``word:*``
-    and joined with ``|`` instead of FTS5's ``"word"* OR``. Built from the
-    tokens rather than by rewriting the FTS5 string so there is one definition
-    of what counts as a term.
-    """
+    """An OR of prefix terms (``word:*`` joined by ``|``), syntax stripped."""
 
     terms = []
     for token in tokens:

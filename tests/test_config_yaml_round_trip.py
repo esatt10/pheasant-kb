@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from pheasant.config.loader import config_hash, dump_config_yaml, load_config
+from pheasant.config.loader import config_hash, dump_config_yaml
 from pheasant.config.schema import PheasantConfig
 
 REPO = Path(__file__).resolve().parents[1]
@@ -44,21 +44,6 @@ def test_the_dumper_round_trips_and_indents_its_sequences() -> None:
     assert yaml.safe_load(text) == payload
     # Indented under the key, not at the parent's indent.
     assert "  b:\n    - x:y\n" in text, text
-
-
-def test_a_generated_config_reloads_into_the_same_settings(tmp_path: Path) -> None:
-    from pheasant.cli import main
-
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    (corpus / "a.md").write_text("# A\n\nProse.\n", encoding="utf-8")
-    config_path = tmp_path / "pheasant.yaml"
-    assert main(["up", str(corpus), "-c", str(config_path), "--no-serve"]) == 0
-
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert data["sources"][0]["name"] == "corpus"
-    assert isinstance(data["security"]["allow_workspace_roots"], list)
-    assert load_config(config_path).sources[0].name == "corpus"
 
 
 def test_a_url_in_a_list_stays_a_string(tmp_path: Path) -> None:

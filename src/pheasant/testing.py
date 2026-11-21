@@ -40,12 +40,28 @@ class ConnectorConformance:
         raise NotImplementedError("conformance subclasses implement make_connector()")
 
     def make_state(self, tmp_path: Path) -> StateStore:
-        state = StateStore(tmp_path / "conformance-state.db")
+        """The state store: the PostgreSQL database ``PHEASANT_DATABASE_URL`` names."""
+
+        state = StateStore()
         state.migrate()
         return state
 
     def _connector(self, tmp_path: Path) -> SourceConnector:
-        return self.make_connector(tmp_path, self.make_state(tmp_path))
+        state = self.make_state(tmp_path)
+        connector = self.make_connector(tmp_path, state)
+        # A checkpoint belongs to a registered source (a foreign key).
+        source = connector.source
+        state.upsert_knowledge_base("conformance", "conformance", None, "conformance", "")
+        state.upsert_source(
+            source.name,
+            "conformance",
+            source.name,
+            str(getattr(source.type, "value", source.type)),
+            str(getattr(source, "path", "") or ""),
+            True,
+            {},
+        )
+        return connector
 
     @staticmethod
     def _payload_sha(connector: SourceConnector, item: ConnectorItem) -> str | None:

@@ -54,21 +54,19 @@ dependencies = [
   # signs a Drive service account's token request (RS256). Already in the
   # image through the a2a extra; core because a standalone region connects too.
   "cryptography>=42.0",
+  # The state store is PostgreSQL. pg8000 (BSD-3-Clause, pure Python) speaks
+  # the wire protocol and SQLAlchemy's QueuePool (MIT) pools it;
+  # `persistence/pg_driver.py` is the only importer of either. pg8000 is
+  # pinned exactly because pg_driver drives its connection's message handling
+  # directly (see that module's docstring); tests/test_pg_driver.py fails when
+  # an upgrade moves what it relies on.
+  "pg8000==1.31.6",
+  "sqlalchemy>=2.0.30,<2.2",
 ]
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.1,<3"]
 vector = ["lancedb>=0.6"]
-# Phase 35.2: the Postgres state backend. Gated so a standalone region —
-# which is every default install — carries no database driver and the
-# offline suite runs without one.
-#
-# pg8000 (BSD-3-Clause, pure Python) speaks the wire protocol and SQLAlchemy's
-# QueuePool (MIT) pools it; `persistence/pg_driver.py` is the only importer of
-# either. pg8000 is pinned exactly because pg_driver drives its connection's
-# message handling directly (see that module's docstring);
-# tests/test_pg_driver.py fails when an upgrade moves what it relies on.
-postgres = ["pg8000==1.31.6", "sqlalchemy>=2.0.30,<2.2"]
 # Agentic question answering. Gated so a region that never opens the chat
 # surface — or is happy with the single-pass workflow — carries no agent
 # framework, and the offline suite passes without it.
@@ -122,8 +120,8 @@ dev = [
   "httpx>=0.27,<1",
   "jsonschema>=4.22",
   "ruff>=0.5",
-  # Not every extra is in `dev` — lancedb, wasmtime and postgres each want a
-  # runtime or a server, so their tests skip in CI. DuckDB wants neither: it
+  # Not every extra is in `dev` — lancedb and wasmtime each want a runtime,
+  # so their tests skip in CI. DuckDB wants neither: it
   # is a wheel with no service behind it, so including it here is what makes
   # `tests/test_parquet_export.py` actually run on every PR instead of
   # skipping quietly, which is how an export format rots.
@@ -146,6 +144,9 @@ pythonpath = ["src"]
 # Fixture packages carry their own test suites (the canonical third-party
 # connector shape); they run in *their* package context, not ours.
 norecursedirs = ["tests/fixtures"]
+markers = [
+    "module_database: the module's tests share one state database its module-scoped fixtures index into",
+]
 
 [tool.ruff]
 line-length = 100

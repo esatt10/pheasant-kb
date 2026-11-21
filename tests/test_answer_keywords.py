@@ -33,6 +33,8 @@ from pheasant.assistant.llm import LLM
 from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_server.tools import PheasantTools
 
+pytestmark = pytest.mark.module_database
+
 # ---------------------------------------------------------------------------
 # 1. Reading
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from collections.abc import Callable, Iterator
@@ -532,7 +533,7 @@ def test_a_read_past_its_deadline_is_stopped_by_postgres(tmp_path: Path) -> None
 
     config = _config(tmp_path)
     config.storage.backend = "postgres"
-    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     engine = SyncEngine(config)
     try:
         started = time.monotonic()
@@ -558,7 +559,6 @@ def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path
     Watched on Azure after a Postgres restart.
     """
 
-    import os
     import time
 
     from pheasant.persistence import pg_driver
@@ -566,11 +566,11 @@ def test_a_deadline_bound_read_survives_a_connection_the_server_dropped(tmp_path
 
     config = _config(tmp_path)
     config.storage.backend = "postgres"
-    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     engine = SyncEngine(config)
     try:
         engine.state.rows("SELECT 1 AS one")  # a pooled connection, now idle
-        with pg_driver.connect(os.environ["PHEASANT_TEST_POSTGRES_DSN"], autocommit=True) as admin:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
             admin.query(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE datname = current_database() AND pid <> pg_backend_pid()"

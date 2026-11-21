@@ -19,13 +19,19 @@ from typing import Any
 
 import pytest
 
-# The suite is offline by design, so it runs on the standalone defaults:
-# SQLite, no queue, one process, stub models. pheasant's own default is
-# pheasant-kb's configuration (Postgres, NATS, OpenAI), which
-# tests/test_flagship_defaults.py exercises explicitly. Nothing above imports
-# pheasant, so this is set before any config is built, and every CLI the
-# suite runs as a subprocess inherits it.
+# The suite runs on the offline defaults: no queue, one process, stub models,
+# no keys. pheasant's own default is pheasant-kb's configuration (NATS,
+# OpenAI), which tests/test_flagship_defaults.py exercises explicitly. Nothing
+# above imports pheasant, so this is set before any config is built, and every
+# CLI the suite runs as a subprocess inherits it.
 os.environ.setdefault("PHEASANT_DEFAULTS", "standalone")
+
+#: The state store is PostgreSQL (Postgres 17 with pg_textsearch preloaded:
+#: `deploy/postgres`). This names a database the test user may connect to and
+#: create databases from; each test gets a fresh database cloned from a
+#: migrated template, and PHEASANT_DATABASE_URL points at it.
+ADMIN_DSN_ENV = "PHEASANT_TEST_POSTGRES_DSN"
+DATABASE_ENV = "PHEASANT_DATABASE_URL"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures"
@@ -132,6 +138,231 @@ def _fresh_model_availability():
 
     llm.reset_availability()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _fresh_usage_meter():
+    """Start and end every test with the process's usage meter unbound and empty.
+
+    The meter is one per process. A test that closed its engine without
+    unbinding left rows the meter could no longer write to that database (its
+    pool is closed), and the next test to bind the meter received them.
+    """
+
+    from pheasant.telemetry.usage import METER
+
+    def reset() -> None:
+        with METER._lock:
+            METER._target = None
+            METER._mirror = None
+            METER._rows.clear()
+            METER._inflight = {}
+
+    reset()
+    yield
+    reset()
+
+
+# --------------------------------------------------------------------------
+# One PostgreSQL database per test
+# --------------------------------------------------------------------------
+
+
+def _admin_dsn() -> str:
+    dsn = os.environ.get(ADMIN_DSN_ENV, "").strip()
+    if not dsn:
+        pytest.exit(
+            f"{ADMIN_DSN_ENV} is unset. The suite runs on PostgreSQL 17 with pg_textsearch "
+            "preloaded (deploy/postgres). Start one, e.g.\n"
+            "  docker run -d --name pheasant-test-pg -p 127.0.0.1:55432:5432 "
+            "-e POSTGRES_USER=pheasant -e POSTGRES_PASSWORD=test "
+            "ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1\n"
+            f"  export {ADMIN_DSN_ENV}=postgresql://pheasant:test@127.0.0.1:55432/pheasant",
+            returncode=2,
+        )
+    return dsn
+
+
+def database_dsn(name: str) -> str:
+    """The admin DSN with its database swapped for ``name``."""
+
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(_admin_dsn())
+    return urlunsplit(parts._replace(path=f"/{name}"))
+
+
+def _admin_execute(*statements: str) -> None:
+    from pheasant.persistence import pg_driver
+
+    connection = pg_driver.connect(_admin_dsn(), autocommit=True)
+    try:
+        for statement in statements:
+            connection.execute(statement)
+    finally:
+        connection.close()
+
+
+@pytest.fixture(scope="session")
+def _template_database() -> str:
+    """A database every table has been created in, cloned once per test.
+
+    Running the schema migration per test costs seconds; ``CREATE DATABASE …
+    TEMPLATE`` copies the files and costs tens of milliseconds.
+    """
+
+    from pheasant.persistence.backends import PostgresBackend
+    from pheasant.persistence.state_store import StateStore
+
+    name = f"pheasant_template_{os.getpid()}"
+    _admin_execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)', f'CREATE DATABASE "{name}"')
+    store = StateStore(backend=PostgresBackend(database_dsn(name), pool_size=1))
+    try:
+        store.migrate()
+    finally:
+        store.close()
+    yield name
+    _admin_execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def _make_database(template: str) -> str:
+    import uuid
+
+    name = f"pheasant_t_{uuid.uuid4().hex[:12]}"
+    _admin_execute(f'CREATE DATABASE "{name}" TEMPLATE "{template}"')
+    return name
+
+
+def _drop_database(name: str) -> None:
+    _admin_execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+@pytest.fixture()
+def fresh_database(_template_database: str) -> Callable[[], str]:
+    """Make another empty, migrated database and return its DSN.
+
+    For a test that stands up two regions: each needs its own state store, as
+    each had its own file before the store was a server.
+    """
+
+    made: list[str] = []
+
+    def make() -> str:
+        made.append(_make_database(_template_database))
+        return database_dsn(made[-1])
+
+    yield make
+    for name in made:
+        _drop_database(name)
+
+
+def _database_variables(template: str):
+    made: list[tuple[str, str]] = []
+
+    def make() -> str:
+        name = _make_database(template)
+        variable = f"PHEASANT_TEST_DB_{name.rsplit('_', 1)[-1].upper()}"
+        os.environ[variable] = database_dsn(name)
+        made.append((variable, name))
+        return variable
+
+    def drop() -> None:
+        for variable, name in made:
+            os.environ.pop(variable, None)
+            _drop_database(name)
+
+    return make, drop
+
+
+@pytest.fixture()
+def database_variable(_template_database: str) -> Callable[[], str]:
+    """Make a database and return the name of a variable holding its DSN.
+
+    For a second region in one test: its config names the variable as
+    ``storage.dsn_env``, so it keeps a state store of its own beside the one
+    ``PHEASANT_DATABASE_URL`` names, as it kept a state directory of its own.
+    """
+
+    make, drop = _database_variables(_template_database)
+    yield make
+    drop()
+
+
+@pytest.fixture(scope="session")
+def session_database_variable(_template_database: str) -> Callable[[], str]:
+    """``database_variable`` for a region a module-scoped fixture builds."""
+
+    make, drop = _database_variables(_template_database)
+    yield make
+    drop()
+
+
+#: A module whose fixtures build one corpus for all its tests marks itself
+#: ``pytestmark = pytest.mark.module_database``: the tests reading that corpus
+#: share the database it was indexed into, as they shared its state directory.
+MODULE_DATABASE = "module_database"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_database(request: pytest.FixtureRequest, _template_database: str):
+    if request.node.get_closest_marker(MODULE_DATABASE) is None:
+        yield None
+        return
+    name = _make_database(_template_database)
+    dsn = database_dsn(name)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(DATABASE_ENV, dsn)
+        yield dsn
+    _drop_database(name)
+
+
+def _uses_module_fixture(request: pytest.FixtureRequest) -> bool:
+    """Whether the test takes a fixture its module built once (its corpus)."""
+
+    own = {"_module_database", "_template_database"}
+    for name, definitions in request._pyfuncitem._fixtureinfo.name2fixturedefs.items():
+        if name not in own and any(d.scope == "module" for d in definitions):
+            return True
+    return False
+
+
+@pytest.fixture(autouse=True)
+def _state_database(
+    request: pytest.FixtureRequest,
+    _module_database: str | None,
+    fresh_database: Callable[[], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Every test's state store is a database of its own.
+
+    A test reading its module's shared corpus reads the module's database; one
+    that builds a region of its own beside it gets a fresh one, as it got a
+    state directory of its own.
+    """
+
+    shared = _module_database is not None and _uses_module_fixture(request)
+    dsn = _module_database if shared else fresh_database()
+    monkeypatch.setenv(DATABASE_ENV, dsn)
+    return dsn
+
+
+@pytest.fixture()
+def no_state_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A process that must hold no state credential: a preparation worker."""
+
+    monkeypatch.delenv(DATABASE_ENV, raising=False)
+
+
+def seed_source(store: Any, source_id: str = "demo", kb_id: str = "demo") -> None:
+    """Register a knowledge base and a source, for a test writing rows by hand.
+
+    Every artifact, chunk and checkpoint names its source, and Postgres
+    enforces the foreign key that SQLite only declared.
+    """
+
+    now = "2026-01-01T00:00:00Z"
+    store.upsert_knowledge_base(kb_id, kb_id, None, "test", now)
+    store.upsert_source(source_id, kb_id, source_id, "folder", "/w", True, {})
 
 
 @pytest.fixture()

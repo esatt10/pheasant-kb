@@ -9,7 +9,6 @@ from pheasant.config.schema import PheasantConfig
 @dataclass(frozen=True)
 class StatePaths:
     state: Path
-    sqlite: Path
     graphs: Path
     manifests: Path
     snapshots: Path
@@ -23,7 +22,6 @@ class StatePaths:
         state = config.pheasant.state_path
         return cls(
             state=state,
-            sqlite=config.storage.sqlite_path or state / "pheasant.db",
             graphs=config.storage.graph_path or state / "graphs",
             manifests=config.storage.manifest_path or state / "manifests",
             snapshots=state / "snapshots",
@@ -45,4 +43,3 @@ class StatePaths:
             self.exports,
         ]:
             path.mkdir(parents=True, exist_ok=True)
-        self.sqlite.parent.mkdir(parents=True, exist_ok=True)
