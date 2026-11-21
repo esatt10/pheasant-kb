@@ -251,6 +251,7 @@ class StateStore:
         self._migrate_evaluation_progress()
         self._migrate_tuning_control()
         self._migrate_saved_artifacts()
+        self._migrate_chunk_pages()
         self.conn.commit()
         self._migrate_fts_titles()
 
@@ -294,6 +295,20 @@ class StateStore:
         ("archived_at", "TEXT"),
         ("publication_state", "TEXT NOT NULL DEFAULT 'published'"),
     )
+
+    def _migrate_chunk_pages(self) -> None:
+        """The pages a chunk's lines fall on (`graph/provenance.py`).
+
+        Both paths, for the reason `_migrate_evaluation_progress` states.
+        Nullable with no default, so on Postgres the ALTER is a catalog change,
+        not a rewrite of every chunk; existing rows read ``NULL`` (no pages)
+        until their document is indexed again.
+        """
+
+        columns = self.backend.table_columns("chunks")
+        for column in ("page_start", "page_end"):
+            if columns and column not in columns:
+                self.conn.execute(f"ALTER TABLE chunks ADD COLUMN {column} INTEGER")
 
     def _migrate_saved_artifacts(self) -> None:
         from pheasant.persistence.artifact_migrations import migrate_saved_artifacts
@@ -385,6 +400,9 @@ class StateStore:
                 "connections": "check_json",
                 "access_grants": "updated_at",
                 "usage_daily": "b9",
+                # A column on a table every region has, so the marker alone
+                # would skip it (CLAUDE.md §6, the first trap).
+                "chunks": "page_end",
             }
             schema_present = all(
                 column in self.backend.table_columns(table) for table, column in required.items()
@@ -416,6 +434,7 @@ class StateStore:
             # named in only one place exists on exactly one backend.
             self._migrate_tuning_control()
             self._migrate_saved_artifacts()
+            self._migrate_chunk_pages()
             migrate_derived_indexes(self)
             migrate_lexical_index(self)
             self.conn.execute(
@@ -731,13 +750,14 @@ class StateStore:
             self.conn.executemany(
                 """INSERT INTO chunks(
                     id,artifact_id,source_id,chunk_index,heading_path,start_line,
-                    end_line,text,text_hash,summary,token_estimate
+                    end_line,text,text_hash,summary,token_estimate,page_start,page_end
                 )
                 VALUES(
                     :id,:artifact_id,:source_id,:chunk_index,:heading_path,
-                    :start_line,:end_line,:text,:text_hash,:summary,:token_estimate
+                    :start_line,:end_line,:text,:text_hash,:summary,:token_estimate,
+                    :page_start,:page_end
                 )""",
-                chunks,
+                [{"page_start": None, "page_end": None, **chunk} for chunk in chunks],
             )
             self.conn.executemany(
                 """INSERT INTO chunks_fts(

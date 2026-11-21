@@ -37,6 +37,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from pheasant.graph import okf_index
+from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
 from pheasant.search.criteria import (
     apply_retrieval_criteria,
     criteria_active,
@@ -60,8 +61,10 @@ MAX_EXPANSION_SEEDS = 25
 #: leads from a file to its own passages — the hit already is one — and comes
 #: first in a file's out-edges, so left in it spends the whole budget
 #: restating the document. ``indexes`` is the source -> every-artifact
-#: shortcut the canvas leaves out for the same reason.
-DEFAULT_EXPANSION_EXCLUDES = ("has_chunk", "indexes")
+#: shortcut the canvas leaves out for the same reason. The provenance edges
+#: (`graph/provenance.py`) too: ``section_has_chunk`` would bring a file's own
+#: passages back two hops later. Name them in ``edge_types`` to walk them.
+DEFAULT_EXPANSION_EXCLUDES = ("has_chunk", "indexes", *sorted(PROVENANCE_EDGE_TYPES))
 
 
 @dataclass(frozen=True)

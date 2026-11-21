@@ -12,6 +12,10 @@ class TextChunk:
     start_line: int
     end_line: int
     heading_path: str | None = None
+    #: The pages the chunk's first and last lines fall on, for a document that
+    #: has pages (`ingestion.extractor.PagedText`); ``None`` otherwise.
+    page_start: int | None = None
+    page_end: int | None = None
 
     @property
     def text_hash(self) -> str:

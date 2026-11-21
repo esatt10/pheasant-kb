@@ -27,6 +27,7 @@ from typing import Any
 
 from pheasant.assistant.providers import PROVIDERS
 from pheasant.graph.okf_index import prompt_note
+from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -332,10 +333,9 @@ FACT_NODE_TYPES = {
     *ARTIFACT_FACT_TYPES,
 }
 # Structural edges say "this file is in this folder"; they are noise as facts.
-# `derived_from` is the exact mirror of `mentions` (one per mentions edge —
-# 766,477 of each on the demo corpus), so surfacing it says the same thing
-# twice, backwards.
-STRUCTURAL_EDGES = {"contains", "has_chunk", "indexes", "derived_from"}
+# `derived_from` mirrors `mentions` (one per mentions edge, 766,477 of each on
+# the demo corpus), so surfacing it says the same thing twice, backwards.
+STRUCTURAL_EDGES = {"contains", "has_chunk", "indexes", "derived_from", *PROVENANCE_EDGE_TYPES}
 
 #: What a fact is worth, by edge type. Lower sorts first.
 #:

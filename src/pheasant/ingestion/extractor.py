@@ -94,6 +94,7 @@ from pheasant.ingestion.pdf_pages import (
     _pdfium,
     pdf_page_texts,
 )
+from pheasant.ingestion.text_tidy import PagedText, _tidy, paged_text  # noqa: F401
 
 if TYPE_CHECKING:
     from pheasant.config.schema import ExtractorSettings
@@ -426,19 +427,6 @@ def extract_docx_text_builtin(content: bytes, math: bool = False) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _tidy(text: str) -> str:
-    """Collapse extraction artifacts into stable, chunkable text.
-
-    Deterministic and idempotent: ``_tidy(_tidy(x)) == _tidy(x)``, so the same
-    bytes always chunk identically across runs and platforms.
-    """
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r" ?\n ?", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
 # ---------------------------------------------------------------------------
 # Providers
 # ---------------------------------------------------------------------------
@@ -562,7 +550,7 @@ class NativeExtractor:
                 pages = pdf_page_texts(content, math=True) if self.math else pdf_page_texts(content)
             else:
                 pages = self.pdf_pages(content, relative_path)
-            return _tidy("\n\n".join(pages))
+            return paged_text(list(pages))
         except Exception as exc:
             # A corrupt/encrypted PDF must not abort a sync: fall back to the
             # builtin, which may still recover the uncompressed streams.

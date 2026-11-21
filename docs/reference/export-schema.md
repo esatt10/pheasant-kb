@@ -156,6 +156,8 @@ true corpus extract rather than a metadata dump. Primary key `id`.
 | `text_hash` | VARCHAR | Hash of `text`. |
 | `summary` | VARCHAR | Usually NULL — no LLM runs in the indexing path. |
 | `token_estimate` | BIGINT | Rough token count, for budgeting a context window. |
+| `page_start` | BIGINT | The page the chunk's first line is on, for a document read with its pages (a PDF); NULL otherwise, and for a chunk indexed before pages were kept. |
+| `page_end` | BIGINT | The page its last line is on; NULL as for `page_start`. |
 
 ### `symbols.parquet`
 
@@ -320,7 +322,7 @@ One row per edge — **one row per parallel edge**, not per node pair.
 |---|---|---|
 | `from_node` | VARCHAR | → `graph_nodes.node_id` |
 | `to_node` | VARCHAR | → `graph_nodes.node_id` |
-| `type` | VARCHAR | Relation: `contains`, `has_chunk`, `has_heading`, `mentions`, `references`, `imports`, `calls`, `similar_to`, `supersedes`, `about`, `indexes`, `derived_from`. |
+| `type` | VARCHAR | Relation: `contains`, `has_chunk`, `has_heading`, `next_chunk`, `section_has_chunk`, `next_heading`, `mentions`, `references`, `imports`, `calls`, `similar_to`, `supersedes`, `about`, `indexes`, `derived_from`. |
 | `confidence` | DOUBLE | 1.0 unless the enrichment pass said otherwise. |
 | `created_at` | VARCHAR | ISO-8601 UTC. |
 | `attributes` | VARCHAR | JSON text, as for nodes. |

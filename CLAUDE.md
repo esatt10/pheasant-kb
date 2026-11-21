@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 233 pytest modules, offline by design
+└── tests/                     ← 234 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -599,6 +599,25 @@ one adapter per format behind one set of safety rules); the outermost tar is
 indexed once per process, a compressed one decompressed once into a bounded
 temporary file, so members are read by seeking rather than by decompressing
 again each time. `tests/test_okf_index.py`, `tests/test_tar_archives.py`.
+
+**A passage knows where it sits** (`graph/provenance.py`, since 2026-11-21).
+`next_chunk` chains a document's chunks, `section_has_chunk` links a heading
+to every chunk holding its own text, `next_heading` orders the sections, and
+`chunk_index`/`order` and pages (`page_start`/`page_end` on chunks and their
+rows, `page` on headings) say it as numbers. Pages come from PDFium's page
+texts: `extractor.paged_text` finds each page's tidied text in the tidied
+whole, so the text, chunk ids and every index are byte-identical, and a
+document it cannot align gets no pages rather than wrong ones (`PagedText`, a
+str dropped by the pipeline at once). The builder prefetches every node and
+pair a document touches (`_prefetch_structure`) so the fleet writer's working
+set reads a document in a few statements. **Nothing that ranks reads any of
+it**: relationship search and the row store's `candidate_edges` skip the edge
+types, node search and the node index skip the attributes, facts call them
+structural, answer expansion does not root at chunks or headings, and a
+search's `expand` excludes them by default. `tests/test_chunk_provenance.py`
+compares every one with the structure stripped, on SQLite and Postgres, and
+each guard was seen failing without it. Re-indexing also removes sections a
+document no longer has. A region adopts it with a `full` sync.
 
 **Deletions are synced, not just additions.** An incremental sync removes
 what a complete listing no longer contains (`sync/vanished.py`, opt-in per

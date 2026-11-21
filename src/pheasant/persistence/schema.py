@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   text_hash TEXT NOT NULL,
   summary TEXT,
   token_estimate INTEGER,
+  page_start INTEGER, page_end INTEGER,
   FOREIGN KEY (artifact_id) REFERENCES artifacts(id),
   FOREIGN KEY (source_id) REFERENCES sources(id)
 );

@@ -378,7 +378,9 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         reached by and the node it was reached via, so you can follow it with
         get_graph_neighbors, get_graph_slice, explain_node or get_file_summary.
         By default has_chunk and indexes edges are skipped (a file's own
-        passages, and the source-to-every-file shortcut). At most 25 distinct
+        passages, and the source-to-every-file shortcut), and so are
+        next_chunk, section_has_chunk and next_heading (a document's own
+        order); name any of them in edge_types to walk it. At most 25 distinct
         hits are expanded; the response's "expansion" block says how many.
         Every hit's node_id, and every passage's chunk_id, is a graph node id.
 

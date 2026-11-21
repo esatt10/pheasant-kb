@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
 from pheasant.ingestion.content_types import MEMORY_ARTIFACT_TYPE
 from pheasant.services import ServiceContext
 from pheasant.services.errors import DocumentNotFound, InvalidRequest, SourceNotFound
@@ -60,6 +61,7 @@ from pheasant.sync.health import scored_status
 #: Edges that describe where a document sits rather than what it points at.
 STRUCTURAL_EDGES = frozenset(
     {"contains", "indexes", "has_chunk", "has_heading", "belongs_to_branch", "at_commit"}
+    | PROVENANCE_EDGE_TYPES
 )
 #: Link rows one call may return. Page with ``offset`` past it.
 MAX_LINKS = 500

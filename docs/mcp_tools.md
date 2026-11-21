@@ -230,7 +230,9 @@ has them, a short `summary`, its `depth`, the `edge_types` it was reached by
 and `via`, the node it was reached from. The response's `expansion` block
 reports the settings in force and how many distinct hits were walked (at most
 25; `seeds_skipped` counts the rest). `has_chunk` and `indexes` are skipped by
-default — a file's own passages and the source-to-every-file shortcut; naming
+default — a file's own passages and the source-to-every-file shortcut — and so
+are `next_chunk`, `section_has_chunk` and `next_heading`, a document's own
+order ([document structure](graph_model.md#document-structure)); naming
 `edge_types` drops those defaults and naming `exclude_edge_types` replaces them.
 
 Expansion never changes retrieval — the same hits, in the same order, under

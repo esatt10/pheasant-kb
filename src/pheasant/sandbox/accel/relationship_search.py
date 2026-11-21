@@ -16,6 +16,7 @@ from __future__ import annotations
 import struct
 from typing import Any
 
+from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.sandbox.accel.loader import new_instance
 from pheasant.search.graph_search import _SKIP_KEYS, _stringify
@@ -81,6 +82,8 @@ def _edge_rows(
         source_label = str((nodes.get(source) or {}).get("label") or source)
         target_label = str((nodes.get(target) or {}).get("label") or target)
         for _key, data in edge_map.items():
+            if data.get("type") in PROVENANCE_EDGE_TYPES:
+                continue  # never scored, as in `graph_search._scan_edges`
             rows.append((source, target, data, source_label, target_label))
     return rows
 

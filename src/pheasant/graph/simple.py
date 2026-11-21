@@ -5,6 +5,8 @@ import threading
 from collections import defaultdict
 from typing import Any
 
+from pheasant.graph.provenance import PROVENANCE_ATTRIBUTES
+
 
 def _search_blob(attrs: dict[str, Any]) -> str:
     """Every attribute value of a node, lowercased into one searchable string.
@@ -15,8 +17,10 @@ def _search_blob(attrs: dict[str, Any]) -> str:
     """
 
     parts = []
-    for value in attrs.values():
-        if value is None or isinstance(value, bool):
+    for key, value in attrs.items():
+        if value is None or isinstance(value, bool) or key in PROVENANCE_ATTRIBUTES:
+            # Provenance attributes are never scored (`search.graph_search`),
+            # so the index that only rejects nodes has no use for them.
             continue
         if isinstance(value, (str, int, float)):
             parts.append(str(value))

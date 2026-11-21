@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from pheasant.graph.provenance import PROVENANCE_ATTRIBUTES, PROVENANCE_EDGE_TYPES
 from pheasant.graph.simple import SimpleMultiDiGraph
 from pheasant.search.sqlite_store import _STOPWORDS
 
@@ -22,6 +23,9 @@ _SKIP_KEYS = {
     "sha256",
     "id",
     "key",
+    # Where a chunk or section sits (`graph/provenance.py`): positions and
+    # page numbers, which would match a query's numbers on every long PDF.
+    *PROVENANCE_ATTRIBUTES,
 }
 
 _STRUCTURED_KEYS = {"label", "name", "qualified_name", "type"}
@@ -293,6 +297,11 @@ def _scan_edges(
             if source_name and data.get("source_id") != source_name:
                 continue
             etype = str(data.get("type") or "related")
+            if etype in PROVENANCE_EDGE_TYPES:
+                # Order and section membership: structure, never a match.
+                # The row store's narrowing leaves them out already; the
+                # resident graph's full iteration does not.
+                continue
             type_score = _field_score(etype, tokens, q, 0.65, 0.55, 0.45)
             endpoint_score = max(
                 _field_score(source_label, tokens, q, 0.5, 0.4, 0.3),
