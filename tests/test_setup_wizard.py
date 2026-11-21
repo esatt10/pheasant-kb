@@ -122,14 +122,13 @@ def test_assistant_model_is_explicitly_asked_when_chat_is_enabled() -> None:
     assert wizard.answers["assistant.model"] == "gpt-test"
 
 
-def test_setup_uses_six_responsive_phases() -> None:
+def test_setup_uses_five_responsive_phases() -> None:
     assert [phase.title for phase in build_phases()] == [
         "Foundation",
         "Sources & content",
         "Search & graph",
         "Assistant & memory",
         "Operations & security",
-        "Federation",
     ]
 
 

@@ -4,7 +4,7 @@ The harness runs the real write→index→search path; the thresholds below are
 the regression gate for the two retrieval fixes it flushed out (FTS5
 implicit-AND on natural-language questions, inverted bm25→relevance
 mapping). Full-size numbers are recorded in the Flock repo's
-``docs/RESULTS.md`` §9d; reproduce with ``python -m pheasant.memory.benchmark``.
+``docs/RESULTS.md`` §9d; reproduce with ``python -m pheasant.artifacts.benchmark``.
 """
 
 from __future__ import annotations
@@ -13,15 +13,15 @@ from pathlib import Path
 
 import pytest
 
-from pheasant.config.loader import load_config
-from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.benchmark import (
+from pheasant.artifacts.benchmark import (
     MemoryBenchSpec,
     RedundancyBenchSpec,
     generate_cases,
     run_memory_recall_benchmark,
     run_memory_redundancy_benchmark,
 )
+from pheasant.config.loader import load_config
+from pheasant.mcp_server.tools import PheasantTools
 
 CI_SPEC = MemoryBenchSpec(n_facts=12, n_distractors=40, n_updates=4, n_abstain=4, n_sync_probes=3)
 CI_REDUNDANCY_SPEC = RedundancyBenchSpec(n_facts=6, seed=99)

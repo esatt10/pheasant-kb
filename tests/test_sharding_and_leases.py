@@ -123,7 +123,7 @@ def test_the_rendered_plan_names_regions_sources_and_memory() -> None:
     assert "shard-1" in text and "shard-2" in text
     assert "- a" in text and "- b" in text
     assert "Gi" in text
-    assert "router" in text
+    assert "never across them" in text
 
 
 def test_planning_an_empty_corpus_is_not_an_error() -> None:

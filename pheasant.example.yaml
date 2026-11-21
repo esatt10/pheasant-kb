@@ -379,25 +379,6 @@ security:
   #   behind_authenticating_proxy: false
   #   public_paths: ["/health", "/ready", "/metrics"]
 
-# Synapse federation (Synapse 21.5). Standalone-safe: every router-facing
-# behavior is a no-op unless you opt in here. With the defaults below the
-# region behaves exactly like a router-less pheasant.
-#
-# synapse:
-#   publish: false               # gate contract publication + sync event stream
-#   router_url: null             # e.g. http://synapse-router:8000 (POST sync.completed)
-#   fleet_id: null               # fleet label stamped into the contract
-#   endpoint: null               # this region's reachable base URL, e.g.
-#                                # http://my-region:8765 (router pulls GET /contract)
-#   webhook_timeout_seconds: 5.0
-#
-# When synapse.publish is true, each successful indexing sync (re)writes
-# <state>/contract.latest.json (served at GET /contract and the MCP resource
-# pheasant://knowledge-bases/{kb_id}/contract) and appends a sync.completed
-# record to <state>/events/YYYY-MM-DD.ndjson. When router_url is also set, the
-# event (with the inline contract) is POSTed to <router_url>/v1/synapse/events;
-# webhook failures are logged, never raised.
-
 # Grounded chat over your index (the UI's chat layer). Query-time only — no
 # LLM ever runs during indexing, so re-syncing unchanged content stays
 # Agent memory. Records are append-only Markdown files written by agents

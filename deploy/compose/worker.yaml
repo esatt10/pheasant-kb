@@ -82,5 +82,3 @@ security:
   default_exclude_secrets: true
   allow_user_selected_source_paths: true
   acl_enforced: false
-synapse:
-  publish: false

@@ -477,12 +477,3 @@ def test_office_resync_is_idempotent(tmp_path: Path) -> None:
         )
     ]
     assert first == second and first
-
-
-def test_publisher_advertises_document_for_office_only_sources(tmp_path: Path) -> None:
-    """A deck-only region is document-capable: no PDF or DOCX required."""
-    engine = _make_office_engine(tmp_path)
-    from pheasant.synapse.publisher import ContractPublisher
-
-    caps = ContractPublisher(engine.config, engine.state)._capabilities()
-    assert "document" in caps["modalities"]

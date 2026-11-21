@@ -117,9 +117,7 @@ def test_every_retrieval_knob_has_help_text() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "extra", ["mcp", "vector", "a2a", "agent", "wasm", "docs", "dev", "analytics", "otel"]
-)
+@pytest.mark.parametrize("extra", ["mcp", "vector", "agent", "wasm", "dev", "analytics", "otel"])
 def test_documented_extras_still_exist(extra: str) -> None:
     """The wizard and the docs name these; a renamed extra breaks both."""
     import tomllib

@@ -192,9 +192,9 @@ def render_plan(plan: dict[str, Any]) -> str:
             lines.append(f"  ! {warning}")
     lines.append("")
     lines.append(
-        "Each region is an ordinary pheasant container with its own /state. "
-        "Point them all at one router (synapse.router_url) and it fans out "
-        "across them. See docs/how-to/capacity-planning.md."
+        "Each region is a separate knowledge base with its own state; a question "
+        "is answered by one region, never across them. "
+        "See docs/how-to/capacity-planning.md."
     )
     return "\n".join(lines) + "\n"
 
@@ -423,8 +423,8 @@ def _emit_readme(plan: dict[str, Any], regions: list[str]) -> str:
             "- **No data moves.** Each region indexes its own sources from scratch.",
             "  There is no state migration, and a tool that pretended otherwise would",
             "  be the dangerous kind of automation.",
-            "- **No router is configured.** Point every region at one `synapse.router_url`",
-            "  to have queries fanned out across them; see docs/SYNAPSE_INTEGRATION.md.",
+            "- **Queries do not span regions.** Each region is its own knowledge base;",
+            "  a question asked of one is answered from that region's sources only.",
             "- **No secrets are generated.** The `.env.example` files carry stubs and",
             "  say how many distinct values each region needs.",
             "",

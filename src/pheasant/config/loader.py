@@ -36,6 +36,10 @@ REMOVED_SETTINGS: dict[str, str] = {
         "has had no effect since. Terms are still searchable; the corpus "
         "vocabulary now comes from the full-text index. Delete the key."
     ),
+    "synapse": (
+        "Synapse federation was removed in 2.0: a region no longer publishes a "
+        "semantic contract or posts sync events to a router. Delete the section."
+    ),
     "pheasant.vault_path": (
         "the Obsidian vault projection was removed, so pheasant no longer "
         "writes a vault. Delete the key, and drop any /vault mount. Files "

@@ -1,5 +1,5 @@
 import { Telemetry } from "./components/Telemetry";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { JobsTray } from "./components/JobsTray";
 import { RegionBanner } from "./components/RegionBanner";
@@ -37,7 +37,6 @@ export function App() {
           <Routes>
             <Route path="/" element={<Notebook />} />
             <Route path="/graph" element={<GraphPage />} />
-            <Route path="/memory" element={<Navigate to="/artifacts" replace />} />
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/evaluation" element={<EvaluationPage />} />
             <Route path="/tuning" element={<PermissionPage permission="tuning.manage"><TuningPage /></PermissionPage>} />

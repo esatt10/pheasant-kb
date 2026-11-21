@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from pheasant.artifacts.policy import MemoryPolicy
+from pheasant.artifacts.steering import Steering, load_steering, parse_rule
+from pheasant.artifacts.store import MemoryStore
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.policy import MemoryPolicy
-from pheasant.memory.steering import Steering, load_steering, parse_rule
-from pheasant.memory.store import MemoryStore
 
 NOW = "2026-07-16T12:00:00Z"
 
@@ -185,7 +185,7 @@ def test_a_malformed_rule_in_the_store_does_not_break_a_search(tmp_path: Path) -
         steering=True,
     )
     try:
-        payload = tools.search_context("steer-test", "router", mode="text", memory="off")
+        payload = tools.search_context("steer-test", "router", mode="text", artifact_policy="off")
         assert any("deploy.md" in path for path in _paths(payload))
     finally:
         tools.engine.close()
@@ -219,7 +219,7 @@ def test_an_alias_makes_a_query_that_previously_missed_land(tmp_path: Path) -> N
         tmp_path / "off", [("alias", "org", "router -> pheasant-flock")], steering=False
     )
     try:
-        missed = without.search_context("steer-test", "router", mode="text", memory="off")
+        missed = without.search_context("steer-test", "router", mode="text", artifact_policy="off")
         assert not _paths(missed), "the corpus never says 'router'"
     finally:
         without.engine.close()
@@ -228,7 +228,9 @@ def test_an_alias_makes_a_query_that_previously_missed_land(tmp_path: Path) -> N
         tmp_path / "on", [("alias", "org", "router -> pheasant-flock")], steering=True
     )
     try:
-        found = with_steering.search_context("steer-test", "router", mode="text", memory="off")
+        found = with_steering.search_context(
+            "steer-test", "router", mode="text", artifact_policy="off"
+        )
         assert any("deploy.md" in path for path in _paths(found)), (
             "the alias should have reached the document that only says pheasant-flock"
         )
@@ -268,13 +270,17 @@ def test_steering_off_is_byte_identical(tmp_path: Path) -> None:
     ]
     off = _synced(tmp_path / "a", rules, steering=False)
     try:
-        baseline = off.search_context("steer-test", "pheasant-flock", mode="text", memory="off")
+        baseline = off.search_context(
+            "steer-test", "pheasant-flock", mode="text", artifact_policy="off"
+        )
     finally:
         off.engine.close()
 
     plain = _synced(tmp_path / "b", [], steering=False)
     try:
-        expected = plain.search_context("steer-test", "pheasant-flock", mode="text", memory="off")
+        expected = plain.search_context(
+            "steer-test", "pheasant-flock", mode="text", artifact_policy="off"
+        )
     finally:
         plain.engine.close()
 
@@ -332,7 +338,9 @@ def test_default_policy_applies_when_the_caller_says_nothing(tmp_path: Path) -> 
         silent = tools.search_context("steer-test", "remembered fact", mode="text")
         assert not any(item.get("memory") for item in silent.get("results") or [])
 
-        asked = tools.search_context("steer-test", "remembered fact", mode="text", memory="only")
+        asked = tools.search_context(
+            "steer-test", "remembered fact", mode="text", artifact_policy="only"
+        )
         assert any(item.get("memory") for item in asked.get("results") or [])
     finally:
         tools.engine.close()

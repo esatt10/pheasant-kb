@@ -117,8 +117,7 @@ sources:
                 transport = streamable_http_client(f"{base}/mcp/", http_client=http_client)
                 async with Client(transport) as client:
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    assert tools["memory_write"].meta["deprecated"] is True
-                    assert tools["memory_write"].meta["replacement"] == "record_artifact"
+                    assert "memory_write" not in tools
                     for name in (
                         "record_artifact",
                         "list_artifact_records",

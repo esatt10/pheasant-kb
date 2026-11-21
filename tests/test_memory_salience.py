@@ -10,9 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pheasant.config.loader import load_config
-from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.salience import (
+from pheasant.artifacts.salience import (
     HALF_LIFE_DAYS,
     over_capacity,
     over_scope_capacity,
@@ -20,7 +18,9 @@ from pheasant.memory.salience import (
     rank,
     salience,
 )
-from pheasant.memory.store import MemoryStore
+from pheasant.artifacts.store import MemoryStore
+from pheasant.config.loader import load_config
+from pheasant.mcp_server.tools import PheasantTools
 
 NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -290,7 +290,7 @@ def test_a_memory_that_was_never_returned_is_not_credited(tmp_path: Path) -> Non
 def test_maintenance_writes_salience_back(tmp_path: Path) -> None:
     """An operator should see the score that decided a prune, not have to
     recompute the formula by hand."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     tools = _tools(tmp_path, ["A remembered fact."], usage=False)
     try:
@@ -313,7 +313,7 @@ def test_maintenance_writes_salience_back(tmp_path: Path) -> None:
 
 
 def test_a_store_over_its_bound_is_pruned_to_the_bound(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     tools = _tools(tmp_path, [f"Remembered fact number {i}." for i in range(6)], max_records=3)
     try:
@@ -336,7 +336,7 @@ def test_a_store_over_its_bound_is_pruned_to_the_bound(tmp_path: Path) -> None:
 
 
 def test_no_cap_configured_prunes_nothing(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     tools = _tools(tmp_path, [f"Remembered fact number {i}." for i in range(6)])
     try:
@@ -351,7 +351,7 @@ def test_scope_budget_protects_org_from_a_session_flood(tmp_path: Path) -> None:
     """The end-to-end version of `test_scope_capacity_isolates_pools`: a
     `session_max_records` cap must survive a real maintenance pass, not just
     the pure `salience` formula, without touching the org record at all."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     writes = [{"text": "An org-wide policy fact.", "scope": "org"}]
     writes += [{"text": f"Session scratch note {i}.", "scope": "session"} for i in range(5)]
@@ -370,7 +370,7 @@ def test_scope_budget_protects_org_from_a_session_flood(tmp_path: Path) -> None:
 
 
 def test_subject_budget_caps_one_entity_without_touching_another(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     writes = [
         {"text": f"Widget detail {i}.", "scope": "org", "subject": "widget"} for i in range(4)
@@ -393,7 +393,7 @@ def test_subject_budget_caps_one_entity_without_touching_another(tmp_path: Path)
 def test_scope_and_global_caps_compose_without_double_archiving(tmp_path: Path) -> None:
     """The global `max_records` backstop must run only over what the
     per-scope cap left behind, never re-consider a record already doomed."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     writes = [{"text": f"Session note {i}.", "scope": "session"} for i in range(5)]
     writes += [{"text": f"User fact {i}.", "scope": "user"} for i in range(3)]

@@ -4,22 +4,14 @@
 # For most files that is invisible, but this repository hashes some of its own
 # bytes, and a rewritten byte is a different hash:
 #
-#   * contracts/ carries the vendored Synapse contract schema and fixtures,
-#     whose sha256 must match contracts/PARITY.json byte-for-byte in BOTH this
-#     repo and pheasant-flock (CLAUDE.md rule 9). On a Windows checkout
-#     the schema hashed 856ccba6... instead of 3a7a8a06... and
-#     tests/test_contract_parity.py failed for every Windows contributor while
-#     passing in CI — a false failure that is easy to dismiss as flakiness and
-#     dangerous to dismiss, because a *real* parity break looks identical.
-#   * tests/fixtures/ content is hashed by the idempotency suite for the same
-#     reason: re-indexing unchanged bytes must produce an unchanged state.
+#   * tests/fixtures/ content is hashed by the idempotency suite:
+#     re-indexing unchanged bytes must produce an unchanged state.
 #
 # Default everything text to LF so a checkout is byte-identical on every
 # platform, then pin the hashed paths explicitly so the intent survives
 # someone changing the default later.
 * text=auto eol=lf
 
-contracts/** text eol=lf
 tests/fixtures/** text eol=lf
 
 # Genuinely binary — never touch these.

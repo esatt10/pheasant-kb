@@ -245,81 +245,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
 
         return tools.scan_source(knowledge_base, source_name, max_depth=max_depth)
 
-    @mcp.tool(meta={"deprecated": True, "replacement": "record_artifact"})
-    @anticipated
-    def memory_write(
-        knowledge_base: str,
-        text: str,
-        scope: str = "user",
-        subject: str | None = None,
-        supersedes: str | None = None,
-        tags: list[str] | None = None,
-        sync: bool = True,
-        kind: str = "fact",
-        principal: str | None = None,
-        valid_until: str | None = None,
-        session: str | None = None,
-    ) -> dict:
-        """Deprecated: use record_artifact. Typed artifact adapter."""
-
-        return tools.memory_write(
-            knowledge_base,
-            text,
-            scope,
-            subject,
-            supersedes,
-            tags,
-            sync,
-            kind,
-            principal,
-            valid_until,
-        )
-
-    @mcp.tool(meta={"deprecated": True, "replacement": "list_artifact_candidates"})
-    @anticipated
-    def list_memory_candidates(
-        knowledge_base: str,
-        status: str = "pending",
-        rule_id: str | None = None,
-        principal: str | None = None,
-        max_results: int = 50,
-    ) -> dict:
-        """Deprecated: use list_artifact_candidates. Typed artifact adapter."""
-
-        return tools.list_memory_candidates(knowledge_base, status, rule_id, principal, max_results)
-
-    @mcp.tool(meta={"deprecated": True, "replacement": "promote_artifact_candidate"})
-    @anticipated
-    def promote_memory_candidate(
-        knowledge_base: str, candidate_id: str, principal: str | None = None
-    ) -> dict:
-        """Deprecated: use promote_artifact_candidate. Typed artifact adapter."""
-
-        return tools.promote_memory_candidate(knowledge_base, candidate_id, principal)
-
-    @mcp.tool(meta={"deprecated": True, "replacement": "reject_artifact_candidate"})
-    @anticipated
-    def reject_memory_candidate(
-        knowledge_base: str, candidate_id: str, principal: str | None = None
-    ) -> dict:
-        """Deprecated: use reject_artifact_candidate. Typed artifact adapter."""
-
-        return tools.reject_memory_candidate(knowledge_base, candidate_id, principal)
-
-    @mcp.tool(meta={"deprecated": True, "replacement": "consolidate_artifacts"})
-    @anticipated
-    def memory_consolidate(knowledge_base: str) -> dict:
-        """Deprecated: use consolidate_artifacts. Typed artifact adapter."""
-
-        return tools.memory_consolidate(knowledge_base)
-
-    @mcp.tool(meta={"deprecated": True, "replacement": "synthesize_artifacts"})
-    @anticipated
-    def memory_synthesize(knowledge_base: str) -> dict:
-        """Deprecated: use synthesize_artifacts. Typed artifact adapter."""
-
-        return tools.memory_synthesize(knowledge_base)
-
     @mcp.tool()
     @anticipated
     def sync_all(
@@ -349,7 +274,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         exclude_sources: list[str] | None = None,
         node_types: list[str] | None = None,
         min_score: float | None = None,
-        memory: dict | str | None = None,
         artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
@@ -418,12 +342,12 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         offers, and preview_retrieval to compare criteria against the
         standing configuration before committing to them.
 
-        memory controls how this region's agent memory takes part: one of
+        artifact_policy controls how this region's typed records take part: one of
         "auto" (default), "off", "only", "prefer", or an object such as
         {"scopes": ["user"], "subject": "deploy", "as_of": "2026-01-01T00:00:00Z"}.
         Records a later record corrected are excluded by default; pass an
         as_of instant to ask what was believed at that time. Results that came
-        from memory carry a "memory" block naming the record and its scope.
+        from a record carry a "memory" block naming the record and its scope.
         artifacts does the same for saved artifacts (the "artifacts" source):
         "include" (default), "exclude" or "only"; true/false mean include/exclude.
 
@@ -432,8 +356,8 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         so two runs naming one snapshot cannot silently see different corpora.
 
         as_of is the instant memory validity is evaluated at, accepted here as
-        well as inside memory so it reaches the lineage block even where the
-        region holds no memory at all.
+        well as inside artifact_policy so it reaches the lineage block even
+        where the region holds no records at all.
         """
 
         return tools.search_context(
@@ -450,7 +374,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=artifact_policy if artifact_policy is not None else memory,
+            artifact_policy=artifact_policy,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
@@ -478,7 +402,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         exclude_sources: list[str] | None = None,
         node_types: list[str] | None = None,
         min_score: float | None = None,
-        memory: dict | str | None = None,
         artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
@@ -521,7 +444,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=artifact_policy if artifact_policy is not None else memory,
+            memory=artifact_policy,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
             snapshot_id=snapshot_id,
@@ -557,7 +480,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         exclude_sources: list[str] | None = None,
         node_types: list[str] | None = None,
         min_score: float | None = None,
-        memory: dict | str | None = None,
         artifact_policy: dict | str | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
@@ -579,7 +501,7 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=artifact_policy if artifact_policy is not None else memory,
+            artifact_policy=artifact_policy,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
         )
@@ -619,13 +541,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         """Return source freshness and last sync status."""
 
         return tools.get_sync_status(knowledge_base)
-
-    @mcp.tool()
-    @anticipated
-    def get_contract(knowledge_base: str) -> dict:
-        """Return this region's published Synapse semantic contract."""
-
-        return tools.get_contract(knowledge_base)
 
     @mcp.tool()
     @anticipated
@@ -901,23 +816,6 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
         """Return a small graph slice rooted at one node as JSON."""
 
         return _json(tools.get_graph_slice(kb_id, node_id, depth=2))
-
-    @mcp.resource(
-        "pheasant://knowledge-bases/{kb_id}/memory",
-        meta={"deprecated": True, "replacement": "artifact-records"},
-    )
-    @anticipated_resource
-    def memory_resource(kb_id: str) -> str:
-        """Deprecated: use artifact-records resource. Typed artifact adapter."""
-
-        return _json(tools.memory_list(kb_id, current_only=True))
-
-    @mcp.resource("pheasant://knowledge-bases/{kb_id}/contract")
-    @anticipated_resource
-    def contract_resource(kb_id: str) -> str:
-        """Return this region's published Synapse semantic contract as JSON."""
-
-        return _json(tools.get_contract(kb_id))
 
     @mcp.prompt()
     def use_pheasant_for_coding_task(task: str = "") -> str:

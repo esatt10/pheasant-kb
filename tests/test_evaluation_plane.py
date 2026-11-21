@@ -589,7 +589,7 @@ def test_control_regression_is_paired_against_the_steering_baseline(tmp_path: Pa
 
     engine = _engine(tmp_path)
     _observe(engine)
-    from pheasant.memory.store import MemoryStore, memory_source
+    from pheasant.artifacts.store import MemoryStore, memory_source
 
     source = memory_source(engine.config, engine.state)
     assert source is not None
@@ -618,7 +618,7 @@ def test_the_control_cohort_excludes_anything_a_rule_could_fire_on(tmp_path: Pat
 
     engine = _engine(tmp_path)
     _observe(engine)
-    from pheasant.memory.store import MemoryStore, memory_source
+    from pheasant.artifacts.store import MemoryStore, memory_source
 
     source = memory_source(engine.config, engine.state)
     assert source is not None
@@ -1070,8 +1070,8 @@ def test_a_shadow_variant_only_exists_when_something_is_proposed() -> None:
 def test_steering_kinds_narrows_which_rules_fire(tmp_path: Path) -> None:
     """The ablation has to run against the real rule path, not a copy of it."""
 
-    from pheasant.memory.policy import MemoryPolicy
-    from pheasant.memory.steering import load_steering
+    from pheasant.artifacts.policy import MemoryPolicy
+    from pheasant.artifacts.steering import load_steering
 
     records = [
         {

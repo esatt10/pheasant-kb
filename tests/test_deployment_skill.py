@@ -16,7 +16,7 @@ def test_repository_deployment_skill_routes_blank_and_preset_workflows() -> None
     assert "Never hand-write `pheasant.yaml`" in text
     assert "deploy/compose/docker-compose.advanced.yml" in text
     assert "deploy/compose/docker-compose.scale.yml" in text
-    assert "memory_write" in text
+    assert "record_artifact" in text
 
 
 def test_deployment_skill_has_discoverable_ui_metadata() -> None:

@@ -150,5 +150,3 @@ assistant:
     verify_citations: true
     max_facts: 24
 sources: []
-synapse:
-  publish: false

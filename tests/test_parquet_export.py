@@ -684,7 +684,7 @@ def test_memory_text_is_recoverable_by_joining_chunks(tmp_path: Path) -> None:
 
     from datetime import UTC, datetime
 
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     config = _config(tmp_path, memory=True)
     store = MemoryStore(tmp_path / "memory")

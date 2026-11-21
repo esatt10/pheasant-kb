@@ -260,5 +260,3 @@ observability:
       nats_stream: PHEASANT_LOGS
       nats_subject: pheasant.logs.batches
       nats_durable: pheasant-loggers
-synapse:
-  publish: false

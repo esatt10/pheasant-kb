@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from pheasant.artifacts.store import DEFAULT_KIND, MemoryRecord, MemoryStore, _digest_input
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.store import DEFAULT_KIND, MemoryRecord, MemoryStore, _digest_input
 
 PINNED_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 PINNED_ISO = "2026-07-16T12:00:00Z"
@@ -292,7 +292,7 @@ def test_valid_until_is_derived_from_the_superseding_record(tmp_path: Path) -> N
 
 
 def test_the_earlier_of_declared_and_superseded_expiry_wins() -> None:
-    from pheasant.memory.projection import effective_valid_until
+    from pheasant.artifacts.projection import effective_valid_until
 
     record = MemoryRecord(
         record_id="mem-x",
@@ -315,7 +315,7 @@ def test_the_earlier_of_declared_and_superseded_expiry_wins() -> None:
 
 
 def test_the_earliest_correction_is_the_one_that_ends_validity() -> None:
-    from pheasant.memory.projection import supersession_index
+    from pheasant.artifacts.projection import supersession_index
 
     def correction(record_id: str, asserted_at: str, target: str) -> MemoryRecord:
         return MemoryRecord(
@@ -465,7 +465,7 @@ def test_http_consolidate_without_a_source_matches_the_mcp_tool(tmp_path: Path) 
     app = create_app(load_config(config_path), config_path=str(config_path))
     client = fastapi_testclient.TestClient(app)
     try:
-        resp = client.post("/memory/consolidate")
+        resp = client.post("/artifacts/consolidate")
         assert resp.status_code == 200, resp.text
         assert "skipped" in resp.json()
 
@@ -487,7 +487,7 @@ def test_written_by_is_recorded_and_audited_over_http(tmp_path: Path) -> None:
     client = fastapi_testclient.TestClient(app)
     try:
         resp = client.post(
-            "/memory",
+            "/artifacts/records",
             json={
                 "text": "Alice owns the release calendar.",
                 "scope": "user",
@@ -500,9 +500,9 @@ def test_written_by_is_recorded_and_audited_over_http(tmp_path: Path) -> None:
         # The MCP path always audited a memory write; the HTTP one silently did
         # not, so the same action was traceable or not depending on protocol.
         rows = app.state.engine.state.rows(
-            "SELECT details_json FROM source_audit_events WHERE action='memory_write'"
+            "SELECT details_json FROM source_audit_events WHERE action='artifact_record_write'"
         )
-        assert rows, "POST /memory wrote no audit event"
+        assert rows, "POST /artifacts/records wrote no audit event"
         assert "record_id" in str(rows[0]["details_json"])
     finally:
         app.state.engine.close()
@@ -511,50 +511,6 @@ def test_written_by_is_recorded_and_audited_over_http(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Provisioning and the bridge's configuration surface
 # ---------------------------------------------------------------------------
-
-
-def test_enable_provisions_the_memory_source_and_is_idempotent(tmp_path: Path) -> None:
-    """`SourceType.memory` is absent from the generic source picker on purpose,
-    but that must not mean a person can never turn memory on."""
-    fastapi_testclient = pytest.importorskip("fastapi.testclient")
-    from pheasant.api.app import create_app
-
-    config_path = _write_config(tmp_path, include_memory=False)
-    app = create_app(load_config(config_path), config_path=str(config_path))
-    client = fastapi_testclient.TestClient(app)
-    try:
-        assert client.get("/memory").status_code == 400
-
-        first = client.post("/memory/enable", json={})
-        assert first.status_code == 200, first.text
-        assert first.json()["status"] == "enabled"
-
-        # *Where* it landed is the assertion that matters, and it has been
-        # wrong twice. It must be under `state_path` — the one location
-        # pheasant owns and can always write. Anchoring to the workspace put
-        # memory under the corpus mount, which every container mounts
-        # read-only, so enabling "succeeded" and the first write returned 500;
-        # before that, resolving through `_resolve_source_path` used the
-        # process CWD and wrote a record into the repo checkout.
-        registered = Path(first.json()["source"]["path"]).resolve()
-        state_root = Path(load_config(config_path).pheasant.state_path).resolve()
-        assert registered == (state_root / "memory"), registered
-        assert registered.is_dir()
-        assert tmp_path.resolve() not in registered.parents or state_root in registered.parents
-
-        # Idempotent: enabling twice returns the existing source rather than
-        # registering a second one.
-        assert client.post("/memory/enable", json={}).json()["status"] == "already-enabled"
-
-        listing = client.get("/memory")
-        assert listing.status_code == 200
-        assert listing.json()["records"] == []
-
-        written = client.post("/memory", json={"text": "Enabled from the UI."})
-        assert written.status_code == 200, written.text
-        assert written.json()["created"] is True
-    finally:
-        app.state.engine.close()
 
 
 def test_the_memory_mcp_resource_returns_current_records(tmp_path: Path) -> None:
@@ -649,40 +605,12 @@ def test_about_max_targets_is_read_by_the_engine(tmp_path: Path) -> None:
         tools.engine.close()
 
 
-def test_enable_refuses_an_unwritable_location(tmp_path: Path) -> None:
-    """Memory is the one source pheasant *writes*, so a location it cannot
-    write is a configuration error to report, not a source to register.
-
-    A live run enabled memory under a read-only `/workspace` mount: enabling
-    returned 200 and every subsequent write returned a bare 500.
-    """
-    fastapi_testclient = pytest.importorskip("fastapi.testclient")
-    from pheasant.api.app import create_app
-
-    config_path = _write_config(tmp_path, include_memory=False)
-    app = create_app(load_config(config_path), config_path=str(config_path))
-    client = fastapi_testclient.TestClient(app)
-    try:
-        # A path under a file is unwritable on every platform, without needing
-        # real permission games that behave differently on Windows.
-        blocker = tmp_path / "not-a-directory"
-        blocker.write_text("", encoding="utf-8")
-        response = client.post("/memory/enable", json={"path": str(blocker / "memory")})
-        assert response.status_code == 400, response.text
-        assert "writable" in response.json()["detail"].lower()
-
-        # And nothing was registered, so the region is still honestly "off".
-        assert client.get("/memory").status_code == 400
-    finally:
-        app.state.engine.close()
-
-
 def test_a_runtime_registered_memory_source_is_visible_to_a_new_process(
     tmp_path: Path,
 ) -> None:
     """Enabling from the API must not be invisible to everything else.
 
-    A source created through `POST /memory/enable` lives in the state registry
+    A source created through `POST /artifacts/records/enable` lives in the state registry
     and only reaches `config.sources` in the process that created it. Without a
     registry fallback, a fresh MCP server, the sync worker, or the container
     after a restart all report no memory at all — which is what a live run saw
@@ -690,13 +618,13 @@ def test_a_runtime_registered_memory_source_is_visible_to_a_new_process(
     """
     fastapi_testclient = pytest.importorskip("fastapi.testclient")
     from pheasant.api.app import create_app
-    from pheasant.memory.store import memory_source
+    from pheasant.artifacts.store import memory_source
 
     config_path = _write_config(tmp_path, include_memory=False)
     app = create_app(load_config(config_path), config_path=str(config_path))
     client = fastapi_testclient.TestClient(app)
     try:
-        assert client.post("/memory/enable", json={}).status_code == 200
+        assert client.post("/artifacts/records/enable").status_code == 200
     finally:
         app.state.engine.close()
 
@@ -710,6 +638,6 @@ def test_a_runtime_registered_memory_source_is_visible_to_a_new_process(
         assert memory_source(tools.config, tools.state) is not None
         described = tools.describe_retrieval("memory-test")["memory"]
         assert described["enabled"] is True
-        assert described["source_name"] == "agent-memory"
+        assert described["source_name"] == "artifact-records"
     finally:
         tools.engine.close()
