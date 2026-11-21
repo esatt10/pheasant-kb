@@ -12,7 +12,7 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 | `repository`, `branch`, `commit` | Git-aware repository context. |
 | `directory`, `file`, `document`, `markdown_note` | Indexed filesystem artifacts. |
 | `memory_record` | One agent-memory record (Step 33.7). Still an ordinary Markdown artifact indexed by the ordinary pipeline — the type exists because the graph previously could not say which of its notes an agent had *remembered*. Attributes: `scope`, `subject`, `asserted_at`, `kind`. Its stable ID is unchanged (`file:{source}:{relpath}:branch=none`); only the type attribute is new, so a graph written before 2026-08-11 types these `markdown_note` until its next sync. |
-| `heading`, `chunk` | Retrieval and document structure units. `heading` carries a document's structural outline (chapter/section/§ code) and is emitted when a source sets `taxonomy.enabled` — **note it went unemitted from the initial build until 2026-08-06**, so a graph written before then contains none. Attributes: `level`, `number`, `title`, `kind`, `heading_path`, `start_line`. |
+| `heading`, `chunk` | Retrieval and document structure units. `heading` carries a document's structural outline (chapter/section/§ code) and is emitted when a source sets `taxonomy.enabled` — **note it went unemitted from the initial build until 2026-08-06**, so a graph written before then contains none. Attributes: `level`, `number`, `title`, `kind`, `heading_path`, `start_line`, and since 2026-11-21 `order` (its position among the document's sections, from 0) and `page` (when the document has pages). A `chunk` carries `chunk_index`, `start_line`, `end_line` and, for a document read with its pages (a PDF read by PDFium), `page_start` and `page_end`; the `chunks` table has the same two columns. See [Document structure](#document-structure). |
 | `symbol` | Code symbols, constants, and call targets extracted from language-aware passes. |
 | `entity` | Named systems, products, people, or CamelCase/Title Case mentions. |
 | ~~`concept`~~ | **Retired 2026-08-03.** Concept extraction produced 87.2% of a 162k-node graph and 98.6% of its edges while contributing nothing measurable: the retrieval expansion path never fired, the facts panel filled every slot with terms like "limit" and "request info", and the similarity pass it fed emitted zero edges. See `graph.enrichment._add_concept`. |
@@ -27,6 +27,7 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 | Type | Purpose |
 |---|---|
 | `contains`, `indexes`, `has_chunk`, `has_heading` | Hierarchy and indexing relationships. `has_heading` links an artifact to every section it contains; a section `contains` its subsections. Both were documented but unemitted until 2026-08-06. |
+| `next_chunk`, `section_has_chunk`, `next_heading` | Where a passage or section sits in its document, since 2026-11-21: a chunk to the next chunk, a section to every chunk holding its own text, a section to the next section in document order. See [Document structure](#document-structure). |
 | `mentions`, `derived_from` | Artifact-to-entity/symbol links and reverse provenance. In an OKF bundle, `derived_from` is a concept's `sources[]` entry (`relation: okf_source`) carrying the per-source credibility signals as written (`source_key`, `author`, `usage_count`, `last_modified`, `usage_window`) and `citations` — how many footnotes cite that source's `id`. |
 | `imports`, `calls` | Repository/code relationships. |
 | `references` | Markdown links, URLs, wiki links, citations, and other external references. |
@@ -40,6 +41,45 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 | `subsumes` | A near-duplicate cluster's medoid to the records it absorbed (compaction Phase 3): the canonical record to each demoted (`tier=cold`) member. Attributes: `enrichment_pass`. Drawn straight from `memory_records.subsumed_by`, **not** through the `about` ladder — that ladder is corpus-only by design (a memory must not be matched against symbols/headings/entities extracted from *another* memory), and a subsumption is memory-to-memory by definition. Deliberately distinct from `supersedes`: a subsumed record is redundant but still *true*, so `subsumed_by` never feeds `effective_valid_until` — conflating the two would silently expire facts that are still valid. See `docs/memory-system.md` §8 and `pheasant.memory.compaction`. |
 | ~~`generated_note`~~ | **Retired 2026-08-16** with the Obsidian projection it described. Like `heading`/`has_heading` before 2026-08-06, it was documented from the initial build and **never emitted** — no graph written by any release contains one. |
 | `retrieved_by`, `modified_by` | Agent audit. |
+
+## Document structure
+
+Since 2026-11-21 (`graph/provenance.py`) a document's chunks and sections are
+ordered and linked in the graph, not only in the rows:
+
+- `next_chunk`: chunk *i* to chunk *i + 1* of the same document. A chunk's
+  predecessor is its incoming `next_chunk`.
+- `section_has_chunk`: a `heading` to every chunk holding any of the section's
+  own text, which runs from its line to the line before the next heading of any
+  level. A chunk packed across two sections belongs to both, and text before
+  the first heading belongs to none. The enclosing section is still `contains`.
+- `next_heading`: a heading to the next heading in document order, whatever its
+  level. `order` on the heading is the same position as a number.
+- Pages: `page_start`/`page_end` on a chunk and `page` on a heading, read from
+  where each page starts in the extracted text. Only PDFs read by PDFium have
+  them (the builtin and sandboxed PDF readers, and every other format, have
+  none). An empty page holds no line, so no chunk is on it. The text is
+  byte-identical to what the reader produced before pages were kept, so chunk
+  ids, hashes and every index are unchanged.
+
+**None of it ranks.** Relationship search skips the three edge types (in the
+row store's narrowing too), node search skips the attributes, and the node
+index never holds them; answer facts treat the edges as structural, answer
+expansion does not start from a chunk or a section, and a search's `expand`
+skips the edges unless they are named in `edge_types`.
+`tests/test_chunk_provenance.py` holds every one of those against the same
+corpus with the structure removed. A walk (`get_graph_neighbors`) from a chunk
+or a section does follow them; from a document, folder or source it reaches
+the same nodes in the same order as before, because every new edge points at
+a node the walk has already reached.
+
+Decision note: additions to the vocabulary, not a change to any ID (rule 3).
+Every chunk and heading id is what it was. A graph written before this has
+none of it until each document is indexed again, so a region adopts it with a
+`full` sync (or as its documents change); nothing is migrated, and the
+`chunks` columns arrive empty. On the same re-index, sections a document no
+longer has are now removed from the graph, where before they stayed beside
+their replacements until a full sync.
 
 ## Stable IDs
 

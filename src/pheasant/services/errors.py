@@ -282,6 +282,20 @@ class AssistantBusy(ServiceError):
         super().__init__("Assistant is at its concurrent-answer limit; retry shortly")
 
 
+class DeepResearchBusy(ServiceError):
+    """This process's deep-research slots (``max_concurrent_deep_answers``) are full."""
+
+    status = 429
+    code = "DEEP_RESEARCH_BUSY"
+    retryable = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Deep research is at its limit of answers running at once on this server; "
+            "retry shortly, or ask without @detailed / @deep for an ordinary answer"
+        )
+
+
 class AssistantDeadline(ServiceError):
     """The answer request exceeded its configured end-to-end budget."""
 

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from pheasant.mcp_server.compose_tools import ComposeTools
+from pheasant.mcp_server.research_tools import ResearchTools
 
 APP_URI = "ui://pheasant/knowledge-view.html"
 APP_MIME = "text/html;profile=mcp-app"
@@ -56,8 +57,8 @@ def app_meta() -> dict[str, Any]:
     return {"ui": {"resourceUri": APP_URI}, "ui/resourceUri": APP_URI}
 
 
-class AssistantTools(ComposeTools):
-    """Answering, visuals and images over MCP, and compose as a job (``ComposeTools``)."""
+class AssistantTools(ComposeTools, ResearchTools):
+    """Answering, visuals and images over MCP; compose and deep research as jobs."""
 
     config: Any
     services: Any
@@ -322,12 +323,15 @@ def register_assistant_tools(
         continuity is what you send. At most the last 6 turns are used.
 
         depth is "short" (a direct answer; the default), "medium" (a few
-        sections) or "long" (an outlined, sectioned write-up). Leave it unset
-        to let the question decide ("in detail" reads as long, "briefly" as
-        short). visual is "diagram" (a visual whose every element cites a
-        passage), "image" (images the cited documents show), "none", or a
-        shape to draw the diagram as (any create_visual kind, e.g.
-        "timeline", "table", "mindmap"); unset reads it off the question
+        sections) or "long" (deep research: the region searches each aspect
+        of the question, follows up, and writes a sectioned answer; "deep" is
+        the same; minutes, and research_knowledge_base runs it as a job).
+        Leave it unset to let the question decide ("in detail" reads as a
+        long answer without the research, "briefly" as short). visual is
+        "diagram" (a visual whose every element cites a passage), "image"
+        (images the cited documents show), "none", or a shape to draw the
+        diagram as (any create_visual kind, e.g. "timeline", "table",
+        "mindmap"); unset reads it off the question
         ("draw…", "a timeline of…", "show me the figure…"). A host
         that supports MCP Apps renders the result; the JSON is complete
         without one. Figures appear in the answer as [fig:n] markers and in

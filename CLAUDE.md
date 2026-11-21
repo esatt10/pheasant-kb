@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 232 pytest modules, offline by design
+└── tests/                     ← 234 pytest modules, offline by design
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -599,6 +599,25 @@ one adapter per format behind one set of safety rules); the outermost tar is
 indexed once per process, a compressed one decompressed once into a bounded
 temporary file, so members are read by seeking rather than by decompressing
 again each time. `tests/test_okf_index.py`, `tests/test_tar_archives.py`.
+
+**A passage knows where it sits** (`graph/provenance.py`, since 2026-11-21).
+`next_chunk` chains a document's chunks, `section_has_chunk` links a heading
+to every chunk holding its own text, `next_heading` orders the sections, and
+`chunk_index`/`order` and pages (`page_start`/`page_end` on chunks and their
+rows, `page` on headings) say it as numbers. Pages come from PDFium's page
+texts: `extractor.paged_text` finds each page's tidied text in the tidied
+whole, so the text, chunk ids and every index are byte-identical, and a
+document it cannot align gets no pages rather than wrong ones (`PagedText`, a
+str dropped by the pipeline at once). The builder prefetches every node and
+pair a document touches (`_prefetch_structure`) so the fleet writer's working
+set reads a document in a few statements. **Nothing that ranks reads any of
+it**: relationship search and the row store's `candidate_edges` skip the edge
+types, node search and the node index skip the attributes, facts call them
+structural, answer expansion does not root at chunks or headings, and a
+search's `expand` excludes them by default. `tests/test_chunk_provenance.py`
+compares every one with the structure stripped, on SQLite and Postgres, and
+each guard was seen failing without it. Re-indexing also removes sections a
+document no longer has. A region adopts it with a `full` sync.
 
 **Deletions are synced, not just additions.** An incremental sync removes
 what a complete listing no longer contains (`sync/vanished.py`, opt-in per
@@ -1399,6 +1418,22 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is
   written from its passages and the trace says so (`assistant.longform`).
+- **A long answer someone chose is deep research** (`assistant/workflows/deep.py`;
+  MCP `research_knowledge_base`, a job). `@detailed` / `@deep`, a pinned
+  `depth: "long"` (or `"deep"`, `routing.DEPTH_ALIASES`) or the UI's Detailed
+  length: `routing.deep_research(depth, depth_by)` is `long` *and* `pinned`, so
+  a long read off the words or the planner is today's long, byte-identical.
+  `DEEP_DEFAULTS` + `deep_options` over the depth profile, as compose's block
+  (a config-set key pins against profiles); `PLANNER_DEEP_RULE` plans one
+  query per aspect. It stops after a grade (`deep.stop_reason`, said as a
+  `research` step) on no passages, no new evidence, or spend + projected
+  write at 95% of the per-answer limit (`telemetry/answer_spend.py`: a
+  ContextVar the meter adds every priced call to; `models.deep_answer_spend_limit`,
+  5). A section not started at 100% is extractive (`longform.AnswerLimitReached`).
+  `max_concurrent_deep_answers` (2) per process is a counter in
+  `services.assistant.acquire` (`DEEP_RESEARCH_BUSY`, 429). Both limits are
+  `region_controls` fields, operator admin only, on the Controls tab, `PUT
+  /region/controls` and MCP `set_region_controls`. `tests/test_deep_research.py`.
 - **A new artifact is composed, not looked up** (intent `compose`, read off a
   leading build verb plus an artifact noun, or the planner). "Write the
   configuration that…" asks for something no passage contains, and every other
@@ -1513,8 +1548,18 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
 - **Latency is bounded, not promised.** `assistant.latency` (all off by
   default) gives short/medium/long answers an end-to-end deadline that starts
   before history rewriting (`request_budget.py`) and a per-process cap on
-  active answers shared by HTTP, SSE and MCP; over it the refusal is
-  `ASSISTANT_BUSY` (429, retryable). `staged_retrieval` runs one hybrid search
+  active answers shared by HTTP, SSE and MCP (pheasant-kb: 16); over it an
+  answer waits up to `admission_wait_seconds` (15) for a slot, then the
+  refusal is `ASSISTANT_BUSY` (429, retryable). The cap was 4 and refused at
+  once, so a fifth person asking beside four answers on the hosted region got
+  an error for an answer that would have started seconds later; an answer
+  waits on models, not CPU, so the models' quota is the ceiling to raise
+  first. The routes wait on the event loop (`acquire_waiting`), so a request
+  that disconnects while waiting holds no slot. The cap is also an operator
+  admin's region control (`max_concurrent_answers`, 1-256, the Controls tab's
+  Answers at once), read through `spend.GUARD.controls()` per answer, so a
+  replica follows a change within 5 s and a lowered figure cuts off nothing
+  running. `staged_retrieval` runs one hybrid search
   before planning, `combine_grade_and_answer` grades and writes a short answer
   in one validated call, and `embeddings.query_*` give the vector arm a tighter
   failure budget than indexing. `multi_search` drops standalone vector/graph
@@ -3514,6 +3559,21 @@ Each of these cost real time. They are listed because the shape recurs.
   `python -m pheasant.deployment.database wait|ensure` now, and pheasant picks
   the driver. The general shape: a startup command is code, and it should
   depend on pheasant's surface, not on what the image happens to contain.
+- **A lazy read of rows that a pending delete owns resurrects them.** The
+  fleet writer's working set (`graph/working_set.py`) reads an edge pair from
+  the rows the first time it is asked. A full sync removes a source's nodes
+  and re-adds them in one delta, and until that delta commits the rows still
+  hold the removed nodes' edges, which the commit's cascade then deletes. The
+  working set hydrated them, `upsert_edge` found the edge already there and
+  wrote nothing, and the cascade took it: one full sync on the hosted region
+  left the source with 11 `indexes` edges for 1,505 documents, no folder
+  `contains`, no `has_chunk`, and a fraction of its `mentions` and
+  `references`. Every test passed, because only the row working set does the
+  lazy read, and only a full sync over an existing graph puts a removed node's
+  edges in its way. `_hydrate_pair` skips rows touching a node in
+  `_pending_removed_nodes` now, which is what the resident graph does by
+  forgetting them at once; `tests/test_row_writer.py` runs two full syncs on
+  both backends and compares with the resident writer.
 - **A dump from an image with extensions carries them, and their data.** A
   `pg_dump` of a pheasant database on the TimescaleDB image holds `CREATE
   EXTENSION timescaledb`, its comment, and the rows of `_timescaledb_catalog`

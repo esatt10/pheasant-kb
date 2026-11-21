@@ -62,7 +62,10 @@ claim that no model is connected.
 
 - **Length.** The picker under the chat box is *Auto* by default — each
   question decides ("in detail" writes a long, sectioned answer; "briefly" a
-  short one) — or pin *Short*, *Medium* or *Long*.
+  short one) — or pin *Short*, *Medium* or *Detailed*. *Detailed* is
+  [deep research](conversations-and-visuals.md#deep-research): it searches
+  every aspect of the question before writing, takes minutes, and has a
+  per-answer spend limit; `@detailed` or `@deep` asks for it in one message.
 - **Follow-ups.** Each question is sent with the recent answered turns, so
   "and what about the vault?" is understood. The composer says how many turns
   are in play; **New topic** starts fresh without clearing the thread.
@@ -292,8 +295,9 @@ draft streams in under a "Draft answer · checking citations" label and is
 replaced by the verified answer. The trace under a finished answer breaks a
 search step into its per-mode timings (for example `vector embeddings · 2
 queries` and `hybrid · query 1`). If the region caps concurrent answers
-(`assistant.latency.max_concurrent_answers`) and is full, the request is refused
-with `429` and `ASSISTANT_BUSY`; retry shortly.
+(`assistant.latency.max_concurrent_answers`) and is full, the question waits up
+to `admission_wait_seconds` (15 s) for a slot, and only then is refused with
+`429` and `ASSISTANT_BUSY`; retry shortly.
 
 See [Customize the answering workflow](agent-workflows.md) for the tuning
 options and for writing your own.

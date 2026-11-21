@@ -43,6 +43,10 @@ export const EDGE_COLORS: Record<string, string> = {
   contains: "#9e998c",
   indexes: "#7f8b9e",
   has_chunk: "#8b81a6",
+  // A document's own order: the chunk family, quieter.
+  next_chunk: "#a59cbd",
+  section_has_chunk: "#8b81a6",
+  next_heading: "#9e998c",
   mentions: "#a8808f",
   derived_from: "#9e998c",
   imports: "#b98f5c",

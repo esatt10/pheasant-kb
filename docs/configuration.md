@@ -53,7 +53,7 @@ standalone is selected:
 | `pheasant.environment` | `compose` | `local` |
 | `server.mcp.max_request_body_size_mb` | `1024` | `64` |
 | `server.mcp.transports` | `{"stdio": false, "streamable_http": true, "sse": false}` | `{"stdio": true, "streamable_http": true, "sse": false}` |
-| `server.api.max_concurrent_requests` | `32` | `0` |
+| `server.api.max_concurrent_requests` | `64` | `0` |
 | `server.api.drain_seconds` | `20` | `0` |
 | `server.api.cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000", "http://api:8765", "http://host.docker.internal:8765"]` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000"]` |
 | `storage.backend` | `postgres` | `sqlite` |
@@ -140,7 +140,7 @@ standalone is selected:
 | `assistant.workflow_options.agentic.compose_options.chars_per_passage` | `4000` | unset |
 | `assistant.workflow_options.agentic.compose_options.context_budget_chars` | `400000` | unset |
 | `assistant.workflow_options.agentic.compose_options.max_output_tokens` | `24000` | unset |
-| `assistant.latency.max_concurrent_answers` | `4` | `0` |
+| `assistant.latency.max_concurrent_answers` | `16` | `0` |
 | `assistant.retrieval.max_rounds` | `2` | `3` |
 | `assistant.retrieval.per_query_results` | `10` | `8` |
 | `assistant.retrieval.max_context_passages` | `16` | `12` |
@@ -1284,6 +1284,7 @@ are the only models and nothing here is consulted.
 | `selectable` | bool | `true` | Whether a caller may pick per question. Off, naming anything but the default is refused. |
 | `currency` | string | `USD` | The currency the prices below are stated in. A label, not a conversion. |
 | `monthly_spend_limit` | number \| null | `500` | What the knowledge base may spend on chat, judgement and embedding calls per calendar month (UTC), in `currency` at the prices below. At it, model calls are refused (`SPEND_LIMIT_REACHED`) until the 1st or until an operator admin raises it (`PUT /region/controls`, which overrides this at runtime). `null`: no limit. A model with no stated price counts nothing. See [the kill switch and spend limit](how-to/hosted-regions.md#a-kill-switch-and-a-monthly-spend-limit). |
+| `deep_answer_spend_limit` | number \| null | `5` | What one [deep research](how-to/conversations-and-visuals.md#deep-research) answer may spend, in `currency`. Research wraps up once its spend plus the projected cost of writing reaches 95% of it; a section not yet written at the limit is written from its passages. An operator admin overrides it at runtime (`PUT /region/controls`). `null`: no per-answer limit. |
 
 Every entry also takes `input_price`, `output_price` and `cached_input_price` (per
 million tokens; embeddings take `input_price` only). They are what the operator
@@ -2069,7 +2070,9 @@ HTTP 429 with `Retry-After` and the stable `ASSISTANT_BUSY` code.
 | `short_deadline_seconds` | number \| null | `null` | End-to-end budget for short answers. |
 | `medium_deadline_seconds` | number \| null | `null` | End-to-end budget for medium answers. |
 | `long_deadline_seconds` | number \| null | `null` | End-to-end budget for long answers and visual work. |
-| `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. |
+| `max_concurrent_answers` | integer | `0` | Maximum active answer workers per process; `0` disables admission. A disconnected stream holds its slot until its worker exits. An operator admin overrides it at runtime (`max_concurrent_answers` in `PUT /region/controls`, 1 to 256), and every replica follows within seconds. |
+| `admission_wait_seconds` | number | `15` | With every answer slot taken, how long a new answer waits for one before `429 ASSISTANT_BUSY`. An answer mostly waits on model calls, so a slot usually frees within seconds; `0` refuses at once. Deep research's own cap still refuses at once. |
+| `max_concurrent_deep_answers` | integer | `2` | [Deep research](how-to/conversations-and-visuals.md#deep-research) answers one process runs at once, within `max_concurrent_answers`; past it a deep question is `429 DEEP_RESEARCH_BUSY` (retryable). `0`: no separate cap. An operator admin overrides it at runtime (`PUT /region/controls`). |
 
 The lab starts with 10-second short/medium safety deadlines, a 180-second long
 deadline and four active answer slots. These are operational bounds, not a

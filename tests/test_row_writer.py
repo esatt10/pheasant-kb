@@ -197,3 +197,56 @@ def test_returned_failed_result_discards_the_writer(monkeypatch, capsys):
     report = json.loads(capsys.readouterr().out)["report"]
     assert report["status"] == "failed"
     assert calls == ["task", "closed"]
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+def test_a_full_resync_on_the_fleet_writer_keeps_every_edge(tmp_path, backend):
+    """A full sync removes a source's nodes and re-adds them in one delta. The
+    rows still held the removed nodes' edges until the commit's cascade, and
+    the working set hydrated them back: `upsert_edge` found the edge, wrote
+    nothing, and the cascade deleted it. Found on the hosted region, where one
+    full sync dropped every `indexes`, `contains` and `has_chunk` edge and most
+    `mentions` and `references`; it must equal what the resident writer keeps."""
+
+    import os
+
+    dsn = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
+    if backend == "postgres":
+        if not dsn:
+            pytest.skip("set PHEASANT_TEST_POSTGRES_DSN to run on Postgres")
+        from tests.test_backend_parity import _reset
+
+        _reset(dsn)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "app.py").write_text("import target\ndef before():\n    return helper()\n")
+    (workspace / "target.py").write_text("def helper():\n    return 1\n")
+    (workspace / "guide.md").write_text(
+        "# Gateway\n\nThe Gateway talks to SharePoint. See [later](later.md).\n"
+    )
+    (workspace / "later.md").write_text("# Later\n\nOneDrive and SharePoint.\n")
+    config = _config(tmp_path / "rows", workspace)
+    if backend == "postgres":
+        config.storage.backend = "postgres"
+        config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    resident = SyncEngine(_config(tmp_path / "resident", workspace))
+    try:
+        resident.sync_source("docs", "full")
+        resident.sync_source("docs", "full")
+        expected = _content(resident)
+    finally:
+        resident.close()
+    for _ in range(2):
+        writer = SyncEngine(config, defer_persisted_graph_load=True)
+        try:
+            writer.sync_source("docs", "full")
+        finally:
+            writer.close()
+    reader = SyncEngine(config, defer_persisted_graph_load=True)
+    try:
+        kept = _content(reader)
+    finally:
+        reader.close()
+    types = {json.loads(attrs).get("type") for _a, _b, attrs in kept[1]}
+    assert {"indexes", "contains", "has_chunk", "mentions"} <= types
+    assert kept == expected

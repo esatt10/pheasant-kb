@@ -334,6 +334,7 @@ MCP_PERMISSIONS = {
     "remove_connection": "security.manage",
     "remove_source": "sources.manage",
     "request_capacity": "security.manage",
+    "research_knowledge_base": "knowledge.use",
     "resolve_capacity_request": "security.manage",
     "revoke_access": "settings.manage",
     "rollback_tuning_bundle": "tuning.manage",

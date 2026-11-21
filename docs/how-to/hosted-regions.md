@@ -319,6 +319,29 @@ is in flight across the replicas at that moment and never by more. A model with
 no stated price counts nothing and is named in the reply. On the 1st the month
 starts over. Each knowledge base of a fleet has its own switch and its own limit.
 
+**Deep research has two limits of its own**, in the same row and behind the
+same rule (operator admin only), on the same Controls tab, on desktop and
+phone alike. `deep_answer_spend_limit` (default `models.deep_answer_spend_limit`,
+5) is what one `@detailed` / `@deep` answer may spend: research wraps up at
+95% of it, counting what writing will cost. `max_concurrent_deep_answers`
+(default 2) is how many run at once per api process; past it a deep question
+is `429 DEEP_RESEARCH_BUSY` and an ordinary one is still answered. `null`
+returns either to the deployment's default. A granted Admin sees the
+concurrency figure and not the amount.
+[Deep research](conversations-and-visuals.md#deep-research) has the detail.
+
+**So does every answer.** `max_concurrent_answers` (default
+`assistant.latency.max_concurrent_answers`, 16 on pheasant-kb) is how many
+questions of any kind one api process answers at once, set on the same
+Controls tab (**Answers at once**) by an operator admin, 1 to 256, or `null`
+for the default. Past it a question waits up to
+`assistant.latency.admission_wait_seconds` (15) for a slot, then gets
+`429 ASSISTANT_BUSY`. A lowered figure cuts off nothing running; it admits
+nobody new until enough answers finish. An answer mostly waits on the models,
+so their tokens-per-minute quota is usually the ceiling to raise first, and
+past `server.api.max_concurrent_requests` the request limit refuses before
+this one does (the tab says so). Every Admin sees the figure.
+
 **Prices are set at runtime and apply from then on.** Each call is costed when
 it is made, at the price in force then, and the cost is stored with its tokens.
 When a provider changes its price, an operator admin changes it in the Models

@@ -6,7 +6,7 @@ import base64
 import json
 import threading
 from collections import OrderedDict
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -116,6 +116,7 @@ def parsed_to_wire(parsed: ParsedArtifact | None) -> dict[str, Any] | None:
         "headings": [_heading_to_wire(heading) for heading in parsed.headings],
         "chunk_plan": parsed.chunk_plan,
         "okf": parsed.okf,
+        "page_lines": parsed.page_lines,
     }
 
 
@@ -134,6 +135,13 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
         # on which replica prepared it. Markdown only, so a rolling upgrade
         # does not send every other file back to the indexer.
         raise IncompatibleResult("worker predates OKF parsing; preparing locally")
+    if "page_lines" not in payload and str(payload.get("relative_path", "")).lower().endswith(
+        ".pdf"
+    ):
+        # Same rule: a worker from before pages were kept answers without the
+        # key, and committing that would leave a PDF's chunks without pages
+        # depending on which replica read it.
+        raise IncompatibleResult("worker predates page numbers; preparing locally")
     return ParsedArtifact(
         id=str(payload["id"]),
         source_id=str(payload["source_id"]),
@@ -146,11 +154,21 @@ def parsed_from_wire(payload: dict[str, Any] | None) -> ParsedArtifact | None:
         mtime=str(payload["mtime"]),
         git_branch=payload.get("git_branch"),
         git_commit=payload.get("git_commit"),
-        chunks=[TextChunk(**row) for row in payload.get("chunks") or []],
+        chunks=[_chunk_from_wire(row) for row in payload.get("chunks") or []],
         headings=[_heading_from_wire(row) for row in payload.get("headings") or []],
         chunk_plan=plan,
         okf=payload.get("okf"),
+        page_lines=payload.get("page_lines"),
     )
+
+
+_CHUNK_FIELDS = frozenset(field.name for field in fields(TextChunk))
+
+
+def _chunk_from_wire(row: dict[str, Any]) -> TextChunk:
+    """A chunk off the wire, ignoring fields this process does not know."""
+
+    return TextChunk(**{key: value for key, value in row.items() if key in _CHUNK_FIELDS})
 
 
 def task_payload(

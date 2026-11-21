@@ -53,6 +53,21 @@ below; change it only if the question clearly asks for more or less.
 - If an earlier conversation is shown, the question may refer back to it: \
 plan queries for what it refers to, by name."""
 
+#: Appended to the planner's system prompt for deep research (a pinned
+#: ``long``, ``workflows/deep.py``). One query per aspect is what took compose
+#: from 10 passages of 4 documents to 44 of 22: one search of a broad question
+#: returns the overview pages its words weigh most.
+PLANNER_DEEP_RULE = """
+
+DEEP RESEARCH: the reader asked for a thorough, sectioned answer and will \
+wait for it. First work out the distinct aspects a complete answer to this \
+question must cover -- for example what it is, how it works, how it is set \
+up or used, its limits and failure cases, how it relates to its neighbours \
+-- using only the aspects this question and this corpus actually have. Then \
+write one query per aspect, up to {planned_queries}, each phrased in the \
+corpus's own terms. Put the aspects, in reading order, in "reasoning"."""
+
+
 GRADER_SYSTEM = """You judge whether retrieved passages are sufficient to \
 answer a question.
 

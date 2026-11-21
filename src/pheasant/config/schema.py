@@ -1100,8 +1100,18 @@ class AssistantLatencySettings(ModelMixin):
     medium_deadline_seconds: float | None = None
     long_deadline_seconds: float | None = None
     max_concurrent_answers: int = 0
+    #: How long an answer waits for a slot when all ``max_concurrent_answers``
+    #: are taken, before ``ASSISTANT_BUSY`` (``services/answer_admission.py``).
+    admission_wait_seconds: float = 15.0
+    #: Deep-research answers (``@detailed`` / ``@deep``) one process runs at
+    #: once, within ``max_concurrent_answers``; past it the caller is refused
+    #: ``DEEP_RESEARCH_BUSY`` (429, retryable). An operator admin overrides it
+    #: at runtime (``PUT /region/controls``). ``0``: no separate cap.
+    max_concurrent_deep_answers: int = 2
 
     def __post_init__(self) -> None:
+        if self.max_concurrent_deep_answers < 0:
+            raise ValueError("assistant.latency.max_concurrent_deep_answers cannot be negative")
         for name in (
             "short_deadline_seconds",
             "medium_deadline_seconds",
@@ -1112,6 +1122,8 @@ class AssistantLatencySettings(ModelMixin):
                 raise ValueError(f"assistant.latency.{name} must be greater than zero")
         if self.max_concurrent_answers < 0:
             raise ValueError("assistant.latency.max_concurrent_answers cannot be negative")
+        if self.admission_wait_seconds < 0:
+            raise ValueError("assistant.latency.admission_wait_seconds cannot be negative")
 
 
 @dataclass

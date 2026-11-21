@@ -253,7 +253,7 @@ KEYWORDS: tuple[Keyword, ...] = (
         "detailed",
         "depth",
         "long",
-        "A long, outlined write-up, section by section.",
+        "Deep research: searches every aspect, then a sectioned write-up (minutes).",
         "@detailed how indexing works",
         ("long", "report", "deep"),
         group="Length",

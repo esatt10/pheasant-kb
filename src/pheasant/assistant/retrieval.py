@@ -78,6 +78,9 @@ VALID_MODES = ("hybrid", "text", "graph", "vector")
 #: offered first.
 EXPAND_MAX_NODES = 200
 
+#: Node ids graph expansion does not walk from (chunk and section nodes); see `_expand`.
+_NOT_EXPANDED = ("chunk:", "heading:")
+
 #: How long an answer waits for its expansion, once, before going on without
 #: it. Expansion adds evidence the direct hits did not find, so it is
 #: best-effort like facts and figures; with the client's 30 s and one retry a
@@ -884,6 +887,14 @@ class PheasantRetriever:
     def _expand(self, passages: list[Passage], *, depth: int, per_node: int) -> list[Passage]:
         seen = {p.node_id for p in passages if p.node_id}
         found: list[Passage] = []
+        # A walk from a chunk or a section node reaches no document by any
+        # edge: their out-edges are order and section membership
+        # (`graph/provenance.py`), which stay inside their own document, and
+        # before those existed a chunk had none at all. Walking them would
+        # spend EXPAND_MAX_NODES reads to keep nothing, so they are not roots.
+        # Read off the node id the walk would start from, never the passage's
+        # `type`: a text hit is typed `chunk` and rooted at its document.
+        passages = [p for p in passages if not str(p.node_id or "").startswith(_NOT_EXPANDED)]
         remote_many = getattr(self.graph, "remote_neighbors_many", None)
         expanded: dict[str, list[dict]] = {}
         if callable(remote_many):

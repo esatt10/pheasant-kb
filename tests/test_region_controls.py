@@ -508,3 +508,64 @@ def test_the_fleet_directorys_mirror_is_append_only_too(tmp_path):
             store.execute("DELETE FROM usage_daily")
     finally:
         fleet_store.close_all()
+
+
+# ------------------------------------------------ how many answers at once
+
+
+def test_an_operator_sets_the_answer_limit_and_admission_follows_it(region, operator):
+    from pheasant.services.assistant import acquire
+    from pheasant.services.errors import AssistantBusy
+
+    shown = region_controls.describe(region)["answers"]
+    assert (shown["max_concurrent"], shown["default_max_concurrent"]) == (0, 0)
+    assert not shown["custom_max_concurrent"] and "No answer limit" in shown["note"]
+
+    changed = region_controls.update(region, {"max_concurrent_answers": "1"})["answers"]
+    assert changed["max_concurrent"] == 1 and changed["custom_max_concurrent"] is True
+    first = acquire(region)
+    try:
+        with pytest.raises(AssistantBusy):
+            acquire(region, wait=0)
+    finally:
+        first.release()
+    acquire(region, wait=0).release()
+
+    reset = region_controls.update(region, {"max_concurrent_answers": None})["answers"]
+    assert reset["max_concurrent"] == 0 and not reset["custom_max_concurrent"]
+    held = [acquire(region, wait=0) for _ in range(3)]  # the default again: no limit
+    for permit in held:
+        permit.release()
+
+
+@pytest.mark.parametrize("value", [0, -1, 257, 2.5, True, "many"])
+def test_a_bad_answer_limit_is_refused(region, operator, value):
+    with pytest.raises(InvalidRequest, match="max_concurrent_answers"):
+        region_controls.update(region, {"max_concurrent_answers": value})
+
+
+def test_a_lower_request_limit_is_said(region, operator):
+    region.config.server.api.max_concurrent_requests = 8
+    shown = region_controls.update(region, {"max_concurrent_answers": 12})["answers"]
+    assert shown["request_limit"] == 8 and "request limit (8" in shown["note"]
+
+
+def test_a_granted_admin_sees_the_answer_limit_and_cannot_change_it(region):
+    token = _granted_admin(region.config)
+    try:
+        assert region_controls.describe(region)["answers"]["max_concurrent"] == 0
+        with pytest.raises(OperatorRequired):
+            region_controls.update(region, {"max_concurrent_answers": 40})
+    finally:
+        reset_identity(token)
+
+
+def test_both_surfaces_set_the_answer_limit(served):
+    app, client = served
+    set_ = _mcp_body(_mcp(client, ADMIN, "set_region_controls", {"max_concurrent_answers": 24}))
+    assert json.loads(set_["result"]["content"][0]["text"])["answers"]["max_concurrent"] == 24
+    assert client.get("/region/controls", headers=ADMIN).json()["answers"]["max_concurrent"] == 24
+    back = client.put("/region/controls", json={"max_concurrent_answers": None}, headers=ADMIN)
+    assert back.status_code == 200 and not back.json()["answers"]["custom_max_concurrent"]
+    refused = client.put("/region/controls", json={"max_concurrent_answers": 40}, headers=READER)
+    assert refused.status_code == 403

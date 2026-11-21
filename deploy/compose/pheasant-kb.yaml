@@ -22,7 +22,7 @@ server:
   api:
     enabled: true
     openapi: true
-    max_concurrent_requests: 32
+    max_concurrent_requests: 64
     drain_seconds: 20
     graph_refresh_seconds: 30
     cors_origins:
@@ -212,7 +212,7 @@ assistant:
         context_budget_chars: 400000
         max_output_tokens: 24000
   latency:
-    max_concurrent_answers: 4
+    max_concurrent_answers: 16
   retrieval:
     max_rounds: 2
     per_query_results: 10

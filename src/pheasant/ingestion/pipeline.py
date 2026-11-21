@@ -76,6 +76,12 @@ class ParsedArtifact:
     #: directory is a *bundle* is decided once the whole source is indexed
     #: (`graph/okf.py`), because no single file can say so.
     okf: dict[str, Any] | None = None
+    #: The line each page starts on (``page_lines[n]`` is page ``n + 1``,
+    #: ``None`` for a page with no text), for a document read with its pages
+    #: (`ingestion.extractor.PagedText`); ``None`` for everything else. The
+    #: chunks already carry their pages; the graph builder reads this for the
+    #: headings' (`graph/provenance.py`).
+    page_lines: list[int | None] | None = None
 
 
 def utc_now() -> str:
@@ -245,6 +251,30 @@ def extract_to_text(
         return ""
 
 
+def _pages_of(text: str) -> list[int | None] | None:
+    """The page map a :class:`~pheasant.ingestion.extractor.PagedText` carries."""
+
+    lines = getattr(text, "page_lines", None)
+    return list(lines) if lines else None
+
+
+def _with_pages(chunks: list[TextChunk], page_lines: list[int | None] | None) -> list[TextChunk]:
+    """Each chunk with the pages its first and last lines fall on."""
+
+    if not page_lines:
+        return chunks
+    from pheasant.graph.provenance import chunk_pages, page_starts
+
+    starts = page_starts(page_lines)
+    if not starts[0]:
+        return chunks
+    out = []
+    for chunk in chunks:
+        first, last = chunk_pages(starts, chunk.start_line, chunk.end_line)
+        out.append(replace(chunk, page_start=first, page_end=last))
+    return out
+
+
 def _chunks_and_headings(
     source: SourceConfig, text: str, relative_path: str = ""
 ) -> tuple[list[TextChunk], list[SectionHeading], dict[str, Any] | None]:
@@ -268,6 +298,7 @@ def _chunks_and_headings(
     ingestion boundary keeps both backends' indexed corpus identical.
     """
 
+    page_lines = _pages_of(text)
     text = text.replace("\x00", "")
     text, line_offset = _strip_memory_frontmatter(source, text)
     plan = None
@@ -289,7 +320,7 @@ def _chunks_and_headings(
         chunks = chunks_for_source(source, text, headings)
     recorded = plan.as_dict() if plan is not None else None
     if not line_offset:
-        return chunks, headings, recorded
+        return _with_pages(chunks, page_lines), headings, recorded
     chunks = [
         replace(
             chunk,
@@ -299,7 +330,7 @@ def _chunks_and_headings(
         for chunk in chunks
     ]
     headings = [replace(heading, line=heading.line + line_offset) for heading in headings]
-    return chunks, headings, recorded
+    return _with_pages(chunks, page_lines), headings, recorded
 
 
 def okf_for_source(source: SourceConfig, relative_path: str, text: str) -> dict[str, Any] | None:
@@ -530,6 +561,8 @@ def parse_file(
     else:
         text = read_text(path, extractor)
     chunks, headings, chunk_plan = _chunks_and_headings(source, text, relative)
+    page_lines = _pages_of(text)
+    text = str(text)
     okf = okf_for_source(source, relative, text)
     stat = path.stat()
     artifact_id = f"file:{source.name}:{relative}:branch={branch or 'none'}"
@@ -552,6 +585,7 @@ def parse_file(
         headings=headings,
         chunk_plan=chunk_plan,
         okf=okf,
+        page_lines=page_lines,
     )
 
 
@@ -622,6 +656,8 @@ def parse_connector_payload(
     else:
         text = read_text_bytes(payload.content, item.relative_path, extractor)
     chunks, headings, chunk_plan = _chunks_and_headings(source, text, item.relative_path)
+    page_lines = _pages_of(text)
+    text = str(text)
     okf = okf_for_source(source, item.relative_path, text)
     artifact_id = f"file:{source.name}:{item.relative_path}:branch={branch or 'none'}"
     return ParsedArtifact(
@@ -640,6 +676,7 @@ def parse_connector_payload(
         headings=headings,
         chunk_plan=chunk_plan,
         okf=okf,
+        page_lines=page_lines,
     )
 
 

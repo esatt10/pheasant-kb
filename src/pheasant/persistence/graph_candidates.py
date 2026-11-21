@@ -12,7 +12,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
 from pheasant.persistence.graph_codec import edge_attrs
+
+#: Never scored (`graph/provenance.py`), so never read: left in, a chunk's
+#: `next_chunk` edges would match every query naming its file and fill the
+#: `limit` below with edges the scorer then throws away.
+_UNSCORED = tuple(sorted(PROVENANCE_EDGE_TYPES))
+_UNSCORED_CLAUSE = f" AND e.type NOT IN ({','.join('?' for _ in _UNSCORED)})"
 
 
 def candidate_edges(
@@ -50,7 +57,8 @@ def candidate_edges(
     matched = [
         edge_type
         for edge_type in edge_types(store, kb_id)
-        if any(token in edge_type.lower() for token in tokens)
+        if edge_type not in PROVENANCE_EDGE_TYPES
+        and any(token in edge_type.lower() for token in tokens)
     ]
     sql, params = "", []
     if matched:
@@ -63,10 +71,10 @@ def candidate_edges(
     sql += (
         "SELECT DISTINCT e.* FROM graph_edges e JOIN graph_nodes n"
         " ON n.kb_id=e.kb_id AND (n.node_id=e.source OR n.node_id=e.target)"
-        f" WHERE n.kb_id=? AND ({label_clause}) AND e.kb_id=?{source_clause}"
+        f" WHERE n.kb_id=? AND ({label_clause}) AND e.kb_id=?{source_clause}{_UNSCORED_CLAUSE}"
         " ORDER BY source, target, type, seq LIMIT ?"
     )
-    params.extend([kb_id, *like, kb_id, *source_params, int(limit)])
+    params.extend([kb_id, *like, kb_id, *source_params, *_UNSCORED, int(limit)])
     current: tuple[str, str] | None = None
     parallel: dict[int, dict] = {}
     for row in store.state.rows(sql, tuple(params)):

@@ -74,10 +74,12 @@ from pheasant.assistant.workflows import (
     WorkflowResult,
     WorkflowStep,
     decision_gates,
+    deep,
 )
 from pheasant.assistant.workflows.agentic_prompts import (
     GRADER_CRITERIA,
     GRADER_SYSTEM,
+    PLANNER_DEEP_RULE,
     PLANNER_SYSTEM,
 )
 from pheasant.assistant.workflows.compose import (
@@ -152,6 +154,8 @@ DEFAULTS: dict[str, Any] = {
     "passages_per_document": None,
     # Overrides for compose questions only, over COMPOSE_DEFAULTS.
     "compose_options": {},
+    # Overrides for deep research only (a pinned "long"), over DEEP_DEFAULTS.
+    "deep_options": {},
     # Read whole files behind the hits, not 500-char chunk previews.
     **CONTENT_DEFAULTS,
 }
@@ -209,6 +213,7 @@ class AgentState(decision_gates.DecisionState, total=False):
     retrieval_rounds: int
     round_start_evidence_ids: list[str]
     no_new_evidence: bool
+    research_stop: str  # why deep research stopped early (workflows/deep.py)
     round: int
     fallback_done: bool
     graph_fallback_done: bool
@@ -245,6 +250,7 @@ def resolve_options(state: AgentState) -> dict:
     # Depth layers over intent: a long procedural answer still reads files
     # deeply, it just reads more of them into more sections.
     options = routing.depth_options(str(state.get("depth") or "short"), options, explicit)
+    options = deep.apply(options) if deep.active(state) else options  # compose excluded
     if state.get("intent") == "compose":
         options.update(COMPOSE_DEFAULTS)
         options.update(options.get("compose_options") or {})
@@ -405,6 +411,8 @@ def plan_node(state: AgentState, ctx: dict) -> dict:
         if intent == "compose":
             planner_system += PLANNER_COMPOSE_RULE
             corpus += documents_in_scope(retriever)
+        elif deep.active(state):
+            planner_system += PLANNER_DEEP_RULE.replace("{planned_queries}", str(planned_queries))
         raw = llm.try_complete(
             planner_system,
             f"{corpus}\n\n"
@@ -683,10 +691,12 @@ def _expansion_result(
 
 def grade_node(state: AgentState, ctx: dict) -> dict:
     """Decide whether the evidence answers the question: judged, else model-graded."""
-    gated = decision_gates.grade(state, ctx, resolve_options(state))
-    if gated.update is not None:
-        return gated.update
-    return decision_gates.after_classic(gated, state, ctx, _grade_classic(state, ctx))
+    options = resolve_options(state)
+    gated = decision_gates.grade(state, ctx, options)
+    update = gated.update or decision_gates.after_classic(
+        gated, state, ctx, _grade_classic(state, ctx)
+    )
+    return deep.after_grade(state, update, ctx, options)  # deep research's own stops
 
 
 def _grade_classic(state: AgentState, ctx: dict) -> dict:
@@ -1163,6 +1173,8 @@ def verify_node(state: AgentState, ctx: dict) -> dict:
 def should_retry(state: AgentState, ctx: dict) -> str:
     """Choose broadening, a replan, or synthesis from the current grade."""
     options = resolve_options(state)
+    if state.get("research_stop"):
+        return "synthesize"  # deep research decided it has what it can get
     if decided := decision_gates.route_after_grade(state, ctx, options):
         return decided
     grade = state.get("grade") or {}
@@ -1432,7 +1444,7 @@ class AgenticWorkflow:
             initial,
             config={
                 "configurable": {"ctx": ctx},
-                "recursion_limit": 6 * max(1, int(options["max_rounds"])) + 12,
+                "recursion_limit": 6 * max(1, deep.most_rounds(options)) + 12,
             },
         )
 
@@ -1444,6 +1456,7 @@ class AgenticWorkflow:
             "why": {"depth": final.get("depth_why", "")},
             "decided_by": {"depth": final.get("depth_by", "rule")},
         }
+        steps = deep.finish(final, route)
         return WorkflowResult(
             answer=final.get("answer", ""),
             citations=citations,
@@ -1475,7 +1488,7 @@ class AgenticWorkflow:
                 "intent": final.get("intent", "knowledge"),
                 "depth": depth,
             },
-            steps=final.get("steps", []),
+            steps=steps,
             workflow=self.name,
             figures=final.get("figures", []),
             route=route,

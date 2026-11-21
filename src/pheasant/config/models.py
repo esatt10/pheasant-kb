@@ -127,10 +127,19 @@ class ModelsSettings(ModelMixin):
     #: raises it (``PUT /region/controls``, which overrides this at runtime).
     #: ``null``: no limit. A model with no stated price counts nothing.
     monthly_spend_limit: float | None = 500.0
+    #: What one deep-research answer (``@detailed`` / ``@deep``, or a pinned
+    #: ``depth: "long"``) may spend, in ``currency``. Research wraps up once
+    #: its spend plus the projected cost of writing reaches 95% of it, and a
+    #: section not yet written when it is reached is written from its
+    #: passages. An operator admin overrides it at runtime
+    #: (``PUT /region/controls``). ``null``: no per-answer limit.
+    deep_answer_spend_limit: float | None = 5.0
 
     def __post_init__(self) -> None:
         if self.monthly_spend_limit is not None and float(self.monthly_spend_limit) < 0:
             raise ValueError("models.monthly_spend_limit must be zero or more, or null")
+        if self.deep_answer_spend_limit is not None and float(self.deep_answer_spend_limit) < 0:
+            raise ValueError("models.deep_answer_spend_limit must be zero or more, or null")
         for kind, entries, default in (
             ("chat", self.chat, self.default_chat),
             ("decisions", self.decisions, self.default_decision),

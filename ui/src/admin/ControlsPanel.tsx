@@ -14,9 +14,10 @@ const money = (amount: number | null, currency: string | null) => {
 };
 
 /**
- * The operator's two controls over this knowledge base: a kill switch that
- * cuts everyone's access but an operator admin's, and a monthly limit on what
- * it spends on models. An Admin sees them; only an operator admin (one the
+ * The operator's controls over this knowledge base: a kill switch that cuts
+ * everyone's access but an operator admin's, a monthly limit on what it spends
+ * on models, how many answers one server runs at once, and deep research's two
+ * limits (what one answer may spend, and how many run at once). An Admin sees them; only an operator admin (one the
  * deployment pinned, or the shared token) changes them, and the server says
  * which this caller is (`can_change`).
  */
@@ -49,6 +50,12 @@ export function ControlsPanel() {
       ) : null}
       <KillSwitch data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
       <SpendLimit data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
+      <AnswerLimit data={data} busy={change.isPending} onChange={(body) => change.mutate(body)} />
+      <DeepResearchLimits
+        data={data}
+        busy={change.isPending}
+        onChange={(body) => change.mutate(body)}
+      />
     </>
   );
 }
@@ -247,6 +254,245 @@ function SpendLimit({
                 }
               >
                 Use the default
+              </button>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+function AnswerLimit({
+  data,
+  busy,
+  onChange,
+}: {
+  data: RegionControls;
+  busy: boolean;
+  onChange: (body: RegionControlsChange) => void;
+}) {
+  const answers = data.answers;
+  const [concurrent, setConcurrent] = useState(String(answers?.max_concurrent ?? ""));
+  useEffect(() => {
+    setConcurrent(String(answers?.max_concurrent ?? ""));
+  }, [answers?.max_concurrent]);
+  if (!answers) return null;
+  const parsed = Number(concurrent);
+  const valid =
+    concurrent.trim() !== "" &&
+    Number.isInteger(parsed) &&
+    parsed >= 1 &&
+    parsed <= answers.max_allowed;
+  const changed = valid && parsed !== answers.max_concurrent;
+  return (
+    <section className="section controls-card" aria-labelledby="controls-answers">
+      <div className="controls-card__head">
+        <h2 className="section__title" id="controls-answers">
+          Answers at once
+        </h2>
+        <span className="pill">
+          {answers.max_concurrent > 0 ? `${answers.max_concurrent} per server` : "No limit"}
+        </span>
+      </div>
+      <p className="muted small">
+        How many questions one server answers at the same time. With every slot taken, the next
+        question waits up to {answers.wait_seconds} seconds for one and is then told to try again.
+        An answer mostly waits on the models, so the usual ceiling is the models&apos; quota: raise
+        that before raising this.
+      </p>
+      {answers.note ? <div className="banner banner--info">{answers.note}</div> : null}
+      <dl className="controls-figures">
+        <div>
+          <dt>At once, per server</dt>
+          <dd>
+            {answers.max_concurrent > 0 ? answers.max_concurrent : "No limit"}
+            {!answers.custom_max_concurrent ? (
+              <span className="muted small"> (deployment default)</span>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Wait for a slot</dt>
+          <dd>{answers.wait_seconds} s</dd>
+        </div>
+      </dl>
+      {data.can_change ? (
+        <form
+          className="controls-card__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (changed) onChange({ max_concurrent_answers: parsed });
+          }}
+        >
+          <label className="field">
+            <span>Answers at once, per server (1 to {answers.max_allowed})</span>
+            <input
+              className="text-input"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={answers.max_allowed}
+              step={1}
+              value={concurrent}
+              onChange={(event) => setConcurrent(event.target.value)}
+            />
+          </label>
+          <div className="controls-card__actions">
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={busy || !valid || !changed}
+            >
+              Save answer limit
+            </button>
+            {answers.custom_max_concurrent ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => onChange({ max_concurrent_answers: null })}
+                title={`Back to ${
+                  answers.default_max_concurrent > 0 ? answers.default_max_concurrent : "no limit"
+                } at once`}
+              >
+                Use the default
+              </button>
+            ) : null}
+          </div>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+function DeepResearchLimits({
+  data,
+  busy,
+  onChange,
+}: {
+  data: RegionControls;
+  busy: boolean;
+  onChange: (body: RegionControlsChange) => void;
+}) {
+  const deep = data.deep_research;
+  const [limit, setLimit] = useState(
+    deep.answer_spend_limit != null ? String(deep.answer_spend_limit) : "",
+  );
+  const [concurrent, setConcurrent] = useState(String(deep.max_concurrent));
+  useEffect(() => {
+    setLimit(deep.answer_spend_limit != null ? String(deep.answer_spend_limit) : "");
+  }, [deep.answer_spend_limit]);
+  useEffect(() => {
+    setConcurrent(String(deep.max_concurrent));
+  }, [deep.max_concurrent]);
+  const parsedLimit = Number(limit);
+  const limitValid = limit.trim() !== "" && Number.isFinite(parsedLimit) && parsedLimit >= 0;
+  const parsedConcurrent = Number(concurrent);
+  const concurrentValid =
+    concurrent.trim() !== "" && Number.isInteger(parsedConcurrent) && parsedConcurrent >= 0;
+  const limitChanged = limitValid && parsedLimit !== deep.answer_spend_limit;
+  const concurrentChanged = concurrentValid && parsedConcurrent !== deep.max_concurrent;
+  return (
+    <section className="section controls-card" aria-labelledby="controls-deep">
+      <div className="controls-card__head">
+        <h2 className="section__title" id="controls-deep">
+          Deep research
+        </h2>
+        <span className="pill">{deep.enforced ? "Limited per answer" : "Not enforced"}</span>
+      </div>
+      <p className="muted small">
+        An answer asked for with <code>@detailed</code> or <code>@deep</code> (or the Detailed
+        length) researches before it writes: it searches each aspect of the question and follows
+        up on what it finds, and stops once the answer is found or the knowledge base has nothing
+        more. Each one may spend up to its limit: research wraps up at {deep.wrap_up_percent}% of
+        it, counting what writing will cost. The monthly limit above still applies.
+      </p>
+      {deep.note ? <div className="banner banner--info">{deep.note}</div> : null}
+      <dl className="controls-figures">
+        <div>
+          <dt>Per answer</dt>
+          <dd>
+            {deep.answer_spend_limit != null
+              ? money(deep.answer_spend_limit, deep.currency)
+              : data.can_change
+                ? "None"
+                : "—"}
+            {data.can_change && !deep.custom_answer_spend_limit ? (
+              <span className="muted small"> (deployment default)</span>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt>At once, per server</dt>
+          <dd>
+            {deep.max_concurrent > 0 ? deep.max_concurrent : "No separate cap"}
+            {data.can_change && !deep.custom_max_concurrent ? (
+              <span className="muted small"> (deployment default)</span>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+      {data.can_change ? (
+        <form
+          className="controls-card__form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const body: RegionControlsChange = {};
+            if (limitChanged) body.deep_answer_spend_limit = parsedLimit;
+            if (concurrentChanged) body.max_concurrent_deep_answers = parsedConcurrent;
+            if (Object.keys(body).length) onChange(body);
+          }}
+        >
+          <label className="field">
+            <span>Limit per answer ({deep.currency || "USD"})</span>
+            <input
+              className="text-input"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="any"
+              value={limit}
+              onChange={(event) => setLimit(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Deep answers at once, per server (0 for no separate cap)</span>
+            <input
+              className="text-input"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              value={concurrent}
+              onChange={(event) => setConcurrent(event.target.value)}
+            />
+          </label>
+          <div className="controls-card__actions">
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={
+                busy || !limitValid || !concurrentValid || !(limitChanged || concurrentChanged)
+              }
+            >
+              Save deep research limits
+            </button>
+            {deep.custom_answer_spend_limit || deep.custom_max_concurrent ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() =>
+                  onChange({ deep_answer_spend_limit: null, max_concurrent_deep_answers: null })
+                }
+                title={`Back to ${
+                  deep.default_answer_spend_limit != null
+                    ? money(deep.default_answer_spend_limit, deep.currency)
+                    : "no limit"
+                } per answer and ${deep.default_max_concurrent} at once`}
+              >
+                Use the defaults
               </button>
             ) : null}
           </div>

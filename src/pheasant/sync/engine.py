@@ -2254,6 +2254,8 @@ class SyncEngine:
                         "text_hash": chunk.text_hash,
                         "summary": chunk.text[:240],
                         "token_estimate": chunk.token_estimate,
+                        "page_start": chunk.page_start,
+                        "page_end": chunk.page_end,
                     }
                     for chunk in parsed.chunks
                 ]

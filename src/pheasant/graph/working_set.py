@@ -78,6 +78,17 @@ class RowWorkingSet(SimpleMultiDiGraph):
         self._seen_pairs.add(pair)
         if source in self._deleted or target in self._deleted:
             return
+        # A node removed in the delta not yet committed still has its old edges
+        # in the rows, and the commit's cascade deletes every one of them (the
+        # removal is kept until then even when the node is re-added; see
+        # `SimpleMultiDiGraph.add_node`). Hydrating them would hand the builder
+        # edges that are about to vanish: an `upsert_edge` finds one, writes
+        # nothing, and the cascade takes it. That is how a full sync on the
+        # fleet writer dropped every `indexes`, `contains` and `has_chunk` edge
+        # and most `mentions` and `references`. The resident graph forgets a
+        # removed node's edges at once; so does this, until the delta commits.
+        if source in self._pending_removed_nodes or target in self._pending_removed_nodes:
+            return
         if parallel:
             self._edges[pair] = {key: dict(attrs) for key, attrs in parallel.items()}
             self._out.setdefault(source, {})[target] = None

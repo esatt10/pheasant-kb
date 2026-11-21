@@ -59,6 +59,11 @@ CEILINGS: dict[str, int] = {
     # these cohesive with their owning retriever/workflow and hold a fixed cap.
     "assistant/retrieval.py": 1650,
     "assistant/workflows/agentic.py": 1600,
+    # The refusal vocabulary: the readiness contract publishes its code table
+    # by reading this one module (a refusal defined elsewhere is a code no
+    # client can learn, CLAUDE.md traps), so it is one unit by necessity.
+    # Crossed 800 with `DEEP_RESEARCH_BUSY`; new refusals are short classes.
+    "services/errors.py": 820,
     # Raised to 3206 for `backup`/`restore` refusing a Postgres region (whose
     # data is not under /state) with the refusal text `persistence/backup.py`
     # owns, instead of writing an archive that holds none of it.
@@ -131,14 +136,17 @@ CEILINGS: dict[str, int] = {
     # Raised to 1263 for the hook that appends tables' DDL kept beside their
     # own modules (`persistence/access_grants.py`, `usage_ledger.py`): new
     # tables go there, not here.
-    "persistence/schema.py": 1264,  # + durable_jobs.dismissed_at (a cleared job stays readable)
+    # + chunks.page_start/page_end, the pages a chunk is on (graph/provenance.py).
+    "persistence/schema.py": 1265,  # + durable_jobs.dismissed_at (a cleared job stays readable)
     # The SQLite and Postgres backends are one unit: the shared interface and
     # its two implementations. Crossed 800 with the Postgres read path's
     # dropped-connection discard and pool check before a retry.
     "persistence/backends.py": 815,
     # Lowered from 1800 when the derived-index migrations moved to
     # `persistence/derived_indexes.py`.
-    "persistence/state_store.py": 1799,  # + saved_artifacts columns, + connections in `required`
+    # Raised from 1799 for the chunk page columns: their guarded ALTER on both
+    # backends, their `required` entry and the insert's two named parameters.
+    "persistence/state_store.py": 1819,  # + saved_artifacts columns, + connections in `required`
     # Lowered from 1400 when `VectorIndexer` moved to `search/vector_indexer.py`.
     # The bounded query embedding cache, single-flight registry and query-only
     # retry policy now live with the existing vector cache and embedder.
@@ -163,7 +171,8 @@ CEILINGS: dict[str, int] = {
     # only when it is loaded. The reconcile itself is in `search/node_index.py`.
     # Raised from 2895: the engine installs its state store as the place
     # this process reads connected accounts from (`connections/resolve.py`).
-    "sync/engine.py": 2900,
+    # Raised from 2900 by the chunk rows' two page fields.
+    "sync/engine.py": 2902,
     "sync/queue.py": 1050,
     "telemetry/interactions.py": 1350,
     "tuning/runner.py": 1450,

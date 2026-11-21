@@ -71,6 +71,10 @@ export const STRUCTURAL_EDGE_TYPES = new Set([
   "indexes",
   "has_chunk",
   "has_heading",
+  // Where a passage or section sits in its document (graph/provenance.py).
+  "next_chunk",
+  "section_has_chunk",
+  "next_heading",
 ]);
 
 /**

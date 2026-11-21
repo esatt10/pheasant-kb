@@ -1844,3 +1844,42 @@ def test_an_interrupted_reader_pass_is_not_recorded_as_done(
         assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
     finally:
         engine.close()
+
+
+def test_chunk_order_sections_and_pages_resync_to_the_same_state(tmp_path: Path) -> None:
+    """The provenance structure (`graph/provenance.py`) is derived again on
+    every index of a document: an unchanged corpus re-syncs to the same rows,
+    and an edited one to what a full sync of the new text draws, pages
+    included."""
+
+    pytest.importorskip("pypdfium2")
+    from tests.test_chunk_provenance import _corpus, _engine, _guide, _shape
+
+    workspace = tmp_path / "ws"
+    _corpus(workspace)
+    engine = _engine(tmp_path, "incremental", workspace)
+    try:
+        engine.sync_source("docs", "full")
+        first = _shape(engine)
+        pages = engine.state.rows("SELECT id, page_start, page_end FROM chunks ORDER BY id", ())
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 0
+        assert _shape(engine) == first
+        (workspace / "guide.md").write_text(_guide(edited=True), encoding="utf-8")
+        assert engine.sync_source("docs", "incremental").indexed_artifacts == 1
+        edited = _shape(engine)
+        unchanged_pdf = [row for row in pages if "birds.pdf" in row["id"]]
+        assert unchanged_pdf == [
+            row
+            for row in engine.state.rows(
+                "SELECT id, page_start, page_end FROM chunks ORDER BY id", ()
+            )
+            if "birds.pdf" in row["id"]
+        ]
+    finally:
+        engine.close()
+    reference = _engine(tmp_path, "full", workspace)
+    try:
+        reference.sync_source("docs", "full")
+        assert edited == _shape(reference)
+    finally:
+        reference.close()
