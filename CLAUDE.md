@@ -3559,6 +3559,21 @@ Each of these cost real time. They are listed because the shape recurs.
   `python -m pheasant.deployment.database wait|ensure` now, and pheasant picks
   the driver. The general shape: a startup command is code, and it should
   depend on pheasant's surface, not on what the image happens to contain.
+- **A lazy read of rows that a pending delete owns resurrects them.** The
+  fleet writer's working set (`graph/working_set.py`) reads an edge pair from
+  the rows the first time it is asked. A full sync removes a source's nodes
+  and re-adds them in one delta, and until that delta commits the rows still
+  hold the removed nodes' edges, which the commit's cascade then deletes. The
+  working set hydrated them, `upsert_edge` found the edge already there and
+  wrote nothing, and the cascade took it: one full sync on the hosted region
+  left the source with 11 `indexes` edges for 1,505 documents, no folder
+  `contains`, no `has_chunk`, and a fraction of its `mentions` and
+  `references`. Every test passed, because only the row working set does the
+  lazy read, and only a full sync over an existing graph puts a removed node's
+  edges in its way. `_hydrate_pair` skips rows touching a node in
+  `_pending_removed_nodes` now, which is what the resident graph does by
+  forgetting them at once; `tests/test_row_writer.py` runs two full syncs on
+  both backends and compares with the resident writer.
 - **A dump from an image with extensions carries them, and their data.** A
   `pg_dump` of a pheasant database on the TimescaleDB image holds `CREATE
   EXTENSION timescaledb`, its comment, and the rows of `_timescaledb_catalog`
