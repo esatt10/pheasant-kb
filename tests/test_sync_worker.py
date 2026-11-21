@@ -99,7 +99,7 @@ def test_sync_all_preserves_a_child_failure_as_a_result(monkeypatch) -> None:
     from pheasant.sync import worker as worker_module
 
     class Engine:
-        paths = type("Paths", (), {"sqlite": Path("/state/pheasant.db")})()
+        paths = type("Paths", (), {"state": Path("/state")})()
 
     backed = WorkerBackedEngine(Engine(), "/config/pheasant.yaml")
     monkeypatch.setattr(backed, "_can_delegate", lambda: True)

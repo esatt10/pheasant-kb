@@ -51,7 +51,7 @@ from pheasant.ingestion.office import (
     extract_xlsx_text,
 )
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 DOCS = Path(__file__).parent / "fixtures" / "sample_workspace" / "documents"

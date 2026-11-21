@@ -78,7 +78,7 @@ def context(tmp_path):
     config = _config(tmp_path)
     config.observability.interactions.enabled = True
     config.observability.interactions.hot_retention_days = 7
-    state = StateStore(tmp_path / "traces.db")
+    state = StateStore()
     state.migrate()
     yield ServiceContext(config, state, None)
     state.close()
@@ -654,7 +654,7 @@ def test_the_search_reads_the_same_on_a_real_postgres(tmp_path, admin):
     config = _config(tmp_path)
     config.observability.interactions.enabled = True
     config.storage.backend = "postgres"
-    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     engine = SyncEngine(config)
     try:
         context = ServiceContext(config, engine.state, None)

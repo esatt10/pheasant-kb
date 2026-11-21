@@ -78,9 +78,7 @@ def _connector(tmp_path: Path) -> FilesystemConnector:
             ],
         }
     )
-    return FilesystemConnector(
-        config.effective_source(config.sources[0]), StateStore(tmp_path / "s.db")
-    )
+    return FilesystemConnector(config.effective_source(config.sources[0]), StateStore())
 
 
 def test_nested_archives_are_folders_and_read_back(tmp_path: Path) -> None:

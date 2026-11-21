@@ -29,13 +29,12 @@ DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 postgres = pytest.mark.skipif(not DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run")
 
 
-def _state(tmp_path: Path, backend: str = "sqlite", **storage: Any) -> StateStore:
+def _state(tmp_path: Path, backend: str = "postgres", **storage: Any) -> StateStore:
     raw: dict[str, Any] = {
         "pheasant": {"name": "beats", "defaults": "standalone", "state_path": str(tmp_path)},
+        "storage": dict(storage),
     }
-    if backend == "postgres":
-        raw["storage"] = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN", **storage}
-    state = StateStore.from_config(PheasantConfig.model_validate(raw), tmp_path / "state.db")
+    state = StateStore.from_config(PheasantConfig.model_validate(raw))
     state.migrate()
     return state
 
@@ -81,7 +80,7 @@ def test_a_heartbeat_gives_up_when_its_caller_says_the_claim_lapsed() -> None:
     assert seen == [1, 2, 3]
 
 
-def test_a_sync_run_beats_on_sqlite(tmp_path: Path) -> None:
+def test_a_sync_run_beats(tmp_path: Path) -> None:
     state = _state(tmp_path)
     run = cancellation.SyncRun(state, "notes", heartbeat_interval_s=0.05)
     with run:
@@ -111,7 +110,7 @@ def test_a_sync_run_beats_while_its_work_holds_every_pooled_connection(tmp_path:
 
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as admin:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
         admin.query("DROP TABLE IF EXISTS sync_runs")
     state = _state(tmp_path, "postgres", pool_size=1)
     try:
@@ -131,7 +130,7 @@ def test_a_sync_run_beats_while_its_work_holds_every_pooled_connection(tmp_path:
             worker = threading.Thread(target=work, daemon=True)
             worker.start()
             assert held.wait(5)
-            with pg_driver.connect(DSN, autocommit=True) as reader:
+            with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as reader:
 
                 def beats() -> list[Any]:
                     return reader.query(
@@ -154,14 +153,14 @@ def test_a_source_lease_holds_while_its_work_holds_every_pooled_connection(
 ) -> None:
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as admin:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
         admin.query("DROP TABLE IF EXISTS source_leases")
     state = _state(tmp_path, "postgres", pool_size=1)
     try:
         lease = SourceLease(state, "site", heartbeat_interval_s=0.1, stale_after_s=60)
         assert lease.try_acquire()
         state.backend.execute("SELECT 1")  # the work's open transaction holds the pool
-        with pg_driver.connect(DSN, autocommit=True) as reader:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as reader:
 
             def beat() -> Any:
                 return reader.query(

@@ -25,6 +25,7 @@ from pheasant.sync import connector_registry
 from pheasant.sync.connectors import ItemNotModified
 from pheasant.sync.engine import SyncEngine
 from pheasant.testing import ConnectorConformance
+from tests.conftest import seed_source
 
 
 def _source(type_name: str, **overrides) -> SourceConfig:
@@ -38,8 +39,9 @@ def _source(type_name: str, **overrides) -> SourceConfig:
 
 
 def _state(tmp_path: Path) -> StateStore:
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
+    seed_source(state, "team-gdrive")
     return state
 
 
@@ -77,7 +79,7 @@ sources:
         cfg = load_config(config_path)
         paths = StatePaths.from_config(cfg)
         paths.ensure()
-        state = StateStore(paths.sqlite)
+        state = StateStore()
         state.migrate()
         engine = SyncEngine(cfg, paths, state)
         try:

@@ -188,7 +188,7 @@ def serve(path: str) -> None:
     from pheasant.sync.worker import DEFAULT_LEASE_WAIT_S, PROGRESS_MARKER
 
     engine = SyncEngine(load_config(Path(path)), defer_persisted_graph_load=True)
-    engine.lease.wait_timeout_s = DEFAULT_LEASE_WAIT_S
+    engine.config.sync.concurrency.lock_timeout_seconds = DEFAULT_LEASE_WAIT_S
 
     def progress(
         phase: str, current: int, total: int | None, detail: str, meta: dict | None = None

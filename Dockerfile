@@ -66,7 +66,7 @@ RUN apt-get update \
 # Install from pyproject so the image's dependencies never drift from the
 # package's declared deps (a hand-maintained list previously omitted core deps
 # added later — numpy (21.4) and zstandard (21.6a) — breaking the smoke test).
-ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,postgres,grpc,queue,analytics,otel
+ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,grpc,analytics,otel
 COPY pyproject.toml README.md LICENSE /app/
 # Resolve runtime dependencies before copying application source. A one-line
 # code edit should not invalidate and redownload the entire universal stack;
@@ -82,8 +82,7 @@ RUN pip install --no-cache-dir --no-deps .
 COPY --from=ui /ui/dist /app/ui
 COPY pheasant.example.yaml /app/pheasant.default.yaml
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-COPY docker-fresh-entrypoint.sh /app/docker-fresh-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh /app/docker-fresh-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Run as an unprivileged user. The indexer reads whatever paths it is pointed
 # at, so running it as root means a misconfigured source — or a bug in the

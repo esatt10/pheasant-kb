@@ -8,7 +8,6 @@ behavior is identical to pre-32.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -331,21 +330,13 @@ def _graph_hits(tools: PheasantTools, query: str, principal: str | None) -> list
     return payload["results"]
 
 
-POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
+@pytest.fixture()
+def graph_tools(tmp_path: Path):
+    """The enforcement corpus: the filter reads `artifacts`."""
 
-
-@pytest.fixture(params=["sqlite", "postgres"])
-def graph_tools(request, tmp_path: Path):
-    """The enforcement corpus on each backend: the filter reads `artifacts` there."""
-
-    storage = ""
-    if request.param == "postgres":
-        if not POSTGRES_DSN:
-            pytest.skip("set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
-        storage = "storage:\n  backend: postgres\n  dsn_env: PHEASANT_TEST_POSTGRES_DSN\n"
     connector_registry.reset_connector_registry()
     connector_registry.register_connector_class("acltest", AclTestConnector)
-    tools = PheasantTools(_config(tmp_path, enforced=True, storage=storage))
+    tools = PheasantTools(_config(tmp_path, enforced=True))
     tools.sync_source("acl-test", "docs", "full")
     yield tools
     tools.engine.close()

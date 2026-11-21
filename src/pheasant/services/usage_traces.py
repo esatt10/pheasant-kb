@@ -301,11 +301,9 @@ def _window(days: Any) -> tuple[int, str]:
 
 
 def _attribute(state: Any, key: str) -> str:
-    """One top-level key of ``attributes_json``, in this backend's SQL."""
+    """One top-level key of ``attributes_json``."""
 
-    if state.dialect.is_postgres:
-        return f"(NULLIF(attributes_json, '')::jsonb ->> '{key}')"
-    return f"json_extract(attributes_json, '$.{key}')"
+    return f"(NULLIF(attributes_json, '')::jsonb ->> '{key}')"
 
 
 def _where(

@@ -745,11 +745,9 @@ def _shoot_run_states(port: int, config) -> None:
 
     from pheasant.evaluation import store as evaluation_store
     from pheasant.evaluation.runner import reclaim_interrupted_runs
-    from pheasant.persistence.paths import StatePaths
     from pheasant.persistence.state_store import StateStore
 
-    paths = StatePaths.from_config(config)
-    state = StateStore.from_config(config, paths.sqlite)
+    state = StateStore.from_config(config)
     provisioned = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
     launch: dict[str, object] = {}
     if provisioned.exists():

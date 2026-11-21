@@ -70,7 +70,7 @@ def _engine_for(config_path: Path) -> SyncEngine:
     cfg = load_config(config_path)
     paths = StatePaths.from_config(cfg)
     paths.ensure()
-    state = StateStore(paths.sqlite)
+    state = StateStore()
     state.migrate()
     return SyncEngine(cfg, paths, state)
 
@@ -105,7 +105,7 @@ def test_programmatic_registration_resolves_at_dispatch(
     connector_registry.register_connector_class("staticdir", example_connector_class)
     config_path = _write_config(tmp_path, "staticdir", _content_dir(tmp_path))
     cfg = load_config(config_path)
-    state = StateStore(tmp_path / "state" / "db.sqlite")
+    state = StateStore()
     state.migrate()
     connector = connector_for_source(cfg.sources[0], state)
     assert isinstance(connector, example_connector_class)
@@ -140,7 +140,7 @@ def test_unresolvable_type_errors_name_installed_plugins(
     connector_registry.register_connector_class("otherplugin", example_connector_class)
     config_path = _write_config(tmp_path, "staticdir", _content_dir(tmp_path))
     cfg = load_config(config_path)
-    state = StateStore(tmp_path / "state" / "db.sqlite")
+    state = StateStore()
     state.migrate()
     with pytest.raises(ConnectorUnavailable) as excinfo:
         connector_for_source(cfg.sources[0], state)

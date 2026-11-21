@@ -230,11 +230,30 @@ def run_tuning(
                     state,
                     max_queue_depth=int(settings.max_index_queue_depth),
                     respect_sync=bool(settings.yield_to_sync),
+                    queue_depth=_index_queue_depth(config, state),
                 ),
             ),
             on_progress=on_progress,
             started=started,
         )
+
+
+def _index_queue_depth(config: Any, state: Any) -> Any:
+    """How many index tasks are waiting or running, read from the broker."""
+
+    def depth() -> int | None:
+        from pheasant.sync.queue import INFLIGHT, PENDING, queue_from_config
+
+        queue = queue_from_config(config, state)
+        if queue is None:
+            return None
+        try:
+            counts = queue.depth()
+            return int(counts.get(PENDING, 0)) + int(counts.get(INFLIGHT, 0))
+        finally:
+            queue.close()
+
+    return depth
 
 
 def _run(
@@ -1117,7 +1136,7 @@ def _repointed(searcher: Any, ranking: RankingParameters) -> Any:
     """
 
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     return HybridSearch(
         SearchStore(searcher.store.state, ranking=ranking),

@@ -19,7 +19,7 @@ lossy similarity judgement rather than an equivalence:
   before/after — breaks under token-sort. Reordering only ever collapses
   whitespace, never token order.
 * **No stopword removal.** A quantifier like "not", "all", "any", "every"
-  changes what a *fact* means; stripping it (as `search.sqlite_store`'s
+  changes what a *fact* means; stripping it (as `search.text_store`'s
   query-framing stopword list does, correctly, for ranking) would invert
   the assertion's truth value. Nothing here reads a stopword list.
 

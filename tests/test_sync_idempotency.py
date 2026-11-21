@@ -12,7 +12,7 @@ from pheasant.config.schema import DEFAULT_INCLUDES, PheasantConfig
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
 

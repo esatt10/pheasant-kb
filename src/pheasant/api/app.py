@@ -53,7 +53,7 @@ from pheasant.config.schema import (
 )
 from pheasant.connections import environment as connection_environment
 from pheasant.connections import secret as connection_secret
-from pheasant.deployment.roles import Role, resolve_role, validate_role
+from pheasant.deployment.roles import Role, RoleConfigurationError, resolve_role, validate_role
 from pheasant.deployment.roles import describe as describe_role
 from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter, DrainState
 from pheasant.graph.exporter import cytoscape, node_link
@@ -68,7 +68,7 @@ from pheasant.registry.knowledge_base_registry import KnowledgeBaseRegistry
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.security.authorization import background_target
 from pheasant.security.path_policy import (
     PathPolicyError,
@@ -433,34 +433,6 @@ RETRIEVAL_FIELD_HELP = assistant_service.RETRIEVAL_FIELD_HELP
 #: means it is written to the file and needs a restart. Being honest about the
 #: difference is the whole point — a UI that says "saved" for a setting the
 #: process is still ignoring has lied to the user.
-def _state_is_writable(config: PheasantConfig, state: object) -> bool:
-    """Can this process actually write the hot store?
-
-    Under PostgreSQL, yes, from every replica -- which is why the shipped
-    fleet needs no spool at all. Under SQLite the answer is the filesystem's:
-    `docker-compose.scale.yml` mounts `/state:ro` on API replicas so the
-    indexer is the only writer, and probing beats asking an operator to
-    configure per-role what the mount already decided.
-
-    Verified against the two forms that mount can take, because they are not
-    equivalent. A read-only **mount** -- what `:ro` actually is -- is reported
-    unwritable even to uid 0, since the kernel checks `MS_RDONLY` before it
-    checks anything else. Read-only **permission bits** are not: root bypasses
-    them, so this returns True and the first insert raises instead. That
-    failure is caught and counted as a dropped batch rather than surfacing to
-    a caller, so the worst case is a degraded ledger, not a broken request --
-    and the manifests express it as a mount, which is the case that works.
-    """
-
-    backend = str(getattr(config.storage, "backend", "sqlite") or "sqlite").lower()
-    if backend != "sqlite":
-        return True
-    path = getattr(config.storage, "sqlite_path", None)
-    if path is None:
-        return True
-    return os.access(Path(path).parent, os.W_OK)
-
-
 def _build_interaction_buffer(
     config: PheasantConfig,
     state: object,
@@ -494,7 +466,6 @@ def _build_interaction_buffer(
             state=state,
             queue=queue,
             kb_id=config.pheasant.name,
-            state_writable=_state_is_writable(config, state),
             owner=f"{socket.gethostname()}-{os.getpid()}",
         )
         buffer = InteractionBuffer(
@@ -944,10 +915,19 @@ def create_app(
     # is byte-identical to pre-roles behavior; the one that changes anything
     # here is `api`, which publishes index work instead of running it.
     role_policy = resolve_role(config, role)
+    if role_policy.role is Role.WORKER:
+        # The app opens the state store, and a worker holds no credential for
+        # it: a worker is `pheasant worker --transport grpc`, which serves the
+        # preparation calls and nothing else.
+        raise RoleConfigurationError(
+            "role 'worker' is served by `pheasant worker --transport grpc`, not by the "
+            "HTTP app: the app opens the state database, and a worker holds no "
+            "credential for it."
+        )
     validate_role(role_policy, config)
     paths = StatePaths.from_config(config)
     paths.ensure()
-    state = StateStore.from_config(config, paths.sqlite)
+    state = StateStore.from_config(config)
     state.migrate()
     SourceRegistry(config, state).initialize()
     # Only a standalone process, the dedicated graph service, or a legacy API
@@ -955,17 +935,15 @@ def create_app(
     # coordinate child commits; workers prepare immutable files; remote APIs
     # query the graph service. None of those needs a second graph copy.
     remote_graph = bool(str(config.graph.query_service_url or "").strip())
-    # On the row backend only a process that *builds* the graph holds one: a
-    # bounded walk is a bounded query there, so an api or graph replica serves
-    # from `graph_nodes`/`graph_edges` and never materializes 1.5GB (measured
-    # at 100k files) to answer a three-hop neighbourhood. On the whole-file
-    # backend there is no such option, and this resolves exactly as it did.
-    stores_graph = config.storage.graph_format == "rows"
+    # Only a process that *builds* the graph holds one: a bounded walk is a
+    # bounded query, so an api or graph replica serves from
+    # `graph_nodes`/`graph_edges` and never materializes 1.5GB (measured at
+    # 100k files) to answer a three-hop neighbourhood.
     builds_graph = role_policy.role in {Role.ALL, Role.INDEXER}
     loads_graph = (
         role_policy.role in {Role.ALL, Role.GRAPH}
         or (role_policy.role is Role.API and not remote_graph)
-    ) and (builds_graph or not stores_graph)
+    ) and builds_graph
     engine = SyncEngine(
         config,
         paths,
@@ -2483,10 +2461,10 @@ def create_app(
         an id to poll. Source leases make at-least-once broker delivery safe.
 
         Logical task ids are content-addressed on (knowledge base, source,
-        mode), the same rule ``sync_all`` uses. The local queue suppresses an
-        outstanding duplicate; JetStream suppresses network retries of one
-        publish invocation, while source leases remain the final guard if two
-        API replicas intentionally submit distinct invocations.
+        mode), the same rule ``sync_all`` uses. JetStream suppresses network
+        retries of one publish invocation, while source leases remain the
+        final guard if two API replicas intentionally submit distinct
+        invocations.
         """
 
         import hashlib

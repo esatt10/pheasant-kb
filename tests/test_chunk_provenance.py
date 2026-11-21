@@ -80,15 +80,7 @@ def _corpus(root: Path, *, edited: bool = False, pdf: bool = True) -> None:
 
 #: A throwaway Postgres (CLAUDE.md rule 10); unset, the Postgres cases skip.
 DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
-BACKENDS = [
-    "sqlite",
-    pytest.param(
-        "postgres",
-        marks=pytest.mark.skipif(
-            not DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run on Postgres"
-        ),
-    ),
-]
+BACKENDS = ["postgres"]
 
 
 def _engine(
@@ -96,7 +88,7 @@ def _engine(
 ) -> SyncEngine:
     storage: dict = {"graph_snapshots": False}
     if backend == "postgres":
-        storage.update(backend="postgres", dsn_env="PHEASANT_TEST_POSTGRES_DSN")
+        storage.update(backend="postgres", dsn_env="PHEASANT_DATABASE_URL")
     return SyncEngine(
         PheasantConfig.model_validate(
             {
@@ -123,17 +115,9 @@ def _engine(
     )
 
 
-def _reset() -> None:
-    from tests.test_backend_parity import _reset as reset
-
-    reset(DSN)
-
-
 @pytest.fixture(params=BACKENDS)
 def indexed(request, tmp_path: Path):
     pytest.importorskip("pypdfium2")
-    if request.param == "postgres":
-        _reset()
     workspace = tmp_path / "ws"
     _corpus(workspace)
     engine = _engine(tmp_path, "main", workspace, request.param)
@@ -305,8 +289,6 @@ def test_an_edited_outline_leaves_exactly_what_a_full_sync_draws(tmp_path: Path)
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_the_fleet_writer_draws_what_the_resident_writer_draws(tmp_path: Path, backend: str):
-    if backend == "postgres":
-        _reset()
     workspace = tmp_path / "ws"
     _corpus(workspace, pdf=False)
     resident = _engine(tmp_path, "resident", workspace)
@@ -590,15 +572,8 @@ def test_a_state_written_before_pages_gains_the_columns(tmp_path: Path, backend:
     """On Postgres the schema marker would skip the DDL for a region that
     already has `chunks`; the `required` map is what makes the column arrive."""
 
-    from pheasant.persistence.state_store import StateStore
-
-    if backend == "postgres":
-        _reset()
-        engine = _engine(tmp_path, "pg", tmp_path, backend)
-        state = engine.state
-    else:
-        engine, state = None, StateStore(tmp_path / "old.db")
-        state.migrate()
+    engine = _engine(tmp_path, "pg", tmp_path, backend)
+    state = engine.state
     try:
         state.conn.execute("ALTER TABLE chunks DROP COLUMN page_end")
         state.conn.execute("ALTER TABLE chunks DROP COLUMN page_start")

@@ -17,9 +17,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import threading
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -27,7 +25,7 @@ import pytest
 from pheasant.config.loader import load_config
 from pheasant.persistence.state_store import StateStore
 from pheasant.sync.engine import SyncEngine
-from pheasant.sync.locks import EngineLease, EngineLeaseError, source_lock
+from pheasant.sync.locks import source_lock
 from tests.conftest import CONFIG_TEMPLATE
 
 POLL_TIMEOUT_S = 30.0
@@ -106,22 +104,6 @@ def _dead_pid() -> int:
     return int(proc.stdout.strip())
 
 
-def test_state_store_connections_use_wal_and_timeouts(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.migrate()
-    try:
-        from pheasant.persistence.state_store import BUSY_TIMEOUT_MS
-
-        assert store.rows("PRAGMA journal_mode")[0][0] == "wal"
-        # Reads the constant rather than repeating a literal: the value was
-        # raised from 5 s after a real index died on "database is locked", and
-        # a second copy of the number is how that silently reverts.
-        assert int(store.rows("PRAGMA busy_timeout")[0][0]) == BUSY_TIMEOUT_MS
-        assert int(store.rows("PRAGMA synchronous")[0][0]) == 1  # NORMAL
-    finally:
-        store.close()
-
-
 # Needs SIGKILL and a POSIX process tree to simulate an unclean mid-sync kill.
 @pytest.mark.skipif(os.name == "nt", reason="POSIX-only; see comment above.")
 def test_kill9_mid_sync_then_restart_recovers_without_repair(
@@ -174,143 +156,8 @@ def test_kill9_mid_sync_then_restart_recovers_without_repair(
         engine.close()
 
 
-def test_second_engine_process_fails_fast_with_lease_error(
-    tmp_path: Path,
-    workspace_copy: Path,
-) -> None:
-    config_file = _render_config(tmp_path, "primary", workspace_copy)
-    engine = SyncEngine(load_config(config_file))
-    engine.lease.acquire()  # process A holds the lease, heartbeating
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", SYNC_DRIVER, str(config_file)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert proc.returncode != 0
-        assert "lease" in proc.stderr.lower()
-        assert "SYNC_COMPLETE" not in proc.stdout
-    finally:
-        engine.close()
-    assert not (_state_dir(config_file) / "engine.lease").exists()
-
-
-def test_engine_lease_can_wait_for_current_writer(tmp_path: Path) -> None:
-    lease_path = tmp_path / "engine.lease"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "pid": os.getpid() + 1,
-                "hostname": "another-host",
-                "heartbeat_at": datetime.now(UTC).isoformat(),
-            }
-        ),
-        encoding="utf-8",
-    )
-    contender = EngineLease(
-        tmp_path,
-        heartbeat_interval_s=0.02,
-        stale_after_s=1.0,
-        wait_timeout_s=1.0,
-        poll_interval_s=0.01,
-    )
-    timer = threading.Timer(0.05, lease_path.unlink)
-    timer.start()
-    try:
-        contender.acquire()
-        assert contender.held
-    finally:
-        contender.release()
-        timer.join()
-
-
-def test_stale_lease_is_taken_over_with_warning(
-    tmp_path: Path,
-    workspace_copy: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    config_file = _render_config(tmp_path, "stale", workspace_copy)
-    lease_path = _state_dir(config_file) / "engine.lease"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "pid": _dead_pid(),
-                "hostname": "somewhere-else",  # forces the heartbeat-age path
-                "heartbeat_at": "2020-01-01T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
-    engine = SyncEngine(load_config(config_file))
-    try:
-        with caplog.at_level(logging.WARNING, logger="pheasant.sync.locks"):
-            engine.lease.acquire()
-        assert any("stale" in record.message.lower() for record in caplog.records)
-        assert json.loads(lease_path.read_text(encoding="utf-8"))["pid"] == os.getpid()
-    finally:
-        engine.close()
-
-
 # Lease takeover probes PID liveness with POSIX signal 0. Windows has no
 # equivalent that distinguishes "dead" from "not permitted".
-@pytest.mark.skipif(os.name == "nt", reason="POSIX-only; see comment above.")
-def test_dead_pid_on_this_host_is_taken_over(
-    tmp_path: Path,
-    workspace_copy: Path,
-) -> None:
-    config_file = _render_config(tmp_path, "deadpid", workspace_copy)
-    lease_path = _state_dir(config_file) / "engine.lease"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "pid": _dead_pid(),
-                "hostname": socket.gethostname(),
-                # Fresh heartbeat: only the dead-PID check can permit takeover.
-                "heartbeat_at": "2999-01-01T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
-    engine = SyncEngine(load_config(config_file))
-    try:
-        engine.lease.acquire()
-        assert json.loads(lease_path.read_text(encoding="utf-8"))["pid"] == os.getpid()
-    finally:
-        engine.close()
-
-
-def test_lease_heartbeats_and_releases(tmp_path: Path) -> None:
-    lease = EngineLease(tmp_path, heartbeat_interval_s=0.05, stale_after_s=1.0)
-    lease.acquire()
-    first = json.loads(lease.path.read_text(encoding="utf-8"))["heartbeat_at"]
-    deadline = time.monotonic() + 5.0
-    refreshed = False
-    while time.monotonic() < deadline:
-        if json.loads(lease.path.read_text(encoding="utf-8"))["heartbeat_at"] != first:
-            refreshed = True
-            break
-        time.sleep(0.01)
-    assert refreshed, "heartbeat thread never refreshed the lease"
-    lease.release()
-    assert not lease.path.exists()
-
-    # A live, fresh lease held by another (simulated) process is respected.
-    lease.path.write_text(
-        json.dumps(
-            {
-                "pid": os.getpid() + 1,
-                "hostname": "another-host",
-                "heartbeat_at": "2999-01-01T00:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
-    contender = EngineLease(tmp_path, heartbeat_interval_s=0.05, stale_after_s=60.0)
-    with pytest.raises(EngineLeaseError, match="lease"):
-        contender.acquire()
-
-
 def test_source_lock_from_a_dead_container_is_not_honoured(tmp_path: Path, caplog) -> None:
     """A lock left by a killed container must not brick the next container.
 
@@ -405,7 +252,7 @@ def test_legacy_manifests_migrate_exactly_once(
 
     listing = sorted(path.name for path in manifests_dir.iterdir())
     mtimes = {path.name: path.stat().st_mtime_ns for path in manifests_dir.iterdir()}
-    snapshot_store = StateStore(_state_dir(config_file) / "pheasant.db")
+    snapshot_store = StateStore()
     rows = [
         (row["source_name"], row["payload_json"], row["updated_at"])
         for row in snapshot_store.rows(
@@ -426,67 +273,3 @@ def test_legacy_manifests_migrate_exactly_once(
         ] == rows
     finally:
         second.close()
-
-
-def test_busy_timeout_is_long_enough_for_a_long_sync(tmp_path) -> None:
-    """A 5-second budget lost a 12,667-file index to `database is locked`.
-
-    The sync worker writes continuously in one process while the API server
-    serves UI polls in another. WAL lets them coexist, but checkpoints and the
-    enrichment pass's multi-statement transactions still take the write lock
-    for long enough to blow a short budget — so the timeout has to be measured
-    in tens of seconds, not units.
-    """
-    from pheasant.persistence.state_store import BUSY_TIMEOUT_MS, StateStore
-
-    assert BUSY_TIMEOUT_MS >= 30_000, "too short to survive a real indexing run"
-
-    store = StateStore(tmp_path / "state.db")
-    try:
-        store.migrate()
-        applied = store.conn.execute("PRAGMA busy_timeout").fetchone()[0]
-        assert applied == BUSY_TIMEOUT_MS, "the pragma is not reaching the connection"
-    finally:
-        store.close()
-
-
-def test_engines_sharing_a_lease_can_heartbeat_at_the_same_moment(tmp_path: Path) -> None:
-    """Engines in one process share one lease file, and each heartbeats it.
-
-    Every heartbeat wrote to the same fixed ``engine.lease.tmp`` and renamed it,
-    so two heartbeats landing together had one rename take the other's temp
-    file: ``FileNotFoundError``, logged from a daemon thread. Harmless to the
-    lease -- and on Python 3.12 a daemon thread writing to stderr while the
-    interpreter shuts down aborts the whole process, which is how it surfaced:
-    a test run whose every test had passed, exiting 134.
-    """
-
-    path = tmp_path / "engine.lease"
-    first = EngineLease(tmp_path)
-    second = EngineLease(tmp_path)
-    first.acquire()
-    second.acquire()  # same process: ownership is shared, as two engines do
-    try:
-        start = threading.Barrier(2)
-        errors: list[BaseException] = []
-
-        def heartbeat(lease: EngineLease) -> None:
-            start.wait()
-            for _ in range(300):
-                try:
-                    lease._write()
-                except OSError as exc:
-                    errors.append(exc)
-
-        threads = [threading.Thread(target=heartbeat, args=(lease,)) for lease in (first, second)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(30)
-        assert errors == []
-        assert json.loads(path.read_text())["pid"] == os.getpid()
-        # No temp file is left behind by either writer.
-        assert sorted(p.name for p in tmp_path.iterdir()) == ["engine.lease"]
-    finally:
-        second.release()
-        first.release()

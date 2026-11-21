@@ -38,6 +38,7 @@ from pheasant.ingestion.landing_service import (
     RemoteLandingZone,
     landing_zone_for_config,
 )
+from tests.conftest import make_nats_queue_settings
 
 TOKEN = "landing-token-for-tests"
 
@@ -345,7 +346,8 @@ def test_the_drop_zone_forwards_end_to_end(
     # rather than running it, so it refuses to start without a queue for an
     # indexer to drain; and a serving role on a routable bind refuses to start
     # unauthenticated.
-    serving.sync.queue.enabled = True
+    for key, value in make_nats_queue_settings().items():
+        setattr(serving.sync.queue, key, value)
     serving.security.api_auth.behind_authenticating_proxy = True
     client = TestClient(create_app(config=serving, config_path=config_path, role="api"))
 

@@ -29,25 +29,9 @@ from tests.test_sync_idempotency import _FlakySite
 DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 
 
-@pytest.fixture(
-    params=[
-        "sqlite",
-        pytest.param(
-            "postgres",
-            marks=pytest.mark.skipif(not DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run"),
-        ),
-    ]
-)
-def backend(request) -> str:
-    """The score's queries on both backends: SQLite here, Postgres on the fleet."""
-
-    if request.param == "postgres":
-        from pheasant.persistence import pg_driver
-
-        with pg_driver.connect(DSN, autocommit=True) as conn:
-            conn.query("DROP SCHEMA public CASCADE")
-            conn.query("CREATE SCHEMA public")
-    return request.param
+@pytest.fixture()
+def backend() -> str:
+    return "postgres"
 
 
 def _web_engine(root: Path, base: str, pages: list[str], backend: str = "sqlite") -> SyncEngine:
@@ -71,7 +55,7 @@ def _web_engine(root: Path, base: str, pages: list[str], backend: str = "sqlite"
         ],
     }
     if backend == "postgres":
-        raw["storage"] = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}
+        raw["storage"] = {"backend": "postgres", "dsn_env": "PHEASANT_DATABASE_URL"}
     return SyncEngine(PheasantConfig.model_validate(raw))
 
 

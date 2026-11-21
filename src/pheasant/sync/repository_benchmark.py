@@ -25,7 +25,7 @@ from pheasant.config.schema import DEFAULT_EXCLUDES, PheasantConfig
 from pheasant.ingestion.content_types import TEXT_EXTENSIONS, suffix_globs
 from pheasant.ingestion.pipeline import _match_any
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 REQUIRED_REPOSITORIES = {"spark", "mlflow", "vscode", "langgraph", "deepagents"}

@@ -32,7 +32,6 @@ from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
 from pheasant.config.schema import PheasantConfig
-from pheasant.persistence.backup import _safe_extract
 from pheasant.search.hybrid import MAX_RESULTS_CEILING
 from pheasant.security.path_policy import PathPolicyError, resolve_config_write_target
 from pheasant.sync.connectors import is_fetchable_url, require_fetchable_url
@@ -423,45 +422,6 @@ def _tar_with(members: list[tarfile.TarInfo], payloads: dict[str, bytes]) -> io.
             tar.addfile(member, io.BytesIO(data) if data is not None else None)
     buffer.seek(0)
     return buffer
-
-
-def test_backup_extraction_rejects_escaping_symlinks(tmp_path: Path) -> None:
-    """A symlink member passes a name-only check and escapes on the next write."""
-
-    link = tarfile.TarInfo("escape")
-    link.type = tarfile.SYMTYPE
-    link.linkname = "/etc"
-    buffer = _tar_with([link], {})
-
-    with tarfile.open(fileobj=buffer, mode="r") as tar, pytest.raises(ValueError):
-        _safe_extract(tar, tmp_path / "dest")
-
-
-def test_backup_extraction_rejects_traversing_members(tmp_path: Path) -> None:
-    member = tarfile.TarInfo("../escaped.txt")
-    member.size = 3
-    buffer = _tar_with([member], {"../escaped.txt": b"bad"})
-
-    with tarfile.open(fileobj=buffer, mode="r") as tar, pytest.raises(ValueError):
-        _safe_extract(tar, tmp_path / "dest")
-
-
-def test_backup_extraction_still_restores_ordinary_members(tmp_path: Path) -> None:
-    member = tarfile.TarInfo("graph.json")
-    member.size = 2
-    buffer = _tar_with([member], {"graph.json": b"{}"})
-    dest = tmp_path / "dest"
-    dest.mkdir()
-
-    with tarfile.open(fileobj=buffer, mode="r") as tar:
-        _safe_extract(tar, dest)
-
-    assert (dest / "graph.json").read_bytes() == b"{}"
-
-
-# ---------------------------------------------------------------------------
-# 7. Unbounded result counts
-# ---------------------------------------------------------------------------
 
 
 def test_max_results_is_clamped(workspace: Path) -> None:

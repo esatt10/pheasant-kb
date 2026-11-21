@@ -14,6 +14,7 @@ a fleet opens no directory at all.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -73,12 +74,18 @@ def _config(tmp_path: Path, slot: str, *, claimed: bool, fleet: bool = True) -> 
             "enabled": True,
             "slot": slot,
             "url": f"https://{slot}.example.test",
-            "path": str(tmp_path / "fleet.db"),
             "claimed": claimed,
         }
     config = PheasantConfig.model_validate(data)
     config.artifacts.index_on_save = False
     return config
+
+
+@pytest.fixture(autouse=True)
+def _fleet_directory(fresh_database: Callable[[], str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The directory every stack in a test shares: a database of its own."""
+
+    monkeypatch.setenv("PHEASANT_FLEET_DATABASE_URL", fresh_database())
 
 
 @pytest.fixture

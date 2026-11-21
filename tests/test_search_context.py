@@ -42,7 +42,7 @@ def test_search_context_returns_sync_engine_file_with_provenance(
 def _explained_stages(loaded_config: object, sync_engine: object) -> dict:
     run_sync(sync_engine, source_name="pheasant-repo", mode="full")
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     searcher = HybridSearch(SearchStore(sync_engine.state))
     payload = searcher.search_context(

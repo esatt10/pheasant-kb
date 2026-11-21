@@ -9,13 +9,11 @@ while the UI polled ``/graph`` + ``/overview`` produced a stream of
 
 from __future__ import annotations
 
-import json
 import sys
 import threading
 
 from pheasant.graph.exporter import cytoscape, node_link
 from pheasant.graph.simple import SimpleMultiDiGraph
-from pheasant.persistence.graph_store import GraphStore
 from pheasant.search.graph_search import search_graph
 
 READ_ROUNDS = 40
@@ -121,46 +119,6 @@ def test_maintained_aggregates_match_a_full_scan() -> None:
     reloaded = SimpleMultiDiGraph.from_node_link(graph.to_node_link())
     assert reloaded.number_of_edges() == graph.number_of_edges()
     assert reloaded.type_counts() == graph.type_counts()
-
-
-def test_concurrent_saves_do_not_collide_on_a_shared_tmp_file(tmp_path) -> None:
-    """Two writers saving at once must both produce a complete file.
-
-    ``DELETE /sources`` saves the graph from a request thread while the sync
-    thread saves its own pass. With a fixed ``graph.latest.tmp`` the first
-    ``os.replace`` renamed the shared tmp away and the second raised
-    ``FileNotFoundError`` (a 500), with interleaved writes free to corrupt the
-    payload in between.
-    """
-
-    graph = SimpleMultiDiGraph()
-    for i in range(300):
-        graph.add_node(f"n{i}", id=f"n{i}", type="file", label=f"label-{i}")
-
-    store = GraphStore(tmp_path)
-    errors: list[BaseException] = []
-    barrier = threading.Barrier(4)
-
-    def save() -> None:
-        try:
-            barrier.wait(timeout=10)
-            for _ in range(5):
-                store.save("kb", graph)
-        except BaseException as exc:  # pragma: no cover - surfaced via ``errors``
-            errors.append(exc)
-
-    threads = [threading.Thread(target=save, daemon=True) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-
-    assert not errors, f"concurrent save failed: {errors[0]!r}"
-    import zstandard as zstd
-
-    payload = json.loads(zstd.ZstdDecompressor().decompress(store.graph_path("kb").read_bytes()))
-    assert len(payload["nodes"]) == 300
-    assert not list(store.kb_dir("kb").glob("*.tmp")), "temp files left behind"
 
 
 def test_reading_pins_the_graph_for_a_consistent_export() -> None:

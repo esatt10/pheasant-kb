@@ -121,7 +121,7 @@ def test_sync_is_idempotent_but_heartbeat_bumps(
     config = _config(tmp_path)
     from pheasant.persistence.state_store import StateStore
 
-    state = StateStore(tmp_path / "state" / "pheasant.db")
+    state = StateStore()
     state.migrate()
     state.migrate()  # idempotent second migrate
     try:
@@ -158,7 +158,7 @@ def test_fresh_idp_groups_disabled_or_never_synced_grants_nothing(tmp_path: Path
     from pheasant.persistence.state_store import StateStore
 
     config = _config(tmp_path, idp_enabled=False)
-    state = StateStore(tmp_path / "state" / "pheasant.db")
+    state = StateStore()
     state.migrate()
     try:
         assert fresh_idp_groups(state, "user:alice", config.security.idp) == set()
@@ -179,7 +179,7 @@ def test_maintenance_due_logic_and_error_resilience(
     config = _config(tmp_path)
     from pheasant.persistence.state_store import StateStore
 
-    state = StateStore(tmp_path / "state" / "pheasant.db")
+    state = StateStore()
     state.migrate()
     try:
         report = run_idp_maintenance(config, state, now=NOW)
@@ -226,7 +226,7 @@ def test_status_reports_disabled(tmp_path: Path) -> None:
     from pheasant.persistence.state_store import StateStore
 
     config = _config(tmp_path, idp_enabled=False)
-    state = StateStore(tmp_path / "state" / "pheasant.db")
+    state = StateStore()
     state.migrate()
     try:
         status = idp_status(config, state)

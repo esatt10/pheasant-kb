@@ -25,7 +25,7 @@ postgres = pytest.mark.skipif(not DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to
 def _terminate(backend_pid: int) -> None:
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as admin:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
         admin.query("SELECT pg_terminate_backend(?)", (backend_pid,))
 
 
@@ -36,7 +36,7 @@ def _pid(backend: PostgresBackend) -> int:
 @postgres
 def test_a_connection_killed_while_idle_is_not_handed_out(monkeypatch) -> None:
     monkeypatch.setattr(pg_pool, "IDLE_CHECK_SECONDS", 0.0)
-    backend = PostgresBackend(DSN, pool_size=1)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=1)
     try:
         dead = _pid(backend)
         _terminate(dead)
@@ -50,7 +50,7 @@ def test_a_connection_killed_while_idle_is_not_handed_out(monkeypatch) -> None:
 @postgres
 def test_a_recently_returned_connection_is_not_pinged(monkeypatch) -> None:
     monkeypatch.setattr(pg_pool, "IDLE_CHECK_SECONDS", 3600.0)
-    backend = PostgresBackend(DSN, pool_size=1)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=1)
     pinged: list[object] = []
     real = pg_driver.Connection.ping
     monkeypatch.setattr(
@@ -70,7 +70,7 @@ def test_a_recently_returned_connection_is_not_pinged(monkeypatch) -> None:
 def test_connections_ask_for_tcp_keepalives() -> None:
     import socket
 
-    backend = PostgresBackend(DSN, pool_size=1)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=1)
     try:
         sock = backend._conn()._raw._usock
         assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
@@ -93,7 +93,7 @@ def test_a_read_whose_connection_dropped_is_run_again(monkeypatch) -> None:
     monkeypatch.setattr(pg_pool, "IDLE_CHECK_SECONDS", 3600.0)
     # One connection: with two, the pool can hand the read the live one and
     # the test passes with the retry deleted.
-    backend = PostgresBackend(DSN, pool_size=1)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=1)
     try:
         dead = _pid(backend)
         _terminate(dead)
@@ -114,10 +114,10 @@ def test_sync_events_read_back_on_postgres(tmp_path) -> None:
     config = PheasantConfig.model_validate(
         {
             "pheasant": {"name": "events", "defaults": "standalone", "state_path": str(tmp_path)},
-            "storage": {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"},
+            "storage": {"backend": "postgres", "dsn_env": "PHEASANT_DATABASE_URL"},
         }
     )
-    state = StateStore.from_config(config, tmp_path / "unused.db")
+    state = StateStore.from_config(config)
     try:
         state.migrate()
         state.execute("DELETE FROM sync_events WHERE source_id=?", ("events-src",))

@@ -21,7 +21,6 @@ database and is exactly what it was.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from pheasant.config.model import ModelMixin
 
@@ -35,10 +34,8 @@ class FleetSettings(ModelMixin):
     slot: str = ""
     #: The address people reach this stack at.
     url: str = ""
-    #: The directory. On Postgres, the *name* of the variable holding its DSN;
-    #: with ``path`` set instead, a SQLite file (one host, or a test).
+    #: The directory: the *name* of the variable holding its PostgreSQL DSN.
     dsn_env: str = "PHEASANT_FLEET_DATABASE_URL"
-    path: Path | None = None
     #: A stack that is in use before anybody claims it: the first knowledge
     #: base of a deployment. ``false`` registers as a free slot.
     claimed: bool = False

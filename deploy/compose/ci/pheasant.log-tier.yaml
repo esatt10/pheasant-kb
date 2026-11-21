@@ -43,7 +43,9 @@ sync:
     # publishes index work instead of running it, so without a queue every
     # sync request would be accepted and go nowhere.
     enabled: true
-    backend: local
+    backend: nats
+    nats_servers:
+      - nats://nats:4222
 
 observability:
   interactions:
@@ -56,7 +58,7 @@ observability:
     cold_enabled: true
     queue:
       enabled: true
-      backend: local
+      backend: nats
 
 memory:
   formation:

@@ -91,6 +91,9 @@ class BackpressureGate:
     state: Any
     max_queue_depth: int = DEFAULT_MAX_QUEUE_DEPTH
     respect_sync: bool = True
+    #: Returns the index queue's unfinished task count, or None with the
+    #: queue off. The queue is NATS JetStream, so the depth is the broker's.
+    queue_depth: Any = None
     interval: float = BACKPRESSURE_INTERVAL_SECONDS
     _last_checked: float = field(default=0.0, repr=False)
     _last_answer: tuple[bool, str] = field(default=(True, ""), repr=False)
@@ -107,14 +110,10 @@ class BackpressureGate:
 
     def _probe(self) -> tuple[bool, str]:
         try:
-            rows = self.state.rows(
-                "SELECT COUNT(*) AS depth FROM index_tasks WHERE status IN ('pending','claimed')",
-                (),
-            )
-            depth = int(rows[0]["depth"]) if rows else 0
-            if depth >= self.max_queue_depth:
+            depth = self.queue_depth() if self.queue_depth is not None else None
+            if depth is not None and depth >= self.max_queue_depth:
                 return False, f"the index queue has {depth} task(s) waiting"
-        except Exception:  # noqa: BLE001 - no queue table is the ordinary case
+        except Exception:  # noqa: BLE001 - an unreachable broker does not stop a batch
             logger.debug("tuning: index queue depth unavailable", exc_info=True)
         if self.respect_sync:
             try:

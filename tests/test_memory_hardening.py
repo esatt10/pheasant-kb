@@ -253,7 +253,7 @@ def test_a_trigger_fires_whatever_separator_it_uses(trigger: str) -> None:
     """`ci/cd`, `fs.watch` and `api:gateway` tokenize to two query terms each
     while the trigger stayed one unsplittable string, so the rule parsed,
     loaded, reported itself in force — and never fired."""
-    from pheasant.search.sqlite_store import _query_tokens
+    from pheasant.search.text_store import _query_tokens
 
     spaced = trigger.replace("-", " ").replace("/", " ").replace(".", " ").replace(":", " ")
     tokens = _query_tokens(f"where is the {spaced} implemented")

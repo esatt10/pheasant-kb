@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -16,7 +17,6 @@ from pheasant.telemetry.tracing import Tracing, destination
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    import os
 
     for key in list(os.environ):
         if key.startswith("OTEL_") or key.startswith("CONTAINERAPP_OTEL"):
@@ -331,7 +331,6 @@ def test_http_tracing_independent_of_ledger_and_ui_ingestion(
 
 
 def test_real_nats_postgres_and_grpc_join_one_trace(monkeypatch, collector, tmp_path):
-    import os
     import socket
     import uuid
 
@@ -367,7 +366,7 @@ def test_real_nats_postgres_and_grpc_join_one_trace(monkeypatch, collector, tmp_
         subject="otel." + suffix,
         durable="otel-" + suffix,
     )
-    backend = PostgresBackend(dsn)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"])
     workspace = tmp_path / "worker"
     _write_docs(workspace, 1)
     config = _config(tmp_path, workspace)
@@ -423,7 +422,6 @@ def test_real_nats_postgres_and_grpc_join_one_trace(monkeypatch, collector, tmp_
 
 
 def test_sync_subprocess_and_remote_executor_keep_context(monkeypatch, collector, tmp_path):
-    import os
 
     import grpc
 
@@ -476,7 +474,7 @@ def test_sync_subprocess_and_remote_executor_keep_context(monkeypatch, collector
         preset.update(
             {
                 "storage.backend": "postgres",
-                "storage.dsn_env": "PHEASANT_TEST_POSTGRES_DSN",
+                "storage.dsn_env": "PHEASANT_DATABASE_URL",
                 "storage.lexical_index": "tsvector",
             }
         )

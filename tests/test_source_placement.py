@@ -18,7 +18,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
@@ -125,29 +124,6 @@ def test_two_folders_of_one_repository_are_two_sources(tmp_path: Path) -> None:
     assert place(again, docs.to_source_dict(), lambda name: name == "repo")[0] == "same"
     other_ref = _repo("https://github.com/org/repo/tree/v2/docs", tmp_path)
     assert not same_source(other_ref, docs.to_source_dict())
-
-
-def test_pheasant_up_places_a_repository_before_cloning_it(tmp_path: Path) -> None:
-    """`pheasant up` fetched before it merged into the config, so a second
-    `tools` would have fast-forwarded the first one's checkout."""
-
-    from pheasant.quickstart import resolve_up_targets, state_root
-
-    config_path = tmp_path / "pheasant.yaml"
-    first = resolve_up_targets(["https://github.com/org-one/tools.git"], config_path)
-    config_path.write_text(
-        yaml.safe_dump({"sources": [t.to_source_dict() for t in first]}), encoding="utf-8"
-    )
-    (second,) = resolve_up_targets(["https://github.com/org-two/tools.git"], config_path)
-    assert second.name == "tools-2"
-    assert second.clone_path == str(state_root(config_path) / "sources" / "tools-2")
-    (again,) = resolve_up_targets(["https://github.com/org-one/tools.git"], config_path)
-    assert again.name == "tools", "the same repository is the source already there"
-
-
-# ---------------------------------------------------------------------------
-# editing a web collection's URLs, over HTTP and MCP
-# ---------------------------------------------------------------------------
 
 
 class _Pages(BaseHTTPRequestHandler):

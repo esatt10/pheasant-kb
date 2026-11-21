@@ -76,7 +76,7 @@ def test_acl_reads_do_not_exhaust_the_connection_pool() -> None:
     from pheasant.persistence.backends import PostgresBackend
     from pheasant.persistence.state_store import StateStore
 
-    backend = PostgresBackend(DSN, pool_size=2)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=2)
     store = StateStore(backend=backend)
     store.migrate()
 
@@ -501,77 +501,6 @@ def test_reviving_an_archived_record_nothing_corrected_still_makes_it_current(
 # --------------------------------------------------------------------------
 # 6. A backend migration carries the whole region, or says what it left
 # --------------------------------------------------------------------------
-
-
-def test_every_core_table_is_either_migrated_or_declared_unmigrated() -> None:
-    """The guard that would have caught the evaluation plane going missing.
-
-    `pheasant migrate --to postgres` is the step a region takes on its way to a
-    fleet, and it copies the tables named in `TABLE_ORDER`. The evaluation
-    plane added six tables and none of them reached that tuple, so a migration
-    silently dropped every snapshot, cohort, run, metric and *proof* the region
-    had -- and reported success, because a table in neither `copied` nor
-    `skipped` appears in the output not at all.
-
-    Two of those are unreproducible. Proof comes from a surface where somebody
-    said so and nothing can say it again on their behalf; and the cohorts carry
-    the frozen anchor, without which the next run builds a new one and every
-    trend point after the migration is measured against different questions
-    than every point before.
-
-    So this is mechanical rather than a list someone remembers to update, the
-    same posture `test_config_surface_freshness.py` takes for the config
-    surface.
-    """
-
-    import re
-
-    from pheasant.persistence import schema
-    from pheasant.persistence.migrate import NOT_MIGRATED, TABLE_ORDER
-
-    core = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", schema.CORE_SCHEMA))
-    assert core, "could not read the core schema"
-
-    migrated = set(TABLE_ORDER)
-    declared = set(NOT_MIGRATED)
-
-    unaccounted = sorted(core - migrated - declared)
-    assert not unaccounted, (
-        f"{unaccounted} are in the schema but neither copied by `migrate` nor listed in "
-        "NOT_MIGRATED. A migration would drop them silently. Add each to TABLE_ORDER, or "
-        "to NOT_MIGRATED with the reason it is safe to leave behind."
-    )
-    assert not (migrated & declared), sorted(migrated & declared)
-    assert not (migrated - core), (
-        f"TABLE_ORDER names tables that are not in the schema: {sorted(migrated - core)}"
-    )
-    assert not (declared - core), (
-        f"NOT_MIGRATED names tables that are not in the schema: {sorted(declared - core)}"
-    )
-    assert all(NOT_MIGRATED.values()), "every excluded table needs a stated reason"
-
-
-def test_the_evaluation_plane_is_carried_across_a_migration() -> None:
-    """The tables themselves, named, so a future reorder cannot quietly drop one."""
-
-    from pheasant.persistence.migrate import TABLE_ORDER
-
-    order = list(TABLE_ORDER)
-    for table in (
-        "evaluation_snapshots",
-        "evaluation_cohorts",
-        "evaluation_proofs",
-        "evaluation_runs",
-        "evaluation_metrics",
-    ):
-        assert table in order, f"{table} would be dropped by a backend migration"
-
-    # Dependency order: a run names its snapshot, a metric names run, snapshot
-    # and cohort. Copied out of order, the rows arrive before what they refer
-    # to -- which SQLite tolerates and Postgres does not.
-    assert order.index("evaluation_snapshots") < order.index("evaluation_runs")
-    assert order.index("evaluation_runs") < order.index("evaluation_metrics")
-    assert order.index("evaluation_cohorts") < order.index("evaluation_metrics")
 
 
 def test_a_roll_where_every_day_deferred_reports_neither_cold_nor_dropped(

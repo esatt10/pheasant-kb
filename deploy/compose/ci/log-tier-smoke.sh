@@ -8,15 +8,11 @@
 #
 # So the run is split in two phases:
 #
-#   1. api only, no logger. Batches must pile up in `log_tasks` and
-#      `interaction_events` must stay **empty** -- the producer does not drain.
-#   2. start the logger. The rows must appear.
-#
-# Phase 1 is the half that can fail silently, and it is the reason for the
-# split. An earlier version of this asserted on `log_tasks.owner` instead and
-# failed for a reason that was not a bug: `LocalQueue.ack` sets `owner=NULL`,
-# so a batch that has been drained *successfully* has no owner left to check.
-# The column is a claim lease, not an audit trail.
+#   1. api only, no logger. Batches must pile up on the log tier's JetStream
+#      stream and `interaction_events` must stay **empty** -- the producer does
+#      not drain.
+#   2. start the logger. The rows must appear and the stream must empty: the
+#      stream uses work-queue retention, so an acked batch leaves it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,16 +22,34 @@ COMPOSE=(docker compose -f "${HERE}/docker-compose.log-tier.yml")
 # which means this script also proves the guard admits a real caller.
 API_TOKEN="ci-smoke-token"
 PSQL=("${COMPOSE[@]}" exec -T postgres psql -qtAX -U pheasant -d pheasant -c)
+# NATS monitoring, published on the host by the compose file.
+NATS_MONITOR="http://127.0.0.1:18222"
+LOG_STREAM="PHEASANT_LOGS"
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 query() { "${PSQL[@]}" "$1" | tr -d '[:space:]'; }
 
+# Messages currently held on a stream (0 when it does not exist yet).
+stream_messages() {
+  curl -fsS "${NATS_MONITOR}/jsz?streams=true" | python3 -c '
+import json, sys
+name = sys.argv[1]
+data = json.load(sys.stdin)
+for account in data.get("account_details") or []:
+    for stream in account.get("stream_detail") or []:
+        if stream.get("name") == name:
+            print(stream.get("state", {}).get("messages", 0))
+            raise SystemExit(0)
+print(0)
+' "$1"
+}
+
 await() {
-  # $1 label, $2 SQL, $3 expected-nonzero-predicate, $4 seconds
-  local label="$1" sql="$2" seconds="$3" waited=0 value
+  # $1 label, $2 command producing a number, $3 seconds; waits for non-zero
+  local label="$1" command="$2" seconds="$3" waited=0 value
   while [ "${waited}" -lt "${seconds}" ]; do
-    value="$(query "${sql}" || true)"
+    value="$(eval "${command}" || true)"
     if [ -n "${value}" ] && [ "${value}" != "0" ]; then
       echo "    ${label}: ${value}"
       return 0
@@ -47,8 +61,8 @@ await() {
   return 1
 }
 
-log "Phase 1: postgres, the migrator and an api replica -- deliberately no logger"
-"${COMPOSE[@]}" up -d --wait --wait-timeout 240 postgres db-init api
+log "Phase 1: postgres, nats, the migrator and an api replica -- deliberately no logger"
+"${COMPOSE[@]}" up -d --wait --wait-timeout 240 postgres nats db-init api
 
 # The corpus was indexed by the migrator: an `api` replica publishes index
 # work rather than running it, and this topology has no indexer on purpose.
@@ -63,10 +77,8 @@ for query_text in "pheasant-flock rollout" "filewatch daemon nightly" "vault sea
     -d "{\"query\": \"${query_text}\", \"mode\": \"hybrid\", \"max_results\": 5}" >/dev/null
 done
 
-log "The api published batches to the log tier's own queue"
-await "log_tasks rows" "SELECT count(*) FROM log_tasks;" 60
-# Its own table, never the indexer's.
-test "$(query 'SELECT count(*) FROM index_tasks;')" = "0"
+log "The api published batches to the log tier's own stream"
+await "batches on ${LOG_STREAM}" "stream_messages ${LOG_STREAM}" 60
 
 log "...and did NOT drain them itself"
 # The half that can fail silently. Give it long enough that a producer which
@@ -74,9 +86,9 @@ log "...and did NOT drain them itself"
 # scheduler beat at all in this config.
 sleep 10
 DRAINED_WITHOUT_LOGGER="$(query 'SELECT count(*) FROM interaction_events;')"
-PENDING="$(query "SELECT count(*) FROM log_tasks WHERE status IN ('pending','inflight');")"
+PENDING="$(stream_messages "${LOG_STREAM}")"
 echo "    interaction_events without a logger: ${DRAINED_WITHOUT_LOGGER}"
-echo "    batches still waiting:               ${PENDING}"
+echo "    batches still on the stream:         ${PENDING}"
 if [ "${DRAINED_WITHOUT_LOGGER}" != "0" ]; then
   echo "FAILED: the api drained its own batches; the log tier would be doing nothing" >&2
   exit 1
@@ -87,7 +99,7 @@ log "Phase 2: starting the logger"
 "${COMPOSE[@]}" up -d --wait --wait-timeout 180 logger
 
 log "The logger drained them into the hot store"
-await "interaction_events rows" "SELECT count(*) FROM interaction_events;" 90
+await "interaction_events rows" "query 'SELECT count(*) FROM interaction_events;'" 90
 
 log "The rows carry identity, modality and the caller's own trace"
 test "$(query "SELECT count(*) FROM interaction_events WHERE session_id='ci-session';")" != "0"
@@ -99,10 +111,12 @@ test "$(query "SELECT count(*) FROM interaction_events WHERE trace_id IS NULL OR
 test "$(query "SELECT count(*) FROM interaction_events WHERE trace_id = repeat('a', 32);")" != "0"
 echo "    identity, modality, trace and timing all present"
 
-log "Every batch reached a terminal state; none dead-lettered"
-test "$(query "SELECT count(*) FROM log_tasks WHERE status='dead';")" = "0"
-await "completed batches" "SELECT count(*) FROM log_tasks WHERE status='done';" 60
-# Nothing left waiting, so the logger cleared the backlog phase 1 built.
-test "$(query "SELECT count(*) FROM log_tasks WHERE status IN ('pending','inflight');")" = "0"
+log "Every batch was acknowledged: the stream is empty"
+waited=0
+while [ "$(stream_messages "${LOG_STREAM}")" != "0" ] && [ "${waited}" -lt 60 ]; do
+  sleep 2
+  waited=$((waited + 2))
+done
+test "$(stream_messages "${LOG_STREAM}")" = "0"
 
 log "The log tier is real"

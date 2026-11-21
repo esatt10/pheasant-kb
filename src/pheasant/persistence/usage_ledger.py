@@ -192,13 +192,6 @@ _LOWERED = " OR ".join(
         "(NEW.cost_micros IS NULL OR NEW.cost_micros < OLD.cost_micros))"
     ]
 )
-_SQLITE_TRIGGERS = (
-    "CREATE TRIGGER IF NOT EXISTS usage_daily_no_delete BEFORE DELETE ON usage_daily "
-    f"BEGIN SELECT RAISE(ABORT, '{APPEND_ONLY}'); END",
-    "CREATE TRIGGER IF NOT EXISTS usage_daily_no_lowering BEFORE UPDATE ON usage_daily "
-    f"WHEN {_LOWERED.replace('IS DISTINCT FROM', 'IS NOT')} "
-    f"BEGIN SELECT RAISE(ABORT, '{APPEND_ONLY}'); END",
-)
 _PG_FUNCTION = f"""CREATE OR REPLACE FUNCTION pheasant_usage_daily_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -225,8 +218,8 @@ def protect(store: Any) -> None:
 
     Not behind a once-only marker, because a trigger somebody dropped should
     come back on the next start rather than stay gone with a marker saying it
-    was installed. On Postgres it checks first, so a boot that finds both
-    triggers takes no table lock.
+    was installed. It checks first, so a boot that finds both triggers takes
+    no table lock.
     """
 
     columns = store.backend.table_columns("usage_daily")
@@ -234,26 +227,22 @@ def protect(store: Any) -> None:
         # Additive and once; a region created before costs were stored.
         store.conn.execute("ALTER TABLE usage_daily ADD COLUMN cost_micros BIGINT")
         store.conn.commit()
-    if store.dialect.is_postgres:
-        # Replaced every boot (it takes no table lock), so a changed rule
-        # reaches a region whose triggers already exist.
-        store.conn.execute(_PG_FUNCTION)
-        store.conn.commit()
-        present = {
-            str(row["tgname"])
-            for row in store.rows(
-                "SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-                "WHERE c.relname = 'usage_daily' AND NOT t.tgisinternal",
-                (),
-            )
-        }
-        if set(_PG_TRIGGERS) <= present:
-            return
-        for statement in _PG_TRIGGERS.values():
-            store.conn.execute(statement)
-    else:
-        for statement in _SQLITE_TRIGGERS:
-            store.conn.execute(statement)
+    # Replaced every boot (it takes no table lock), so a changed rule reaches a
+    # region whose triggers already exist.
+    store.conn.execute(_PG_FUNCTION)
+    store.conn.commit()
+    present = {
+        str(row["tgname"])
+        for row in store.rows(
+            "SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+            "WHERE c.relname = 'usage_daily' AND NOT t.tgisinternal",
+            (),
+        )
+    }
+    if set(_PG_TRIGGERS) <= present:
+        return
+    for statement in _PG_TRIGGERS.values():
+        store.conn.execute(statement)
     store.conn.commit()
 
 
