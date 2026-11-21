@@ -345,10 +345,9 @@ class StorageSettings(ModelMixin):
       that work away. 0 disables checkpointing (end-of-sync save only).
     """
 
-    #: Where the published knowledge graph lives: ``rows`` (default) or
-    #: ``node_link_json``.
+    #: Where the published knowledge graph lives: ``rows``, the only value.
     #:
-    #: ``rows`` puts it in ``graph_nodes``/``graph_edges`` in the state
+    #: It is in ``graph_nodes``/``graph_edges`` in the state
     #: database, beside the artifacts it describes. A commit then writes only
     #: what changed and a serving replica holds nothing: measured on this
     #: repo's own benchmark at 100k files, the commit after a one-file change
@@ -358,10 +357,9 @@ class StorageSettings(ModelMixin):
     #: compressed file they replace — which is stated in
     #: ``pheasant.capacity`` and reported by ``pheasant scan``.
     #:
-    #: ``node_link_json`` is the pre-35.10 single zstd file. Kept selectable,
-    #: and kept working, so a region that hits trouble reverts with one line
-    #: rather than a downgrade. A region switched to ``rows`` imports its
-    #: existing file once at boot and keeps it as ``*.migrated``.
+    #: The whole-file ``node_link_json`` backend was removed in 2.0. A region
+    #: still holding its file imports it once at boot and keeps it as
+    #: ``*.migrated``.
     graph_format: str = "rows"
     graph_snapshots: bool = True
     graph_snapshot_interval_seconds: int = 900
@@ -821,21 +819,18 @@ class SyncConcurrencySettings(ModelMixin):
 class SyncQueueSettings(ModelMixin):
     """The durable index work queue (Phase 35.5).
 
-    Off by default, and that is a design decision rather than caution: with
-    it off, ``sync_all`` keeps its remaining sources in a Python list exactly
-    as it always has, so a single container indexing a folder needs no queue
-    to do it. Turning it on buys three things a list cannot give: a backlog
-    that survives a restart, a depth other processes can read (and a
-    scheduler can scale on), and a source that keeps failing being
-    dead-lettered instead of retried forever.
+    Off in the standalone table: ``sync_all`` then indexes in-process. On
+    (pheasant-kb), it buys three things a list cannot give: a backlog that
+    survives a restart, a depth other processes can read (and a scheduler can
+    scale on), and a source that keeps failing being dead-lettered instead of
+    retried forever. An ``api`` role requires it.
 
-    ``local`` is the state store itself — no broker to run, and it works on
-    both SQLite and Postgres. ``nats`` is for a fleet that has outgrown one
-    database; it does not buy correctness the local queue lacks.
+    ``backend`` is ``nats`` (JetStream), the only queue. The database-backed
+    ``local`` queue was removed in 2.0.
     """
 
     enabled: bool = False
-    backend: str = "local"
+    backend: str = "nats"
     #: Seconds a claimed task stays invisible to other workers. Heartbeats
     #: extend it, so this bounds *silence* from a claimer, not work.
     visibility_seconds: int = 300
@@ -1317,7 +1312,7 @@ class LogQueueSettings(ModelMixin):
     #: Off, batches are written by whoever produced them, if `/state` is
     #: writable. On, they are published and a ``--role logger`` drains them.
     enabled: bool = False
-    backend: str = "local"  # local | nats
+    backend: str = "nats"  # NATS JetStream, the only log queue
     visibility_seconds: int = 120
     #: Lower than the index queue's 3. A log batch is best-effort by
     #: construction, and retrying a poisoned one three times costs more than

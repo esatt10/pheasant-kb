@@ -341,3 +341,16 @@ def test_every_compose_file_names_the_database_image_deploy_postgres_builds() ->
         assert found == {expected}, f"{name} names {sorted(found)}, not {expected}"
     container = (WORKFLOWS / "container.yml").read_text(encoding="utf-8")
     assert "deploy/postgres/TAG" in container and "context: deploy/postgres" in container
+
+
+def test_every_job_that_runs_pytest_runs_a_jetstream_broker() -> None:
+    """The work queues are NATS JetStream; the queue tests need a broker."""
+
+    missing = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        for name, job in (_workflow(path.name).get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            commands = " ".join(str(step.get("run") or "") for step in steps)
+            if "pytest" in commands and "nats:2.10-alpine -js" not in commands:
+                missing.append(f"{path.name}:{name}")
+    assert not missing, f"these jobs run pytest with no JetStream broker: {missing}"

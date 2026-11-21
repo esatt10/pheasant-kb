@@ -935,17 +935,15 @@ def create_app(
     # coordinate child commits; workers prepare immutable files; remote APIs
     # query the graph service. None of those needs a second graph copy.
     remote_graph = bool(str(config.graph.query_service_url or "").strip())
-    # On the row backend only a process that *builds* the graph holds one: a
-    # bounded walk is a bounded query there, so an api or graph replica serves
-    # from `graph_nodes`/`graph_edges` and never materializes 1.5GB (measured
-    # at 100k files) to answer a three-hop neighbourhood. On the whole-file
-    # backend there is no such option, and this resolves exactly as it did.
-    stores_graph = config.storage.graph_format == "rows"
+    # Only a process that *builds* the graph holds one: a bounded walk is a
+    # bounded query, so an api or graph replica serves from
+    # `graph_nodes`/`graph_edges` and never materializes 1.5GB (measured at
+    # 100k files) to answer a three-hop neighbourhood.
     builds_graph = role_policy.role in {Role.ALL, Role.INDEXER}
     loads_graph = (
         role_policy.role in {Role.ALL, Role.GRAPH}
         or (role_policy.role is Role.API and not remote_graph)
-    ) and (builds_graph or not stores_graph)
+    ) and builds_graph
     engine = SyncEngine(
         config,
         paths,
@@ -2463,10 +2461,10 @@ def create_app(
         an id to poll. Source leases make at-least-once broker delivery safe.
 
         Logical task ids are content-addressed on (knowledge base, source,
-        mode), the same rule ``sync_all`` uses. The local queue suppresses an
-        outstanding duplicate; JetStream suppresses network retries of one
-        publish invocation, while source leases remain the final guard if two
-        API replicas intentionally submit distinct invocations.
+        mode), the same rule ``sync_all`` uses. JetStream suppresses network
+        retries of one publish invocation, while source leases remain the
+        final guard if two API replicas intentionally submit distinct
+        invocations.
         """
 
         import hashlib

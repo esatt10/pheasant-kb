@@ -81,21 +81,13 @@ server:
     graph_visualization: true
 
 storage:
-  # Where the published graph lives.
-  #   rows            - graph_nodes/graph_edges in the state database (default).
-  #                     A commit writes only what changed (1.1ms at 100k files,
-  #                     flat) and a serving replica holds no graph at all. Costs
-  #                     ~1,640 bytes of database per node; `pheasant scan` says
-  #                     how much for your corpus.
-  #   node_link_json  - one zstd file. Every commit re-serializes the whole
-  #                     graph (6.15s at 100k files) and every process that
-  #                     answers a graph query holds it (1.65 GB). Smaller on
-  #                     disk. Switching to rows imports an existing file once
-  #                     and keeps it as *.migrated.
+  # Where the published graph lives: rows in graph_nodes/graph_edges, the only
+  # format. A commit writes only what changed (1.1ms at 100k files, flat) and a
+  # serving replica holds no graph at all. Costs ~1,640 bytes of database per
+  # node; `pheasant scan` says how much for your corpus.
   graph_format: rows
   # Synapse 21.6A: zstd-compressed timestamped graph snapshots written after a
-  # successful sync (graphs/<kb_id>/graph.<utc-ts>.json.zst). Files on both
-  # backends. Throttled by the interval; bounded by the retention cap (oldest
+  # successful sync (graphs/<kb_id>/graph.<utc-ts>.json.zst). Throttled by the interval; bounded by the retention cap (oldest
   # evicted first; the published graph, db and contract never evicted).
   graph_snapshots: true
   graph_snapshot_interval_seconds: 900
@@ -281,8 +273,7 @@ sync:
   #   pheasant queue status / drain / requeue-dead
   queue:
     enabled: false
-    backend: local          # local (this KB's own database, no broker to run)
-                            #   | nats (JetStream; needs the [queue] extra)
+    backend: nats           # NATS JetStream, the only queue
     visibility_seconds: 300 # how long a claimed task is invisible to other
                             #   workers; heartbeats extend it, so this bounds
                             #   SILENCE from a claimer, not work
@@ -552,12 +543,11 @@ observability:
     spool_path: null
     queue:
       # Off, whoever observed a call writes it. On, batches go to their OWN
-      # queue (log_tasks, never index_tasks) and a `serve --role logger`
+      # JetStream stream (never the index queue's) and a `serve --role logger`
       # drains them -- so persistence, rolling and cold compaction never touch
-      # a request or the indexer's sync lock. Worth it in a fleet; pure
-      # overhead in one container.
+      # a request or the indexer's sync lock.
       enabled: false
-      backend: local  # local | nats
+      backend: nats
       visibility_seconds: 120
       # Below the index queue's 3 on purpose: a batch is best-effort, and
       # retrying a poisoned one three times costs more than the data.

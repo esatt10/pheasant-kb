@@ -209,16 +209,15 @@ def notifier_from_config(config: Any) -> GraphCommitNotifier:
     """The configured notifier, or the null one — which is the default.
 
     Tied to `sync.queue`: the broker it publishes on is the broker the index
-    queue already runs, and a region with the queue off or on the local
-    backend has no broker to announce anything over. That is not a gap. Such a
-    region is either one container (which reloads its own graph in-process) or
-    a fleet on one database (where the poll is what it always was).
+    queue already runs, and a region with the queue off has no broker to
+    announce anything over. That is not a gap: such a region is one process,
+    which reloads its own graph in-process.
     """
 
     settings = getattr(getattr(config, "sync", None), "queue", None)
     if settings is None or not getattr(settings, "enabled", False):
         return NULL_NOTIFIER
-    if str(getattr(settings, "backend", "local") or "local").lower() != "nats":
+    if str(getattr(settings, "backend", "nats") or "nats").lower() != "nats":
         return NULL_NOTIFIER
     try:
         return NatsGraphNotifier(

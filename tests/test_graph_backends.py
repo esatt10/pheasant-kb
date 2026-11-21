@@ -33,7 +33,7 @@ from pheasant.sync.engine import SyncEngine
 from pheasant.sync.graph_history import snapshot_after_sync
 
 KB = "backends"
-FORMATS = ("rows", "node_link_json")
+FORMATS = ("rows",)
 
 
 #: Same switch `tests/test_backend_parity.py` uses. The graph is now rows in
@@ -115,37 +115,6 @@ def _synced(tmp_path: Path, graph_format: str, **kwargs: Any) -> SyncEngine:
 # --------------------------------------------------------------------------
 # 1. The same graph, whichever backend wrote it
 # --------------------------------------------------------------------------
-
-
-def test_both_backends_persist_the_same_graph(tmp_path: Path) -> None:
-    """Node for node and edge for edge, from one corpus.
-
-    The load-bearing assertion of the whole change: `storage.graph_format` is
-    a storage decision, and a storage decision that altered what the graph
-    *contains* would be a retrieval change wearing a config flag.
-    """
-
-    persisted = {}
-    for graph_format in FORMATS:
-        engine = _synced(tmp_path, graph_format)
-        try:
-            graph = engine.graph_store.load(KB)
-            persisted[graph_format] = (
-                {node_id for node_id, _attrs in graph.iter_nodes()},
-                {
-                    (source, target, str(attrs.get("type")))
-                    for (source, target), edge_map in graph.iter_edges()
-                    for attrs in edge_map.values()
-                },
-            )
-        finally:
-            engine.close()
-
-    rows_nodes, rows_edges = persisted["rows"]
-    file_nodes, file_edges = persisted["node_link_json"]
-    assert rows_nodes == file_nodes
-    assert rows_edges == file_edges
-    assert rows_nodes, "the fixture produced no graph at all"
 
 
 @pytest.mark.parametrize("graph_format", FORMATS)
@@ -429,12 +398,22 @@ def test_folding_a_digest_twice_puts_it_back() -> None:
 def test_an_existing_graph_file_is_imported_once_and_kept(tmp_path: Path) -> None:
     """CLAUDE.md rule 2: `/state` is user data, so the file is parked not deleted."""
 
-    engine = _synced(tmp_path, "node_link_json")
+    import json
+
+    import zstandard as zstd
+
+    # A 1.x region: its graph in one zstd node-link file, the rows empty.
+    engine = _synced(tmp_path, "rows")
     try:
-        expected = engine.graph_builder.graph.number_of_nodes()
+        graph = engine.graph_builder.graph
+        expected = graph.number_of_nodes()
         graph_file = engine.graph_store.graph_path(KB)
-        assert graph_file.exists()
+        payload = json.dumps(graph.to_node_link(), sort_keys=True).encode("utf-8")
+        graph_file.write_bytes(zstd.ZstdCompressor(level=3).compress(payload))
         state_path = engine.config.pheasant.state_path
+        engine.state.execute("DELETE FROM graph_edges WHERE kb_id=?", (KB,))
+        engine.state.execute("DELETE FROM graph_nodes WHERE kb_id=?", (KB,))
+        engine.state.execute("DELETE FROM graph_generations WHERE kb_id=?", (KB,))
     finally:
         engine.close()
 
@@ -443,8 +422,8 @@ def test_an_existing_graph_file_is_imported_once_and_kept(tmp_path: Path) -> Non
             "pheasant": {
                 "name": KB,
                 "state_path": str(state_path),
-                "workspace_root": str(tmp_path / "ws-node_link_json"),
-                "exports_path": str(tmp_path / "exports-node_link_json"),
+                "workspace_root": str(tmp_path / "ws-rows"),
+                "exports_path": str(tmp_path / "exports-rows"),
             },
             "server": {"host": "127.0.0.1"},
             "storage": {"graph_format": "rows", "graph_snapshots": False},
@@ -474,18 +453,15 @@ def test_an_existing_graph_file_is_imported_once_and_kept(tmp_path: Path) -> Non
         again.close()
 
 
-def test_a_rows_store_without_a_state_handle_refuses(tmp_path: Path) -> None:
-    """Rather than silently falling back to the whole-file path.
+def test_a_store_without_a_state_handle_refuses_the_published_graph(tmp_path: Path) -> None:
+    """Snapshot files need no database; the published graph always does."""
 
-    Degrading quietly would make a region's commit cost depend on how its
-    store happened to be constructed, which is exactly the class of bug that
-    is invisible until someone measures a production incident.
-    """
-
-    with pytest.raises(ValueError, match="needs a state store"):
-        GraphStore(tmp_path / "graphs", graph_format="rows")
-    with pytest.raises(ValueError, match="Unknown storage.graph_format"):
-        GraphStore(tmp_path / "graphs", graph_format="parquet")
+    snapshots_only = GraphStore(tmp_path / "graphs")
+    with pytest.raises(ValueError, match="state database"):
+        snapshots_only.save(KB, SimpleMultiDiGraph())
+    for removed in ("node_link_json", "parquet"):
+        with pytest.raises(ValueError, match="is not supported"):
+            GraphStore(tmp_path / "graphs", graph_format=removed)
 
 
 def test_a_snapshot_is_written_from_rows_and_reads_back(tmp_path: Path) -> None:
@@ -1037,42 +1013,6 @@ def test_fact_collection_batches_postgres_reads(tmp_path: Path) -> None:
         assert reads.call_count == 2
     finally:
         engine.close()
-
-
-@postgres
-def test_a_graph_file_imports_into_postgres_rows(tmp_path: Path) -> None:
-    """The upgrade path on the backend a fleet actually runs."""
-
-    legacy = SyncEngine(_config(tmp_path, "node_link_json", backend="postgres"))
-    try:
-        legacy.sync_source("docs", "full")
-        expected = legacy.graph_builder.graph.number_of_nodes()
-        graph_file = legacy.graph_store.graph_path(KB)
-        state_path = legacy.config.pheasant.state_path
-        assert graph_file.exists()
-    finally:
-        legacy.close()
-
-    upgraded = _config(tmp_path, "rows", backend="postgres")
-    upgraded.pheasant.state_path = state_path
-    upgraded.storage.graph_path = Path(state_path) / "graphs"
-    engine = SyncEngine(upgraded)
-    try:
-        assert engine.graph_store.counts(KB)[0] == expected
-        assert engine.graph_store.rows.recount(KB)[0] == expected
-        assert graph_file.with_suffix(graph_file.suffix + ".migrated").exists()
-    finally:
-        engine.close()
-
-
-# --------------------------------------------------------------------------
-# 6. What a read costs, bounded rather than timed
-# --------------------------------------------------------------------------
-#
-# Every assertion below counts round trips or rows, never seconds. All three
-# were found by a stress run against an 8,000-file corpus and were invisible
-# to every fixture in this suite, because a fixture's graph has no hub and its
-# index returns four candidates.
 
 
 def _hub_graph(engine: SyncEngine, fan_out: int = 400) -> str:
@@ -1694,7 +1634,7 @@ def _serving_client(tmp_path: Path, graph_format: str):
     )
 
 
-@pytest.mark.parametrize("graph_format", ["rows", "node_link_json"])
+@pytest.mark.parametrize("graph_format", ["rows"])
 def test_whole_graph_endpoints_answer_on_either_backend(tmp_path: Path, graph_format: str) -> None:
     """A 500 here is what the fleet served for `/graph/diagnostics`."""
 
@@ -1711,27 +1651,6 @@ def test_whole_graph_endpoints_answer_on_either_backend(tmp_path: Path, graph_fo
     taxonomy = client.get("/taxonomy", params={"max_nodes": 500})
     assert taxonomy.status_code == 200, taxonomy.text
     assert isinstance(taxonomy.json().get("documents"), list)
-
-
-def test_the_two_backends_diagnose_the_same_graph(tmp_path: Path) -> None:
-    """Same corpus, same answer — whichever backend served it.
-
-    Status codes alone would pass while one backend quietly reported zero
-    orphans because it could not enumerate nodes at all.
-    """
-
-    rows = _serving_client(tmp_path / "a", "rows").get("/graph/diagnostics", params={"top": 5})
-    filed = _serving_client(tmp_path / "b", "node_link_json").get(
-        "/graph/diagnostics", params={"top": 5}
-    )
-    assert rows.status_code == filed.status_code == 200
-
-    a, b = rows.json(), filed.json()
-    assert a["total_nodes"] == b["total_nodes"]
-    assert a["total_links"] == b["total_links"]
-    assert a["orphan_count"] == b["orphan_count"]
-    assert a["node_types"] == b["node_types"]
-    assert a["edge_types"] == b["edge_types"]
 
 
 def test_the_store_backed_node_map_refuses_a_whole_graph_walk(tmp_path: Path) -> None:

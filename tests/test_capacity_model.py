@@ -275,7 +275,6 @@ def test_a_projection_without_a_byte_count_reports_only_what_files_can_tell_it()
     projection = project(1_000)
     assert projection.state_bytes == projection.nodes * GRAPH_ROW_BYTES_PER_NODE
     assert projection.rss_bytes > 0
-    assert project(1_000, graph_format="node_link_json").state_bytes == 0
 
 
 def test_chunks_are_projected_from_bytes_not_from_file_count() -> None:

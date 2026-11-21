@@ -66,7 +66,7 @@ RUN apt-get update \
 # Install from pyproject so the image's dependencies never drift from the
 # package's declared deps (a hand-maintained list previously omitted core deps
 # added later — numpy (21.4) and zstandard (21.6a) — breaking the smoke test).
-ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,grpc,queue,analytics,otel
+ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,grpc,analytics,otel
 COPY pyproject.toml README.md LICENSE /app/
 # Resolve runtime dependencies before copying application source. A one-line
 # code edit should not invalidate and redownload the entire universal stack;

@@ -2185,7 +2185,6 @@ def main(argv: list[str] | None = None) -> int:
             DONE,
             INFLIGHT,
             PENDING,
-            LocalQueue,
             drain,
             queue_from_config,
         )
@@ -2193,31 +2192,21 @@ def main(argv: list[str] | None = None) -> int:
         engine = _engine(Path(args.config))
         queue = None
         try:
-            # Built from config, not hardcoded to LocalQueue: with
-            # `sync.queue.backend: nats` the tasks are in JetStream, and
-            # reaching for the SQLite table reported an empty queue on a
-            # backlog of thousands and drained nothing — while `requeue-dead`
-            # silently did nothing to the queue that actually held the dead
-            # letters. `queue_from_config` returns None when queueing is off.
-            queue = queue_from_config(engine.config, engine.state) or LocalQueue(engine.state)
+            # The configured queue (NATS JetStream), or None when queueing is off.
+            queue = queue_from_config(engine.config, engine.state)
+            if queue is None:
+                print(
+                    "sync.queue is off: syncs run in-process and nothing is queued.",
+                    file=sys.stderr,
+                )
+                return 1
             if args.queue_command == "status":
                 depth = queue.depth()
                 print(
                     f"queued: {depth[PENDING]}  in-flight: {depth[INFLIGHT]}  "
                     f"done: {depth[DONE]}  dead: {depth[DEAD]}"
                 )
-                if depth[DEAD] and isinstance(queue, LocalQueue):
-                    # Per-task detail is a property of the local table; a
-                    # JetStream dead letter is terminated on the broker and
-                    # has no row here to read.
-                    for row in engine.state.rows(
-                        "SELECT source_id, attempts, last_error FROM index_tasks "
-                        "WHERE status=? ORDER BY updated_at",
-                        (DEAD,),
-                    ):
-                        print(
-                            f"  ! {row['source_id']} failed {row['attempts']}x: {row['last_error']}"
-                        )
+                if depth[DEAD]:
                     print("\nFix the cause, then: pheasant queue requeue-dead")
                 return 0
             if args.queue_command == "requeue-dead":
@@ -2656,7 +2645,7 @@ def main(argv: list[str] | None = None) -> int:
                 # state store's connection — on Postgres that is a pooled
                 # server-side process, not just a file handle.
                 graph = (
-                    GraphStore(paths.graphs).load(kb_id)
+                    GraphStore(paths.graphs, state=state).load(kb_id)
                     if any(name in GRAPH_TABLES for name in selected)
                     else None
                 )
@@ -2665,7 +2654,7 @@ def main(argv: list[str] | None = None) -> int:
                     # "this corpus has no structure" rather than "the graph was
                     # not where I looked". Say which it is.
                     print(
-                        f"WARNING: no graph found under {paths.graphs / kb_id}; "
+                        f"WARNING: the published graph for {kb_id} is empty; "
                         "graph_nodes/graph_edges will be empty.",
                         file=sys.stderr,
                     )

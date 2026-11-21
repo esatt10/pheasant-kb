@@ -83,6 +83,10 @@ jobs:
         with:
           database: pheasant_ci
 
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
+
       - name: Run pytest suite
         env:
           PHEASANT_REQUIRE_AGENT: ${{ matrix.require-agent }}
@@ -138,6 +142,10 @@ jobs:
         uses: ./.github/actions/pheasant-postgres
         with:
           database: pheasant_ci
+
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
 
       - name: Run the view's browser tests
         env:

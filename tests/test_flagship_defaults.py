@@ -75,10 +75,10 @@ def test_without_a_selection_the_flagship_is_the_default(monkeypatch: pytest.Mon
 def test_a_config_choice_beats_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(DEFAULTS_ENV, FLAGSHIP)
     config = PheasantConfig.model_validate({"pheasant": {"defaults": STANDALONE}})
-    assert (config.pheasant.defaults, config.sync.queue.backend) == (STANDALONE, "local")
+    assert (config.pheasant.defaults, config.sync.queue.enabled) == (STANDALONE, False)
     monkeypatch.setenv(DEFAULTS_ENV, STANDALONE)
     config = PheasantConfig.model_validate({"pheasant": {"defaults": FLAGSHIP}})
-    assert (config.pheasant.defaults, config.sync.queue.backend) == (FLAGSHIP, "nats")
+    assert (config.pheasant.defaults, config.sync.queue.enabled) == (FLAGSHIP, True)
 
 
 def test_a_set_value_beats_the_table() -> None:
@@ -117,7 +117,7 @@ def test_the_layered_loader_starts_from_the_files_table(
     path = tmp_path / "pheasant.yaml"
     path.write_text("pheasant:\n  defaults: standalone\n", encoding="utf-8")
     config = load_layered_config(path)
-    assert (config.storage.backend, config.sync.queue.backend) == ("postgres", "local")
+    assert (config.storage.backend, config.sync.queue.enabled) == ("postgres", False)
     assert not config.search.embeddings.enabled
 
 
@@ -126,7 +126,7 @@ def test_the_wizard_records_the_table_it_answered_on(
 ) -> None:
     from pheasant.setup_wizard import Wizard
 
-    for table, queue in ((FLAGSHIP, "nats"), (STANDALONE, "local")):
+    for table, queue in ((FLAGSHIP, True), (STANDALONE, False)):
         wizard = Wizard(accept_defaults=True, preset={"pheasant.defaults": table})
         wizard.run()
         capsys.readouterr()
@@ -134,7 +134,7 @@ def test_the_wizard_records_the_table_it_answered_on(
         assert data["pheasant"]["defaults"] == table
         # Read back with the environment pointing the other way.
         monkeypatch.setenv(DEFAULTS_ENV, STANDALONE if table == FLAGSHIP else FLAGSHIP)
-        assert PheasantConfig.model_validate(data).sync.queue.backend == queue
+        assert PheasantConfig.model_validate(data).sync.queue.enabled is queue
 
 
 # -- every shipped config names its table -------------------------------------

@@ -62,6 +62,10 @@ dependencies = [
   # an upgrade moves what it relies on.
   "pg8000==1.31.6",
   "sqlalchemy>=2.0.30,<2.2",
+  # The index and log work queues are NATS JetStream (`sync/queue.py`); the
+  # fleet's api tier publishes to it and the indexer and logger drain it.
+  # nats-py is Apache-2.0.
+  "nats-py>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -83,11 +87,6 @@ wasm = ["wasmtime>=20"]
 # checked-in gencode, which would pin every installer to the exact protobuf
 # release the stubs were generated against.
 grpc = ["grpcio>=1.62", "grpcio-tools>=1.62", "protobuf>=5"]
-# Phase 35.5: NATS JetStream as the index work queue, for a fleet that has
-# outgrown one database. Gated because the default queue is the state store
-# itself, which needs no broker — and because the queue is off entirely
-# unless sync.queue.enabled is set.
-queue = ["nats-py>=2.7"]
 # Columnar (Parquet) exports of indexed state, plus the SQL surface over
 # them (`pheasant export`). DuckDB is a read-side tool here and nothing on the
 # sync path may depend on it — it is a Parquet writer and a query engine, not

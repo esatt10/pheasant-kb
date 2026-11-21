@@ -16,6 +16,7 @@ from pheasant.api.app import create_app
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.query_service import GraphQueryClient, GraphQueryError, RemoteGraph
 from pheasant.sync.engine import SyncEngine
+from tests.conftest import make_nats_queue_settings
 
 
 def _config(tmp_path: Path, *, remote: bool = False) -> PheasantConfig:
@@ -39,7 +40,7 @@ def _config(tmp_path: Path, *, remote: bool = False) -> PheasantConfig:
         # startup (tests/test_process_roles.py), and claiming that posture
         # here would be describing a deployment none of this performs.
         "server": {"host": "127.0.0.1"},
-        "sync": {"queue": {"enabled": True}},
+        "sync": {"queue": make_nats_queue_settings()},
         "sources": [
             {
                 "name": "docs",

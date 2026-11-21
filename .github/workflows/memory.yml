@@ -70,6 +70,10 @@ jobs:
         with:
           database: pheasant_memory
 
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

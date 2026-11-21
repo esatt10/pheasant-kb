@@ -539,16 +539,6 @@ def build_sections() -> list[Section]:
                     advanced=True,
                 ),
                 Question(
-                    key="sync.queue.backend",
-                    prompt="Queue backend (local | nats)",
-                    kind="str",
-                    help="'local' is this knowledge base's own database — no "
-                    "broker to run. 'nats' needs the [queue] extra and is for a "
-                    "fleet that has outgrown one database.",
-                    when=lambda a: bool(a.get("sync.queue.enabled")),
-                    advanced=True,
-                ),
-                Question(
                     key="sync.queue.max_attempts",
                     prompt="Attempts before a source is set aside",
                     kind="int",

@@ -53,39 +53,6 @@ def test_write_and_read_snapshot_round_trips(tmp_path: Path) -> None:
     assert restored.number_of_edges() == graph.number_of_edges()
 
 
-def test_current_generation_snapshot_copies_published_bytes(tmp_path: Path) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    graph = _graph(6)
-    current = store.save("kb", graph)
-
-    snapshot = store.snapshot_current("kb", "2026-06-18T01:00:00Z")
-
-    assert snapshot.read_bytes() == current.read_bytes()
-    restored = store.read_snapshot(snapshot)
-    assert (restored.number_of_nodes(), restored.number_of_edges()) == (6, 5)
-
-
-def test_save_publishes_small_generation_metadata_for_count_only_readers(
-    tmp_path: Path,
-) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    graph = _graph(7)
-
-    store.save("kb", graph)
-
-    assert store.metadata_path("kb").exists()
-    assert store.counts("kb") == (7, 6)
-
-
-def test_counting_a_legacy_graph_migrates_it_to_metadata_only_reads(tmp_path: Path) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    store.save("kb", _graph(4))
-    store.metadata_path("kb").unlink()
-
-    assert store.counts("kb") == (4, 3)
-    assert store.metadata_path("kb").exists()
-
-
 def test_list_snapshots_is_oldest_first(tmp_path: Path) -> None:
     store = GraphStore(tmp_path / "graphs")
     for ts in ("2026-06-18T03:00:00Z", "2026-06-18T01:00:00Z", "2026-06-18T02:00:00Z"):
@@ -129,23 +96,6 @@ def test_retention_keeps_at_least_one_snapshot(tmp_path: Path) -> None:
     # Cap below a single snapshot — newest is still kept.
     store.enforce_retention("kb", max_bytes=1)
     assert len(store.list_snapshots("kb")) == 1
-
-
-def test_retention_never_touches_latest_db_or_contract(tmp_path: Path) -> None:
-    graphs = tmp_path / "graphs"
-    store = GraphStore(graphs)
-    kb = "kb"
-    store.save(kb, _graph(10))
-    for hour in range(1, 4):
-        store.write_snapshot(kb, _graph(50), f"2026-06-18T0{hour}:00:00Z")
-    latest = store.graph_path(kb)
-    assert latest.exists()
-    store.enforce_retention(kb, max_bytes=1)
-    # latest.json must survive any retention pass.
-    assert latest.exists()
-
-
-# --- engine integration: interval throttling ---------------------------------
 
 
 def test_snapshot_interval_respected(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

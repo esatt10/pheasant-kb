@@ -233,7 +233,7 @@ def test_the_log_tier_topology_splits_producing_from_draining(
 
     compose = yaml.safe_load(CI_COMPOSE.read_text(encoding="utf-8"))
     services = compose["services"]
-    assert set(services) == {"postgres", "db-init", "api", "logger"}
+    assert set(services) == {"postgres", "nats", "db-init", "api", "logger"}
     assert services["api"]["command"] == ["serve", "--role", "api"]
     assert services["logger"]["command"] == ["serve", "--role", "logger"]
 

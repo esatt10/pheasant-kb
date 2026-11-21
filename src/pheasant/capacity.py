@@ -37,10 +37,8 @@ NODES_PER_FILE = 6.3
 #: Process RSS per graph node **for a process that holds the graph**, measured
 #: flat across four scales in `pheasant.graph.capacity` (2k → 250k files).
 #:
-#: On ``storage.graph_format: rows`` — the default since 35.10 — that is the
-#: indexer and nothing else: a serving replica queries `graph_nodes` and its
-#: measured graph RSS is zero. On ``node_link_json`` every process that answers
-#: a graph query pays this, which is why the `graph` role exists at all.
+#: That is the indexer and nothing else: a serving replica queries
+#: `graph_nodes` and its measured graph RSS is zero.
 RSS_BYTES_PER_NODE = 2400
 
 #: The graph is roughly this share of process RSS; the rest is the
@@ -195,11 +193,8 @@ def project(
     and node count track file count. Passing 0 skips the disk projection
     rather than inventing one.
 
-    ``graph_format`` moves cost between the two: on ``rows`` the graph is in
-    the database and out of every serving process's memory, on
-    ``node_link_json`` it is the other way round. Both are projected from the
-    same measured node count, so the two answers are comparable — which is the
-    point, since choosing between them is the decision this informs.
+    ``graph_format`` is ``rows``: the graph is in the database and out of
+    every serving process's memory, so its bytes count toward state.
 
     ``nodes`` overrides the ``NODES_PER_FILE`` estimate with a real count. For
     a corpus nobody has indexed yet there is nothing better than the estimate;

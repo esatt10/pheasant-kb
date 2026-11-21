@@ -223,13 +223,9 @@ def test_the_executor_stands_down_when_the_index_queue_has_work(tmp_path: Path) 
 
     engine = _engine(tmp_path)
     try:
-        engine.state.execute(
-            "INSERT INTO index_tasks "
-            "(id, source_id, mode, status, visible_at, enqueued_at, attempts) "
-            "VALUES ('t1','docs','full','pending','2026-01-01T00:00:00Z',"
-            "'2026-01-01T00:00:00Z',0)"
+        gate = BackpressureGate(
+            engine.state, max_queue_depth=1, interval=0.0, queue_depth=lambda: 1
         )
-        gate = BackpressureGate(engine.state, max_queue_depth=1, interval=0.0)
         ok, reason = gate.check()
         assert not ok
         assert "index queue" in reason

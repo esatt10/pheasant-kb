@@ -4,8 +4,7 @@ The tier exists to keep observation off two hot paths -- the request, and the
 indexer's ``sync_lock``. These tests pin the parts of that which are easy to
 regress silently:
 
-* the index queue's own SQL did not move when it was parameterized;
-* the two queues cannot claim, dead-letter, or drain each other's work;
+* a batch published by one process is drained by another;
 * a redelivered batch is a no-op, so at-least-once delivery is safe;
 * a roll is bounded, and cold storage is readable by something that is not
   pheasant.
@@ -15,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,8 +24,8 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.persistence.state_store import StateStore
 from pheasant.sync.log_queue import (
     DEFAULT_LOG_MAX_ATTEMPTS,
-    LogQueue,
     LogTask,
+    NatsLogQueue,
     drop_expired_partitions,
     handle_batch,
     hot_row_count,
@@ -37,8 +35,26 @@ from pheasant.sync.log_queue import (
     run_log_maintenance,
     write_events,
 )
-from pheasant.sync.queue import DEAD, DONE, PENDING, IndexTask, LocalQueue, drain
+from pheasant.sync.queue import DONE, PENDING, drain
 from pheasant.telemetry.interactions import InteractionEvent, QueueSink, SpoolSink
+
+
+def _log_queue(index: dict[str, Any], logs: dict[str, Any]) -> NatsLogQueue:
+    return NatsLogQueue(
+        servers=list(index["nats_servers"]),
+        stream=logs["nats_stream"],
+        subject=logs["nats_subject"],
+        durable=logs["nats_durable"],
+    )
+
+
+@pytest.fixture
+def log_queue(nats_queue_settings: dict, nats_log_queue_settings: dict) -> Any:
+    queue = _log_queue(nats_queue_settings, nats_log_queue_settings)
+    try:
+        yield queue
+    finally:
+        queue.close()
 
 
 @pytest.fixture
@@ -70,76 +86,6 @@ def _event(index: int, *, when: str = "2026-01-01T00:00:00.000000Z") -> Interact
 # --------------------------------------------------------------------------
 
 
-def test_the_index_queues_own_sql_is_unchanged_by_the_parameterization() -> None:
-    """`LocalQueue` gained a table seam so the log tier could reuse its
-    race-free claim rather than copy it. The index path must not have moved:
-    every predicate in the claim is still a literal, and the column lists
-    still name exactly what they named."""
-
-    queue = LocalQueue.__new__(LocalQueue)
-
-    publish, claim = queue._publish_sql(), queue._claim_sql()
-
-    assert publish.startswith(
-        "INSERT INTO index_tasks(id, source_id, mode, payload, status, attempts, "
-        "max_attempts, owner, visible_at, enqueued_at, updated_at, last_error) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-    )
-    assert publish.endswith("WHERE index_tasks.status=?")
-    assert claim.endswith("RETURNING id, source_id, mode, payload, attempts, max_attempts")
-    # The whole race argument, still spelled out. The visibility check appears
-    # twice on purpose -- once picking the row, once *outside* the subquery --
-    # and it is the outer one that makes the loser of a contended claim match
-    # nothing, because the winner has just pushed `visible_at` into the future.
-    assert claim.count("visible_at<=?") == 2
-    assert "AND status IN (?,?) AND visible_at<=? RETURNING" in claim
-
-
-def test_the_log_queue_is_a_different_table_with_no_indexing_vocabulary() -> None:
-    queue = LogQueue.__new__(LogQueue)
-
-    assert LogQueue.TABLE == "log_tasks"
-    assert "index_tasks" not in queue._publish_sql()
-    assert "index_tasks" not in queue._claim_sql()
-    # No source_id, no mode: a batch is opaque and the payload is the task.
-    assert "source_id" not in queue._publish_sql()
-    assert queue._claim_sql().endswith("RETURNING id, payload, attempts, max_attempts")
-
-
-# --------------------------------------------------------------------------
-# Isolation between the two queues
-# --------------------------------------------------------------------------
-
-
-def test_the_two_queues_cannot_claim_each_others_work(state: StateStore) -> None:
-    """Sharing one table would mean two handlers stealing from each other --
-    the reason this is a second table and not a `kind` column."""
-
-    index_queue, log_queue = LocalQueue(state), LogQueue(state)
-    index_queue.publish(IndexTask(id="idx-1", source_id="docs"))
-    log_queue.publish(LogTask(id="log-1", payload={"events": []}))
-
-    assert index_queue.claim("a").id == "idx-1"
-    assert index_queue.claim("a") is None
-
-    assert log_queue.claim("b").id == "log-1"
-    assert log_queue.claim("b") is None
-
-
-def test_a_dead_lettered_batch_does_not_show_up_in_the_index_queues_depth(
-    state: StateStore,
-) -> None:
-    index_queue, log_queue = LocalQueue(state), LogQueue(state)
-    log_queue.publish(LogTask(id="log-1", payload={}, max_attempts=1))
-    claimed = log_queue.claim("b")
-    log_queue.nack(claimed, "poison")
-
-    assert log_queue.depth()[DEAD] == 1
-    assert index_queue.depth()[DEAD] == 0
-    assert log_queue.requeue_dead() == 1
-    assert log_queue.depth()[PENDING] == 1
-
-
 def test_a_batch_is_best_effort_and_gives_up_sooner_than_a_sync() -> None:
     """Retrying a poisoned batch three times costs more than the data."""
 
@@ -151,8 +97,8 @@ def test_a_batch_is_best_effort_and_gives_up_sooner_than_a_sync() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_batch_survives_the_process_that_produced_it(state: StateStore) -> None:
-    queue = LogQueue(state)
+def test_a_batch_survives_the_process_that_produced_it(state: StateStore, log_queue: Any) -> None:
+    queue = log_queue
     QueueSink(queue, kb_id="kb").write([_event(1), _event(2)])
 
     written = drain(queue, lambda task: handle_batch(state, task), owner="logger-1")
@@ -162,13 +108,14 @@ def test_a_batch_survives_the_process_that_produced_it(state: StateStore) -> Non
     assert queue.depth()[DONE] == 1
 
 
-def test_redelivering_a_batch_writes_no_new_rows(state: StateStore) -> None:
+def test_redelivering_a_batch_writes_no_new_rows(state: StateStore, log_queue: Any) -> None:
     """At-least-once is the queue's normal mode. A double-count here would
     inflate a formation threshold -- a wrong memory, not a wrong number."""
 
-    queue = LogQueue(state)
-    QueueSink(queue, kb_id="kb").write([_event(1), _event(2)])
-    payload = json.loads(state.rows("SELECT payload FROM log_tasks", ())[0]["payload"])
+    QueueSink(log_queue, kb_id="kb").write([_event(1), _event(2)])
+    claimed = log_queue.claim("logger")
+    assert claimed is not None
+    payload = claimed.payload
 
     handle_batch(state, LogTask(id="x", payload=payload))
     handle_batch(state, LogTask(id="x", payload=payload))
@@ -368,15 +315,17 @@ def test_maintenance_no_ops_fast_when_observation_is_off(state: StateStore) -> N
     assert run_log_maintenance(state, PheasantConfig()) is None
 
 
-def test_an_unknown_backend_falls_back_rather_than_failing_startup(state: StateStore) -> None:
+@pytest.mark.parametrize("backend", ["local", "kafka"])
+def test_a_backend_other_than_nats_is_refused(state: StateStore, backend: str) -> None:
     config = PheasantConfig.model_validate(
         {
             "observability": {
-                "interactions": {"enabled": True, "queue": {"enabled": True, "backend": "kafka"}}
+                "interactions": {"enabled": True, "queue": {"enabled": True, "backend": backend}}
             }
         }
     )
-    assert isinstance(log_queue_from_config(config, state), LogQueue)
+    with pytest.raises(ValueError, match="NATS JetStream"):
+        log_queue_from_config(config, state)
 
 
 # --------------------------------------------------------------------------
@@ -404,84 +353,6 @@ def _pg_stores() -> tuple[Any, list[Any]]:
         return store
 
     return new_store, stores
-
-
-@postgres
-def test_the_log_claim_is_race_free_on_postgres() -> None:
-    """The claim was parameterized by table so the log tier could reuse it
-    rather than copy it. SQLite cannot tell whether that broke anything --
-    one writer at a time means two claimants are serialized by the file lock
-    and every guard is redundant. Postgres runs them concurrently, and under
-    READ COMMITTED the loser's UPDATE re-evaluates its WHERE after the winner
-    commits, which is what the outer `status`/`visible_at` clauses are for.
-
-    The sibling of `test_the_claim_statement_is_race_free_on_postgres`, and
-    the reason the two queues share one implementation of this statement.
-    """
-
-    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
-    new_store, stores = _pg_stores()
-
-    seed = new_store()
-    seed.migrate()
-    seed.execute("DELETE FROM log_tasks", ())
-    queue = LogQueue(seed)
-    for index in range(20):
-        queue.publish(LogTask(id=f"pg-log-{index}", payload={"events": []}))
-
-    claimed: list[str] = []
-    lock = threading.Lock()
-    barrier = threading.Barrier(5)
-
-    def worker(name: str) -> None:
-        own = LogQueue(new_store())
-        barrier.wait(timeout=15)
-        while True:
-            task = own.claim(name, visibility_seconds=300.0)
-            if task is None:
-                return
-            with lock:
-                claimed.append(task.id)
-
-    threads = [threading.Thread(target=worker, args=(f"pg-l{index}",)) for index in range(5)]
-    try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=60)
-
-        assert sorted(claimed) == sorted(f"pg-log-{index}" for index in range(20))
-        assert len(claimed) == len(set(claimed)), "two workers claimed the same batch"
-    finally:
-        for store in stores:
-            store.close()
-
-
-@postgres
-def test_the_two_queues_do_not_contend_on_postgres() -> None:
-    """Separate tables, so an indexer draining sources and a logger draining
-    batches never see each other's rows -- the isolation this is a second
-    table for."""
-
-    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
-    new_store, stores = _pg_stores()
-    try:
-        seed = new_store()
-        seed.migrate()
-        seed.execute("DELETE FROM log_tasks", ())
-        seed.execute("DELETE FROM index_tasks", ())
-
-        index_queue, log_queue = LocalQueue(seed), LogQueue(seed)
-        index_queue.publish(IndexTask(id="idx-a", source_id="docs"))
-        log_queue.publish(LogTask(id="log-a", payload={"events": []}))
-
-        assert index_queue.claim("i").id == "idx-a"
-        assert index_queue.claim("i") is None
-        assert log_queue.claim("l").id == "log-a"
-        assert log_queue.claim("l") is None
-    finally:
-        for store in stores:
-            store.close()
 
 
 @postgres
@@ -564,41 +435,9 @@ def test_an_older_postgres_ledger_gains_the_new_columns() -> None:
             store.close()
 
 
-@postgres
-def test_the_new_tables_are_in_the_postgres_schema_probe() -> None:
-    """`_migrate_postgres` skips DDL when a marker says the schema is current.
-    A table absent from the `required` probe is a table a stale marker can
-    skip -- which is why index_tasks, source_leases and sync_fingerprints are
-    all listed there."""
-
-    pytest.importorskip("pg8000", reason="the [postgres] extra is optional")
-    import inspect
-
-    from pheasant.persistence.state_store import StateStore as Store
-
-    source = inspect.getsource(Store._migrate_postgres)
-    assert '"log_tasks"' in source
-    assert '"interaction_events"' in source
-
-    new_store, stores = _pg_stores()
-    try:
-        store = new_store()
-        store.migrate()
-        # Replaying is idempotent and leaves both tables usable.
-        store.migrate()
-        for table in ("log_tasks", "interaction_events"):
-            assert store.backend.table_columns(table)
-    finally:
-        for store in stores:
-            store.close()
-
-
-# --------------------------------------------------------------------------
-# Across processes, which is the only reason the queue is durable at all
-# --------------------------------------------------------------------------
-
-
-def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) -> None:
+def test_a_batch_published_by_one_process_is_drained_by_another(
+    tmp_path: Path, nats_queue_settings: dict, nats_log_queue_settings: dict
+) -> None:
     """The property the whole tier rests on, and one an in-process fake cannot
     show: a `--role logger` is a *different process* from the API replica that
     observed the call. Cross-process visibility is also where this codebase has
@@ -612,27 +451,40 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
 
     store = StateStore()
     store.migrate()
-    QueueSink(LogQueue(store), kb_id="kb").write([_event(1), _event(2), _event(3)])
     store.close()
+    producer = _log_queue(nats_queue_settings, nats_log_queue_settings)
+    QueueSink(producer, kb_id="kb").write([_event(1), _event(2), _event(3)])
+    producer.close()
+    stream = (
+        nats_queue_settings["nats_servers"][0],
+        nats_log_queue_settings["nats_stream"],
+        nats_log_queue_settings["nats_subject"],
+        nats_log_queue_settings["nats_durable"],
+    )
 
     # A genuinely separate interpreter, holding its own connection.
     drained = subprocess.run(
         [
             sys.executable,
             "-c",
-            textwrap.dedent("""
+            textwrap.dedent(f"""
                 from pheasant.persistence.state_store import StateStore
-                from pheasant.sync.log_queue import LogQueue, handle_batch, hot_row_count
+                from pheasant.sync.log_queue import NatsLogQueue, handle_batch, hot_row_count
                 from pheasant.sync.queue import drain
 
+                server, stream, subject, durable = {stream!r}
                 store = StateStore()
                 store.migrate()
+                queue = NatsLogQueue(
+                    servers=[server], stream=stream, subject=subject, durable=durable
+                )
                 written = drain(
-                    LogQueue(store),
+                    queue,
                     lambda task: handle_batch(store, task),
                     owner="logger-process",
                 )
                 print(sum(written), hot_row_count(store))
+                queue.close()
                 store.close()
             """),
         ],
@@ -646,64 +498,10 @@ def test_a_batch_published_by_one_process_is_drained_by_another(tmp_path: Path) 
 
     # And the first process sees the result, not a stale view of its own.
     store = StateStore()
+    queue = _log_queue(nats_queue_settings, nats_log_queue_settings)
     try:
         assert hot_row_count(store) == 3
-        assert LogQueue(store).depth()[DONE] == 1
+        assert queue.depth()[PENDING] == 0
     finally:
+        queue.close()
         store.close()
-
-
-def test_maintenance_purges_written_batches_and_keeps_the_rest(
-    state: StateStore, tmp_path: Path
-) -> None:
-    """A written batch's row is removed, with its payload, after a day.
-
-    Batch ids are content-addressed over their events, so no id repeats and
-    every observation batch was a new ``log_tasks`` row holding its whole
-    payload -- kept forever, because `purge_completed` had no caller.
-    """
-
-    queue = LogQueue(state)
-    for index in range(5):
-        queue.publish_batch(f"log-{index}", {"kind": "interactions", "kb_id": "kb", "events": []})
-    drain(queue, lambda task: 1)
-    queue.publish_batch("log-waiting", {"kind": "interactions", "kb_id": "kb", "events": []})
-    two_days_ago = (datetime.now(UTC) - timedelta(days=2)).isoformat()
-    state.execute(
-        "UPDATE log_tasks SET updated_at=? WHERE id IN (?, ?, ?, ?)",
-        (two_days_ago, "log-0", "log-1", "log-2", "log-3"),
-    )
-
-    config = PheasantConfig.model_validate(
-        {
-            "pheasant": {"name": "kb", "exports_path": str(tmp_path / "exports")},
-            "observability": {
-                "interactions": {"enabled": True, "queue": {"enabled": True, "backend": "local"}}
-            },
-        }
-    )
-    report = run_log_maintenance(state, config)
-
-    assert report is not None and report["purged_batches"] == 4
-    remaining = {
-        str(row["id"]): str(row["status"]) for row in state.rows("SELECT id, status FROM log_tasks")
-    }
-    # A batch finished within the window stays (it still dedups a republish),
-    # and one not yet written is never touched.
-    assert remaining == {"log-4": DONE, "log-waiting": PENDING}
-
-
-def test_purge_and_requeue_count_what_they_changed(state: StateStore) -> None:
-    queue = LocalQueue(state)
-    for index in range(3):
-        queue.publish(IndexTask(id=f"t{index}", source_id=f"s{index}", max_attempts=1))
-    while (task := queue.claim("worker")) is not None:
-        queue.nack(task, "boom")  # one attempt allowed: straight to dead
-    assert queue.depth()[DEAD] == 3
-    assert queue.requeue_dead() == 3
-    assert queue.depth()[DEAD] == 0 and queue.depth()[PENDING] == 3
-    assert queue.requeue_dead() == 0
-
-    drain(queue, lambda task: 1)
-    assert queue.purge_completed(older_than_seconds=-1) == 3
-    assert queue.purge_completed(older_than_seconds=-1) == 0

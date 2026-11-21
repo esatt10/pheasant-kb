@@ -353,6 +353,79 @@ def no_state_database(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(DATABASE_ENV, raising=False)
 
 
+#: The work queues are NATS JetStream. A test that needs one names a broker
+#: here (`nats-server -js`, or `docker run -p 127.0.0.1:14222:4222
+#: nats:2.10-alpine -js`), and gets a stream, subject and consumer of its own.
+NATS_ENV = "PHEASANT_TEST_NATS_URL"
+DEFAULT_NATS_URL = "nats://127.0.0.1:14222"
+
+
+def nats_url() -> str:
+    return os.environ.get(NATS_ENV, "").strip() or DEFAULT_NATS_URL
+
+
+def _broker_reachable(url: str) -> bool:
+    import socket
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    try:
+        with socket.create_connection((parts.hostname or "127.0.0.1", parts.port or 4222), 1.0):
+            return True
+    except OSError:
+        return False
+
+
+def make_nats_queue_settings() -> dict[str, Any]:
+    """``sync.queue`` for one test: NATS, on a stream nobody else uses.
+
+    A plain function as well as a fixture, for config helpers that are not
+    fixtures. Fails, rather than skips, without a broker: the queue is NATS.
+    """
+
+    import uuid
+
+    url = nats_url()
+    if not _broker_reachable(url):
+        pytest.fail(
+            f"no JetStream broker at {url}. Start one, e.g. "
+            "`docker run -d --name pheasant-test-nats -p 127.0.0.1:14222:4222 "
+            f"nats:2.10-alpine -js`, or set {NATS_ENV}."
+        )
+    tag = uuid.uuid4().hex[:10]
+    return {
+        "enabled": True,
+        "backend": "nats",
+        "nats_servers": [url],
+        "nats_stream": f"TEST_INDEX_{tag}",
+        "nats_subject": f"test.{tag}.index",
+        "nats_durable": f"test-indexers-{tag}",
+    }
+
+
+def make_nats_log_queue_settings(index_settings: dict[str, Any]) -> dict[str, Any]:
+    """``observability.interactions.queue`` beside ``index_settings``."""
+
+    tag = index_settings["nats_stream"].rsplit("_", 1)[-1]
+    return {
+        "enabled": True,
+        "backend": "nats",
+        "nats_stream": f"TEST_LOGS_{tag}",
+        "nats_subject": f"test.{tag}.logs",
+        "nats_durable": f"test-loggers-{tag}",
+    }
+
+
+@pytest.fixture()
+def nats_queue_settings() -> dict[str, Any]:
+    return make_nats_queue_settings()
+
+
+@pytest.fixture()
+def nats_log_queue_settings(nats_queue_settings: dict[str, Any]) -> dict[str, Any]:
+    return make_nats_log_queue_settings(nats_queue_settings)
+
+
 def seed_source(store: Any, source_id: str = "demo", kb_id: str = "demo") -> None:
     """Register a knowledge base and a source, for a test writing rows by hand.
 

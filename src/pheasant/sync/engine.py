@@ -251,11 +251,7 @@ class SyncEngine:
         self.graph_store.on_publish = self._on_graph_published
         self.graph_builder = GraphBuilder(config)
         self._loads_persisted_graph = bool(load_persisted_graph)
-        self._row_working_set = bool(
-            load_persisted_graph
-            and defer_persisted_graph_load
-            and self.graph_store.rows is not None
-        )
+        self._row_working_set = bool(load_persisted_graph and defer_persisted_graph_load)
         self._graph_loaded = not self._loads_persisted_graph
         #: Which published generation this process is actually serving, or
         #: None for a process that holds no graph. "Stale" was previously
@@ -385,13 +381,11 @@ class SyncEngine:
             self._reset_row_working_set()
             return self.graph_store.counts(self.config.knowledge_base_id)[0]
         if not self._loads_persisted_graph:
-            # Nothing private to reload. On the row backend that is the normal
-            # case for a serving replica — it reads the graph out of the shared
-            # database, so it is never behind — and the generation it reports
-            # still has to keep up, or `/ready` would claim a staleness that
-            # cannot happen. See `serving_graph`.
-            if self.graph_store.rows is not None:
-                self._note_loaded_generation()
+            # Nothing private to reload: a serving replica reads the graph out
+            # of the shared database, so it is never behind — and the
+            # generation it reports still has to keep up, or `/ready` would
+            # claim a staleness that cannot happen. See `serving_graph`.
+            self._note_loaded_generation()
             return 0
         loaded = self.graph_store.load(self.config.knowledge_base_id)
         if not len(loaded):
@@ -428,7 +422,7 @@ class SyncEngine:
         read does not land on every search.
         """
 
-        if self._loads_persisted_graph or self.graph_store.rows is None:
+        if self._loads_persisted_graph:
             return self._loaded_graph_generation
         now = time.monotonic()
         if now - self._generation_at > self._generation_ttl:
@@ -446,18 +440,12 @@ class SyncEngine:
 
         Two different objects for two different jobs. A process that *builds*
         the graph serves its own working set, which is current by construction
-        and is what `role: all` — every standalone container — uses. A process
-        that only serves gets whatever the store offers: on ``rows`` a
-        :class:`~pheasant.graph.sql.SqlGraph` holding nothing, on the file
-        backend the resident copy it loaded, because there is no third option
-        there.
-
-        That asymmetry is the residency win stated in one place: the file
-        backend has to give a graph to everyone who reads one, and the row
-        backend only to whoever writes one.
+        (`role: all`). A process that only serves gets a
+        :class:`~pheasant.graph.sql.SqlGraph` holding nothing: the graph is
+        held only by whoever writes it.
         """
 
-        if self._loads_persisted_graph or self.graph_store.rows is None:
+        if self._loads_persisted_graph:
             return self.graph_builder.graph
         return self.graph_store.serving_graph(self.config.knowledge_base_id)
 
@@ -583,7 +571,7 @@ class SyncEngine:
     def reconcile_node_index(self, source_name: str, *, missing: bool = False) -> None:
         """`node_index.reconcile` against the truth this process holds (see there)."""
 
-        saved = self.config.storage.graph_format == "rows"
+        saved = True  # the published graph's rows are the truth
 
         def working() -> Any:
             with self._sync_mutex:
@@ -802,9 +790,9 @@ class SyncEngine:
                     on_progress=on_progress,
                 )
             finally:
-                # This call built the queue, so this call closes it. A no-op
-                # for the local queue; for a broker it is the difference
-                # between one connection per sync and a leak per sync.
+                # This call built the queue, so this call closes it: the
+                # difference between one broker connection per sync and a
+                # leak per sync.
                 queue.close()
         if workers == 1:
             return [
@@ -886,9 +874,9 @@ class SyncEngine:
         The difference from the in-memory path is what survives a kill: a
         process stopped nine sources into ten leaves the tenth *queued*, so
         the next run finishes it instead of starting over. Logical task ids
-        are stable for observability. The local queue re-arms a completed
-        logical task, while NATS assigns each invocation a distinct broker
-        publish id so its duplicate window cannot suppress a real rapid re-run.
+        are stable for observability; NATS assigns each invocation a distinct
+        broker publish id so its duplicate window cannot suppress a real rapid
+        re-run.
 
         Ordering is by enqueue time, so with one worker the results come back
         in configured source order exactly as before. With several the
