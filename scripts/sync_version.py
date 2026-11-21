@@ -122,32 +122,6 @@ def replacements(version: str) -> list[Replacement]:
     image = f"ghcr.io/esatt10/pheasant:{version}"
     return [
         Replacement(
-            path=Path("deploy/helm/Chart.yaml"),
-            pattern=re.compile(r"(?m)^(version:\s*)[^\r\n]+"),
-            replacement=rf"\g<1>{version}",
-            label="Helm chart version",
-        ),
-        Replacement(
-            path=Path("deploy/helm/Chart.yaml"),
-            pattern=re.compile(r'(?m)^(appVersion:\s*)"[^\r\n"]+"'),
-            replacement=rf'\g<1>"{version}"',
-            label="Helm appVersion",
-        ),
-        Replacement(
-            path=Path("deploy/helm/values.yaml"),
-            pattern=re.compile(
-                r"(?ms)^(image:\r?\n(?:[ \t]+[^\r\n]*\r?\n)*?[ \t]+tag:\s*)[^\r\n#]+"
-            ),
-            replacement=rf"\g<1>{version}",
-            label="Helm image tag",
-        ),
-        Replacement(
-            path=Path("deploy/kubernetes/deployment.yaml"),
-            pattern=re.compile(r"ghcr\.io/esatt10/pheasant:[0-9A-Za-z._+-]+"),
-            replacement=image,
-            label="Kubernetes deployment image",
-        ),
-        Replacement(
             path=Path("deploy/compose/docker-compose.yml"),
             pattern=re.compile(r"ghcr\.io/esatt10/pheasant:[0-9A-Za-z._+-]+"),
             replacement=image,
@@ -175,12 +149,6 @@ def replacements(version: str) -> list[Replacement]:
                 # pheasant-kb, the default deployment: eight pheasant services.
                 Path("compose.yaml"): 8,
                 Path(".env.example"): 1,
-                Path("deploy/kubernetes/scaled/api-deployment.yaml"): 1,
-                Path("deploy/kubernetes/scaled/graph-deployment.yaml"): 1,
-                Path("deploy/kubernetes/scaled/indexer-statefulset.yaml"): 1,
-                Path("deploy/kubernetes/scaled/observability/logger-deployment.yaml"): 1,
-                Path("deploy/kubernetes/scaled/worker-deployment.yaml"): 1,
-                Path("deploy/kubernetes/scaled/exports-cronjob.yaml"): 1,
             },
         ),
         # Commented-out examples, but they are the values a user copies into a

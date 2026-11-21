@@ -229,46 +229,6 @@ def test_describe_retrieval_lists_the_types_present_and_the_new_knobs(tmp_path: 
 # --------------------------------------------------------------------------
 
 
-def test_the_contract_advertises_the_regions_source_types(tmp_path: Path) -> None:
-    from pheasant.synapse.publisher import ContractPublisher
-
-    tools = _tools(tmp_path)
-    try:
-        contract = ContractPublisher(tools.config, tools.state).build(
-            generated_at="2026-06-21T00:00:00Z"
-        )
-        assert contract["capabilities"]["source_types"] == [
-            "document_folder",
-            "markdown_folder",
-        ]
-    finally:
-        tools.engine.close()
-
-
-def test_the_contract_still_validates_against_the_vendored_schema(tmp_path: Path) -> None:
-    """Rule 6: additive wire data, no schema bump and no re-vendor."""
-
-    import json
-
-    import jsonschema
-
-    from pheasant.synapse.publisher import ContractPublisher
-
-    schema = json.loads(
-        (
-            Path(__file__).resolve().parents[1] / "contracts" / "semantic_contract.v1.schema.json"
-        ).read_text(encoding="utf-8")
-    )
-    tools = _tools(tmp_path)
-    try:
-        contract = ContractPublisher(tools.config, tools.state).build(
-            generated_at="2026-06-21T00:00:00Z"
-        )
-    finally:
-        tools.engine.close()
-    jsonschema.validate(contract, schema)
-
-
 # --------------------------------------------------------------------------
 # The criteria layer itself
 # --------------------------------------------------------------------------

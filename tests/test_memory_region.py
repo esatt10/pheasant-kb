@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from pheasant.artifacts.store import MEMORY_RECORD_VERSION, MemoryRecord, MemoryStore, memory_source
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.store import MEMORY_RECORD_VERSION, MemoryRecord, MemoryStore, memory_source
 
 PINNED_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -167,12 +167,13 @@ def test_memory_write_is_searchable_immediately_and_resync_is_zero_work(
         tools.engine.close()
 
 
-def test_memory_write_without_memory_source_is_actionable(tmp_path: Path) -> None:
+def test_the_first_write_creates_the_record_source(tmp_path: Path) -> None:
     config = load_config(_write_config(tmp_path, include_memory=False))
     tools = PheasantTools(config)
     try:
-        with pytest.raises(ValueError, match="type: memory"):
-            tools.memory_write("memory-test", "anything")
+        written = tools.memory_write("memory-test", "anything")
+        assert written["created"] is True
+        assert written["source"] == "artifact-records"
     finally:
         tools.engine.close()
 
@@ -191,7 +192,7 @@ def test_http_memory_write_and_list(tmp_path: Path) -> None:
     client = fastapi_testclient.TestClient(app)
     try:
         resp = client.post(
-            "/memory",
+            "/artifacts/records",
             json={"text": "Deploy freezes start Friday 5pm.", "scope": "org", "sync": True},
         )
         assert resp.status_code == 200, resp.text
@@ -200,19 +201,19 @@ def test_http_memory_write_and_list(tmp_path: Path) -> None:
         assert body["record"]["schema_version"] == MEMORY_RECORD_VERSION
         assert body["sync"]["indexed_artifacts"] == 1
 
-        listing = client.get("/memory", params={"scope": "org"})
+        listing = client.get("/artifacts/records", params={"scope": "org"})
         assert listing.status_code == 200
         assert [r["text"] for r in listing.json()["records"]] == [
             "Deploy freezes start Friday 5pm."
         ]
 
-        bad = client.post("/memory", json={"text": "", "scope": "org"})
-        assert bad.status_code == 400
+        bad = client.post("/artifacts/records", json={"text": "", "scope": "org"})
+        assert bad.status_code == 422
     finally:
         app.state.engine.close()
 
 
-def test_http_memory_without_source_is_400(tmp_path: Path) -> None:
+def test_http_lists_nothing_until_the_first_write_creates_the_source(tmp_path: Path) -> None:
     fastapi_testclient = pytest.importorskip("fastapi.testclient")
     from pheasant.api.app import create_app
 
@@ -220,8 +221,11 @@ def test_http_memory_without_source_is_400(tmp_path: Path) -> None:
     app = create_app(load_config(config_path), config_path=str(config_path))
     client = fastapi_testclient.TestClient(app)
     try:
-        assert client.post("/memory", json={"text": "x"}).status_code == 400
-        assert client.get("/memory").status_code == 400
+        empty = client.get("/artifacts/records")
+        assert empty.status_code == 200
+        assert empty.json() == {"records": [], "source": None}
+        assert client.post("/artifacts/records", json={"text": "x"}).status_code == 200
+        assert client.get("/artifacts/records").json()["source"] == "artifact-records"
     finally:
         app.state.engine.close()
 
@@ -229,23 +233,6 @@ def test_http_memory_without_source_is_400(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Publisher capability (routing prep for 33.3) — wire format unchanged
 # ---------------------------------------------------------------------------
-
-
-def test_publisher_advertises_memory_modality(tmp_path: Path) -> None:
-    from pheasant.persistence.state_store import StateStore
-    from pheasant.synapse.publisher import ContractPublisher
-
-    state = StateStore(tmp_path / "pub-state.db")
-    state.migrate()
-
-    with_memory = load_config(_write_config(tmp_path))
-    modalities = ContractPublisher(with_memory, state)._capabilities()["modalities"]
-    assert "memory" in modalities
-
-    plain_dir = tmp_path / "plain"
-    plain_dir.mkdir()
-    without = load_config(_write_config(plain_dir, include_memory=False))
-    assert "memory" not in ContractPublisher(without, state)._capabilities()["modalities"]
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +294,7 @@ def test_ttl_none_means_scope_never_expires(tmp_path: Path) -> None:
 
 
 def test_maintenance_reindexes_so_search_forgets_archived_records(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path))
     tools = PheasantTools(config)
@@ -338,7 +325,7 @@ def test_maintenance_reindexes_so_search_forgets_archived_records(tmp_path: Path
                 "memory-test",
                 "rollout password",
                 mode="text",
-                memory={"current_only": False},
+                artifact_policy={"current_only": False},
             )
         )
         assert "bananas" in history.lower()
@@ -370,7 +357,7 @@ def test_maintenance_reindexes_so_search_forgets_archived_records(tmp_path: Path
                 "memory-test",
                 "rollout password",
                 mode="text",
-                memory={"current_only": False},
+                artifact_policy={"current_only": False},
             )
         ).lower()
         assert "bananas" not in after_history
@@ -385,7 +372,7 @@ def test_maintenance_reindexes_so_search_forgets_archived_records(tmp_path: Path
 
 
 def test_maintenance_respects_disable_and_missing_source(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     no_source = load_config(_write_config(tmp_path, include_memory=False))
     tools = PheasantTools(no_source)
@@ -417,20 +404,22 @@ def test_http_consolidate_endpoint(tmp_path: Path) -> None:
     app = create_app(load_config(config_path), config_path=str(config_path))
     client = fastapi_testclient.TestClient(app)
     try:
-        first = client.post("/memory", json={"text": "v1 of the fact", "scope": "org"}).json()
+        first = client.post(
+            "/artifacts/records", json={"text": "v1 of the fact", "scope": "org"}
+        ).json()
         client.post(
-            "/memory",
+            "/artifacts/records",
             json={
                 "text": "v2 of the fact",
                 "scope": "org",
                 "supersedes": first["record"]["record_id"],
             },
         )
-        resp = client.post("/memory/consolidate")
+        resp = client.post("/artifacts/consolidate")
         assert resp.status_code == 200, resp.text
         assert resp.json()["report"]["archived"] == 1
 
-        current = client.get("/memory", params={"current_only": True}).json()["records"]
+        current = client.get("/artifacts/records", params={"current_only": True}).json()["records"]
         assert [r["text"] for r in current] == ["v2 of the fact"]
     finally:
         app.state.engine.close()

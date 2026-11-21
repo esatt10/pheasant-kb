@@ -132,8 +132,8 @@ def test_hydration_is_read_only_and_parallel_edges_survive(tmp_path):
 
 @pytest.mark.parametrize("corpus", ["markdown", "python", "structured", "opaque"])
 def test_row_memory_bridging_matches_resident_without_graph_walk(tmp_path, monkeypatch, corpus):
+    from pheasant.artifacts.store import MemoryStore
     from pheasant.config.loader import load_config
-    from pheasant.memory.store import MemoryStore
     from tests.test_memory_graph import _config as memory_config
 
     path = memory_config(tmp_path, corpus=corpus)

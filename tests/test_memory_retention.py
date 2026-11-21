@@ -67,7 +67,7 @@ sources:
 def test_default_retention_is_zero_reproduces_pre_phase_2_archival(tmp_path: Path) -> None:
     """No configured retention window: a correction is archived on the very
     next consolidation pass, exactly as before Phase 2 existed."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path))
     tools = PheasantTools(config)
@@ -85,7 +85,7 @@ def test_default_retention_is_zero_reproduces_pre_phase_2_archival(tmp_path: Pat
 
         history = str(
             tools.search_context(
-                "retention-test", "password", mode="text", memory={"current_only": False}
+                "retention-test", "password", mode="text", artifact_policy={"current_only": False}
             )
         ).lower()
         assert "bananas" not in history  # genuinely gone, not merely filtered
@@ -105,8 +105,8 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
     second-resolution `asserted_at`/`valid_until` collide and there is no
     instant left to tell "before the correction" from "after" apart.
     """
-    from pheasant.memory.maintenance import run_memory_maintenance
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.maintenance import run_memory_maintenance
+    from pheasant.artifacts.store import MemoryStore
 
     config_path = _write_config(tmp_path, retention_days=3)
     config = load_config(config_path)
@@ -144,7 +144,7 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
                 "retention-test",
                 "rollout password",
                 mode="text",
-                memory={"as_of": old_asserted.isoformat().replace("+00:00", "Z")},
+                artifact_policy={"as_of": old_asserted.isoformat().replace("+00:00", "Z")},
             )
         ).lower()
         assert "bananas" in as_of_hits
@@ -165,7 +165,7 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
                 "retention-test",
                 "rollout password",
                 mode="text",
-                memory={"current_only": False},
+                artifact_policy={"current_only": False},
             )
         ).lower()
         assert "bananas" in history
@@ -185,7 +185,7 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
                 "retention-test",
                 "rollout password",
                 mode="text",
-                memory={"current_only": False},
+                artifact_policy={"current_only": False},
             )
         ).lower()
         assert "bananas" not in after_history
@@ -202,7 +202,7 @@ def test_ttl_expiry_also_honors_the_retention_window(tmp_path: Path) -> None:
     """The same window applies to per-scope TTL expiry, not just
     supersession — both are "no longer current" and both used to be
     archived on the very next pass."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path, retention_days=2, ttl_days=5))
     tools = PheasantTools(config)

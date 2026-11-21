@@ -455,33 +455,6 @@ def test_resync_is_idempotent_for_documents(tmp_path: Path) -> None:
     assert [r["text"] for r in chunks_before] == [r["text"] for r in chunks_after]
 
 
-def test_publisher_advertises_document_modality_only_when_configured(tmp_path: Path) -> None:
-    engine = _make_document_engine(tmp_path)
-    from pheasant.synapse.publisher import ContractPublisher
-
-    modalities = ContractPublisher(engine.config, engine.state)._capabilities()["modalities"]
-    assert "document" in modalities
-
-    notes = tmp_path / "notes"
-    notes.mkdir(parents=True, exist_ok=True)
-    text_only = PheasantConfig.model_validate(
-        {
-            "pheasant": {"name": "text-only", "state_path": str(tmp_path / "state2")},
-            "sources": [
-                {
-                    "name": "notes",
-                    "type": "document_folder",
-                    "path": str(notes),
-                    "include": ["**/*.md"],
-                }
-            ],
-        }
-    )
-    engine2 = SyncEngine(text_only)
-    caps = ContractPublisher(text_only, engine2.state)._capabilities()
-    assert "document" not in caps["modalities"]
-
-
 # ---------------------------------------------------------------------------
 # WASM-sandboxed PDF tokenizer
 # ---------------------------------------------------------------------------

@@ -417,7 +417,7 @@ def test_a_replay_never_credits_a_memory_record_with_a_use(tmp_path: Path) -> No
 
     engine = _engine(tmp_path)
     _seed(engine)
-    from pheasant.memory.store import MemoryStore, memory_source
+    from pheasant.artifacts.store import MemoryStore, memory_source
 
     source = memory_source(engine.config, engine.state)
     assert source is not None
@@ -706,7 +706,7 @@ def test_the_mcp_facade_exposes_evidence_and_the_report(tmp_path: Path) -> None:
 
 
 def _memory_store(engine: Any) -> Any:
-    from pheasant.memory.store import MemoryStore, memory_source
+    from pheasant.artifacts.store import MemoryStore, memory_source
 
     source = memory_source(engine.config, engine.state)
     assert source is not None

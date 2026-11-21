@@ -15,16 +15,16 @@ from pathlib import Path
 
 import pytest
 
-from pheasant.config.loader import load_config
-from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.bridge import (
+from pheasant.artifacts.bridge import (
     DEFAULT_MAX_TARGETS,
     BridgeInputs,
     candidate_identifiers,
     resolve_bridges,
     supersedes_edges,
 )
-from pheasant.memory.store import MemoryStore
+from pheasant.artifacts.store import MemoryStore
+from pheasant.config.loader import load_config
+from pheasant.mcp_server.tools import PheasantTools
 
 PINNED = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -416,7 +416,7 @@ def test_identifier_candidates_ignore_ordinary_prose() -> None:
 def test_a_leading_article_does_not_split_one_entity_into_two() -> None:
     """The extractor starts a Title Case run at "The", so the corpus says
     *The Kestrel Gateway* while a memory says *Kestrel Gateway*."""
-    from pheasant.memory.bridge import normalize_label
+    from pheasant.artifacts.bridge import normalize_label
 
     assert normalize_label("The Kestrel Gateway") == normalize_label("Kestrel Gateway")
     assert normalize_label("An Incident Report") == "incident report"

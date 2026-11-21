@@ -150,37 +150,3 @@ def test_text_only_region_builds_no_captioner(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Contract modalities (router will filter on this)
 # ---------------------------------------------------------------------------
-
-
-def test_contract_modalities_include_image_when_image_source_present(tmp_path: Path) -> None:
-    engine = _make_image_engine(tmp_path)
-    engine.sync_source("images", mode="full")
-    from pheasant.synapse.publisher import ContractPublisher
-
-    publisher = ContractPublisher(engine.config, engine.state)
-    contract = publisher.build(generated_at="2026-06-21T00:00:00Z")
-    assert "image" in contract["capabilities"]["modalities"]
-    assert "text" in contract["capabilities"]["modalities"]
-
-
-def test_contract_modalities_omit_image_for_text_region(tmp_path: Path) -> None:
-    notes = tmp_path / "workspace" / "notes"
-    notes.mkdir(parents=True, exist_ok=True)
-    (notes / "a.md").write_text("# Notes\n\nplain text only.\n", encoding="utf-8")
-    config = PheasantConfig.model_validate(
-        {
-            "pheasant": {
-                "name": "text-only",
-                "state_path": str(tmp_path / "state"),
-                "workspace_root": str(tmp_path / "workspace"),
-                "exports_path": str(tmp_path / "exports"),
-            },
-            "sources": [{"name": "notes", "type": "markdown_folder", "path": str(notes)}],
-        }
-    )
-    engine = SyncEngine(config)
-    engine.sync_source("notes", mode="full")
-    from pheasant.synapse.publisher import ContractPublisher
-
-    contract = ContractPublisher(config, engine.state).build(generated_at="2026-06-21T00:00:00Z")
-    assert "image" not in contract["capabilities"]["modalities"]

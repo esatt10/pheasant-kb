@@ -8,9 +8,7 @@ import os
 import zipfile
 
 import pytest
-from fastapi.testclient import TestClient
 
-from pheasant.api.app import create_app
 from pheasant.artifacts import publications
 from pheasant.jobs import JobRegistry
 from pheasant.persistence.durable_jobs import DurableJobStore
@@ -94,44 +92,6 @@ def test_legacy_source_adoption_preserves_files_ids_and_original_definition(cont
         "SELECT * FROM artifact_source_migrations WHERE source_id='old-notes'"
     )
     assert len(rows) == 1 and json.loads(rows[0]["original_config_json"])["type"] == "memory"
-
-
-def test_legacy_imports_are_the_same_implementation():
-    import pheasant.artifacts.store as canonical
-    import pheasant.memory.store as legacy
-
-    assert legacy is canonical
-    assert legacy.MemoryStore is canonical.ArtifactRecordStore
-
-
-def test_http_memory_is_deprecated_and_uses_the_same_artifact_operation(loaded_config):
-    app = create_app(loaded_config)
-    try:
-        client = TestClient(app)
-        result = client.post(
-            "/artifacts/records", json={"text": "A shared artifact.", "scope": "org"}
-        )
-        assert result.status_code == 200, result.text
-        legacy = client.get("/memory")
-        assert legacy.headers["deprecation"] == "true"
-        canonical = client.get("/artifacts/records", params={"current_only": False})
-        assert legacy.json() == canonical.json()
-        assert app.openapi()["paths"]["/memory"]["get"]["deprecated"] is True
-        candidates = client.get("/artifacts/candidates")
-        legacy_candidates = client.get("/memory/candidates")
-        assert candidates.status_code == 200
-        assert candidates.json() == legacy_candidates.json()
-        assert "</artifacts/candidates>" in legacy_candidates.headers["link"]
-        recalled = client.post(
-            "/search", json={"query": "shared artifact", "source_types": ["memory"]}
-        )
-        assert recalled.status_code == 200 and recalled.json()["results"]
-        assert any(
-            r.get("artifact", {}).get("semantic_type") == "fact" for r in recalled.json()["results"]
-        ), recalled.json()
-    finally:
-        app.state.jobs.close()
-        app.state.engine.close()
 
 
 def test_record_visibility_and_replacement_partition_are_preserved(context):

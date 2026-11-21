@@ -717,7 +717,7 @@ sources: []
                     assert client.server_info.version == __version__
                     assert client.instructions, "the model-facing instructions must still be sent"
                     tools = await client.list_tools()
-                    assert {"search_context", "search_context_batch", "memory_write"} <= {
+                    assert {"search_context", "search_context_batch", "record_artifact"} <= {
                         t.name for t in tools.tools
                     }
     finally:
@@ -950,7 +950,6 @@ def test_refreshing_a_tab_that_is_also_an_api_route_loads_the_ui(
         "/graph",
         "/config",
         "/artifacts",
-        "/memory",
         "/evaluation",
         "/tuning",
         "/sources/",

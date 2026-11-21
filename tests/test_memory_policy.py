@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from pheasant.config.loader import load_config
-from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.policy import (
+from pheasant.artifacts.policy import (
     INDEX_COLUMNS,
     MemoryPolicy,
     admits,
     sql_predicate,
 )
+from pheasant.config.loader import load_config
+from pheasant.mcp_server.tools import PheasantTools
 
 NOW = "2026-07-16T12:00:00Z"
 
@@ -291,7 +291,7 @@ def corrected(tmp_path: Path):
     would give the original an empty validity window and make a point-in-time
     query untestable for reasons that have nothing to do with the policy.
     """
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     config_path = _write_config(tmp_path)
     store = MemoryStore(tmp_path / "memory")
@@ -340,7 +340,7 @@ def test_as_of_brings_the_superseded_record_back(corrected) -> None:
             "memory-test",
             "rollout password",
             mode="text",
-            memory={"as_of": "2026-03-01T00:00:00Z"},
+            artifact_policy={"as_of": "2026-03-01T00:00:00Z"},
         )
     )
     assert "bananas" in history
@@ -362,7 +362,7 @@ def test_off_matches_a_region_with_no_memory_source(tmp_path: Path) -> None:
         without.sync_source("memory-test", "notes", "full")
 
         off = with_memory.search_context(
-            "memory-test", "rollout password", mode="text", memory="off"
+            "memory-test", "rollout password", mode="text", artifact_policy="off"
         )
         none_at_all = without.search_context("memory-test", "rollout password", mode="text")
 
@@ -378,7 +378,9 @@ def test_off_matches_a_region_with_no_memory_source(tmp_path: Path) -> None:
 
 def test_only_returns_memory_and_nothing_else(corrected) -> None:
     tools, _old, _new = corrected
-    payload = tools.search_context("memory-test", "rollout password", mode="text", memory="only")
+    payload = tools.search_context(
+        "memory-test", "rollout password", mode="text", artifact_policy="only"
+    )
     results = payload.get("results") or []
     assert results, "expected the memory record itself"
     for item in results:
@@ -393,7 +395,7 @@ def test_scope_filter_narrows_memory_without_narrowing_the_corpus(corrected) -> 
         "memory-test",
         "rollout password",
         mode="text",
-        memory={"scopes": ["session"]},
+        artifact_policy={"scopes": ["session"]},
     )
     results = payload.get("results") or []
     assert not any(item.get("memory") for item in results), "no session-scope memory exists"
@@ -452,7 +454,7 @@ def test_http_and_mcp_answer_identically_for_the_same_criteria(tmp_path: Path) -
     tools.memory_write(
         "memory-test",
         "The rollout password is GRAPES.",
-        scope="user",
+        scope="org",
         subject="infra",
         supersedes=str(first["record"]["record_id"]),
     )
@@ -469,12 +471,12 @@ def test_http_and_mcp_answer_identically_for_the_same_criteria(tmp_path: Path) -
                     "query": "rollout password",
                     "mode": "text",
                     "max_results": 10,
-                    "memory": policy,
+                    "artifact_policy": policy,
                 },
             )
             assert http.status_code == 200, http.text
             mcp = again.search_context(
-                "memory-test", "rollout password", mode="text", memory=policy
+                "memory-test", "rollout password", mode="text", artifact_policy=policy
             )
 
             def keys(payload: dict) -> list:
@@ -621,9 +623,9 @@ def test_graph_arm_hits_are_labelled_as_remembered(corrected) -> None:
 def test_only_excludes_corpus_hits_on_the_graph_arm_too(corrected) -> None:
     tools, _old, _new = corrected
     results = (
-        tools.search_context("memory-test", "rollout password", mode="graph", memory="only").get(
-            "results"
-        )
+        tools.search_context(
+            "memory-test", "rollout password", mode="graph", artifact_policy="only"
+        ).get("results")
         or []
     )
     assert results
@@ -633,7 +635,7 @@ def test_only_excludes_corpus_hits_on_the_graph_arm_too(corrected) -> None:
 
 def test_relative_path_is_recovered_from_both_stable_id_grammars() -> None:
     """The two id grammars are contracts; parsing them is not guesswork."""
-    from pheasant.memory.policy import relative_path_of
+    from pheasant.artifacts.policy import relative_path_of
 
     assert relative_path_of("file:agent-memory:org/mem-x.md:branch=none") == "org/mem-x.md"
     assert (
@@ -697,7 +699,7 @@ def test_prefer_reserves_slots_for_memory(tmp_path: Path) -> None:
             encoding="utf-8",
         )
     store_path = tmp_path / "memory"
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     MemoryStore(store_path).append(
         "The rollout password is GRAPES.", scope="org", now=datetime(2026, 6, 1, tzinfo=UTC)
@@ -710,7 +712,11 @@ def test_prefer_reserves_slots_for_memory(tmp_path: Path) -> None:
         def memory_rank(policy: str) -> int | None:
             results = (
                 tools.search_context(
-                    "memory-test", "rollout password", mode="text", max_results=4, memory=policy
+                    "memory-test",
+                    "rollout password",
+                    mode="text",
+                    max_results=4,
+                    artifact_policy=policy,
                 ).get("results")
                 or []
             )
@@ -728,7 +734,11 @@ def test_prefer_reserves_slots_for_memory(tmp_path: Path) -> None:
             return {
                 str(item.get("relative_path") or "")
                 for item in tools.search_context(
-                    "memory-test", "rollout password", mode="text", max_results=20, memory=policy
+                    "memory-test",
+                    "rollout password",
+                    mode="text",
+                    max_results=20,
+                    artifact_policy=policy,
                 ).get("results")
                 or []
             }
@@ -756,7 +766,7 @@ def test_the_vector_arm_honours_the_memory_policy(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     store = MemoryStore(tmp_path / "memory")
     old, _ = store.append(
@@ -783,7 +793,7 @@ def test_the_vector_arm_honours_the_memory_policy(tmp_path: Path) -> None:
         # result set and prove nothing.
         def vector_flags(policy: str) -> list[bool]:
             payload = tools.search_context(
-                "memory-test", "rollout password", mode="vector", memory=policy
+                "memory-test", "rollout password", mode="vector", artifact_policy=policy
             )
             assert payload["counts"]["vector"] > 0, f"vector arm returned nothing for {policy!r}"
             return [bool(item.get("memory")) for item in payload["results"]]
@@ -824,7 +834,7 @@ def test_steering_rules_are_machinery_not_content() -> None:
     assert admits(MemoryPolicy(mode="only", include_rules=True), rule, now=NOW)
 
     # Steering itself must still see its own rules, or the feature is dead.
-    from pheasant.memory.steering import load_steering
+    from pheasant.artifacts.steering import load_steering
 
     records = [
         {
@@ -851,7 +861,7 @@ def test_the_rule_has_one_definition_and_two_renderers() -> None:
     drift that was possible before.
     """
 
-    from pheasant.memory.policy import MemoryPolicy, clauses
+    from pheasant.artifacts.policy import MemoryPolicy, clauses
 
     policy = MemoryPolicy(
         scopes=("user",), subject="deploy", as_of="2026-01-01T00:00:00Z", include_rules=False
@@ -885,7 +895,7 @@ def test_each_clause_binds_its_own_placeholders() -> None:
     does not make a single renderer correct.
     """
 
-    from pheasant.memory.policy import MemoryPolicy, clauses, sql_predicate
+    from pheasant.artifacts.policy import MemoryPolicy, clauses, sql_predicate
 
     # Both clauses present, with different cardinalities: three steering kinds
     # against two scopes is what makes a shared placeholder string visible.

@@ -931,37 +931,6 @@ class GraphSettings(ModelMixin):
 
 
 @dataclass
-class SynapseSettings(ModelMixin):
-    """Synapse federation (Synapse 21.5). Standalone-safe: all router-facing
-    behavior no-ops when ``router_url`` is unset and ``publish`` is false.
-
-    - ``publish`` gates contract publication + the NDJSON event stream from the
-      sync engine. Default off → a router-less pheasant behaves exactly as
-      before. The local ``GET /contract`` serving path still works once a
-      contract has been published.
-    - ``router_url`` is the Synapse router base URL; when set, the engine POSTs
-      the ``sync.completed`` event (with the inline contract) to
-      ``<router_url>/v1/synapse/events`` (fail-soft).
-    - ``fleet_id`` / ``endpoint`` are stamped into the contract so the router
-      can pin the fleet embedding space and pull/route to this region.
-    """
-
-    publish: bool = False
-    router_url: str | None = None
-    fleet_id: str | None = None
-    endpoint: str | None = None
-    webhook_timeout_seconds: float = 5.0
-    # Synapse 24.4: optional Ed25519 contract signing. ``signing_key_ref`` is a
-    # secret *reference* (``env://NAME`` or a bare env-var name) resolving to a
-    # base64 32-byte Ed25519 private seed — the plaintext key never lands in the
-    # config or on disk. When unset (default) the contract's
-    # ``integrity.signature`` stays ``null`` and a standalone pheasant is
-    # unchanged. The router verifies the signature against an out-of-band public
-    # key when its fleet sets ``require_signed: true``.
-    signing_key_ref: str | None = None
-
-
-@dataclass
 class RetrievalSettings(ModelMixin):
     """How hard the answering workflows look before they answer.
 
@@ -1980,7 +1949,6 @@ class PheasantConfig(ModelMixin):
     sync: SyncSettings = field(default_factory=SyncSettings)
     graph: GraphSettings = field(default_factory=GraphSettings)
     security: SecuritySettings = field(default_factory=SecuritySettings)
-    synapse: SynapseSettings = field(default_factory=SynapseSettings)
     memory: MemorySettings = field(default_factory=MemorySettings)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     assistant: AssistantSettings = field(default_factory=AssistantSettings)

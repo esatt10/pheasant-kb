@@ -1,10 +1,10 @@
-"""Typed artifact adapters; legacy /memory routes are deprecated aliases."""
+"""HTTP adapters for typed artifact records."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 
 from pheasant.services import artifact_records as records
@@ -24,20 +24,6 @@ class RecordBody(BaseModel):
 
 def register_record_routes(app: FastAPI, services: Any) -> None:
     from pheasant.services import job_history, retrieval_configurations
-
-    @app.middleware("http")
-    async def deprecate_memory(request: Request, call_next: Any):
-        response = await call_next(request)
-        if request.url.path == "/memory" or request.url.path.startswith("/memory/"):
-            response.headers["Deprecation"] = "true"
-            suffix = request.url.path.removeprefix("/memory")
-            successor = (
-                "/artifacts/records" + suffix
-                if suffix in ("", "/enable")
-                else "/artifacts" + suffix
-            )
-            response.headers["Link"] = f'<{successor}>; rel="successor-version"'
-        return response
 
     @app.delete("/evaluation/runs/{run_id}")
     def delete_evaluation_run(run_id: str) -> dict:

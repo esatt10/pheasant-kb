@@ -128,5 +128,3 @@ assistant:
     max_facts: 8
   model: null
 sources: []
-synapse:
-  publish: false

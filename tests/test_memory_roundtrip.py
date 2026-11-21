@@ -37,9 +37,9 @@ from typing import Any
 import pytest
 import yaml
 
+from pheasant.artifacts.formation import admit, run_candidate_rules, run_session_digests
+from pheasant.artifacts.store import MemoryStore, memory_source
 from pheasant.config.schema import PheasantConfig
-from pheasant.memory.formation import admit, run_candidate_rules, run_session_digests
-from pheasant.memory.store import MemoryStore, memory_source
 from pheasant.sync import log_queue as lq
 from pheasant.sync.queue import drain
 

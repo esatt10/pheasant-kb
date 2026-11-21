@@ -12,11 +12,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pheasant.artifacts.compaction import find_clusters, params_hash
+from pheasant.artifacts.policy import MemoryPolicy, admits
+from pheasant.artifacts.store import MemoryRecord
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.compaction import find_clusters, params_hash
-from pheasant.memory.policy import MemoryPolicy, admits
-from pheasant.memory.store import MemoryRecord
 
 NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -199,7 +199,7 @@ sources:
 def test_end_to_end_subsumed_records_hidden_by_default_reachable_via_tier(
     tmp_path: Path,
 ) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path))
     tools = PheasantTools(config)
@@ -238,7 +238,7 @@ def test_end_to_end_subsumed_records_hidden_by_default_reachable_via_tier(
             "staging cluster us-east-2",
             mode="text",
             max_results=10,
-            memory={"tiers": ["cold"]},
+            artifact_policy={"tiers": ["cold"]},
         )
         cold_ids = {
             item["memory"]["record_id"]
@@ -259,7 +259,7 @@ def test_end_to_end_subsumed_records_hidden_by_default_reachable_via_tier(
 
 
 def test_compaction_disabled_by_default_leaves_near_duplicates_alone(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path, compaction=False))
     tools = PheasantTools(config)
@@ -284,7 +284,7 @@ def test_compaction_disabled_by_default_leaves_near_duplicates_alone(tmp_path: P
 
 
 def test_compaction_pass_is_idempotent(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path))
     tools = PheasantTools(config)
@@ -313,7 +313,7 @@ def test_compaction_pass_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_subsumes_edge_is_drawn_and_distinct_from_supersedes(tmp_path: Path) -> None:
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path))
     tools = PheasantTools(config)
@@ -344,7 +344,7 @@ def test_compaction_never_crosses_principal_at_user_scope(tmp_path: Path) -> Non
     """The same ACL constraint reinforcement (Phase 1) enforces at the write
     path must hold for clustering too: alice and bob's identical assertions
     at user scope must never merge into one record."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config = load_config(_write_config(tmp_path, threshold=0.1))
     tools = PheasantTools(config)

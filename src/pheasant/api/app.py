@@ -73,7 +73,6 @@ from pheasant.security.authorization import background_target
 from pheasant.security.path_policy import (
     PathPolicyError,
     resolve_config_write_target,
-    resolve_under,
 )
 from pheasant.security.service_auth import (
     GRAPH_QUERY,
@@ -136,37 +135,6 @@ BUILTIN_SOURCE_TYPES: tuple[tuple[str, str, str, str], ...] = (
     ),
     ("api", "HTTP API", "A JSON endpoint paged with a cursor (experimental).", "unused"),
 )
-
-
-class MemoryEnableRequest(BaseModel):
-    """Provision the agent-memory source.
-
-    ``path`` defaults to ``<state_path>/memory`` rather than a workspace-
-    relative folder, because memory is the **only** source type pheasant
-    writes to. Every containerised deployment mounts the corpus read-only
-    (`/workspace:ro` in both the standard and demo compose files), so
-    anchoring memory there registers a source that can never be written —
-    found by a live run, where the first write returned a bare 500.
-    """
-
-    name: str = "agent-memory"
-    path: str | None = None
-
-
-class MemoryWriteRequest(BaseModel):
-    text: str
-    scope: str = "user"
-    subject: str | None = None
-    supersedes: str | None = None
-    tags: list[str] = []
-    sync: bool = True
-    # Step 33.5, all optional and defaulting to the pre-33.5 behavior.
-    # `principal` is who asserted this; it is part of the record id, so two
-    # callers writing the same sentence in the same second get two records
-    # rather than silently sharing one.
-    kind: str = "fact"
-    principal: str | None = None
-    valid_until: str | None = None
 
 
 class SyncRequest(BaseModel):
@@ -674,7 +642,6 @@ LIVE_APPLICABLE_SECTIONS: dict[str, bool] = {
     # and the middleware is only installed when one exists, so turning auth on
     # or rotating the token is a restart.
     "security": False,
-    "synapse": True,
     # The tracer provider, the exporter and the buffer's flusher thread are
     # all wired once at app construction, and the log tier's queue binding
     # with them. Same reason `sync` is False: these are services, not
@@ -2091,23 +2058,6 @@ def create_app(
 
     fleet_service.register(config, state)  # this stack's row in the fleet directory
 
-    @app.get("/contract")
-    def contract() -> dict:
-        """Return this region's published semantic contract (Synapse 21.5).
-
-        404 until a contract has been published (a sync with
-        ``synapse.publish`` on). Standalone regions that never enable
-        publishing simply always 404 here.
-        """
-        from pheasant.synapse.publisher import load_contract_text
-
-        text = load_contract_text(config.pheasant.state_path)
-        if text is None:
-            raise HTTPException(status_code=404, detail="No contract published yet")
-        import json as _json
-
-        return _json.loads(text)
-
     @app.get("/knowledge-bases")
     def knowledge_bases() -> dict:
         return {"knowledge_bases": KnowledgeBaseRegistry(state).list()}
@@ -2696,112 +2646,7 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/memory", deprecated=True)
-    def memory_write(req: MemoryWriteRequest) -> dict:
-        """Deprecated: use POST /artifacts/records; the same artifact operation."""
-        from pheasant.services.artifact_records import WriteRequest, write
-
-        try:
-            return write(services, WriteRequest(**req.model_dump()), legacy=True)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/memory", deprecated=True)
-    def memory_list(
-        scope: str | None = None, current_only: bool = False, principal: str | None = None
-    ) -> dict:
-        """Deprecated: use GET /artifacts/records."""
-        from pheasant.artifacts.store import artifact_source
-        from pheasant.services.artifact_records import list_records
-
-        if artifact_source(config, state) is None:
-            raise HTTPException(
-                status_code=400,
-                detail="no enabled memory source configured; use /artifacts/records/enable",
-            )
-
-        return list_records(services, principal, scope=scope, current_only=current_only)
-
-    @app.post("/memory/enable", deprecated=True)
-    def memory_enable(req: MemoryEnableRequest) -> dict:
-        """Provision the agent-memory source (Step 33.11).
-
-        `SourceType.memory` is deliberately absent from `BUILTIN_SOURCE_TYPES`
-        — memory sources are owned by the store, not hand-registered through
-        the generic source picker, and letting someone point one at an
-        arbitrary folder full of unrelated Markdown would make every file in it
-        look like something an agent asserted.
-
-        But "not in the picker" had come to mean **unreachable**: a person
-        could not turn memory on from the UI at all. A dedicated action keeps
-        the invariant (one well-known layout, created by us) while closing that
-        gap. Idempotent — enabling twice returns the existing source.
-        """
-        from pheasant.artifacts.store import memory_source
-
-        existing = memory_source(config, state)
-        if existing is not None:
-            return {"status": "already-enabled", "source": existing.model_dump(mode="json")}
-
-        if req.path is None:
-            # `/state` is the one location pheasant owns and can always write.
-            path = Path(config.pheasant.state_path) / "memory"
-        else:
-            # An explicit relative path anchors to `pheasant.workspace_root`,
-            # exactly as config load anchors any FILESYSTEM_SOURCE_TYPE. Going
-            # through `_resolve_source_path` instead resolves against the
-            # *process CWD*, which put the folder wherever the server happened
-            # to be started from — during development that was the repo
-            # checkout, and a record was written into it.
-            requested = Path(req.path).expanduser()
-            path = (
-                requested
-                if requested.is_absolute()
-                else Path(config.pheasant.workspace_root) / requested
-            )
-            if not config.security.allow_user_selected_source_paths:
-                try:
-                    path = resolve_under(str(path), _allowed_roots(config))
-                except PathPolicyError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        # Prove it is writable *before* registering. Otherwise enabling
-        # "succeeds" and every later write fails — which is exactly what a
-        # read-only corpus mount produced on a live run.
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-            probe = path / ".pheasant-write-test"
-            probe.write_text("", encoding="utf-8")
-            probe.unlink()
-        except OSError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"cannot write memory records to {path}: {exc}. Memory is the one "
-                    "source pheasant writes to, so it needs a writable location — a "
-                    "read-only corpus mount will not do. Pass an explicit `path`, or "
-                    "mount a writable volume."
-                ),
-            ) from exc
-
-        try:
-            source = _source_from_payload(
-                {"name": req.name, "type": "memory", "path": str(path), "enabled": True}
-            )
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid source: {exc}") from exc
-
-        SourceRegistry(config, state).register_source(source)
-        # Same step every other registration takes: the engine reads sources off
-        # the live config object, so a source that only reached the registry is
-        # invisible to sync.
-        config.sources = [s for s in config.sources if s.name != source.name]
-        config.sources.append(source)
-        audit(source.name, "memory_enable", {"path": str(path)})
-        return {"status": "enabled", "source": source.model_dump(mode="json")}
-
     @app.get("/artifacts/candidates")
-    @app.get("/memory/candidates", deprecated=True)
     def memory_candidates(
         status: str = "pending",
         rule_id: str | None = None,
@@ -2827,7 +2672,6 @@ def create_app(
         }
 
     @app.get("/artifacts/candidates/{candidate_id}/evidence")
-    @app.get("/memory/candidates/{candidate_id}/evidence", deprecated=True)
     def memory_candidate_evidence(candidate_id: str) -> dict:
         """Why this was proposed: the calls behind it, and their spans.
 
@@ -2864,7 +2708,6 @@ def create_app(
         }
 
     @app.post("/artifacts/candidates/{candidate_id}/promote")
-    @app.post("/memory/candidates/{candidate_id}/promote", deprecated=True)
     def memory_candidate_promote(candidate_id: str, principal: str | None = None) -> dict:
         """Admit one proposal. **This is the crossing** from evidence to memory.
 
@@ -2884,7 +2727,6 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/artifacts/candidates/{candidate_id}/reject")
-    @app.post("/memory/candidates/{candidate_id}/reject", deprecated=True)
     def memory_candidate_reject(candidate_id: str, principal: str | None = None) -> dict:
         """Decline one proposal, permanently.
 
@@ -3590,7 +3432,6 @@ def create_app(
         }
 
     @app.post("/artifacts/consolidate")
-    @app.post("/memory/consolidate", deprecated=True)
     def memory_consolidate() -> dict:
         from pheasant.artifacts.maintenance import run_memory_maintenance
 
@@ -3611,7 +3452,6 @@ def create_app(
         return result
 
     @app.post("/artifacts/synthesize")
-    @app.post("/memory/synthesize", deprecated=True)
     def memory_synthesize() -> dict:
         """LLM-merge a near-duplicate memory cluster deterministic
         compaction could not resolve into one canonical record. Off by
@@ -3844,7 +3684,7 @@ def create_app(
                 section=req.section,
                 principal=req.principal,
                 principal_groups=req.principal_groups,
-                memory=req.memory,
+                memory=req.artifact_policy,
             ),
         )
         record_retrieval(request, query=req.query, payload=answer, criteria={"mode": "hybrid"})
@@ -5295,7 +5135,6 @@ UI_ROUTES = frozenset(  # every path App.tsx routes; `/admin` shares none with t
     {
         "/graph",
         "/artifacts",
-        "/memory",
         "/evaluation",
         "/tuning",
         "/sources",

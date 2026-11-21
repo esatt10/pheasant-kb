@@ -150,9 +150,9 @@ For managed repository URLs, retain `repo.clone_url`, `clone_path` and
 not need that mount. Confirm remote, checkout and indexed commit evidence from
 the source status after synchronization.
 
-For durable memory, configure exactly one writable `type: memory` source and a
-persistent `/memory` mount shared by the API and indexer. Memory is written
-explicitly through MCP `memory_write` or `POST /memory`; ordinary chat is not
+Durable typed records (facts, aliases, preferences, exclusions) are written
+explicitly through MCP `record_artifact` or `POST /artifacts/records`; the first
+write creates the `artifact-records` source under `/state`. Ordinary chat is not
 silently recorded.
 
 ## Validate and hand off

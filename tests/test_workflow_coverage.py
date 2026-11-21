@@ -156,8 +156,6 @@ _SHIPPED = [
     "deploy/compose/*.yml",
     "deploy/compose/**/*.yml",
     "deploy/compose/**/*.yaml",
-    "deploy/kubernetes/**/*.yaml",
-    "deploy/helm/**/*.yaml",
     ".github/workflows/*.yml",
     ".github/actions/**/*.yml",
     "deploy/compose/*.sh",

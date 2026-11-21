@@ -9,7 +9,7 @@ against the real built UI, and overwrites `docs/assets/ui/*.png`.
     python scripts/screenshot_ui.py
 
 Everything it shows is produced by the product: the corpus is indexed by the
-ordinary pipeline, the memory records are written through `memory_write`, and
+ordinary pipeline, the records are written through `record_artifact`, and
 the proposals in the Memory tab are mined from real searches this script
 performs. Nothing is mocked for the camera.
 """
@@ -336,7 +336,7 @@ def _drive(app, benchmark: dict | None = None) -> None:
 
     from fastapi.testclient import TestClient
 
-    from pheasant.memory.formation import run_candidate_rules, run_session_digests
+    from pheasant.artifacts.formation import run_candidate_rules, run_session_digests
 
     engine = app.state.engine
     engine.sync_source("handbook", "full")
@@ -354,7 +354,9 @@ def _drive(app, benchmark: dict | None = None) -> None:
     # this one.
     with TestClient(app) as client:
         for text, scope, subject in MEMORIES:
-            client.post("/memory", json={"text": text, "scope": scope, "subject": subject})
+            client.post(
+                "/artifacts/records", json={"text": text, "scope": scope, "subject": subject}
+            )
         # Three passes over the same questions, in different sessions. Not
         # padding: a region gets asked the same things repeatedly, that
         # repetition is what memory formation keys on, and it is what takes
