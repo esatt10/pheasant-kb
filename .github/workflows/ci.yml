@@ -295,12 +295,22 @@ jobs:
           load: true
           tags: pheasant:ci
 
+      # The image's first-boot config is the standalone table, which is the
+      # same PostgreSQL state store as every other: building the app needs a
+      # database, and nothing else (no key, no queue, no mount).
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_smoke
+
       - name: Smoke test built image
         run: |
           docker run --rm pheasant:ci python -m pheasant --help
           docker run --rm pheasant:ci python -m pheasant validate /config/pheasant.yaml --no-require-paths
           # With nothing mounted the image writes its own config, on the
           # standalone table (one process cannot run pheasant-kb's), so the app
-          # builds with no database and no key.
-          docker run --rm pheasant:ci python -c "from pheasant.api.app import create_app; print(create_app(config_path='/config/pheasant.yaml').title)"
+          # builds with a database and no key.
+          docker run --rm --network host \
+            -e PHEASANT_DATABASE_URL=postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_smoke \
+            pheasant:ci python -c "from pheasant.api.app import create_app; print(create_app(config_path='/config/pheasant.yaml').title)"
           docker run --rm pheasant:ci grep -q "defaults: standalone" /config/pheasant.yaml
