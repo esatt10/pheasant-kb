@@ -705,7 +705,13 @@ CONTENT_DEFAULTS: dict[str, Any] = {
 }
 
 
-def hydrate_citations(retriever: Any, citations: list[dict], options: dict | None = None) -> dict:
+def hydrate_citations(
+    retriever: Any,
+    citations: list[dict],
+    options: dict | None = None,
+    *,
+    question: str | None = None,
+) -> dict:
     """Pull the full indexed file behind each citation, keyed by index.
 
     Search returns *chunks*, and a chunk preview is capped at 500 characters
@@ -724,6 +730,10 @@ def hydrate_citations(retriever: Any, citations: list[dict], options: dict | Non
     document produce two citations, and both matched chunks are already
     anchored into the single reassembly, so hydrating the second would repeat
     the same file inside the same prompt.
+
+    ``question`` is what the reader is answering. A file that will only be
+    excerpted is then also searched for it inside itself, so the excerpt
+    holds the part that answers it and not only the chunk search cited.
     """
     settings = {**CONTENT_DEFAULTS, **(options or {})}
     if not settings.get("include_full_content") or retriever is None or not citations:
@@ -763,6 +773,7 @@ def hydrate_citations(retriever: Any, citations: list[dict], options: dict | Non
             large_file_bytes=int(settings["large_file_bytes"]),
             budget_chars=int(settings["context_budget_chars"]),
             **({"allowances": allowances} if allowances else {}),
+            **({"question": question} if question else {}),
         )
     except Exception:  # pragma: no cover - degrade to snippets, never fail
         logger.debug("could not hydrate citation content", exc_info=True)

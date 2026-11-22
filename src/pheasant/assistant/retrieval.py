@@ -54,6 +54,8 @@ from pheasant.assistant.document_assembly import (
     _is_code,
     _reassemble_selected,
     _selected_output_length,
+    question_anchors,
+    question_terms,
 )
 from pheasant.assistant.providers import note_model_used
 from pheasant.graph.traversal import neighbors as _graph_neighbors
@@ -61,6 +63,7 @@ from pheasant.graph.traversal import slice_ as _graph_slice
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.search import corpus_shape
 from pheasant.search.criteria import path_scope, path_within
+from pheasant.search.text_store import QUERY_STOPWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +259,8 @@ class Document:
     line_span: tuple[int, int] | None = None
     symbols: list[str] = field(default_factory=list)
     truncated: bool = False
+    #: Chunks of an excerpt added because they match the question (not cited).
+    question_chunks: int = 0
 
     def describe(self) -> str:
         """One line of provenance, for the prompt header above the text."""
@@ -1152,6 +1157,7 @@ class PheasantRetriever:
         large_file_bytes: int = LARGE_FILE_BYTES,
         budget_chars: int = 60_000,
         allowances: dict[str, int] | None = None,
+        question: str | None = None,
     ) -> dict[str, Document]:
         """Reassemble whole files from their chunks, with metadata attached.
 
@@ -1194,6 +1200,16 @@ class PheasantRetriever:
         ``allowances`` replaces ``max_chars`` per document (prose only; code
         keeps ``code_max_chars``): how a caller says a document it cited many
         times should be read further than one it cited once.
+
+        ``question`` lets a document that will be **excerpted** be searched
+        for the question inside itself (``document_assembly.question_anchors``):
+        up to ``QUESTION_ANCHORS`` of its own chunks join the excerpt beside
+        the cited ones. Search cites one chunk per file, chosen by how the
+        whole corpus scores the question, and on a page whose every chunk
+        matches the question's common words that is often not the chunk that
+        answers it — the excerpt then read the wrong part and the answer said
+        the page did not cover the subject. One statement per excerpted
+        document, counts only; a file read whole is unaffected.
         """
         if self.state is None or not node_ids:
             return {}
@@ -1209,6 +1225,7 @@ class PheasantRetriever:
             large_file_bytes,
             budget_chars,
             tuple(sorted((allowances or {}).items())),
+            question or "",
         )
         cached_documents = self._document_cache.get(cache_key)
         if cached_documents is not None:
@@ -1276,6 +1293,8 @@ class PheasantRetriever:
         plans: dict[str, tuple[list[Any], list[int], int, bool, bool]] = {}
         selected_chunk_ids: list[str] = []
         text_limits: dict[str, int] = {}
+        terms = question_terms(question, QUERY_STOPWORDS) if question else []
+        question_chunks: dict[str, int] = {}
         for node_id in wanted:
             rows = descriptors.get(node_id)
             if not rows or planned_spent >= budget_chars:
@@ -1293,12 +1312,27 @@ class PheasantRetriever:
                 own = (allowances or {}).get(node_id, max_chars)
                 allowance, focused = min(own, budget_chars - planned_spent), False
 
+            anchor_ids = set(anchors.get(node_id, []) if anchors else [])
             selected, truncated, all_fit = _descriptor_selection(
-                rows,
-                set(anchors.get(node_id, []) if anchors else []),
-                allowance,
-                focused=focused,
+                rows, anchor_ids, allowance, focused=focused
             )
+            if truncated and terms and not _is_code(relative_path, language):
+                found = self._question_positions(node_id, rows, anchor_ids, terms)
+                if found:
+                    question_chunks[node_id] = len(found)
+                    # A passage the question found is read like one search
+                    # cited: the allowance grows by what it costs, inside the
+                    # batch budget. Without that it competed for room the head
+                    # and the cited chunk had already spent, and on production
+                    # the HubSpot section was found and then not read.
+                    cost = sum(
+                        len(_chunk_label(rows[i])) + int(rows[i]["text_length"] or 0) + 2
+                        for i in found
+                    )
+                    allowance = min(allowance + cost, max(allowance, budget_chars - planned_spent))
+                    selected, truncated, all_fit = _descriptor_selection(
+                        rows, anchor_ids, allowance, focused=focused, question_positions=found
+                    )
             plans[node_id] = (rows, selected, allowance, truncated, all_fit)
             for index in selected:
                 descriptor = rows[index]
@@ -1376,9 +1410,46 @@ class PheasantRetriever:
                 symbols=symbols.get(node_id, []),
                 text=text,
                 truncated=truncated,
+                question_chunks=question_chunks.get(node_id, 0),
             )
         self._document_cache[cache_key] = dict(out)
         return out
+
+    def _question_positions(
+        self, node_id: str, rows: list[Any], anchor_ids: set[str], terms: list[str]
+    ) -> list[int]:
+        """Chunk positions of one file that best match the question's terms.
+
+        Term frequencies are counted in SQL over the file's chunks, so no
+        chunk text crosses the database boundary; newlines are folded to
+        spaces first, because extracted pages break a phrase across lines.
+        Best-effort: a failure adds nothing and the excerpt is what it was.
+        """
+        columns = ", ".join(
+            f"(LENGTH(body) - LENGTH(REPLACE(body, ?, ''))) / ? AS t{index}"
+            for index in range(len(terms))
+        )
+        params: list[Any] = []
+        for term in terms:
+            params.extend((term, len(term)))
+        params.append(node_id)
+        try:
+            found = {
+                str(row["id"]): [int(row[f"t{index}"] or 0) for index in range(len(terms))]
+                for row in self.state.rows(
+                    f"SELECT id, {columns} FROM ("
+                    "SELECT id, REPLACE(LOWER(text), CHR(10), ' ') AS body "
+                    "FROM chunks WHERE artifact_id = ?) AS chunk_bodies",
+                    tuple(params),
+                )
+            }
+        except Exception:  # an aid, never a blocker
+            logger.debug("could not rank an excerpted document's chunks", exc_info=True)
+            return []
+        counts = [found.get(str(row["id"]), [0] * len(terms)) for row in rows]
+        lengths = [int(row["text_length"] or 0) for row in rows]
+        exclude = {i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids}
+        return question_anchors(counts, lengths, exclude)
 
     # ---------------------------------------------------------- capabilities
 

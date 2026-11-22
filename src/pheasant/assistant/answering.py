@@ -158,6 +158,7 @@ def visual_documents(
     graph: Any = None,
     config: Any = None,
     options: dict | None = None,
+    question: str | None = None,
 ) -> dict:
     """The whole files behind ``citations``, as the answer's prompt read them.
 
@@ -175,7 +176,7 @@ def visual_documents(
     retriever = PheasantRetriever(
         search=None, knowledge_base=knowledge_base, graph=graph, state=state, config=config
     )
-    return hydrate_citations(retriever, citations, options)
+    return hydrate_citations(retriever, citations, options, question=question)
 
 
 def redraw_handle(request: str, citations: list[dict], knowledge_base: str | None) -> dict:
@@ -704,6 +705,7 @@ def answer_question(
                     graph=graph,
                     config=config,
                     options=merged_options,
+                    question=search_question or question,
                 )
                 if draws and llm is not None
                 else None,

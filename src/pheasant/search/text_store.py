@@ -654,6 +654,10 @@ _STOPWORDS = frozenset(
     """.split()
 )
 
+#: The same words, for a reader of the question outside ranking: what an
+#: answer reads inside a cited document (``assistant.document_assembly``).
+QUERY_STOPWORDS = _STOPWORDS
+
 #: Applied when every token is a stopword ("what is it about") — a query with
 #: no content words still has to return something, so the stopword filter
 #: yields rather than emptying the query.

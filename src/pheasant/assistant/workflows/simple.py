@@ -138,7 +138,12 @@ class SimpleWorkflow:
         answering_depth = "medium" if depth == "long" else depth
         if llm is not None and citations:
             read_started = time.perf_counter()
-            documents = hydrate_citations(retriever, citations, options)
+            documents = hydrate_citations(
+                retriever,
+                citations,
+                options,
+                question=request.search_question or request.question,
+            )
             if documents:
                 steps.append(
                     WorkflowStep(

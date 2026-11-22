@@ -7,6 +7,8 @@ is the one caller. The rules themselves are documented on that method.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 # Extensions whose files are read whole or not at all. Source and config
@@ -68,6 +70,117 @@ LARGE_FILE_BYTES = 40_000
 
 #: Chunks kept either side of a match when excerpting a large document.
 ADJACENT_CHUNKS = 1
+
+#: How many of an excerpted document's own chunks the *question* may add to
+#: the excerpt, beside the chunks search cited (``question_anchors``).
+QUESTION_ANCHORS = 2
+
+#: A second question chunk is kept only when it scores at least this share of
+#: the best one: a weak runner-up is dilution, not evidence.
+QUESTION_ANCHOR_RATIO = 0.5
+
+#: Most terms (words and adjacent word pairs) read from one question.
+MAX_QUESTION_TERMS = 12
+
+#: Words that frame a question *about a document* rather than name what is
+#: asked: "what does the article say about X" asks about X. Inside one
+#: document they are worse than noise, because a chunk that happens to say
+#: "in this article" would outrank the one about X.
+DOCUMENT_FRAMING = frozenset(
+    """
+    say says said article articles page pages post posts blog guide guides
+    section sections chapter chapters cover covers covered discuss discusses
+    discussed mention mentions mentioned talk talks write writes written
+    according regarding summary summarize summarise
+    """.split()
+)
+
+#: Words that never take part in a phrase. Narrower than the search
+#: stopwords on purpose: those also drop framing verbs ("find", "search",
+#: "show"), which is right for one word and wrong inside a phrase — "search
+#: intent" is the subject of a question, not an instruction to search.
+FUNCTION_WORDS = frozenset(
+    """
+    a an the this that these those there here it its
+    i we you me my our your us they them their
+    is are was were be been being am do does did doing done
+    have has had having can could should would will shall may might must
+    of to in on at by for from with without into onto about across over under
+    and or not but if then than as so such via per
+    what which who whom whose when where why how
+    """.split()
+)
+
+
+def question_terms(question: str | None, stopwords: frozenset[str]) -> list[str]:
+    """The words of ``question`` worth looking for inside one document.
+
+    Content words (no stopwords, no ``DOCUMENT_FRAMING``), then each pair of
+    content words adjacent in the question as a phrase: "search intent" is
+    what the question asks about, where "search" and "intent" alone each
+    match far more of a page about keywords.
+    """
+    words = re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", (question or "").lower())
+    content = {word for word in words if len(word) > 1 and word not in stopwords} - DOCUMENT_FRAMING
+    phrasal = {
+        word for word in words if len(word) > 1 and word not in FUNCTION_WORDS
+    } - DOCUMENT_FRAMING
+    terms = list(dict.fromkeys(word for word in words if word in content))
+    pairs = [
+        f"{first} {second}"
+        for first, second in zip(words, words[1:], strict=False)
+        if first in phrasal and second in phrasal and (first in content or second in content)
+    ]
+    # Phrases first: when the cap bites, the pairs are the stronger evidence.
+    return list(dict.fromkeys([*pairs, *terms]))[:MAX_QUESTION_TERMS]
+
+
+def question_anchors(
+    counts: list[list[int]],
+    lengths: list[int],
+    exclude: set[int],
+    *,
+    limit: int = QUESTION_ANCHORS,
+) -> list[int]:
+    """Positions of the chunks that best answer the question, within one file.
+
+    ``counts[i][j]`` is how often term ``j`` occurs in chunk ``i``. Scored as
+    BM25 with the *document's own* chunks as the collection, which is the
+    point: corpus-wide, every chunk of a page about keywords matches
+    "keywords", and search cites whichever chunk the page's vocabulary
+    happens to favour. Within the page, a term every chunk holds says nothing
+    (it is dropped), and the rare one the question is about decides.
+
+    Deterministic, no model, and only positions come back; ``exclude`` holds
+    the chunks already anchored.
+    """
+    total = len(counts)
+    if total < 2 or not counts or not counts[0]:
+        return []
+    average = (sum(lengths) / total) or 1.0
+    frequency = [sum(1 for row in counts if row[j] > 0) for j in range(len(counts[0]))]
+    scores: list[tuple[float, int]] = []
+    for index, (row, length) in enumerate(zip(counts, lengths, strict=True)):
+        norm = 1.2 * (0.25 + 0.75 * (length or average) / average)
+        score = 0.0
+        for j, tf in enumerate(row):
+            if tf <= 0 or frequency[j] >= total:  # in every chunk: no signal
+                continue
+            idf = math.log(1 + (total - frequency[j] + 0.5) / (frequency[j] + 0.5))
+            score += idf * tf * 2.2 / (tf + norm)
+        if score > 0:
+            scores.append((score, index))
+    scores.sort(key=lambda item: (-item[0], item[1]))
+    if not scores:
+        return []
+    best = scores[0][0]
+    chosen: list[int] = []
+    for score, index in scores:
+        if len(chosen) >= limit or score < best * QUESTION_ANCHOR_RATIO:
+            break
+        if index not in exclude:
+            chosen.append(index)
+    return chosen
 
 
 def _is_code(relative_path: str | None, language: str | None) -> bool:
@@ -174,16 +287,41 @@ def _chunk_label(row: Any) -> str:
 
 
 def _descriptor_selection(
-    rows: list[Any], anchor_ids: set[str], allowance: int, *, focused: bool
+    rows: list[Any],
+    anchor_ids: set[str],
+    allowance: int,
+    *,
+    focused: bool,
+    question_positions: list[int] | None = None,
 ) -> tuple[list[int], bool, bool]:
     """Choose chunk positions from metadata without transferring their text.
 
     Returns ``(positions, truncated, all_fit)`` with the same priority and
     character accounting as :func:`_reassemble`.
+
+    ``question_positions`` are chunks the question itself matched inside this
+    file (:func:`question_anchors`). They rank after the head and the cited
+    chunks and before any neighbour, so a tight allowance drops a neighbour
+    before it drops the passage that answers the question. They bring no
+    neighbours of their own: the caller funds exactly their length, so room
+    for their neighbours would be taken from the cited chunk's. With none,
+    the selection is exactly what it was.
     """
     lengths = [len(_chunk_label(row)) + int(row["text_length"] or 0) for row in rows]
     anchors = [i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids]
-    if focused:
+    extra = [i for i in (question_positions or []) if 0 <= i < len(rows) and i not in anchors]
+    if extra:
+        if not focused and sum(length + 2 for length in lengths) <= allowance:
+            return list(range(len(rows))), False, True
+        order = [0, *anchors, *extra]
+        offsets = range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1) if focused else (1, -1, 2, -2)
+        for position in anchors:
+            for offset in offsets:
+                if 0 <= position + offset < len(rows):
+                    order.append(position + offset)
+        if not focused:
+            order.extend(range(len(rows)))
+    elif focused:
         wanted = {0}
         for anchor in anchors:
             for offset in range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1):
