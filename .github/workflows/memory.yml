@@ -7,7 +7,7 @@ name: Memory
 #
 # Two jobs, and both are about connection rather than coverage:
 #
-#   round-trip  — the full exchange, in order, on both storage backends:
+#   round-trip  — the full exchange, in order, on PostgreSQL:
 #                 a search becomes a span and a ledger row, the row is
 #                 published to the log tier's own queue, drained into the hot
 #                 store, rolled to cold Parquet, read back out by DuckDB,
@@ -29,7 +29,7 @@ on:
       - synchronize
       - reopened
     paths:
-      - "src/pheasant/memory/**"
+      - "src/pheasant/artifacts/**"
       - "src/pheasant/telemetry/**"
       - "src/pheasant/sync/log_queue.py"
       - "src/pheasant/sync/queue.py"
