@@ -1,4 +1,4 @@
-"""Typed artifact operations shared by HTTP, MCP and legacy memory adapters."""
+"""Typed artifact record operations shared by HTTP and MCP."""
 
 from __future__ import annotations
 
@@ -116,15 +116,12 @@ class WriteRequest:
     channel: str = "api"
 
 
-def write(
-    context: ServiceContext, request: WriteRequest, *, legacy: bool = False
-) -> dict[str, Any]:
+def write(context: ServiceContext, request: WriteRequest) -> dict[str, Any]:
     require_permission("artifacts.manage")
-    found = source(context, create=not legacy)
+    found = source(context, create=True)
     if found is None:
         raise InvalidRequest(
-            "no enabled type: memory (deprecated) or type: artifact source; "
-            "use record_artifact or POST /artifacts/records to enable artifact knowledge"
+            "no artifact record source could be created; check that /state is writable"
         )
     who = effective_principal(request.principal) or None
     store = ArtifactRecordStore(found.path)
@@ -137,7 +134,7 @@ def write(
             raise InvalidRequest(
                 "the replaced artifact is unknown or not visible to this principal"
             )
-        if not legacy and (previous.scope != request.scope or previous.written_by != who):
+        if previous.scope != request.scope or previous.written_by != who:
             raise InvalidRequest("a replacement must retain its artifact's scope and writer")
     try:
         record, created = store.append(
@@ -215,7 +212,7 @@ def write(
     context.state.append_source_audit_event(
         uuid4().hex,
         found.name,
-        "memory_write" if legacy else "artifact_record_write",
+        "artifact_record_write",
         who or request.channel,
         request.channel,
         None,

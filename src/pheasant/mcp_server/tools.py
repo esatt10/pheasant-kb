@@ -595,7 +595,6 @@ class PheasantTools(
                 valid_until=valid_until,
                 channel="mcp",
             ),
-            legacy=True,
         )
 
     def memory_list(
@@ -760,7 +759,6 @@ class PheasantTools(
         exclude_sources: list[str] | None = None,
         node_types: list[str] | None = None,
         min_score: float | None = None,
-        memory: Any = None,
         artifact_policy: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
@@ -844,7 +842,7 @@ class PheasantTools(
                 exclude_documents=exclude_documents,
                 principal=principal,
                 principal_groups=principal_groups,
-                memory=artifact_policy if artifact_policy is not None else memory,
+                memory=artifact_policy,
                 exclude_sources=exclude_sources,
                 node_types=node_types,
                 min_score=min_score,
@@ -1669,7 +1667,6 @@ class PheasantTools(
         exclude_sources: list[str] | None = None,
         node_types: list[str] | None = None,
         min_score: float | None = None,
-        memory: Any = None,
         artifact_policy: Any = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
@@ -1706,7 +1703,7 @@ class PheasantTools(
             exclude_sources=exclude_sources,
             node_types=node_types,
             min_score=min_score,
-            memory=artifact_policy if artifact_policy is not None else memory,
+            artifact_policy=artifact_policy,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
         )
@@ -1729,7 +1726,7 @@ class PheasantTools(
                 "exclude_sources": exclude_sources,
                 "node_types": node_types,
                 "min_score": min_score,
-                "memory": memory,
+                "artifact_policy": artifact_policy,
             },
             "configured": {
                 "mode": self.config.search.default_mode,
@@ -1760,7 +1757,6 @@ class PheasantTools(
         principal: str | None = None,
         principal_groups: list[str] | None = None,
         section: str | None = None,
-        memory: Any = None,
         artifact_policy: Any = None,
     ) -> dict:
         """Files most relevant to a described task.
@@ -1787,7 +1783,7 @@ class PheasantTools(
                 section=section,
                 principal=principal,
                 principal_groups=principal_groups,
-                memory=artifact_policy if artifact_policy is not None else memory,
+                memory=artifact_policy,
             ),
         )
 
@@ -1876,21 +1872,6 @@ class PheasantTools(
         self._require_knowledge_base(knowledge_base)
         self._require_source(source_name)
         return self.engine.manifests.load(source_name)
-
-    def get_contract(self, knowledge_base: str) -> dict:
-        """Return this region's published semantic contract (Synapse 21.5).
-
-        ``{"status": "unpublished"}`` until a contract has been published.
-        """
-        self._require_knowledge_base(knowledge_base)
-        import json as _json
-
-        from pheasant.synapse.publisher import load_contract_text
-
-        text = load_contract_text(self.config.pheasant.state_path)
-        if text is None:
-            return {"status": "unpublished", "knowledge_base": self.config.knowledge_base_id}
-        return _json.loads(text)
 
     def get_sync_history(
         self,

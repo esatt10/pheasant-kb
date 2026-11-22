@@ -805,8 +805,8 @@ def test_targeted_archive_survives_the_memory_records_artifact_fk(tmp_path: Path
     `artifacts` row for a `memory_records` row it deliberately leaves in
     place, and reads `cursor.rowcount` off the result."""
 
+    from pheasant.artifacts.maintenance import run_memory_maintenance
     from pheasant.mcp_server.tools import PheasantTools
-    from pheasant.memory.maintenance import run_memory_maintenance
 
     config = _memory_config(tmp_path)
     tools = PheasantTools(config)
@@ -836,8 +836,8 @@ def test_compaction_and_scope_budgets_run_against_postgres(tmp_path: Path) -> No
     (Phase 3), driven by a per-scope budget prune (Phase 5) in the same
     maintenance pass."""
 
+    from pheasant.artifacts.maintenance import run_memory_maintenance
     from pheasant.mcp_server.tools import PheasantTools
-    from pheasant.memory.maintenance import run_memory_maintenance
 
     config = _memory_config(tmp_path, compaction_enabled=True, session_max_records=1)
     tools = PheasantTools(config)

@@ -17,8 +17,7 @@ from typing import Any
 import pytest
 import yaml
 
-from pheasant.config.schema import PheasantConfig
-from pheasant.memory.formation import (
+from pheasant.artifacts.formation import (
     MAX_PATHS,
     MAX_QUERIES,
     SESSION_DIGEST_RULE,
@@ -30,8 +29,9 @@ from pheasant.memory.formation import (
     run_candidate_rules,
     run_session_digests,
 )
-from pheasant.memory.maintenance import run_memory_maintenance
-from pheasant.memory.store import MemoryStore, memory_source
+from pheasant.artifacts.maintenance import run_memory_maintenance
+from pheasant.artifacts.store import MemoryStore, memory_source
+from pheasant.config.schema import PheasantConfig
 from pheasant.sync.log_queue import write_events
 from pheasant.telemetry.interactions import InteractionEvent
 
@@ -676,7 +676,7 @@ def test_a_corpus_with_no_vocabulary_still_proposes_rather_than_crashing(
     """An empty corpus, or an FTS build without `fts5vocab`, degrades to
     lexical order -- the behaviour before frequencies were consulted."""
 
-    from pheasant.memory.formation import _dominant_term
+    from pheasant.artifacts.formation import _dominant_term
 
     bodies = ["alpha zulu content here", "alpha zulu other content"]
     assert _dominant_term(bodies, exclude=set(), state=None) == "alpha"
@@ -686,7 +686,7 @@ def test_documents_that_are_simply_similar_yield_no_alias() -> None:
     """More than a handful of shared terms means the documents resemble each
     other, not that any one term is the alias."""
 
-    from pheasant.memory.formation import MAX_UNIVERSAL_TERMS, _dominant_term
+    from pheasant.artifacts.formation import MAX_UNIVERSAL_TERMS, _dominant_term
 
     shared = " ".join(f"term{index}" for index in range(MAX_UNIVERSAL_TERMS + 2))
     assert _dominant_term([shared, shared], exclude=set(), state=None) is None
@@ -705,7 +705,7 @@ def test_a_query_family_that_lands_in_one_directory_becomes_a_preference(
     prefs = engine.state.list_memory_candidates(rule_id="path-affinity-v1")
     assert "when: router -> prefer: deploy/" in [c["text"] for c in prefs]
     # A `preference` rule, parseable by the steering engine that will run it.
-    from pheasant.memory.steering import parse_rule
+    from pheasant.artifacts.steering import parse_rule
 
     assert parse_rule("preference", prefs[0]["text"]) is not None
 
@@ -715,7 +715,7 @@ def test_a_prefix_is_cut_at_a_directory_boundary() -> None:
     `docs/deploy`, which is not a directory -- a preference rule matching it
     would match neither file the way an operator expects."""
 
-    from pheasant.memory.formation import _path_prefix
+    from pheasant.artifacts.formation import _path_prefix
 
     assert _path_prefix(["docs/deploy.md", "docs/deployment.md"]) == "docs/"
     assert _path_prefix(["a/b/one.md", "a/b/two.md"]) == "a/b/"
@@ -860,7 +860,7 @@ def test_candidates_expire_but_rejections_do_not(tmp_path: Path) -> None:
 
     from datetime import timedelta
 
-    from pheasant.memory.formation import expire_candidates
+    from pheasant.artifacts.formation import expire_candidates
 
     engine = _corpus_engine(tmp_path, min_observations=2, min_sessions=2, candidate_ttl_days=1)
     for index, session in enumerate(("s1", "s2")):
@@ -882,7 +882,7 @@ def test_tightening_a_threshold_proposes_anew_rather_than_rewriting(tmp_path: Pa
     """`params_hash` is part of the candidate id, so a proposal a person has
     already seen is never silently re-evidenced under different parameters."""
 
-    from pheasant.memory.formation import params_hash
+    from pheasant.artifacts.formation import params_hash
 
     loose = _config(tmp_path, min_observations=2)[0].memory.formation
     tight = _config(tmp_path, min_observations=9)[0].memory.formation
@@ -917,27 +917,27 @@ def test_the_http_surface_lists_promotes_and_rejects(tmp_path: Path) -> None:
     run_candidate_rules(engine)
 
     with TestClient(app) as client:
-        listing = client.get("/memory/candidates")
+        listing = client.get("/artifacts/candidates")
         assert listing.status_code == 200
         candidates = listing.json()["candidates"]
         assert candidates, "the rules proposed nothing to review"
 
-        promoted = client.post(f"/memory/candidates/{candidates[0]['id']}/promote")
+        promoted = client.post(f"/artifacts/candidates/{candidates[0]['id']}/promote")
         assert promoted.status_code == 200
         assert promoted.json()["record_id"].startswith("mem-")
 
         # A decision is final, and the surface says so rather than writing a
         # second identical record.
-        again = client.post(f"/memory/candidates/{candidates[0]['id']}/promote")
+        again = client.post(f"/artifacts/candidates/{candidates[0]['id']}/promote")
         assert again.status_code == 409
 
-        rejected = client.post(f"/memory/candidates/{candidates[1]['id']}/reject")
+        rejected = client.post(f"/artifacts/candidates/{candidates[1]['id']}/reject")
         assert rejected.status_code == 200
 
-        assert client.post("/memory/candidates/nope/promote").status_code == 404
-        assert client.post("/memory/candidates/nope/reject").status_code == 404
+        assert client.post("/artifacts/candidates/nope/promote").status_code == 404
+        assert client.post("/artifacts/candidates/nope/reject").status_code == 404
 
-        remaining = client.get("/memory/candidates").json()
+        remaining = client.get("/artifacts/candidates").json()
         assert all(
             c["id"] not in {candidates[0]["id"], candidates[1]["id"]}
             for c in remaining["candidates"]
@@ -1005,7 +1005,7 @@ def test_the_named_calls_are_bounded(tmp_path: Path) -> None:
     """A token asked four hundred times must not carry four hundred ids in the
     candidate row. The counts beside it stay the true totals."""
 
-    from pheasant.memory.formation import MAX_EVIDENCE_EVENTS
+    from pheasant.artifacts.formation import MAX_EVIDENCE_EVENTS
 
     engine = _corpus_engine(tmp_path, min_observations=2, min_sessions=2)
     for index in range(40):
@@ -1047,7 +1047,7 @@ def test_the_evidence_endpoint_serves_all_three_layers(tmp_path: Path) -> None:
     candidate = engine.state.list_memory_candidates(rule_id="alias-cooccurrence-v1")[0]
 
     with TestClient(app) as client:
-        response = client.get(f"/memory/candidates/{candidate['id']}/evidence")
+        response = client.get(f"/artifacts/candidates/{candidate['id']}/evidence")
         assert response.status_code == 200
         payload = response.json()
 
@@ -1064,7 +1064,7 @@ def test_the_evidence_endpoint_serves_all_three_layers(tmp_path: Path) -> None:
             assert call["duration_ms"] is not None
             assert call["status"] == "ok"
 
-        assert client.get("/memory/candidates/nope/evidence").status_code == 404
+        assert client.get("/artifacts/candidates/nope/evidence").status_code == 404
 
 
 def test_evidence_that_aged_out_is_reported_not_hidden(tmp_path: Path) -> None:
@@ -1098,7 +1098,7 @@ def test_evidence_that_aged_out_is_reported_not_hidden(tmp_path: Path) -> None:
     engine.state.execute("DELETE FROM interaction_events", ())
 
     with TestClient(app) as client:
-        payload = client.get(f"/memory/candidates/{candidate['id']}/evidence").json()
+        payload = client.get(f"/artifacts/candidates/{candidate['id']}/evidence").json()
 
     assert payload["named"] == 4
     assert payload["found"] == 0

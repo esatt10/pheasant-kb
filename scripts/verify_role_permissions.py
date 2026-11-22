@@ -53,7 +53,6 @@ def verify(
                     ("POST", "/ingest/submit", {}),
                     ("POST", "/artifacts", {}),
                     ("POST", "/artifacts/records", {}),
-                    ("POST", "/memory", {}),
                     ("POST", "/tuning/run", {}),
                     ("POST", "/tuning/bundles/apply", {}),
                     ("POST", "/documents/archive", {}),

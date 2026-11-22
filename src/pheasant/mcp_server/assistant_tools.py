@@ -79,7 +79,7 @@ class AssistantTools(ComposeTools, ResearchTools):
         options: dict | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
-        memory: Any = None,
+        artifact_policy: Any = None,
         history: list[dict] | None = None,
         depth: str | None = None,
         visual: str | None = None,
@@ -127,7 +127,7 @@ class AssistantTools(ComposeTools, ResearchTools):
                 principal_groups=principal_groups,
                 workflow=workflow,
                 options=options,
-                memory=memory,
+                memory=artifact_policy,
                 # As sent: coercing here would turn a string into a list of
                 # characters and hide the refusal the service gives it.
                 history=history if history is not None else [],
@@ -288,7 +288,7 @@ def register_assistant_tools(
         options: dict | None = None,
         source_types: list[str] | None = None,
         exclude_source_types: list[str] | None = None,
-        memory: dict | str | None = None,
+        artifact_policy: dict | str | None = None,
         history: list[dict] | None = None,
         depth: str | None = None,
         visual: str | None = None,
@@ -337,8 +337,8 @@ def register_assistant_tools(
         without one. Figures appear in the answer as [fig:n] markers and in
         "figures"; fetch one with get_image.
 
-        memory controls how this region's agent memory takes part, exactly as
-        on search_context.
+        artifact_policy controls how this region's typed records take part,
+        exactly as on search_context.
 
         path_prefix keeps every retrieval inside one file, or one folder, of
         source_name, as browse_source lists it ("docs/guides").
@@ -401,7 +401,7 @@ def register_assistant_tools(
             options=options,
             source_types=source_types,
             exclude_source_types=exclude_source_types,
-            memory=memory,
+            artifact_policy=artifact_policy,
             history=history,
             depth=depth,
             visual=visual,

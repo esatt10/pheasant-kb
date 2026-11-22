@@ -1,6 +1,0 @@
-{
-  "comment": "Cross-repo parity manifest (Synapse Step 20.1; signed fixture added 24.4). Regenerate ONLY via the contract-author skill in pheasant-flock; both repos must carry identical copies.",
-  "fixtures/demo-region.v1.contract.json": "68e81ed507be4ca5eaa422fb4f336a407d2402701c329d283555c6e779c42213",
-  "fixtures/signed-demo-region.v1.contract.json": "26317f583a1088cdb9fbcb879a9f0eae4e97831d17dc95824c2fef3720bc8b61",
-  "semantic_contract.v1.schema.json": "e8f71c9cc6d7ff7e8042e8a170adaec96b45c64d73044ed793805205ae8f674a"
-}

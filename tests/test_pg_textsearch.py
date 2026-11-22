@@ -477,7 +477,7 @@ def test_the_fenced_scan_returns_what_the_unfenced_statement_did(indexed, monkey
     statement answers.
     """
 
-    from pheasant.memory.policy import MemoryPolicy
+    from pheasant.artifacts.policy import MemoryPolicy
 
     monkeypatch.setattr(pg_textsearch, "_BM25_CANDIDATE_FLOOR", 1)
     monkeypatch.setattr(pg_textsearch, "_BM25_CANDIDATE_FACTOR", 1)

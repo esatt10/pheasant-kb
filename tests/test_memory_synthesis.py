@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from pheasant.artifacts.synthesis import SYNTHESIZED_TAG, params_hash
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.synthesis import SYNTHESIZED_TAG, params_hash
 
 
 def _write_config(
@@ -472,7 +472,7 @@ def test_http_memory_synthesize_matches_mcp(
     client = fastapi_testclient.TestClient(app)
     try:
         client.post(
-            "/memory",
+            "/artifacts/records",
             json={
                 "text": "The staging cluster runs in us-east-2.",
                 "scope": "org",
@@ -480,14 +480,14 @@ def test_http_memory_synthesize_matches_mcp(
             },
         )
         client.post(
-            "/memory",
+            "/artifacts/records",
             json={
                 "text": "The staging cluster is owned by platform.",
                 "scope": "org",
                 "subject": "infra",
             },
         )
-        resp = client.post("/memory/synthesize")
+        resp = client.post("/artifacts/synthesize")
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["synthesized"] == 1
@@ -503,7 +503,7 @@ def test_http_memory_synthesize_disabled_returns_200_with_skipped(tmp_path: Path
     app = create_app(load_config(config_path), config_path=str(config_path))
     client = fastapi_testclient.TestClient(app)
     try:
-        resp = client.post("/memory/synthesize")
+        resp = client.post("/artifacts/synthesize")
         assert resp.status_code == 200
         assert resp.json() == {"skipped": "memory.synthesis.enabled is false"}
     finally:
@@ -589,7 +589,7 @@ def test_the_gate_measures_similarity_the_way_clustering_does() -> None:
     the tier it defers to cannot disagree about what "near-duplicate" means
     — a gate reading "L2 has this" must be right about that."""
 
-    from pheasant.memory.compaction import mean_pairwise_jaccard
+    from pheasant.artifacts.compaction import mean_pairwise_jaccard
 
     assert mean_pairwise_jaccard(["only one"]) == 0.0
     identical = mean_pairwise_jaccard(["the gateway restarts nightly"] * 3)
@@ -613,8 +613,8 @@ def test_a_synthesized_record_is_stamped_with_the_callers_instant(
 
     from datetime import UTC, datetime
 
-    from pheasant.memory.store import memory_source
-    from pheasant.memory.synthesis import run_synthesis
+    from pheasant.artifacts.store import memory_source
+    from pheasant.artifacts.synthesis import run_synthesis
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     _install_fake_model(monkeypatch, "The staging cluster runs in us-east-2 and is owned by ada.")
@@ -636,7 +636,7 @@ def test_a_synthesized_record_is_stamped_with_the_callers_instant(
             subject="staging",
         )
         source = memory_source(tools.config, tools.state)
-        from pheasant.memory.store import MemoryStore
+        from pheasant.artifacts.store import MemoryStore
 
         records = MemoryStore(source.path).list_records()
         result = run_synthesis(tools.engine, records, config.memory.synthesis, source, now=pinned)

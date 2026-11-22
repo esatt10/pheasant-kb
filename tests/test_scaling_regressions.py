@@ -428,7 +428,7 @@ def test_reviving_an_archived_record_keeps_its_identity(tmp_path: Path) -> None:
     decided by a boundary nobody means as a semantic one.
     """
 
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     fact = "The gateway restarts nightly at 0300 UTC."
     fix = "Correction: the gateway restarts nightly at 0400 UTC."
@@ -478,7 +478,7 @@ def test_reviving_an_archived_record_nothing_corrected_still_makes_it_current(
     is the behaviour `append` documents.
     """
 
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.store import MemoryStore
 
     root = tmp_path / "ttl"
     root.mkdir(parents=True, exist_ok=True)

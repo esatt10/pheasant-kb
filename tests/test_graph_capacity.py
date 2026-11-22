@@ -150,19 +150,6 @@ def test_the_default_threshold_matches_the_published_table() -> None:
     assert "1.5M nodes" in doc
     assert "240,000 files" in doc
 
-    # And the threshold has to fit the container the manifests actually ship.
-    # ~2.4 KB of RSS per node, graph ~60% of process RSS.
-    for manifest in (
-        Path("deploy/kubernetes/deployment.yaml"),
-        Path("deploy/helm/values.yaml"),
-    ):
-        assert "memory: 6Gi" in manifest.read_text(encoding="utf-8"), manifest
-    graph_bytes_at_threshold = default * 2400
-    container_bytes = 6 * 1024**3
-    assert 0.4 <= graph_bytes_at_threshold / container_bytes <= 0.75, (
-        "graph.max_nodes no longer matches the shipped container limit"
-    )
-
 
 # ---------------------------------------------------------------------------
 # Checkpoint scheduling (Phase 35.4)

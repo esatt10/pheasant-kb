@@ -158,8 +158,6 @@ def _shipped_configs() -> dict[str, dict[str, Any]]:
     for name in tracked:
         if not name or name.startswith(("tests/", "ui/", "contracts/", ".github/")):
             continue
-        if "/templates/" in name:  # Helm templates; their config is values.yaml
-            continue
         text = (ROOT / name).read_text(encoding="utf-8")
         if name.endswith(".json"):
             data = json.loads(text)
@@ -177,7 +175,7 @@ def _shipped_configs() -> dict[str, dict[str, Any]]:
             continue
         try:
             documents = list(yaml.safe_load_all(text))
-        except yaml.YAMLError:  # mkdocs.yml's python tags; not a pheasant config
+        except yaml.YAMLError:  # not YAML a pheasant config could be
             continue
         for document in documents:
             consider(name, document)
@@ -195,7 +193,6 @@ def _shipped_configs() -> dict[str, dict[str, Any]]:
 def test_every_shipped_config_names_its_table() -> None:
     configs = _shipped_configs()
     assert "deploy/compose/pheasant-kb.yaml" in configs
-    assert "deploy/helm/values.yaml:config.pheasantYaml" in configs
     unnamed = sorted(label for label, data in configs.items() if "defaults" not in data["pheasant"])
     assert not unnamed, (
         "these configs name no defaults table, so they would be built on pheasant-kb's "

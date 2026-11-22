@@ -6,7 +6,7 @@ same (scope, subject, kind, ACL-partition) bucket reinforces that record
 creating a new file — for an exact repeat exactly as for a paraphrase. Two
 principals asserting the same sentence at `user`/`session` scope must never
 collapse into one record (that would be a cross-principal read through the
-write path). `pheasant.memory.normalize` must never fold text with real
+write path). `pheasant.artifacts.normalize` must never fold text with real
 argument structure (no token-sort, no stopword removal).
 """
 
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pheasant.artifacts.normalize import acl_class_for, normalized_digest, normalized_text
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.normalize import acl_class_for, normalized_digest, normalized_text
 from pheasant.security.acl import normalize_acl
 
 
@@ -327,7 +327,7 @@ def test_http_memory_write_reinforces_like_mcp(tmp_path: Path) -> None:
     client = fastapi_testclient.TestClient(app)
     try:
         first = client.post(
-            "/memory",
+            "/artifacts/records",
             json={"text": "Deploy freezes start Friday 5pm.", "scope": "org", "sync": True},
         )
         assert first.status_code == 200, first.text
@@ -335,7 +335,7 @@ def test_http_memory_write_reinforces_like_mcp(tmp_path: Path) -> None:
         first_id = first.json()["record"]["record_id"]
 
         again = client.post(
-            "/memory",
+            "/artifacts/records",
             json={"text": "deploy freezes start friday 5pm", "scope": "org", "sync": True},
         )
         assert again.status_code == 200, again.text
@@ -427,8 +427,8 @@ def test_an_exact_repeat_never_folds_into_a_corrected_record(tmp_path: Path) -> 
 
     from datetime import UTC, datetime
 
-    from pheasant.memory.reinforcement import StateReinforcementIndex
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.reinforcement import StateReinforcementIndex
+    from pheasant.artifacts.store import MemoryStore
 
     tools = PheasantTools(load_config(_retention_config(tmp_path, supersede_retention_days=30)))
     store = MemoryStore(tmp_path / "memory")
@@ -464,7 +464,7 @@ def test_a_write_matching_a_demoted_record_folds_into_its_canonical(tmp_path: Pa
     right — the *target* is not. Credit belongs on the cluster's canonical
     record, which is the one a default query returns."""
 
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     tools = PheasantTools(load_config(_retention_config(tmp_path, compaction_enabled="true")))
     try:
@@ -513,8 +513,8 @@ def test_a_cold_projection_still_dedups_a_byte_identical_rewrite(tmp_path: Path)
     dedup on the file. A missed *fold* costs a counter; a missed *dedup*
     writes a duplicate record."""
 
-    from pheasant.memory.reinforcement import StateReinforcementIndex
-    from pheasant.memory.store import MemoryStore
+    from pheasant.artifacts.reinforcement import StateReinforcementIndex
+    from pheasant.artifacts.store import MemoryStore
 
     tools = PheasantTools(load_config(_retention_config(tmp_path)))
     store = MemoryStore(tmp_path / "memory")

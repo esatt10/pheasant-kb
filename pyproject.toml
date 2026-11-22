@@ -69,10 +69,6 @@ vector = ["lancedb>=0.6"]
 # message handling directly (see that module's docstring);
 # tests/test_pg_driver.py fails when an upgrade moves what it relies on.
 postgres = ["pg8000==1.31.6", "sqlalchemy>=2.0.30,<2.2"]
-# Synapse 24.4: optional Ed25519 contract signing. Gated so a region that
-# never sets synapse.signing_key_ref needs no crypto dep and the offline
-# suite passes without it.
-a2a = ["cryptography>=42.0"]
 # Agentic question answering. Gated so a region that never opens the chat
 # surface — or is happy with the single-pass workflow — carries no agent
 # framework, and the offline suite passes without it.
@@ -120,8 +116,6 @@ otel = [
 # network — which is what keeps the offline suite network-free by construction
 # rather than by mocking a tracking server.
 tuning = ["mlflow>=2.14"]
-# Documentation site (MkDocs Material). Build with: mkdocs build --strict
-docs = ["mkdocs-material>=9.5"]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",

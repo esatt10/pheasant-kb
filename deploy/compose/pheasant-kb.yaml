@@ -278,5 +278,3 @@ sources:
       on_file_change: debounce
       on_git_commit: true
       interval_seconds: null
-synapse:
-  publish: false

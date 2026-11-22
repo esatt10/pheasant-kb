@@ -59,9 +59,9 @@ def test_source_removal_never_loads_the_corpus(loaded_config, monkeypatch):
 
 
 def test_cold_source_removal_reads_only_memory_provenance(loaded_config, tmp_path, monkeypatch):
+    from pheasant.artifacts.source_removal import retire_source_memories
+    from pheasant.artifacts.store import MemoryStore
     from pheasant.config.schema import PheasantConfig
-    from pheasant.memory.source_removal import retire_source_memories
-    from pheasant.memory.store import MemoryStore
 
     data = loaded_config.model_dump(mode="json")
     memory_path = tmp_path / "memory"

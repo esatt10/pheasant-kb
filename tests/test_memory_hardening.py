@@ -22,12 +22,12 @@ from pathlib import Path
 
 import pytest
 
+from pheasant.artifacts.policy import MemoryPolicy, may_filter
+from pheasant.artifacts.salience import salience
+from pheasant.artifacts.steering import Steering, load_steering_records
+from pheasant.artifacts.store import MemoryStore
 from pheasant.config.loader import load_config
 from pheasant.mcp_server.tools import PheasantTools
-from pheasant.memory.policy import MemoryPolicy, may_filter
-from pheasant.memory.salience import salience
-from pheasant.memory.steering import Steering, load_steering_records
-from pheasant.memory.store import MemoryStore
 from pheasant.security.acl import normalize_acl
 
 NOW = "2026-08-13T00:00:00Z"
@@ -193,7 +193,7 @@ def test_the_default_policy_reports_that_it_filters() -> None:
 
 
 def test_the_index_holding_two_keys_per_record_is_not_double_counted() -> None:
-    from pheasant.memory.policy import unique_records
+    from pheasant.artifacts.policy import unique_records
 
     record = _record("r1")
     index = {"file:mem:r1.md:branch=none": record, "mem\x00r1.md": record}
@@ -368,7 +368,7 @@ def test_capacity_pruning_never_archives_a_steering_rule(tmp_path: Path) -> None
     competition with ordinary facts, on a formula built for facts — so crossing
     `max_records` could silently switch off an `exclusion` with no signal
     anywhere, changing ranking for every future query."""
-    from pheasant.memory.maintenance import run_memory_maintenance
+    from pheasant.artifacts.maintenance import run_memory_maintenance
 
     config_path = _steer_config(tmp_path, steering=True, max_records=2)
     store = MemoryStore(tmp_path / "memory")

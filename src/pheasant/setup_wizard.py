@@ -1230,47 +1230,11 @@ def build_sections() -> list[Section]:
                 ),
             ],
         ),
-        Section(
-            id="synapse",
-            title="Synapse federation",
-            blurb=(
-                "Optional. Joins this knowledge base to a Synapse fleet as a region: "
-                "it publishes a semantic contract describing what it knows, and a "
-                "router uses that to decide when to ask it. Everything here no-ops "
-                "when publishing is off — a standalone pheasant is unaffected."
-            ),
-            covers=("synapse",),
-            questions=[
-                Question(
-                    key="synapse.publish",
-                    prompt="Publish a semantic contract to a Synapse router?",
-                    kind="bool",
-                ),
-                Question(
-                    key="synapse.router_url",
-                    prompt="Router base URL",
-                    default="",
-                    when=lambda a: bool(a.get("synapse.publish")),
-                ),
-                Question(
-                    key="synapse.fleet_id",
-                    prompt="Fleet ID",
-                    default="",
-                    when=lambda a: bool(a.get("synapse.publish")),
-                ),
-                Question(
-                    key="synapse.endpoint",
-                    prompt="This region's endpoint, as the router will reach it",
-                    default="",
-                    when=lambda a: bool(a.get("synapse.publish")),
-                ),
-            ],
-        ),
     ]
 
 
 def build_phases(sections: list[Section] | None = None) -> list[Phase]:
-    """Return the six concise chapters shown by the guided terminal flow.
+    """Return the five concise chapters shown by the guided terminal flow.
 
     ``build_sections`` remains the canonical flat schema surface so existing
     answer files and freshness checks continue to work.
@@ -1310,12 +1274,6 @@ def build_phases(sections: list[Section] | None = None) -> list[Phase]:
                 "measurement, and filesystem safeguards."
             ),
             ("sync", "server", "observability", "evaluation", "security"),
-        ),
-        Phase(
-            "federation",
-            "Federation",
-            "Optional Synapse publication settings.",
-            ("synapse",),
         ),
     )
     return [phase for phase in definitions if any(item in available for item in phase.section_ids)]
@@ -2070,13 +2028,11 @@ class GuidedWizard(Wizard):
             provider_text = str(provider)
         pheasant = data.get("pheasant", {})
         server = data.get("server", {})
-        synapse = data.get("synapse", {})
         embedding_model = (
             embeddings.get("model") or schema_default("search.embeddings.model")
             if embeddings.get("enabled")
             else "off"
         )
-        federation = "on" if synapse.get("publish") else "off"
         output_path = getattr(self, "output_path", "pheasant.yaml")
         env_output_path = getattr(self, "env_output_path", ".env")
         lines = [
@@ -2086,7 +2042,7 @@ class GuidedWizard(Wizard):
             f"Sources: {len(self.sources)} configured",
             f"Search: {search.get('default_mode')} | embedding model: {embedding_model}",
             f"Assistant: {provider_text} | workflow={assistant.get('workflow')}",
-            f"Server: {server.get('host')}:{server.get('port')} | federation: {federation}",
+            f"Server: {server.get('host')}:{server.get('port')}",
         ]
         for source in self.sources:
             lines.append(f"  - {source.get('name')} ({source.get('type')}): {source.get('path')}")
