@@ -258,7 +258,10 @@ def test_indexer_orchestration_has_one_leader_and_fails_over(tmp_path: Path) -> 
         leader.stop()
         wait_until(lambda: standby.leader)
         wait_until(lambda: sum(promotions) == 2)
-        assert all(service.running for service in service_sets[supervisors.index(standby)])
+        # A promotion starts its reconcile thread (which counts it) before the
+        # services, on purpose, so the services are waited for, not asserted.
+        services = service_sets[supervisors.index(standby)]
+        wait_until(lambda: all(service.running for service in services))
     finally:
         for supervisor in supervisors:
             supervisor.stop()
