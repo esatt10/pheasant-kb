@@ -54,9 +54,9 @@ inspectable knowledge substrate of a hierarchical research swarm, and it must:
 9. Permit deterministic evaluation of whether it improves an otherwise blind
    agent's answers.
 
-pheasant-kb is one knowledge base; Synapse/Flock is the multi-region
-orchestration concept. **A harness may implement the swarm itself** — no
-production Flock service is required before a first experiment.
+pheasant-kb is one knowledge base. A multi-region experiment is something
+**a harness implements itself**, over several regions' HTTP or MCP surfaces;
+pheasant ships no orchestrator for it.
 
 ---
 
@@ -71,7 +71,7 @@ plus a coverage auditor, a benchmark builder and evaluation agents.
 Orchestrator summaries, benchmark questions, reference answers, arm outputs,
 scores and evaluator feedback stay outside it — enforced by
 `readiness.corpus_denylist`, which refuses the *write* rather than detecting
-the contamination afterwards ([§3.6](#36-isolation-phe-iso)).
+the contamination afterwards ([§3.6](#36-isolation--phe-iso)).
 
 ### 2.2 Arms
 
@@ -128,7 +128,7 @@ middle two is the whole subject of this document:
 | `search` | `search_context`, `POST /search` | `G-PHE-011` |
 | `read/evidence.get` | `get_file_summary`, `explain_node`, `GET /nodes/content` | `G-PHE-013` |
 | `memory.configure/status` | memory policy, reported per query | `G-PHE-018` |
-| `memory.export` | `memory_list`, `list_memory_candidates` | `G-PHE-019` |
+| `memory.export` | `list_artifact_records`, `list_artifact_candidates` | `G-PHE-019` |
 | `search_profile.configure/status` | tuning bundles, reported per query | `G-PHE-021` |
 
 ### 3.2 Durable ingestion — PHE-ING
@@ -267,7 +267,7 @@ Memory records are source content: one frontmatter Markdown file per record,
 indexed by the ordinary pipeline, append-only, exportable. Validity, scope
 isolation (`org` shared; `user` and `session` readable only by their writer),
 supersession, steering, and candidate promotion gates are described in
-`docs/memory-system.md` and `docs/memory-formation.md`.
+`docs/artifact-records.md` and `docs/observation-and-formation.md`.
 
 What this plane adds: **every query reports which memory state answered it,
 including "off"**. An arm that ran with memory off has to be able to *record*
@@ -304,7 +304,7 @@ rather than by an implementation, and both are marked as such.
 | Gap | Capability | Status | How it is established |
 |---|---|---|---|
 | `G-PHE-001` | Running service | proven | `service_identity` probe; `/health`, `/ready` |
-| `G-PHE-002` | MCP discovery | proven | `mcp_discovery` probe; every contracted tool exists on the facade |
+| `G-PHE-002` | MCP discovery | proven | `mcp_discovery` probe; every contracted tool is a served MCP tool |
 | `G-PHE-003` | Capability negotiation | proven | the contract itself, derived from live symbols |
 | `G-PHE-004` | Durable ingestion | proven | `ingest_roundtrip`: submit → receipt → index → retrieve at a locator |
 | `G-PHE-005` | Idempotency | proven | `idempotent_write`: three writes, one key, one stored object |
@@ -312,9 +312,9 @@ rather than by an implementation, and both are marked as such.
 | `G-PHE-007` | Provenance | proven | `ingest_roundtrip`, `resolve_result` |
 | `G-PHE-008` | Index barrier | proven | `index_barrier`: `accepted` and `indexed` are distinguishable, lag bounded |
 | `G-PHE-009` | Immutable snapshots | proven | `snapshot_seal`, `snapshot_drift_refused` |
-| `G-PHE-010` | Temporal replay | **partial, declared** | memory `as_of` probed; corpus `as_of` `unsupported` — see [§3.4](#34-sealed-snapshots-and-temporal-semantics-phe-snap) |
+| `G-PHE-010` | Temporal replay | **partial, declared** | memory `as_of` probed; corpus `as_of` `unsupported` — see [§3.4](#34-sealed-snapshots-and-temporal-semantics--phe-snap) |
 | `G-PHE-011` | Retrieval lineage | proven | `retrieval_lineage` |
-| `G-PHE-012` | Evidence semantics | **partial, declared** | record- and proof-level typed; claim-to-claim stance `unsupported` — see [§3.3](#33-knowledge-and-provenance-phe-know) |
+| `G-PHE-012` | Evidence semantics | **partial, declared** | record- and proof-level typed; claim-to-claim stance `unsupported` — see [§3.3](#33-knowledge-and-provenance--phe-know) |
 | `G-PHE-013` | Read/resolve | proven | `resolve_result` |
 | `G-PHE-014` | Namespace/ACL isolation | proven | `principal_isolation` (needs `security.acl_enforced`) |
 | `G-PHE-015` | Benchmark contamination | proven | `contamination_refused`: both doors refuse, and `artifacts` holds nothing the denylist forbids (needs `readiness.corpus_denylist`) |

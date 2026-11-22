@@ -1,21 +1,19 @@
 {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "pheasant-token",
+      "description": "pheasant API token (docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token')",
+      "password": true
+    }
+  ],
   "servers": {
     "pheasant": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "exec",
-        "-i",
-        "pheasant",
-        "python",
-        "-m",
-        "pheasant",
-        "mcp",
-        "--config",
-        "/config/pheasant.yaml",
-        "--transport",
-        "stdio"
-      ]
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:pheasant-token}"
+      }
     }
   }
 }

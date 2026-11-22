@@ -8,7 +8,7 @@ source's `**/*.md` include glob). `as_of` and `current_only=False` are
 query-time filters over *indexed* rows, so "as_of deliberately brings the
 old record back" held only in the window between a correction and the next
 consolidation beat — effectively nothing once a region's scheduler or an
-agent's own `memory_consolidate` call runs.
+agent's own `consolidate_artifacts` call runs.
 
 `memory.supersede_retention_days` (default `0`, opt-in) keeps a
 newly-invalid record's file — and therefore its row — around for that many
@@ -100,7 +100,7 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
     and it genuinely disappears, the same way it always eventually would.
 
     Writes go straight through `MemoryStore.append(now=...)` rather than
-    `memory_write` so every timestamp is exact and a day apart — the two
+    `record_artifact` so every timestamp is exact and a day apart — the two
     records must not land in the same wall-clock second, or their
     second-resolution `asserted_at`/`valid_until` collide and there is no
     instant left to tell "before the correction" from "after" apart.
@@ -159,7 +159,7 @@ def test_as_of_brings_the_superseded_record_back_after_consolidation(tmp_path: P
         assert not old_path.with_suffix(".md.archived").exists()
 
         # Still indexed: current_only=False reaches it exactly as
-        # docs/memory-system.md promises.
+        # docs/artifact-records.md promises.
         history = str(
             tools.search_context(
                 "retention-test",
@@ -210,7 +210,7 @@ def test_ttl_expiry_also_honors_the_retention_window(tmp_path: Path) -> None:
         written = tools.memory_write("retention-test", "Deploys run on Fridays.", scope="org")
         record_id = written["record"]["record_id"]
 
-        # memory_write always stamps the real clock, so the retention/TTL
+        # record_artifact always stamps the real clock, so the retention/TTL
         # windows below are computed relative to the record's own
         # asserted_at rather than a fixed t0.
         asserted_at = datetime.fromisoformat(

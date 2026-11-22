@@ -174,9 +174,8 @@ def test_the_release_commit_stages_every_file_the_release_rewrites() -> None:
 def test_every_image_tag_the_repository_references_is_actually_published() -> None:
     """`docker run ghcr.io/esatt10/pheasant` means `:latest`, and it must exist.
 
-    The README's headline command, the setup guide's one-liner and the chat
-    how-to all use the untagged form. Only the UI image had ever pushed a
-    `latest`, so the flagship install command failed with `manifest unknown`
+    An untagged reference means `latest`. Only the old UI image had ever
+    pushed one, so the untagged install command failed with `manifest unknown`
     against a registry that otherwise held every release.
     """
 
@@ -193,15 +192,15 @@ def test_every_image_tag_the_repository_references_is_actually_published() -> No
 
     assert "latest" in pushed, "nothing pushes a latest tag"
 
-    # Both images, not just the UI one.
+    # The pheasant image itself (the UI is baked into it; there is no sidecar).
     ref_lines = [
         line.strip()
         for step in job["steps"]
         for line in str((step.get("with") or {}).get("tags") or "").splitlines()
         if line.strip()
     ]
-    assert any(line.endswith(":latest") and "ui_ref" in line for line in ref_lines)
     assert any(line.endswith(":latest") and "outputs.ref" in line for line in ref_lines)
+    assert not any("ui_ref" in line for line in ref_lines), "the UI sidecar image is gone"
 
 
 def test_the_container_ci_job_installs_the_cli_it_runs() -> None:
@@ -258,8 +257,7 @@ def test_the_release_commit_runs_only_after_the_images_are_live() -> None:
     commit = names.index("Commit release version to main")
     verify = names.index("Verify the published tags are live")
 
-    for pushing in ("Push semver image", "Push UI image"):
-        assert names.index(pushing) < commit, f"{pushing} must run before the release commit"
+    assert names.index("Push semver image") < commit, "the push must run before the commit"
     assert verify < commit, "the registry must be read back before main records the version"
 
 

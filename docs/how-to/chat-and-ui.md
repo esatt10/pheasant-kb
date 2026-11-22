@@ -12,11 +12,9 @@ The Sources rail shows each source's indexed document count and the same
 readability badge as Taxonomy. Hover a count for its share of the visible
 documents. Long names truncate while counts stay visible.
 
-Start it with `pheasant host <target>` (containers, UI included on `:8080`),
-`docker compose -f deploy/compose/docker-compose.yml up -d --build` from a clone, or by building `ui/dist` and
-letting `pheasant start` serve it on `:8765`. Full step-by-step for each —
-and what to do when the UI will not come up or looks stale — is in
-[Run the web UI](run-the-ui.md).
+The api tier serves it at <http://127.0.0.1:8765> once pheasant-kb is
+running ([Run pheasant-kb](../pheasant-kb/index.md)). What to do when it will
+not come up or looks stale is in [Run the web UI](run-the-ui.md).
 
 ---
 
@@ -38,11 +36,13 @@ Every answer goes through the same four steps, and all four are inspectable:
    citing `[1]`, `[2]`, … Clicking a citation chip in the prose focuses that
    node on the graph and opens it in the **Node** tab.
 
-!!! note "No LLM ever runs during indexing"
-    The assistant is a query-time surface only. Indexing stays fully
-    deterministic (rule-based parsing, content hashing, stable IDs), so
-    re-syncing unchanged content produces byte-identical state whether or
-    not a model is connected.
+> [!NOTE]
+> **No LLM ever runs during indexing**
+>
+> The assistant is a query-time surface only. Indexing stays fully
+> deterministic (rule-based parsing, content hashing, stable IDs), so
+> re-syncing unchanged content produces byte-identical state whether or
+> not a model is connected.
 
 ### Without a model
 
@@ -113,7 +113,7 @@ can start straight away. Sending the question ends a dictation. With OpenAI,
 speech goes from the browser to the transcriber (`gpt-live-transcribe`), not
 through pheasant. With Foundry it goes through the region, which relays it to
 the transcriber, because Foundry's socket takes a credential only as a header.
-See [`assistant.voice`](../configuration.md#assistantvoice-dictation-in-the-composer).
+See [`assistant.voice`](../configuration.md#assistantvoice--dictation-in-the-composer).
 
 Visuals render in pheasant's MCP App view, hosted in a sandboxed frame — the
 same view an MCP host such as Claude renders for the `ask_knowledge_base`,
@@ -310,8 +310,8 @@ The UI is not a read-only viewport onto a YAML file — everything the config
 schema and the HTTP API can express is reachable from it.
 
 - **Sources → + Add source** takes a path, URL, glob or connector name and
-  infers the rest (`POST /sources/quick-add`, the same inference
-  `pheasant up` uses).
+  infers the rest (`POST /sources/quick-add`, the same inference MCP
+  `add_source` uses).
 - **Sources → Advanced…** exposes the full source schema: include/exclude
   globs, folder depth, chunking, repository branch policy, sync triggers,
   URLs, and connector settings. The type picker is populated from

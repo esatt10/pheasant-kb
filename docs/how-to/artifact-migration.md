@@ -2,8 +2,8 @@
 
 Artifacts are the canonical surface for scoped assertions, retrieval rules,
 generated reports, files and conversation threads. The UI's former Memory
-route redirects to Artifacts. Existing `/memory` routes and MCP memory tools
-remain callable, with deprecation metadata and canonical replacements.
+route redirects to Artifacts. The `/memory` routes and the MCP `memory_*`
+tools were removed in 2.0; their replacements are below.
 
 ## Existing knowledge
 
@@ -78,8 +78,8 @@ promoted tuning bundles before job retention runs, preserving existing outputs.
 Ranking promotion commits the active overlay and its publication atomically;
 a failed publication leaves the previous configuration in force.
 
-Sync/maintenance job snapshots are shared through the configured SQLite or
-PostgreSQL state backend. Evaluation runs and tuning experiments retain their
+Sync/maintenance job snapshots are shared through the PostgreSQL state
+store. Evaluation runs and tuning experiments retain their
 existing resumable progress, replay/metric/trial history and cold exports.
 The scheduler prunes terminal history after `artifacts.job_retention_days`
 (default 30; 0 disables age cleanup). Active jobs cannot be deleted.
@@ -106,6 +106,3 @@ refused until another configuration is selected.
 All migrations are additive and idempotent. Back up state and existing source
 mounts using the normal deployment procedure before rolling out a new image.
 Do not remove legacy source directories or rename IDs as a migration step.
-
-Local checks and measured performance are recorded in
-[Artifact transition validation](../artifact-transition-validation.md).

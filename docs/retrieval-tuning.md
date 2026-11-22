@@ -614,7 +614,7 @@ cannot:
 
 | Job | Question |
 |---|---|
-| `suites` | does the plane hold on **both** storage backends? FTS5's `bm25()` and Postgres's `ts_rank_cd` are different functions on purpose |
+| `suites` | does the plane hold against a real PostgreSQL with pg_textsearch, the only state store? |
 | `equivalence` | does offline re-fusion still reproduce the served ranking, id for id? |
 | `standalone` | is a region that never turns it on byte-identical to one built before it existed? |
 | `lifecycle` | does the CLI an operator actually touches work end to end? |

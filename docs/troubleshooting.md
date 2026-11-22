@@ -79,20 +79,6 @@ pheasant sync --config pheasant.yaml --source <source> --mode validate_only
   (`pip install 'pheasant-kb[vector]'`) or switch to `provider: numpy`.
 - See [Vector self-search](how-to/vector-search.md).
 
-## Router connection or contract publish fails
-
-- Synapse features are off unless `synapse.publish: true`. A standalone region
-  is unaffected by router problems.
-- Webhook failures are **logged, never raised** — a sync never fails because the
-  router is unreachable. Confirm `synapse.router_url` is correct and the router's
-  `POST /v1/synapse/events` is reachable from the region.
-- Confirm the region's contract is being written: `GET /contract` should return
-  JSON, and `<state>/contract.latest.json` should be fresh after a sync.
-- If the router rejects the region, check the embedding space matches the fleet
-  (same `model`/`dimensions`) and, if signing, that the router's trust store has
-  this region's public key.
-- See [Attach to a Synapse fleet](how-to/attach-to-synapse.md).
-
 ## Multiple instances conflict
 
 Do not point multiple independent pheasant containers at the same writable `/state` volume. Use one namespace/PVC per instance.

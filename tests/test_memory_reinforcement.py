@@ -99,7 +99,7 @@ def test_normalized_digest_is_versioned_and_scoped():
 
 
 # ---------------------------------------------------------------------------
-# append() end to end, via memory_write
+# append() end to end, via record_artifact
 # ---------------------------------------------------------------------------
 
 
@@ -314,9 +314,9 @@ def test_reinforcement_never_crosses_kind(tmp_path: Path) -> None:
 
 
 def test_http_memory_write_reinforces_like_mcp(tmp_path: Path) -> None:
-    """`POST /memory` must carry the same outcome/observations behavior as
-    the MCP `memory_write` tool — the two protocols share one `MemoryPolicy`
-    story already (see `docs/memory-system.md`), and this is part of it."""
+    """`POST /artifacts/records` must carry the same outcome/observations behavior as
+    the MCP `record_artifact` tool — the two protocols share one `MemoryPolicy`
+    story already (see `docs/artifact-records.md`), and this is part of it."""
     import pytest as _pytest
 
     fastapi_testclient = _pytest.importorskip("fastapi.testclient")

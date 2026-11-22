@@ -49,18 +49,34 @@ def test_every_declared_implementation_exists(capability) -> None:
 
 
 @pytest.mark.parametrize("capability", CAPABILITIES, ids=lambda cap: cap.logical)
-def test_every_declared_mcp_tool_is_on_the_facade(capability) -> None:
-    """A contracted tool name is a promise a harness hard-codes against.
+def test_every_declared_mcp_tool_is_served(capability) -> None:
+    """A contracted tool name is a promise a harness hard-codes against (rule 8).
 
-    Rule 8 makes the tool surface public API, so this is the freshness half of
-    that rule for the readiness contract specifically: a renamed tool has to
-    break here rather than in somebody's preflight.
+    Checked against what the server serves, not the facade: a method can
+    outlive the tool that called it.
+
+    The contract kept naming `memory_list` and `list_memory_candidates` after
+    those tools were removed, because the facade still had the methods. The
+    permission map lists exactly the tools the server registers (the role
+    permission tests hold that), so it is what a contracted name is checked
+    against.
     """
 
-    from pheasant.mcp_server.tools import PheasantTools
+    from pheasant.security.permissions import MCP_PERMISSIONS
 
-    missing = [name for name in capability.mcp_tools if not hasattr(PheasantTools, name)]
-    assert not missing, f"{capability.logical} names tools the facade lacks: {missing}"
+    missing = [name for name in capability.mcp_tools if name not in MCP_PERMISSIONS]
+    assert not missing, f"{capability.logical} names tools the server does not serve: {missing}"
+
+
+@pytest.mark.parametrize("capability", CAPABILITIES, ids=lambda cap: cap.logical)
+def test_every_declared_http_route_is_served(capability) -> None:
+    """The same, for routes: `/memory` stayed in the contract after it was removed."""
+
+    from pheasant.security.permissions import HTTP_PERMISSIONS
+
+    served = {path for _method, path in HTTP_PERMISSIONS}
+    missing = [path for path in capability.http_routes if path != "*" and path not in served]
+    assert not missing, f"{capability.logical} names routes the API does not serve: {missing}"
 
 
 @pytest.mark.parametrize("capability", CAPABILITIES, ids=lambda cap: cap.logical)

@@ -1,6 +1,6 @@
 ---
 name: pheasant-retrieval
-description: Query a Pheasant knowledge base with raw hybrid search and walk its knowledge graph from the results, using your own judgement instead of the region's answering workflow. Use when an agent or evaluation harness connected to Pheasant over MCP (or HTTP) needs passages with provenance, wants to follow imports, calls, references, headings, symbols or memory supersession from a hit, wants reproducible retrieval for scoring, or is asked to "search pheasant", "find related files", or "traverse the graph" without calling ask_knowledge_base.
+description: Query a Pheasant knowledge base with raw hybrid search and walk its knowledge graph from the results, using your own judgement instead of the region's answering workflow. Use when an agent or evaluation harness connected to Pheasant over MCP (or HTTP) needs passages with provenance, wants to follow imports, calls, references, headings, symbols or record supersession from a hit, wants reproducible retrieval for scoring, or is asked to "search pheasant", "find related files", or "traverse the graph" without calling ask_knowledge_base.
 ---
 
 # Retrieve from Pheasant, judge it yourself
@@ -110,7 +110,7 @@ point the way you usually want:
 | file | `has_heading` | its section outline (sources with taxonomy enabled) |
 | symbol, chunk | `derived_from` | the file it came from |
 | directory | `contains` | its children |
-| memory record | `supersedes`, `about` | the record it corrected, and what it is about |
+| record (`memory_record`) | `supersedes`, `about` | the record it corrected, and what it is about |
 
 "Who imports this file?" is an *incoming* question. A walk from that file
 cannot answer it. Search for the module name, or walk from the importers you
@@ -123,9 +123,9 @@ path in either direction between two nodes.
   corpus has moved since, the region refuses with `SNAPSHOT_DRIFTED` and names
   what moved. It never silently answers from a different corpus.
 - `lineage` on every search names the ranking parameters, graph generation,
-  criteria and memory policy that produced it. Store it with your scores.
-- `memory="off"` keeps agent-memory records out of a corpus-only arm.
-  `memory="only"` retrieves just those records.
+  criteria and records policy that produced it. Store it with your scores.
+- `artifact_policy="off"` keeps typed records (`record_artifact`) out of a
+  corpus-only arm. `artifact_policy="only"` retrieves just those records.
 - `artifacts="exclude"` keeps saved artifacts (composed files, reports and
   threads people kept) out of the results, for an arm over the sources alone;
   `artifacts="only"` searches just them. The default includes them: they

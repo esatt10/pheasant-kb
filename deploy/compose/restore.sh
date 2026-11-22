@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Restore a pheasant-kb backup: `docker compose run --rm restore <name> [--force]`.
 #
-# <name> is a directory backup.sh wrote under ./backups. Safe by default, in
-# the same way `pheasant restore` is for the single container:
+# <name> is a directory backup.sh wrote under ./backups. Safe by default:
 #
 #   * every file is checked against SHA256SUMS before anything is touched;
 #   * it refuses while a pheasant service is running, because a restore under a

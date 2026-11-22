@@ -151,20 +151,6 @@ def replacements(version: str) -> list[Replacement]:
             replacement=image,
             label="example .env image",
         ),
-        # The UI image, which this script did not rewrite for three releases
-        # while `tests/test_version_alignment.py` scanned for it — the checker
-        # and the writer disagreeing about scope, which is the same drift the
-        # file-list derivation above was introduced to end. It went unnoticed
-        # because the two are keyed differently: the writer matches a
-        # *pattern* per file, the "does the writer cover the scan" test matches
-        # *paths*, so a file listed here with a pattern that misses half its
-        # references looks covered to both.
-        Replacement(
-            path=Path("deploy/compose/.env.example"),
-            pattern=re.compile(r"ghcr\.io/esatt10/pheasant-ui:[0-9A-Za-z._+-]+"),
-            replacement=f"ghcr.io/esatt10/pheasant-ui:{version}",
-            label="example .env UI image",
-        ),
     ]
 
 

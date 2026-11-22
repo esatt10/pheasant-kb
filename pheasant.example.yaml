@@ -64,17 +64,15 @@ server:
     # liveness probe gets restarted by the thing protecting it.
     max_concurrent_requests: 0
     # Seconds to keep serving after SIGTERM while /ready already reports 503.
-    # Kubernetes removes endpoints and sends SIGTERM concurrently, and
-    # endpoint propagation is not instant, so a process that exits promptly
-    # drops what was routed to it in the gap. Keep this comfortably shorter
-    # than terminationGracePeriodSeconds. 0 disables the delay.
+    # An orchestrator removes a replica from its load balancer and sends
+    # SIGTERM concurrently, and the removal is not instant, so a process that
+    # exits promptly drops what was routed to it in the gap. Keep this
+    # comfortably shorter than the termination grace period. 0 disables it.
     drain_seconds: 0
-    # How often an `api`-role replica re-reads a graph the indexer wrote.
-    # The graph is a FILE: a process loads it once at startup, and the only
-    # other reload happens after a sync that same process ran. An api replica
-    # never indexes, so without this it answers graph queries from whatever
-    # the graph was when it started — silently, while text and vector search
-    # stay current from the shared database. Ignored by the other roles.
+    # How often an `api`-role replica checks the published graph generation.
+    # The graph is rows every replica reads, so this refreshes caches keyed by
+    # the generation (the vocabulary, OKF annotations); a NATS announcement
+    # usually gets there first. Ignored by the other roles.
     graph_refresh_seconds: 30
   ui:
     enabled: true
@@ -86,15 +84,13 @@ storage:
   # serving replica holds no graph at all. Costs ~1,640 bytes of database per
   # node; `pheasant scan` says how much for your corpus.
   graph_format: rows
-  # Synapse 21.6A: zstd-compressed timestamped graph snapshots written after a
-  # successful sync (graphs/<kb_id>/graph.<utc-ts>.json.zst). Throttled by the interval; bounded by the retention cap (oldest
-  # evicted first; the published graph, db and contract never evicted).
+  # zstd-compressed timestamped graph history snapshots, materialized from the
+  # rows (graphs/<kb_id>/graph.<utc-ts>.json.zst). Throttled by the interval;
+  # bounded by max_state_size_gb (oldest evicted first; nothing else is).
   graph_snapshots: true
   graph_snapshot_interval_seconds: 900
-  # How often an in-progress sync writes graph.latest.json. The graph used to
-  # reach disk only when a sync *finished*, so stopping the container during a
-  # long first index threw that work away and the next start had to rebuild it.
-  # 0 = save at end of sync only.
+  # Minimum spacing between mid-sync graph commits, so stopping a long first
+  # index keeps what it committed. 0 = commit at the end of the sync only.
   graph_checkpoint_seconds: 60
   compression: zstd
   graph_path: /state/graphs
@@ -103,10 +99,8 @@ storage:
 
 search:
   default_mode: hybrid
-  keyword:
-    enabled: true
-    engine: sqlite_fts5
-  # Optional semantic self-search (Synapse 21.4). Disabled by default; when
+  # Optional semantic self-search. Off on the standalone table (pheasant-kb
+  # turns it on); when
   # enabled, chunks are embedded at sync time through an OpenAI-spec HTTP
   # endpoint (the only sanctioned network call in the indexing path) and
   # search gains mode=vector plus vector candidates inside mode=hybrid.
@@ -117,8 +111,7 @@ search:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY  # env var NAME; the key itself never lands in config
     # Unset = use the model's own native size (1536 for text-embedding-3-small,
-    # 3072 for -3-large). Set a number only to shrink vectors for storage or to
-    # pin an exact size across a Synapse fleet.
+    # 3072 for -3-large). Set a number only to shrink vectors for storage.
     dimensions: null
     batch_size: 64
     timeout_seconds: 30.0        # network timeout per embedding request
@@ -169,12 +162,12 @@ search:
     text_arm_weight: 1.0
     vector_arm_weight: 1.0
     graph_arm_weight: 1.0
-    # How far past max_results the arms fetch when ACL, memory-policy or
+    # How far past max_results the arms fetch when ACL, records-policy or
     # section filtering will remove candidates afterwards. Under-fetching here
     # shows up as a `filters` miss that no amount of ranking fixes.
     filter_overfetch: 3.0
   # Run graph_search._scan_edges through the vendored WASM accelerator
-  # (Synapse 34.5b) instead of pure Python. Needs the [wasm] extra; falls back
+  # instead of pure Python. Needs the [wasm] extra; falls back
   # to pure Python on any failure or if the extra is missing, so it is never a
   # correctness dependency. A consistent, growing win on the relationship-search
   # query path. Off here, but the Docker image turns it ON in a config it
@@ -184,7 +177,7 @@ search:
 # Knowledge-graph construction.
 graph:
   # Run resolve_cross_source_edges (import/link resolution across sources)
-  # through the same vendored accelerator (Synapse 34.5a). Same fallback
+  # through the same vendored accelerator. Same fallback
   # guarantee as above. Conditional win per the 34.4 benchmark: it LOSES to
   # pure Python below roughly 1,300-2,500 cross-source edges and wins above
   # it, so leave it off for a small static corpus and turn it on for a large
@@ -337,28 +330,26 @@ security:
     - /workspace
     - /exports
     # Extra mount for local files that live outside ./workspace. Point the
-    # PHEASANT_DATA_PATH env var (docker-compose.yml) at any host directory and
+    # PHEASANT_DATA_PATH env var (compose.yaml) at any host directory and
     # it shows up here at /data — then register a source under /data.
     - /data
   allow_user_selected_source_paths: true
   # Whether a web source an AGENT registers over MCP may name a loopback,
   # private, link-local or cloud-metadata address. Off: a page an agent read
   # cannot talk it into making this server fetch and index internal endpoints.
-  # YAML, UI and `pheasant up` registrations are not affected.
+  # YAML and UI registrations are not affected.
   allow_agent_private_urls: false
   read_only_sources: true
   deny_path_traversal: true
   default_exclude_secrets: true
-  # First-party bearer auth for the HTTP/MCP surface. Off here, which is right
-  # for one container on loopback: this is a local-first tool behind the
-  # operator's own perimeter, and a token would be a password on your own
-  # laptop.
+  # First-party bearer auth for the HTTP/MCP surface. pheasant-kb sets it on
+  # every tier (secrets-init generates the token). It is off here only because
+  # this file is the one-process (`--role all`) reference.
   #
-  # A fleet is the other case. There the API is a multi-replica Service that
-  # binds 0.0.0.0 by necessity, and the surface behind it can register a source
-  # over any allow-listed path and read what it finds — so every role but
-  # `all` REFUSES TO START on a routable bind with neither of the two below
-  # set. Deliberately a static shared token and nothing more: enough to make
+  # Every tier of a fleet binds 0.0.0.0 by necessity, and the surface behind
+  # it can register a source over any allow-listed path and read what it
+  # finds — so every role but `all` REFUSES TO START on a routable bind with
+  # neither of the two below set. Deliberately a static shared token and nothing more: enough to make
   # "behind an authenticating ingress" the default rather than the
   # instruction, and small enough that it cannot rot into a half-built
   # identity system. Richer auth belongs to the ingress, which is what the
@@ -371,110 +362,113 @@ security:
 
 # Grounded chat over your index (the UI's chat layer). Query-time only — no
 # LLM ever runs during indexing, so re-syncing unchanged content stays
-# Agent memory. Records are append-only Markdown files written by agents
-# (MCP `memory_write` / `POST /memory`) into a `type: memory` source and
-# indexed by the ordinary pipeline — recall is just search, there is no second
-# retrieval path. This block controls consolidation, how memory takes part in
-# retrieval, and how the store is bounded.
+# Artifact records: typed assertions and retrieval rules agents write with MCP
+# `record_artifact` / `POST /artifacts/records`. Each is an append-only
+# Markdown file in the `artifact-records` source, indexed by the ordinary
+# pipeline — recall is just search, there is no second retrieval path. This
+# block controls consolidation, how records take part in retrieval, and how
+# the store is bounded. (`memory:` is accepted as an alias of
+# `artifacts.learning:` so a 1.x config still loads.)
 #
 # A *corrected* record is dropped from results at query time, without waiting
 # for consolidation; pass `{"current_only": false}` or an `as_of` instant on a
 # search to see it again.
-memory:
-  # Archive superseded and TTL-expired records on the scheduler beat. The file
-  # is renamed `<id>.md.archived` in place — bytes preserved, never deleted.
-  consolidation_enabled: true
-  # Per-scope age limits. null = that scope never expires by age.
-  session_ttl_days: null
-  user_ttl_days: null
-  org_ttl_days: null
-  # Days a superseded/TTL-expired record stays indexed (hidden from default
-  # results, reachable via `as_of`/`current_only: false`) before it is
-  # actually archived. 0 = archive immediately, the pre-Phase-2 default.
-  # Opt in for point-in-time recall; it measurably costs ranking (see
-  # docs/memory-system.md) since a corrected record's near-duplicate text
-  # stays indexed alongside its correction.
-  supersede_retention_days: 0
-  # How memory takes part in a search that does not say. A per-call `memory`
-  # argument always wins over this. auto | off | only | prefer
-  default_policy: auto
-  # Let `alias`/`preference`/`exclusion` records re-rank results, not merely be
-  # retrievable. Off by default: a memory that silently re-orders searches is a
-  # surprise unless it was asked for.
-  steering_enabled: false
-  # Count which records retrieval returns, so salience reflects use. Off by
-  # default — a write on the read path, and an operator's decision to make.
-  usage_tracking: false
-  # Archive the least salient records past this many. null = unbounded. Runs
-  # as a backstop after the per-scope/per-subject caps below.
-  max_records: null
-  # Per-scope caps, mirroring the *_ttl_days trio above — each scope its own
-  # isolated pool, so a session flood cannot use its share of max_records to
-  # crowd out an org fact (max_records alone only ever *outranks* it by
-  # scope_weight, never fully protects it). null = that scope unbounded.
-  session_max_records: null
-  user_max_records: null
-  org_max_records: null
-  # Cap on live records sharing one `subject`, across scopes. Records with no
-  # subject are exempt. null = unbounded.
-  max_records_per_subject: null
-  # Cap on `about` graph edges drawn per record by the memory bridge.
-  about_max_targets: 3
-  # Fold a write into an existing record (bump observations/last_seen)
-  # instead of creating a new file when its normalized text already matches
-  # one in the same scope/subject/kind/ACL bucket — exact repeat or
-  # paraphrase alike. On by default, unlike usage_tracking above: this
-  # records what was written, not what was looked up.
-  reinforcement_enabled: true
-  # Offline near-duplicate clustering + medoid promotion on the
-  # consolidation pass. Off by default: unlike reinforcement, this changes
-  # what a *default* query returns (a subsumed near-duplicate stops
-  # appearing in results, though it stays indexed and reachable via an
-  # explicit tier filter or current_only: false).
-  compaction_enabled: false
-  compaction_similarity_threshold: 0.6
-  compaction_min_cluster_size: 2
-  # L3: LLM-merge for what deterministic clustering cannot resolve
-  # (complementary partial facts, progressive refinement, abstraction).
-  # Opt-in AND never automatic — only the explicit memory_synthesize tool /
-  # POST /memory/synthesize runs it, never the scheduler beat. Mirrors
-  # assistant.* field for field.
-  synthesis:
-    enabled: false
-    provider: auto            # auto | anthropic | openai | gemini | none
-    model: null
-    max_calls_per_pass: 20
-    max_input_chars: 6000
-    min_cluster_size: 3
-    # Above this mean pairwise similarity a cluster is skipped: near-
-    # identical rephrasings are what medoid promotion already resolves
-    # losslessly, so model spend goes only where L1/L2 provably cannot
-    # help (complementary partials, progressive refinement, abstraction).
-    max_jaccard: 0.55
+artifacts:
+  learning:
+    # Archive superseded and TTL-expired records on the scheduler beat. The file
+    # is renamed `<id>.md.archived` in place — bytes preserved, never deleted.
+    consolidation_enabled: true
+    # Per-scope age limits. null = that scope never expires by age.
+    session_ttl_days: null
+    user_ttl_days: null
+    org_ttl_days: null
+    # Days a superseded/TTL-expired record stays indexed (hidden from default
+    # results, reachable via `as_of`/`current_only: false`) before it is
+    # actually archived. 0 = archive immediately, the pre-Phase-2 default.
+    # Opt in for point-in-time recall; it measurably costs ranking (see
+    # docs/artifact-records.md) since a corrected record's near-duplicate text
+    # stays indexed alongside its correction.
+    supersede_retention_days: 0
+    # How records take part in a search that does not say. A per-call
+    # `artifact_policy` argument always wins over this. auto | off | only | prefer
+    default_policy: auto
+    # Let `alias`/`preference`/`exclusion` records re-rank results, not merely be
+    # retrievable. Off by default: a memory that silently re-orders searches is a
+    # surprise unless it was asked for.
+    steering_enabled: false
+    # Count which records retrieval returns, so salience reflects use. Off by
+    # default — a write on the read path, and an operator's decision to make.
+    usage_tracking: false
+    # Archive the least salient records past this many. null = unbounded. Runs
+    # as a backstop after the per-scope/per-subject caps below.
+    max_records: null
+    # Per-scope caps, mirroring the *_ttl_days trio above — each scope its own
+    # isolated pool, so a session flood cannot use its share of max_records to
+    # crowd out an org fact (max_records alone only ever *outranks* it by
+    # scope_weight, never fully protects it). null = that scope unbounded.
+    session_max_records: null
+    user_max_records: null
+    org_max_records: null
+    # Cap on live records sharing one `subject`, across scopes. Records with no
+    # subject are exempt. null = unbounded.
+    max_records_per_subject: null
+    # Cap on `about` graph edges drawn per record by the memory bridge.
+    about_max_targets: 3
+    # Fold a write into an existing record (bump observations/last_seen)
+    # instead of creating a new file when its normalized text already matches
+    # one in the same scope/subject/kind/ACL bucket — exact repeat or
+    # paraphrase alike. On by default, unlike usage_tracking above: this
+    # records what was written, not what was looked up.
+    reinforcement_enabled: true
+    # Offline near-duplicate clustering + medoid promotion on the
+    # consolidation pass. Off by default: unlike reinforcement, this changes
+    # what a *default* query returns (a subsumed near-duplicate stops
+    # appearing in results, though it stays indexed and reachable via an
+    # explicit tier filter or current_only: false).
+    compaction_enabled: false
+    compaction_similarity_threshold: 0.6
+    compaction_min_cluster_size: 2
+    # L3: LLM-merge for what deterministic clustering cannot resolve
+    # (complementary partial facts, progressive refinement, abstraction).
+    # Opt-in AND never automatic — only the explicit synthesize_artifacts tool /
+    # POST /artifacts/synthesize runs it, never the scheduler beat. Mirrors
+    # assistant.* field for field.
+    synthesis:
+      enabled: false
+      provider: auto            # auto | anthropic | openai | gemini | none
+      model: null
+      max_calls_per_pass: 20
+      max_input_chars: 6000
+      min_cluster_size: 3
+      # Above this mean pairwise similarity a cluster is skipped: near-
+      # identical rephrasings are what medoid promotion already resolves
+      # losslessly, so model spend goes only where L1/L2 provably cannot
+      # help (complementary partials, progressive refinement, abstraction).
+      max_jaccard: 0.55
 
-  # Turning observed interactions into memory. Off; nothing is read and no
-  # candidate is minted until it is on. See docs/memory-formation.md.
-  formation:
-    enabled: false
-    # One record per session, refined by superseding itself. Written directly
-    # rather than proposed, and only because of scope: it is session-scoped
-    # and written_by its own principal, so it never becomes shared knowledge.
-    session_digest: true
-    # Admit a proposal without review. Off for the same reason
-    # compaction_enabled is: it changes what a *default* query returns.
-    auto_admit: false
-    min_observations: 3
-    # ...and across this many distinct sessions. One session repeating itself
-    # is a habit; several agreeing is a signal.
-    min_sessions: 2
-    max_candidates_per_pass: 50
-    # A pending proposal nobody acted on expires. A rejection never does.
-    candidate_ttl_days: 30
-    rules:
-      - session-digest-v1
-      - alias-cooccurrence-v1
-      - path-affinity-v1
-      - retrieval-gap-v1
+    # Turning observed interactions into memory. Off; nothing is read and no
+    # candidate is minted until it is on. See docs/observation-and-formation.md.
+    formation:
+      enabled: false
+      # One record per session, refined by superseding itself. Written directly
+      # rather than proposed, and only because of scope: it is session-scoped
+      # and written_by its own principal, so it never becomes shared knowledge.
+      session_digest: true
+      # Admit a proposal without review. Off for the same reason
+      # compaction_enabled is: it changes what a *default* query returns.
+      auto_admit: false
+      min_observations: 3
+      # ...and across this many distinct sessions. One session repeating itself
+      # is a habit; several agreeing is a signal.
+      min_sessions: 2
+      max_candidates_per_pass: 50
+      # A pending proposal nobody acted on expires. A rejection never does.
+      candidate_ttl_days: 30
+      rules:
+        - session-digest-v1
+        - alias-cooccurrence-v1
+        - path-affinity-v1
+        - retrieval-gap-v1
 
 # Tracing, and the observation plane memory formation reads.
 #
@@ -485,7 +479,7 @@ memory:
 # policy. Never a file, never chunked, never indexed, never returned by a
 # search. A UI session's chat does not become knowledge because it was
 # observed; only an explicit admission writes a memory record, and it goes
-# through the ordinary write path. See docs/memory-formation.md.
+# through the ordinary write path. See docs/observation-and-formation.md.
 observability:
   # OTLP collector endpoint. null attaches no exporter at all -- spans are
   # still created and still feed the ledger, they just do not leave the box.
@@ -534,12 +528,11 @@ observability:
     # principals and query text -- put the access control on the directory.
     cold_enabled: false
     cold_retention_days: null  # null = keep cold partitions forever
-    # Upper bound on rows one roll pass moves. Load-bearing in one container,
+    # Upper bound on rows one roll pass moves. Load-bearing without a log tier,
     # where the roll runs on the scheduler beat under the sync lock.
     max_rows_per_pass: 50000
-    # Where a replica spools when /state is read-only and no queue is set --
-    # the degraded path for a custom SQLite multi-process deployment. The
-    # shipped fleet runs Postgres, so every replica writes directly.
+    # Where a replica spools batches when no queue is set and a direct write
+    # fails. pheasant-kb runs the log queue, so it needs none of this.
     spool_path: null
     queue:
       # Off, whoever observed a call writes it. On, batches go to their OWN
@@ -845,15 +838,6 @@ tuning:
     minimum_interval_seconds: 86400
 
 sources:
-  # Fleet memory example: configure exactly one writable memory source, backed
-  # by a persistent /memory volume. Memory is written explicitly via MCP or
-  # the API; enabling the source does not save every chat turn automatically.
-  # - name: agent-memory
-  #   type: memory
-  #   path: /memory
-  #   include: ["**/*.md"]
-  #   exclude: ["**/*.archived"]
-
   - name: pheasant-repo
     type: repository
     path: /workspace
@@ -980,7 +964,7 @@ sources:
   # `sync.interval_seconds`, doubling while it is unchanged up to
   # `connector.max_refresh_seconds`, and back to the minimum when it changes.
   # A page that is not due costs no request. The UI, POST /sources,
-  # `pheasant up <url>` and MCP `register_source` set the experimental opt-in
+  # quick add and MCP `register_source` set the experimental opt-in
   # for you; in YAML it is explicit.
   - name: example-web
     type: web_collection

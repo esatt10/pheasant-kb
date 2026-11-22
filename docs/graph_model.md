@@ -38,7 +38,7 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 | `executed_by`, `attested_by`, `computed_by` | An OKF `Attested Computation` to its `executor.resource` (with `receipt`), `attester.resource`, and `computation` file. New 2026-10-03. |
 | `about` | What an agent-memory record is *about* (Step 33.7): the record to the corpus artifact, symbol, heading or entity it refers to. Attributes: `record_id`, `match_signal` (`reference` \| `symbol` \| `heading` \| `entity`, strongest first — a record takes the first that fires), `matched` (what actually matched) and `confidence`. Capped per record, so total `about` edges stay bounded by `records x targets`. A lexical/BM25 rung was deliberately **not** materialized: the search index answers that at query time, and materializing it is how the concept layer reached 98.6% of all edges. |
 | `belongs_to_branch`, `at_commit`, `supersedes` | Git and version lineage. In an OKF bundle, `supersedes` is drawn from a `status: deprecated` concept to the **one** current concept of its own type it links to (`rule: deprecated_links_to_current_of_same_type`); with two candidates it declines. `supersedes` was documented from the initial build but **unemitted until 2026-08-11**, when Step 33.7 began drawing it between agent-memory records — before that a correction existed only as a frontmatter string resolved in Python, and the graph could not answer "what replaced this". |
-| `subsumes` | A near-duplicate cluster's medoid to the records it absorbed (compaction Phase 3): the canonical record to each demoted (`tier=cold`) member. Attributes: `enrichment_pass`. Drawn straight from `memory_records.subsumed_by`, **not** through the `about` ladder — that ladder is corpus-only by design (a memory must not be matched against symbols/headings/entities extracted from *another* memory), and a subsumption is memory-to-memory by definition. Deliberately distinct from `supersedes`: a subsumed record is redundant but still *true*, so `subsumed_by` never feeds `effective_valid_until` — conflating the two would silently expire facts that are still valid. See `docs/memory-system.md` §8 and `pheasant.memory.compaction`. |
+| `subsumes` | A near-duplicate cluster's medoid to the records it absorbed (compaction Phase 3): the canonical record to each demoted (`tier=cold`) member. Attributes: `enrichment_pass`. Drawn straight from `memory_records.subsumed_by`, **not** through the `about` ladder — that ladder is corpus-only by design (a memory must not be matched against symbols/headings/entities extracted from *another* memory), and a subsumption is memory-to-memory by definition. Deliberately distinct from `supersedes`: a subsumed record is redundant but still *true*, so `subsumed_by` never feeds `effective_valid_until` — conflating the two would silently expire facts that are still valid. See `docs/artifact-records.md` §8 and `pheasant.artifacts.compaction`. |
 | ~~`generated_note`~~ | **Retired 2026-08-16** with the Obsidian projection it described. Like `heading`/`has_heading` before 2026-08-06, it was documented from the initial build and **never emitted** — no graph written by any release contains one. |
 | `retrieved_by`, `modified_by` | Agent audit. |
 
@@ -189,7 +189,7 @@ pheasant runs deterministic enrichment during sync:
   `.../agent_framework/_workflows/_checkpoint.py`). Deterministic and
   rule-based — no LLM. Same-source targets carry
   `enrichment_pass: internal_resolution`; cross-source ones keep
-  `cross_source_resolution` (Synapse 21.6B).
+  `cross_source_resolution`.
 
   This is the file-to-file connectivity the graph advertised and did not have.
   Resolution used to skip same-source targets on the belief that intra-source
@@ -197,9 +197,9 @@ pheasant runs deterministic enrichment during sync:
   base — the common case — had **zero** file→file import edges while carrying
   1,871 `imports` edges that all terminated at a bare module name.
 
-Graph-derived terms are also written to SQLite so hybrid search can surface multiple relevant files for a cross-file query, even when no single chunk contains every query term.
+Graph-derived terms are also written to the state database so hybrid search can surface multiple relevant files for a cross-file query, even when no single chunk contains every query term.
 
-Search runs in three modes. `text` queries the SQLite full-text index over chunk content and paths. `graph` matches directly against the live graph — node labels, types and attribute values, plus relationship types and endpoint labels — so enrichment outputs (symbols, entities, external references) and the relationships between them are first-class search targets, not just the chunk text they were derived from. `hybrid` (the default) runs both and merges the results, de-duplicating by node and re-ranking by score. The retrieval mode and the maximum result count are both caller-adjustable.
+Search runs in three modes. `text` queries the full-text index (pg_textsearch BM25) over chunk content and paths. `graph` matches directly against the live graph — node labels, types and attribute values, plus relationship types and endpoint labels — so enrichment outputs (symbols, entities, external references) and the relationships between them are first-class search targets, not just the chunk text they were derived from. `hybrid` (the default) runs both and merges the results, de-duplicating by node and re-ranking by score. The retrieval mode and the maximum result count are both caller-adjustable.
 
 ## Typed artifact adoption and citation targets
 

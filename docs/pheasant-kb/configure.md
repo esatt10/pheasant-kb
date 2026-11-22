@@ -36,10 +36,12 @@ docker compose run --rm --no-deps api config show -c /config/pheasant.yaml
 Keep your copy's `pheasant.name`. It is the knowledge base's id, and the
 data already indexed is stored under it.
 
-!!! note "The UI's Config page cannot save here"
-    The config is mounted read-only into every service, so a persistent edit
-    from the Config page fails. Edit the file instead. Tuning bundles are
-    different: they live in the database, and the Tuning page applies them.
+> [!NOTE]
+> **The UI's Config page cannot save here**
+>
+> The config is mounted read-only into every service, so a persistent edit
+> from the Config page fails. Edit the file instead. Tuning bundles are
+> different: they live in the database, and the Tuning page applies them.
 
 Your copy only needs the keys you change. `pheasant-kb.yaml` is pheasant's
 default configuration written out in full, so a copy holding just

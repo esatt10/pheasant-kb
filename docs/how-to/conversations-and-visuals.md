@@ -230,7 +230,7 @@ data (`number`, `pages`, `next_question`) plus the HTTP `endpoint` and
 table that scrolls inside the answer and grows in place (**Load more**, **Load
 all**) without asking a new question.
 
-Listings leave out memory records (list those with `memory_list`) and internal
+Listings leave out artifact records (list those with `list_artifact_records`) and internal
 sources. Under `security.acl_enforced`, lists and counts include only what the
 caller may read. If the automatic reading is ever wrong for your corpus, set
 `assistant.inventory.mode: keyword` (only `@pheasant` routes) or `off`.

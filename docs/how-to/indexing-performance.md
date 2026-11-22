@@ -5,7 +5,7 @@ pheasant separates work that can scale from state that must stay ordered:
 1. discover and stat items in stable order;
 2. prepare files concurrently (read, SHA-256, skip unchanged, parse and chunk);
 3. embed changed chunks in bounded provider-sized batches;
-4. commit SQLite, graph, manifests and vectors through one coordinator;
+4. commit the database rows, graph, manifests and vectors through one coordinator;
 5. run global graph enrichment and save.
 
 This preserves stable IDs, incremental skips and deterministic graph bytes at
@@ -60,7 +60,7 @@ with, a worker on a different PDF reader build is not trusted, and any range
 the fleet cannot read is read locally. gRPC workers answer the
 `ExtractPages` call and HTTP workers `POST /internal/indexing/extract-pages`;
 a worker too old for either is read around. It is on in every shipped fleet
-profile (`deploy/compose/fleet.yaml`, `deploy/kubernetes/scaled/`).
+profile (`deploy/compose/pheasant-kb.yaml`, `deploy/compose/fleet.yaml`).
 
 ```yaml
 sync:
@@ -73,7 +73,7 @@ sync:
 ```
 
 Measured on a synthetic 8,000-page tariff-style PDF (41M characters, 27,452
-chunks, taxonomy on), one 4-core host, SQLite, stub embedder:
+chunks, taxonomy on), one 4-core host, 1.x's SQLite store, stub embedder:
 
 | | time |
 |---|---|
@@ -197,13 +197,11 @@ must mutate it. Changed generations publish the graph first and the source
 manifests last, so a crash causes safe reprocessing instead of an
 ahead-of-graph manifest.
 
-On the default `storage.graph_format: rows` a changed generation writes only
-the rows that changed, in the same transaction as the artifacts and chunks — so
-a commit costs what the change costs rather than what the graph weighs
-(measured 1.1 ms versus 6.15 s at 100k files), and the graph can no longer
-disagree with the chunks after a crash between two writes. On
-`node_link_json` every commit re-serializes the whole graph, which is the
-cost `storage.graph_checkpoint_seconds` exists to space out.
+A changed generation writes only the graph rows that changed, in the same
+transaction as the artifacts and chunks, so a commit costs what the change
+costs rather than what the graph weighs (measured 1.1 ms at 100k files, against
+6.15 s for 1.x's whole-file graph), and the graph cannot disagree with the
+chunks after a crash between two writes.
 
 A redelivered **full** task resumes as an incremental delta only after a
 graph+manifest checkpoint was durably published. Before that boundary it

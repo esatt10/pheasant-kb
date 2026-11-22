@@ -1,11 +1,11 @@
 # How to enable vector self-search
 
-By default pheasant searches over `text` (SQLite FTS5 + BM25) and `graph`. You
-can additionally enable **semantic / vector search**: chunks are embedded at
-sync time, and search gains a `vector` mode plus vector candidates inside
-`hybrid`.
+pheasant always searches `text` (BM25) and `graph`. With embeddings on,
+which pheasant-kb is, chunks are embedded at sync time and search gains a
+`vector` mode plus vector candidates inside `hybrid`.
 
-This is **off by default**. Standalone text/graph search needs no embeddings.
+The standalone table leaves it off: text and graph search need no
+embeddings.
 
 ## 1. Enable embeddings
 
@@ -28,18 +28,21 @@ search:
 provider returns `text-embedding-3-small`'s own native size (1536).
 Switching `model` therefore changes the vector width automatically, with
 no second edit. Set `dimensions` explicitly only to shrink vectors for
-storage or to pin an exact size across a Synapse fleet (§ below).
+storage, or to pin the space so it does not depend on a provider's native
+default.
 
 | Provider | Behavior |
 |---|---|
 | `stub` | Deterministic, offline embeddings (blake2b-based). No network. Use for tests and offline runs. |
 | `openai-spec` | Calls `POST {base_url}/embeddings`. Works against any OpenAI-spec endpoint, including **self-hosted** — just point `base_url` at it. |
 
-!!! note "The only sanctioned network call (besides captioning)"
-    The `openai-spec` embedder runs in the indexing path, so embedding is the
-    one network call pheasant makes at sync time (alongside optional
-    captioning/transcription). The `stub` provider keeps the offline path
-    network-free.
+> [!NOTE]
+> **The only sanctioned network call (besides captioning)**
+>
+> The `openai-spec` embedder runs in the indexing path, so embedding is the
+> one network call pheasant makes at sync time (alongside optional
+> captioning/transcription). The `stub` provider keeps the offline path
+> network-free.
 
 ## 2. Choose a vector store backend
 
@@ -69,7 +72,7 @@ things the YAML cannot express:
 - **Coverage.** Enabling embeddings only affects *future* syncs — content
   indexed beforehand has no vector. The coverage bar shows the gap, and
   **Build missing vectors** (`POST /search/embeddings/reindex`) closes it by
-  embedding what SQLite already holds, without re-reading a single source
+  embedding the chunks the database already holds, without re-reading a single source
   file. Vectors are keyed by content-addressed chunk id, so a second run
   embeds nothing.
 - **Invalidation.** Changing `model` or `dimensions` puts existing vectors in
@@ -109,21 +112,13 @@ curl -X POST http://localhost:8765/search \
   -d '{"query": "how do we charge customers", "mode": "vector", "max_results": 5}'
 ```
 
-- `text` — FTS5 + BM25 only.
+- `text` — BM25 only.
 - `graph` — node labels, types, attributes, and relationships.
 - `vector` — embedding similarity only (requires embeddings enabled).
 - `hybrid` — merges and re-ranks all available signals, de-duplicating by node.
   The default.
 
-## The fleet-pinned model
+## One model at a time
 
-When pheasant is a Synapse region, its embedding space must match the rest of
-the fleet so the router can compare contracts. The embedder uses the **same
-wire format** the pheasant-flock router's embedding provider uses, so a
-fleet can **pin one model** (one `model` + `dimensions`) across both repos and
-every region. Mismatched embedding spaces are rejected at the router. If you
-plan to join a fleet, agree on the embedding model first and set the same
-`model`/`dimensions` everywhere — for a fleet, set `dimensions` **explicitly**
-on every region rather than leaving it unset, so the pin doesn't depend on
-every region's provider agreeing on the same native default. See
-[Attach to a Synapse fleet](attach-to-synapse.md).
+A region's vectors are comparable only within one embedding space, so a region
+uses **one model** at a time: switching it re-embeds every stored chunk under the `__embeddings__` lease before a sync writes a vector ([`PUT /models/embedding`](../reference/http-api.md)). Set `dimensions` explicitly so the space does not depend on a provider's native default.

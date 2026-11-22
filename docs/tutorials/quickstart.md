@@ -1,216 +1,137 @@
-# Quickstart: stand up a knowledge base in 10 minutes
+# Quickstart: a knowledge base in fifteen minutes
 
-!!! tip "pheasant-kb is the default deployment"
-    This tutorial builds the smallest shape, one process with no key, to show
-    how pheasant works. To run the full product, use pheasant-kb instead.
-    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+By the end of this tutorial you will have pheasant-kb running, a folder of your
+own indexed into it, and a cited answer to a question about it, asked three
+ways: in the web UI, over HTTP and over MCP.
 
-By the end of this tutorial you will have a running standalone pheasant instance
-that has indexed a folder of files and that you can query over HTTP and MCP. No
-fleet, no API keys, no model downloads — everything here runs offline.
+You need Docker with Compose v2 and an OpenAI API key (or an Azure AI Foundry
+resource: [Use Azure AI Foundry models](../pheasant-kb/foundry.md)).
 
-## Prerequisites
-
-- Python 3.11+ (or Docker, if you prefer the container path below)
-- A clone of this repository, or the `pheasant` package installed:
+## 1. Start pheasant-kb
 
 ```bash
-pip install -e ".[dev,mcp]"
+git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb
+echo "OPENAI_API_KEY=sk-..." > .env
+docker compose up -d
 ```
 
-This installs the `pheasant` CLI. Confirm it:
+The first start pulls the images and initializes the database, which takes a
+few minutes. Wait until every long-running service reports `healthy`:
 
 ```bash
-pheasant --help
+docker compose ps
 ```
 
-??? note "Prefer Docker?"
-    Every command below has a container equivalent. The fastest path is:
+`secrets-init`, `db-init` and `workspace-init` exit when they are done; that is
+expected.
 
-    ```bash
-    pheasant init --profile quickstart --output pheasant.yaml
-    pheasant compose-env pheasant.yaml --output .pheasant/compose.env
-    docker compose --env-file .pheasant/compose.env up -d
-    ```
+## 2. Get the API token
 
-    Then jump to [step 5 (health check)](#5-health-check). See
-    [Deployment](../deployment.md) for mounts and image options.
-
-## 1. Generate a starter config
+Every request carries a token generated on first boot:
 
 ```bash
-pheasant init --profile quickstart --output pheasant.yaml
+TOKEN=$(docker compose exec -T api sh -c 'cat /run/pheasant/secrets/api-token')
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/ready
 ```
 
-Expected output:
+`/ready` answers with the region's state, including the graph generation it
+serves. `GET /health` answers without a token; everything else needs it.
 
-```text
-Wrote pheasant.yaml (profile: quickstart)
-```
+## 3. Give it a folder
 
-This writes a `pheasant.yaml` pre-populated from the `quickstart` profile (local
-defaults, API + MCP enabled). Open it — you'll see `sources:`, `search:`
-and `sync:` blocks.
-
-## 2. Point a source at a folder
-
-Create a small folder to index and drop a couple of files in it:
+Make a small folder to index:
 
 ```bash
-mkdir -p ./kb-demo
-printf '# Project Atlas\n\nAtlas is the billing service. Owner: payments team.\n' > ./kb-demo/atlas.md
-printf 'def charge(amount):\n    """Charge a customer."""\n    return amount\n'   > ./kb-demo/billing.py
+mkdir -p ~/kb-demo
+printf '# Project Atlas\n\nAtlas is the billing service. Owner: payments team.\nIt rotates its signing keys every Monday.\n' > ~/kb-demo/atlas.md
+printf 'def charge(amount):\n    """Charge a customer through Atlas."""\n    return amount\n' > ~/kb-demo/billing.py
 ```
 
-Edit the `sources:` list in `pheasant.yaml` so it contains a single
-`markdown_folder`/`repository`-style source pointing at `./kb-demo`. A minimal
-source entry looks like this:
+A source can only read a path the containers can see, so mount the folder under
+`/data` for the indexer (which reads it) and the api tier (which shows the
+original in the document viewer). Create `compose.override.yaml` beside
+`compose.yaml`:
 
 ```yaml
-sources:
-  - name: kb-demo
-    type: repository
-    path: ./kb-demo
-    enabled: true
-    include:
-      - "**/*.md"
-      - "**/*.py"
-    chunking:
-      enabled: true
-      strategy: semantic
-      max_chars: 4000
-      overlap_chars: 400
-    sync:
-      on_startup: true
+services:
+  indexer:
+    volumes:
+      - ~/kb-demo:/data/kb-demo:ro
+  api:
+    volumes:
+      - ~/kb-demo:/data/kb-demo:ro
 ```
-
-!!! note "Paths are validated against an allowlist"
-    pheasant only reads paths under its configured workspace roots
-    (`security.allow_workspace_roots`). In a local run, point `path` at a folder
-    you own. In Docker, mount it under `/workspace`. See
-    [Configure sources](../how-to/sources.md).
-
-## 3. Validate the config
 
 ```bash
-pheasant validate pheasant.yaml
+docker compose up -d
 ```
 
-Expected output (a passing run ends without errors):
-
-```text
-Config valid: pheasant.yaml
-```
-
-Then check the runtime environment (paths writable, sources reachable):
+Now register it. In the UI: open <http://127.0.0.1:8765>, paste the token into
+**Connect API**, then **Sources → Add** with `/data/kb-demo`. Or over HTTP:
 
 ```bash
-pheasant doctor --config pheasant.yaml
+curl -fsS -X POST http://127.0.0.1:8765/sources/quick-add \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"target": "/data/kb-demo"}'
 ```
 
-`doctor` prints a checklist of environment checks. If a path can't be read, fix
-the `path` or your `security.allow_workspace_roots` and re-run.
-
-## 4. Sync (index the source)
+The api tier does not index: it publishes the sync to the queue, and the
+indexer claims it. Wait for it to finish:
 
 ```bash
-pheasant sync --config pheasant.yaml --source kb-demo --mode incremental
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8765/sources/kb-demo/wait?timeout_seconds=55"
 ```
 
-Expected output (counts will vary with your files):
+`state: finished` with `health.percent: 100` means every file was read. The
+same source shows up on the **Syncs** page with its run and its trace.
 
-```text
-Sync kb-demo (incremental): 2 artifacts, 3 chunks indexed, 0 skipped
-```
+Files you just want indexed, without a mount, can be dropped onto the UI's drop
+zone instead: they land in the `uploads` source.
 
-Re-running the **same** command is idempotent — unchanged files are skipped by
-content `sha256`:
-
-```text
-Sync kb-demo (incremental): 0 artifacts, 0 chunks indexed, 2 skipped
-```
-
-??? info "Sync modes"
-    | Mode | Behavior |
-    |---|---|
-    | `incremental` | Skips unchanged artifacts via checkpoints + hashes (default) |
-    | `full` | Rebuilds artifact/chunk/graph/manifest/checkpoint state |
-    | `validate_only` | Checks readability without writing index artifacts |
-    | `repair` | Rebuilds missing or invalid state from manifests + DB |
-
-## 5. Health check
-
-Start the server (HTTP API + MCP on `:8765`):
+## 4. Search it
 
 ```bash
-pheasant start --config pheasant.yaml
+curl -fsS -X POST http://127.0.0.1:8765/search \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"query": "who owns billing", "mode": "hybrid", "max_results": 5}'
 ```
 
-In another terminal:
+Each result names its source, path, lines and the arm that found it (text,
+vector or graph), and the response carries the graph generation that answered.
+
+## 5. Ask it
 
 ```bash
-curl http://localhost:8765/health
-curl http://localhost:8765/ready
+curl -fsS -X POST http://127.0.0.1:8765/assistant/chat \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"question": "When does Atlas rotate its signing keys?"}'
 ```
 
-Expected:
+The answer cites the passages it came from (`[1]` is `atlas.md`), and its
+`steps` show what each stage did and how long it took. In the UI, the same
+question in the Notebook streams the answer and links each citation to the
+passage in the viewer.
 
-```json
-{"status": "ok"}
-```
-
-```json
-{"status": "ready"}
-```
-
-## 6. Search it
-
-Search runs over the **HTTP API** (`POST /search`) or **MCP**
-(`search_context`). There is no `pheasant search` CLI subcommand — search is a
-runtime operation against the running server.
+## 6. Hand it to an agent
 
 ```bash
-curl -X POST http://localhost:8765/search \
-  -H "content-type: application/json" \
-  -d '{"query": "billing owner", "mode": "hybrid", "max_results": 5}'
+claude mcp add --transport http pheasant http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $TOKEN"
 ```
 
-Expected (shape; your IDs and scores will differ):
-
-```json
-{
-  "query": "billing owner",
-  "mode": "hybrid",
-  "results": [
-    {"node_id": "chunk:kb-demo:atlas.md:0", "score": 0.91, "snippet": "Atlas is the billing service. Owner: payments team."}
-  ]
-}
-```
-
-`mode` accepts `text`, `graph`, `hybrid` (default), and `vector` (once
-[vector search](../how-to/vector-search.md) is enabled).
-
-For agents, connect over MCP and call `search_context` instead — see
-[MCP for agents](../mcp_client.md).
-
-## Validation checklist
-
-You're done when all of these are true:
-
-- [x] `pheasant validate pheasant.yaml` exits without errors.
-- [x] `pheasant doctor` reports a writable `/state` (or local state path) and a
-      reachable source.
-- [x] `pheasant sync ... --source kb-demo` reports artifacts/chunks indexed.
-- [x] Re-running the same sync reports artifacts **skipped** (idempotency).
-- [x] `GET /health` returns `{"status": "ok"}` and `GET /ready` returns ready.
-- [x] `POST /search` returns at least one result for a query you know is in your
-      files.
+The agent now has `search_context`, `ask_knowledge_base`, `browse_source`,
+`read_document`, `compose_artifact`, `record_artifact` and the rest of
+[the MCP tools](../mcp_tools.md). Any other MCP client takes the same URL and
+bearer header; the UI's **Connect agent** button shows the snippet.
 
 ## Where to next
 
-- **See it in a browser** — the graph, chat and source panes:
-  [Run the web UI](../how-to/run-the-ui.md).
-- Index **images and audio** (offline): [Multi-modal tutorial](multimodal.md).
-- Turn on **semantic search**: [Vector self-search](../how-to/vector-search.md).
-- Join a **Synapse fleet**: [Attach to a Synapse fleet](../how-to/attach-to-synapse.md).
-- Wire up an **agent**: [MCP for agents](../mcp_client.md).
+- [Configure pheasant-kb](../pheasant-kb/configure.md): models, sources,
+  retrieval, ingestion and the features you can turn off.
+- [Configure sources](../how-to/sources.md): repositories, web collections,
+  SharePoint and Google Drive, and their sync schedules.
+- [Answers, conversations and visuals](../how-to/conversations-and-visuals.md):
+  long answers, `@` keywords, diagrams.
+- [Index images and audio](multimodal.md).
+- [Scale it](../pheasant-kb/scale.md) when the corpus grows.

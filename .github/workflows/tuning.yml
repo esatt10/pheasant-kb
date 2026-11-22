@@ -9,13 +9,10 @@ name: Retrieval tuning
 #
 # Four jobs, and each answers a question the others cannot:
 #
-#   suites       — the plane on both storage backends. FTS5's `bm25()` and
-#                  Postgres's `ts_rank_cd` are different functions on purpose,
-#                  so a parameter that helps on one is not automatically a
-#                  parameter that helps on the other — and a claim tested on
-#                  one backend only is a claim about one backend only. Three
-#                  portability defects have already passed the offline suite
-#                  here and failed on a real PostgreSQL.
+#   suites       — the plane against a real PostgreSQL with pg_textsearch,
+#                  the only state store. Three defects passed an offline
+#                  suite here and failed on a real server, which is why the
+#                  plane is never tested against a stand-in.
 #
 #   equivalence  — the assertion the whole cheap path rests on, run on its own
 #                  so a reviewer can see it pass. Offline re-fusion evaluates

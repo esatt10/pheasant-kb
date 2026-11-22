@@ -153,8 +153,8 @@ reads Postgres and the vector store.
   2048m; a sustained hybrid-search load measured about 1 GB.
 
 One api replica is the right shape on one host, because it owns the published
-port. More api replicas need a load balancer in front, which is what the
-[Kubernetes manifests](../deployment.md) provide.
+port. More api replicas need a load balancer in front, which Container Apps'
+ingress provides ([Deployment](../deployment.md)).
 
 ## The vector store
 
@@ -245,9 +245,7 @@ PHEASANT_POSTGRES_CPUS=1.0
 ```
 
 In your `pheasant.yaml` copy, lower `server.mcp.max_request_body_size_mb` to
-`64`. This suits a corpus of up to about 25,000 files. For less than this, run
-the [single container](../other-deployments.md) instead: one process, SQLite,
-no key needed.
+`64`. This suits a corpus of up to about 25,000 files.
 
 ### Scale up: a large corpus on one large host
 
@@ -271,7 +269,7 @@ chunk), and `assistant.latency.max_concurrent_answers` with the models' quota.
 ### Beyond one host
 
 - **More request capacity** or **machines for each tier:** the same services
-  run on Kubernetes, with api, graph and worker replicas spread across nodes.
+  run as Azure Container Apps, each tier scaled on its own.
   See [Deployment](../deployment.md) and
   [Running a worker fleet](../how-to/worker-fleet.md).
 - **More write capacity:** split the corpus into knowledge-base shards with

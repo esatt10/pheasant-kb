@@ -15,12 +15,14 @@ is columnar, compressed, self-describing, and readable by DuckDB, pandas,
 polars, Spark, Athena, BigQuery and DuckDB-WASM in a browser tab — with no
 pheasant process running and no Python dependency on this package.
 
-!!! info "It reads state, it never writes it"
-
-    An export takes no lease and issues nothing but `SELECT`. Running one
-    during a sync is a WAL reader alongside the writer, not a second writer, so
-    it is safe to put on a schedule. `/state` stays the source of truth;
-    `/exports` stays regenerable.
+> [!NOTE]
+> **It reads state, it never writes it**
+>
+>
+> An export takes no lease and issues nothing but `SELECT`. Running one
+> during a sync is a WAL reader alongside the writer, not a second writer, so
+> it is safe to put on a schedule. `/state` stays the source of truth;
+> `/exports` stays regenerable.
 
 ## Install
 
@@ -77,7 +79,7 @@ never a half-written file.
   "kb_id": "pheasant-repo",
   "generated_at": "2026-08-19T01:22:12+00:00",
   "pheasant_version": "0.10.0",
-  "state_backend": "sqlite",
+  "state_backend": "postgres",
   "compression": "zstd",
   "exported": ["chunks"],
   "tables": [
@@ -134,7 +136,7 @@ Three conventions are worth knowing before you write a query:
 
 | Not exported | Why |
 |---|---|
-| `chunks_fts`, `chunks_vocab` | Derived caches, and dialect-specific (FTS5 virtual table vs. a `tsvector` column). Rebuildable from `chunks`. |
+| `chunks_fts`, `chunks_vocab` | Derived search indexes (the BM25 and `tsvector` columns). Rebuildable from `chunks`. |
 | `idp_groups`, `idp_sync_meta`, `source_audit_events` | Who a principal is, which groups they are in, and what they did. An export is a file people pass around; identity and audit data is not. |
 | `source_checkpoints`, `source_leases`, `index_tasks`, `sync_fingerprints`, `manifests` | Operational state — transient, opaque, and meaningless once detached from the region that wrote it. |
 | Vectors | They already have a columnar home in the LanceDB store under `<state>/vectors/`. |
@@ -192,41 +194,44 @@ cd /exports/parquet/my-kb
 duckdb -c "SELECT relative_path, size_bytes FROM 'artifacts.parquet' ORDER BY 2 DESC LIMIT 10"
 ```
 
-=== "DuckDB (Python)"
+**DuckDB (Python)**
 
-    ```python
-    import duckdb
 
-    duckdb.sql("""
-        SELECT type, count(*) AS edges
-        FROM read_parquet('/exports/parquet/my-kb/graph_edges.parquet')
-        GROUP BY 1 ORDER BY edges DESC
-    """).show()
-    ```
+```python
+import duckdb
 
-=== "pandas"
+duckdb.sql("""
+    SELECT type, count(*) AS edges
+    FROM read_parquet('/exports/parquet/my-kb/graph_edges.parquet')
+    GROUP BY 1 ORDER BY edges DESC
+""").show()
+```
 
-    ```python
-    import pandas as pd
+**pandas**
 
-    artifacts = pd.read_parquet("/exports/parquet/my-kb/artifacts.parquet")
-    artifacts.groupby("source_id")["size_bytes"].sum().sort_values(ascending=False)
-    ```
 
-=== "polars"
+```python
+import pandas as pd
 
-    ```python
-    import polars as pl
+artifacts = pd.read_parquet("/exports/parquet/my-kb/artifacts.parquet")
+artifacts.groupby("source_id")["size_bytes"].sum().sort_values(ascending=False)
+```
 
-    # Lazy: predicate and projection are pushed into the Parquet reader, so a
-    # multi-GB chunks file never lands in memory whole.
-    (
-        pl.scan_parquet("/exports/parquet/my-kb/chunks.parquet")
-        .filter(pl.col("token_estimate") > 400)
-        .select("artifact_id", "heading_path", "token_estimate")
-        .collect()
-    )
-    ```
+**polars**
+
+
+```python
+import polars as pl
+
+# Lazy: predicate and projection are pushed into the Parquet reader, so a
+# multi-GB chunks file never lands in memory whole.
+(
+    pl.scan_parquet("/exports/parquet/my-kb/chunks.parquet")
+    .filter(pl.col("token_estimate") > 400)
+    .select("artifact_id", "heading_path", "token_estimate")
+    .collect()
+)
+```
 
 ## Recipes
 
@@ -305,7 +310,7 @@ SELECT json_extract_string(attributes, '$.language') AS language, count(*) AS no
 FROM graph_nodes WHERE type = 'symbol' GROUP BY 1 ORDER BY nodes DESC;
 ```
 
-**Live agent memory by scope** (see [agent memory](agent-memory.md))
+**Live agent memory by scope** (see [agent memory](agent-records.md))
 
 ```sql
 SELECT scope, kind, count(*) AS n
@@ -328,128 +333,87 @@ process on the reader's side. Which means the whole question is "how do I get
 at that volume", and it has a different answer per runtime.
 
 One rule spans all of them: **the producer needs state access, the reader does
-not.** Running the export requires a writable `/state` (SQLite) or the DSN
-(Postgres). Reading the result requires `/exports` and nothing else. Keeping
+not.** Running the export requires the database DSN. Reading the result
+requires `/exports` and nothing else. Keeping
 those separate is why `/exports` is its own volume rather than a directory
 inside `/state`.
 
-!!! warning "The volume's access *is* the access control"
-
-    An export enforces nothing — memory scope isolation and `artifacts.acl` are
-    exported as data. Mounting `/exports` into a service grants it the union of
-    every principal's access to the corpus. Mount it only where you would hand
-    over the whole knowledge base. See
-    [Parquet export schema](../reference/export-schema.md).
+> [!WARNING]
+> **The volume's access *is* the access control**
+>
+>
+> An export enforces nothing — memory scope isolation and `artifacts.acl` are
+> exported as data. Mounting `/exports` into a service grants it the union of
+> every principal's access to the corpus. Mount it only where you would hand
+> over the whole knowledge base. See
+> [Parquet export schema](../reference/export-schema.md).
 
 ### Docker Compose
 
 `/exports` is a named volume (`pheasant-exports`). Three ways out, easiest
 first:
 
-=== "Bind-mount a host path"
+**Bind-mount a host path**
 
-    Swap the named volume for a directory your other service already reads —
-    the compose files carry this as a commented line:
 
-    ```yaml
+Swap the named volume for a directory your other service already reads, on
+every service that mounts it:
+
+```yaml
+volumes:
+  - ${PHEASANT_EXPORTS_PATH:-./exports}:/exports
+```
+
+```bash
+PHEASANT_EXPORTS_PATH=/srv/analytics/pheasant docker compose up -d
+```
+
+**Mount the volume from another container**
+
+
+Any container on the same host can attach it read-only:
+
+```bash
+docker run --rm -v pheasant-kb_pheasant-exports:/in:ro python:3.12-slim \
+  sh -c "pip install -q duckdb && python -c \"
+import duckdb
+print(duckdb.sql(\\\"SELECT count(*) FROM '/in/parquet/my-kb/chunks.parquet'\\\")) \""
+```
+
+As a long-lived sibling service, in the same compose file:
+
+```yaml
+services:
+  analytics:
+    image: your/loader
     volumes:
-      - ${PHEASANT_EXPORTS_PATH:-./exports}:/exports
-    ```
+      - pheasant-exports:/exports:ro
+```
 
-    ```bash
-    PHEASANT_EXPORTS_PATH=/srv/analytics/pheasant docker compose up -d
-    ```
+**Copy it out**
 
-=== "Mount the volume from another container"
 
-    Any container on the same host can attach it read-only:
-
-    ```bash
-    docker run --rm -v pheasant-exports:/in:ro python:3.12-slim \
-      sh -c "pip install -q duckdb && python -c \"
-    import duckdb
-    print(duckdb.sql(\\\"SELECT count(*) FROM '/in/parquet/my-kb/chunks.parquet'\\\")) \""
-    ```
-
-    As a long-lived sibling service, in the same compose file:
-
-    ```yaml
-    services:
-      analytics:
-        image: your/loader
-        volumes:
-          - pheasant-exports:/exports:ro
-    ```
-
-=== "Copy it out"
-
-    ```bash
-    docker compose cp pheasant:/exports/parquet/my-kb ./my-kb
-    ```
+```bash
+docker compose cp indexer:/exports/parquet/pheasant-kb ./pheasant-kb
+```
 
 Produce the export on a schedule from the host's cron:
 
 ```bash
-0 4 * * *  docker compose exec -T pheasant pheasant export parquet -c /config/pheasant.yaml
+0 4 * * *  cd /path/to/pheasant-kb && docker compose exec -T indexer pheasant export parquet -c /config/pheasant.yaml
 ```
 
-### Kubernetes
+### Container Apps
 
-`/exports` is a `PersistentVolumeClaim` named `pheasant-exports`, and
-`deploy/kubernetes/scaled/exports-cronjob.yaml` fills it nightly. A consumer
-mounts the same claim read-only:
+`/exports` is an Azure Files share mounted on the api and indexer apps, so any
+process that can mount the share reads it, and a scheduled Container Apps job
+running `pheasant export parquet` against the same database keeps it fresh.
+Losing the share costs a re-export, never data.
 
-```yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: warehouse-load
-  namespace: pheasant
-spec:
-  template:
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: load
-          image: your/loader
-          volumeMounts:
-            - name: exports
-              mountPath: /exports
-              readOnly: true
-      volumes:
-        - name: exports
-          persistentVolumeClaim:
-            claimName: pheasant-exports
-```
-
-The claim is **ReadWriteMany** in the scaled fleet for the same reason `/state`
-is: with ReadWriteOnce the volume attaches to one node, so a reader scheduled
-elsewhere cannot mount it at all. If your cluster has no RWX StorageClass, give
-the claim RWO and run the reader as a sidecar or a same-node job — or push the
-files to object storage instead (below). Losing the volume costs a re-export,
-never data.
-
-For a one-off, `kubectl cp` works:
-
-```bash
-kubectl -n pheasant cp "$(kubectl -n pheasant get pod -l app.kubernetes.io/component=indexer \
-  -o jsonpath='{.items[0].metadata.name}')":/exports/parquet/my-kb ./my-kb
-```
-
-With Helm, point the chart at a claim your consumer already mounts rather than
-letting it create one:
-
-```yaml
-persistence:
-  exports:
-    enabled: true
-    existingClaim: analytics-shared
-```
-
-### Object storage, for a consumer outside the cluster
+### Object storage, for a consumer outside the region
 
 The usual answer when the reader is a warehouse, a notebook, or another team.
-Add a sync step after the export — same CronJob, or a sidecar:
+Add a sync step after the export, in the same scheduled job:
 
 ```bash
 pheasant export parquet -c /config/pheasant.yaml \
@@ -467,8 +431,8 @@ SELECT count(*) FROM 's3://my-bucket/pheasant/my-kb/chunks.parquet';
 ### Not over HTTP
 
 pheasant does not serve `/exports` from its API, deliberately. An export
-flattens the ACL model, so a route would hand every principal's memory records
-and every ACL-restricted artifact to any caller who can reach it. If you want
+flattens the ACL model, so a route would hand every principal's records and
+every ACL-restricted artifact to any caller who can reach it. If you want
 HTTP delivery, put your own authenticated static file server or object-store
 presign in front of the volume — that keeps the authorization decision
 somewhere it can actually be made.
@@ -480,22 +444,6 @@ documents as a ZIP, JSONL or Parquet file, built per request from what the
 *caller* may read (the listing's scope and ACL, `knowledge.use`). It is the
 documents a person or agent wants to keep; this page's export is the whole
 corpus, every table, for analysis, and it stays on the volume.
-
-### One constraint worth knowing before you design around it
-
-On **SQLite**, the export must run where `/state` is writable. SQLite creates
-its `-wal` and `-shm` sidecars even to read, so a read-only `/state` — which is
-what `deploy/compose/docker-compose.scale.yml` gives the api replicas — fails outright:
-
-```
-ERROR: could not open the SQLite state at /state/pheasant.db: unable to open
-database file. If /state is mounted read-only, that is the cause…
-```
-
-Run the export from the container that owns `/state` (the indexer, or the
-single-container install), or copy the state directory somewhere writable
-first. On **Postgres** it does not arise: the tables come from the database, so
-`/state` is read-only-mountable and the shipped CronJob does exactly that.
 
 ## Keep exports fresh
 
@@ -510,15 +458,14 @@ pheasant sync --all -c pheasant.yaml && pheasant export parquet -c pheasant.yaml
 
 - **The export is derived data.** It is a snapshot of `/state`, not a backup of
   it — it deliberately omits the operational tables a region needs to resume.
-  Use [`pheasant backup`](backup-restore.md) for anything you intend to restore.
+  Use [a backup](backup-restore.md) for anything you intend to restore.
 - **Row order is the primary key's**, because the export streams by keyset
   pagination on it. Do not rely on it meaning anything else.
 - **`chunks.parquet` carries every chunk's full text**, so it is by far the
   largest file — roughly the size of the indexed corpus before compression.
   Deselect it with `--table` when you only want structure.
-- **Both state backends export identically.** SQLite and Postgres produce the
-  same columns and the same stable IDs, and the manifest records which one the
-  export came from.
+- **Stable IDs are the join keys.** An export's ids are the region's own, so
+  two exports of one region, taken at different times, join on them.
 
 ## What it costs
 
@@ -558,11 +505,10 @@ sized for the sync.
 The fixed floor is ~23 MB for Python and pheasant plus ~33 MB for DuckDB
 itself. Past that, two things drive the numbers:
 
-- **The graph tables dominate at scale**, and that cost is pheasant's existing
-  in-memory graph, not DuckDB. On the 16,000-file corpus: `chunks` alone is
-  0.7 s / 246 MB, all six SQL tables are 0.9 s / 273 MB, and adding
-  `graph_nodes` + `graph_edges` takes it to 1.8 s / 461 MB — the graph has to
-  be loaded whole to be walked. Deselect it when you only want the tables:
+- **The graph tables dominate at scale**, and that cost is materializing the
+  graph from its rows, not DuckDB. On the 16,000-file corpus: `chunks` alone is
+  0.7 s / 246 MB, all six relational tables are 0.9 s / 273 MB, and adding
+  `graph_nodes` + `graph_edges` takes it to 1.8 s / 461 MB. Deselect it when you only want the tables:
 
     ```bash
     pheasant export parquet --table artifacts --table chunks --table symbols
@@ -604,9 +550,8 @@ returns:
 
 ### Concurrency
 
-The export issues only `SELECT` and takes no lease, so on SQLite it is a WAL
-reader beside the indexer's writer and on Postgres an ordinary read-only
-session. It does not block a sync, and a sync does not block it — though an
+The export issues only `SELECT` and takes no lease: an ordinary read-only
+database session. It does not block a sync, and a sync does not block it — though an
 export taken mid-sync is a snapshot of a moving corpus, which is a consistency
 question rather than a performance one.
 
@@ -624,9 +569,8 @@ backend, and never on the sync path. That boundary is deliberate:
   weighting, so the measured `8/3/2/1` title/path/heading/text weights could not
   be expressed at all.
 - DuckDB takes an exclusive **file lock**: while one process holds the database
-  read-write, no other process can open it, even read-only. SQLite's WAL is what
-  lets `deploy/compose/docker-compose.scale.yml` mount `/state:ro` on the API replicas while the
-  indexer writes.
+  read-write, no other process can open it, even read-only. Every tier of a
+  region reads the state store at once.
 
-So it earns its place on the read side, owning nothing. For state, the choice
-stays SQLite (default) or [Postgres](../configuration.md).
+So it earns its place on the read side, owning nothing. State is
+[PostgreSQL](../configuration.md#where-state-lives-storagebackend).
