@@ -1,47 +1,48 @@
 # Running a worker fleet
 
-!!! tip "pheasant-kb is the default deployment"
-    pheasant-kb already runs this topology on one host, with four workers and
-    every tier sized from `.env`; [Scale up or down](../pheasant-kb/scale.md)
-    is the short version of this page. Read on for how the fleet works
-    and for running it on Kubernetes.
-    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+> [!TIP]
+> **pheasant-kb is the default deployment**
+>
+> pheasant-kb already runs this topology on one host, with four workers and
+> every tier sized from `.env`; [Scale up or down](../pheasant-kb/scale.md)
+> is the short version of this page. Read on for how the fleet works.
+> Start with [Run pheasant-kb](../pheasant-kb/index.md).
 
 ## Split the process first
 
 Before any of the below matters, decide what each process *is*. One pheasant
-process serves search, serves the UI, watches directories, runs the scheduler
-and indexes — right for one container, wrong for several, because three
-replicas of it all watch the same directories and all try to index the same
-source.
+process (`--role all`) serves search, serves the UI, watches directories, runs
+the scheduler and indexes — right for one process, wrong for several, because
+three replicas of it all watch the same directories and all try to index the
+same source.
 
 ```bash
-pheasant serve                    # all: today's behavior, the default
 pheasant serve --role api         # serve; publish index work to the queue
 pheasant serve --role graph       # serve read-only graph operations
 pheasant serve --role indexer     # watch, schedule, drain the queue
+pheasant serve --role logger      # drain the observation queue
 pheasant worker --transport grpc  # preparation only
 ```
 
 `api` replicas scale with request traffic and never index; `graph` replicas
-serve a complete read-only snapshot; one `indexer` per shard does the
-indexing; `worker` pods do the parsing. The hand-off between api and indexer is
+serve graph reads from the rows; one `indexer` per shard does the indexing;
+`worker` containers do the parsing. The hand-off between api and indexer is
 the [queue](#queue-the-backlog), which is why `--role api`
 refuses to start without it — a sync request that is accepted and then goes
 nowhere is worse than one that is refused.
 
-`GET /health` and `GET /ready` report the role, so you can tell pods apart
+`GET /health` and `GET /ready` report the role, so you can tell replicas apart
 from a probe response. Full table in
 [configuration](../configuration.md#process-roles-serverrole).
 
 
-Indexing is CPU-bound Python. One container can only parse as fast as its own
+Indexing is CPU-bound Python. One indexer can only parse as fast as its own
 cores, and while it does, it is holding the GIL against the request path. A
 **preparation worker** is a second process — usually a second container — that
 does the parsing and chunking and nothing else.
 
 This page is about running several of them safely. If you only want one
-container to go faster, [speed up indexing](indexing-performance.md) is the
+indexer to go faster, [speed up indexing](indexing-performance.md) is the
 shorter answer.
 
 ## What a worker is, and is not
@@ -49,7 +50,7 @@ shorter answer.
 A worker receives a file's bytes and a whitelisted parse config, and returns
 chunks. That is the whole contract, and everything else follows from it:
 
-* it **never writes** SQLite, the graph, manifests or vectors — the coordinator
+* it **never writes** the database, the graph, manifests or vectors — the coordinator
   commits, in discovery order, so stable IDs and graph bytes stay deterministic;
 * it **never receives connector credentials**. Only parsing inputs cross the
   boundary, so a compromised worker cannot reach your Drive or other connectors;
@@ -61,45 +62,39 @@ fails can simply be sent somewhere else.
 
 ## Start a fleet
 
-Each worker is an ordinary pheasant container with the worker role turned on
-and the shared token in its environment:
-
-```yaml
-# worker container
-sync:
-  concurrency:
-    remote_worker_enabled: true
-    remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
-```
+Each worker is the pheasant image running `pheasant worker`, with its own
+small config (`deploy/compose/worker.yaml`: `server.api.enabled: false`, no
+sources, no database) and the shared token in its environment:
 
 ```bash
-# HTTP workers are the API server
-pheasant serve
-
-# gRPC workers are their own process
 pheasant worker --transport grpc --port 8766
 ```
 
-The coordinator names them:
+The indexer names them (pheasant-kb's config, already set):
 
 ```yaml
 sync:
   concurrency:
     file_executor: remote
     remote_worker_urls:
-      - http://worker-a:8765
-      - http://worker-b:8765
+      - worker:8766
     remote_worker_token_env: PHEASANT_INDEX_WORKER_TOKEN
     remote_worker_batch_size: 8
-    worker_transport: http    # or grpc
+    worker_transport: grpc
 ```
 
-!!! warning "`/internal/indexing/prepare*` must not face the public internet"
+`worker_transport: http` is the other wire: a process serving
+`/internal/indexing/prepare` with `remote_worker_enabled: true`. pheasant-kb
+runs gRPC.
 
-    It is bearer-authenticated and refuses to run at all unless
-    `remote_worker_enabled` is set, but it exists to accept work from your own
-    coordinator. Keep it on an internal network or behind an ingress that
-    does not route to it.
+> [!WARNING]
+> **`/internal/indexing/prepare*` must not face the public internet**
+>
+>
+> It is bearer-authenticated and refuses to run at all unless
+> `remote_worker_enabled` is set, but it exists to accept work from your own
+> coordinator. Keep it on an internal network or behind an ingress that
+> does not route to it.
 
 ## What happens when a worker dies
 
@@ -160,33 +155,8 @@ files; leave it alone if your sources contain large documents.
 
 ## Queue the backlog
 
-Separately from workers: with several sources, the list of what is left to
-index lives in the coordinator's memory. A process killed nine sources into ten
-has lost the tenth.
-
-```yaml
-sync:
-  queue:
-    enabled: true
-    backend: local      # this knowledge base's own database — no broker
-```
-
-Now the backlog is rows. A restart resumes it, `pheasant_index_queue_depth` is
-a number other processes can read, and a source that keeps failing is
-dead-lettered after `max_attempts` instead of consuming the fleet forever.
-
-```bash
-pheasant queue status         # backlog, in-flight, and why anything died
-pheasant queue drain          # index everything currently queued
-pheasant queue requeue-dead   # replay dead letters once the cause is fixed
-```
-
-Redelivery is safe: indexing is idempotent by content hash and stable ID, so a
-task delivered twice re-indexes to identical state.
-
-Use `backend: nats` (`pip install 'pheasant[queue]'`) when indexers on
-different machines must share one backlog and you would rather not point them
-all at one database:
+With several sources, the list of what is left to index must outlive the
+process holding it. pheasant-kb keeps it in NATS JetStream, the only queue:
 
 ```yaml
 sync:
@@ -196,20 +166,32 @@ sync:
     nats_servers: ["nats://nats:4222"]
 ```
 
-It buys fan-out, not correctness the local queue lacks — and it is one more
-thing to run.
+A restart resumes the backlog, `pheasant_index_queue_depth` is a number other
+processes (and an autoscaler) can read, and a source that keeps failing is
+dead-lettered after `max_attempts` instead of consuming the fleet forever.
+`GET /queue` (MCP `get_index_queue`) shows each published sync's state.
+
+```bash
+pheasant queue status         # backlog, in-flight, and why anything died
+pheasant queue drain          # index everything currently queued
+pheasant queue requeue-dead   # replay dead letters once the cause is fixed
+```
+
+Redelivery is safe: indexing is idempotent by content hash and stable ID, so a
+task delivered twice re-indexes to identical state, and a publish is
+deduplicated by its task id, so two api replicas publishing one sync enqueue
+one task.
 
 ## Running the whole fleet
 
-The pieces above assemble into four tiers. Both runtimes ship a working
-version, and both are the *other* trade from the single container — take them
-only past the point where one container stops being enough
-([capacity planning](capacity-planning.md)).
+The pieces above assemble into the tiers pheasant-kb runs: api, graph,
+indexer, workers and logger, over Postgres and NATS. `compose.yaml` is that
+shape on one host; production runs the same tiers as Azure Container Apps.
 
 ### Four secrets, not one
 
-Before either runtime: the fleet has four trust boundaries and each needs its
-own value.
+The fleet has four trust boundaries and each needs its own value.
+pheasant-kb's `secrets-init` generates all four; set them yourself anywhere else.
 
 ```bash
 export PHEASANT_API_TOKEN=$(openssl rand -hex 32)               # callers -> the API
@@ -234,74 +216,51 @@ are forwarded to the indexer, which performs the identical local write; the
 serving tier still writes nothing. Holding that token means being able to put
 bytes into the corpus, so it is a distinct value and `serve` refuses it
 colliding with the worker token as well. It is configured by
-`ingestion.landing_service_url` — already set in `fleet.yaml` and the scaled
-ConfigMap — and is a no-op in a single container, where the process that
-accepts an upload is the one that indexes it.
+`ingestion.landing_service_url` — already set in `pheasant-kb.yaml` and
+`fleet.yaml` — and is a no-op in one process, where the process that accepts an
+upload is the one that indexes it.
 
 ### Compose
+
+pheasant-kb is `docker compose up -d` from the root ([Run pheasant-kb](../pheasant-kb/index.md)).
+CI's generic fleet is the same topology without the UI-facing defaults:
 
 ```bash
 docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up -d \
   --scale indexer=1 --scale worker=4
 ```
 
-Postgres, NATS JetStream, one API, one graph-query service, one elected indexer
-and four gRPC workers. The API keeps no persisted graph resident; authenticated
-graph and hybrid operations go to the graph service over the Compose network.
-The indexer owns watcher, scheduler, queue drain and the global commit stream;
-those producers share one lock, while a `sync --all` child can still prepare
-several sources concurrently. Starting extra indexers creates hot standbys:
-one database lease elects the leader and promotes a standby after failure.
-It does not add write throughput because the graph file, manifests, vectors
-and graph FTS must reach one end state. The gRPC coordinator keeps one
-multiplexed channel to Docker's
-scaled service name and selects `round_robin`, so concurrent preparation
-batches reach distinct worker replicas instead of gRPC's `pick_first` default
-pinning the source to one container. Scale API replicas only after putting a
-load balancer in front of them; Compose deliberately publishes one API endpoint.
+Either way: Postgres, NATS JetStream, one API, one graph service, one elected
+indexer, gRPC workers and the logger. The indexer owns the watcher, the
+scheduler, the queue drain and the commit stream; those producers share one
+lock, while a `sync --all` child can still prepare several sources
+concurrently. Extra indexers are hot standbys: one database lease elects the
+leader and promotes a standby after failure. They do not add write
+throughput, because the graph, manifests and vectors must reach one end state.
+The gRPC coordinator keeps one multiplexed channel to Docker's scaled service
+name and selects `round_robin`, so concurrent preparation batches reach
+distinct worker replicas instead of gRPC's `pick_first` default pinning the
+source to one container. Compose publishes one API endpoint; scale API
+replicas only behind a load balancer.
 
-### Kubernetes
+### Container Apps
 
-```bash
-kubectl apply -f deploy/kubernetes/namespace.yaml
-kubectl -n pheasant create secret generic pheasant-secrets \
-  --from-literal=PHEASANT_DATABASE_URL='postgresql://…' \
-  --from-literal=PHEASANT_API_TOKEN="$(openssl rand -hex 32)" \
-  --from-literal=PHEASANT_INDEX_WORKER_TOKEN="$(openssl rand -hex 32)" \
-  --from-literal=PHEASANT_GRAPH_SERVICE_TOKEN="$(openssl rand -hex 32)" \
-  --from-literal=PHEASANT_INGESTION_SERVICE_TOKEN="$(openssl rand -hex 32)"
-kubectl apply -f deploy/kubernetes/scaled/
-```
+Production runs each tier as its own Container App in one environment: the api
+behind the environment's ingress, the graph service, indexer, workers and
+logger internal only, Postgres Flexible Server for the database and an Azure
+Files share for `/state`. Two requirements carry over to any platform:
 
-`deploy/kubernetes/scaled/networkpolicy.yaml` is applied by that last line: a
-default-deny on ingress, then one allowance per real caller. The API tier is
-the only one anything outside the namespace may reach; the graph service and
-the workers accept traffic from pheasant's own pods and the monitoring
-namespace, and nothing else. A CNI that does not enforce NetworkPolicy makes
-the file inert — check before relying on it, because the tokens are then the
-only control.
-
-| Workload | Kind | Scales on |
-|---|---|---|
-| `pheasant-api` | Deployment | CPU (HPA) |
-| `pheasant-graph` | Deployment | graph-query CPU/latency; one per shard minimum |
-| `pheasant-indexer` | StatefulSet, 1 replica | not autoscaled |
-| `pheasant-worker` | Deployment | queued sources + `pheasant_index_preparation_backlog` |
-
-`deploy/kubernetes/scaled/README.md` lists what you must provide first. Two
-requirements are easy to miss and neither is optional:
-
-* **A ReadWriteMany volume for `/state`.** The indexer writes the graph; the
-  graph-query service and API replicas read state/vector data. With RWO the
-  volume attaches to one node, so replicas scheduled elsewhere cannot mount
-  it. Most default StorageClasses are RWO.
-* **Postgres.** SQLite permits one writer per file, and it is not one file
-  across pods.
+* **A shared `/state` the indexer writes and the api and graph tiers read.**
+  Vectors, media and uploads live there.
+* **Only the api reachable from outside.** The graph service and the workers
+  are protected by their tokens; an ingress that does not route to them is the
+  second layer.
 
 #### How a committed graph reaches the tier serving it
 
-The indexer writes the graph; the graph service and any API replica holding a
-local snapshot reload it and swap generations atomically. Two things trigger
+The indexer commits the graph's rows; every replica reads them, so there is no
+copy to go stale. What a replica does track is the generation it last saw, so
+caches keyed by it (the vocabulary, OKF annotations) are rebuilt. Two things trigger
 that reload, and the cheap one is not the primary one.
 
 An indexer **announces** each committed generation on the broker the fleet
@@ -309,11 +268,10 @@ already runs (`sync.queue.nats_graph_subject`, core NATS pub/sub, one subject
 per knowledge base). Every replica hears it and reloads at commit latency
 rather than up to `server.api.graph_refresh_seconds` later. The **poll is
 kept** underneath as a backstop, which is what lets the announcement be
-at-most-once and stateless: a dropped message, a broker restart, or a region
-with no broker at all costs one poll interval and nothing else. A region on
-the `local` queue backend behaves exactly as it did before this existed.
+at-most-once and stateless: a dropped message or a broker restart costs one
+poll interval and nothing else.
 
-Each generation has a content-addressed id — a digest of the published bytes,
+Each generation has a content-addressed id — an XOR fold of every row's digest,
 so two replicas agree on the name without coordinating and an unchanged graph
 keeps its name across a re-save. It is published where staleness becomes
 visible rather than inferable:
@@ -324,8 +282,8 @@ $ curl -s localhost:8765/ready | jq .graph_generation
 ```
 
 `loaded` is the generation this process is answering from; `published` is what
-is on `/state` now. When they differ, that replica has not picked up the
-latest commit — the condition that used to be silent by construction.
+the database holds now. A row-reading replica reports them equal by
+construction.
 
 On `/ready` rather than `/health`, and read off the event loop beside the
 state-store probe: comparing the two means reading the publication record, and
@@ -359,24 +317,17 @@ as an indexer claims a source; without the claimed-work signal the scaler can
 remove every worker before preparation starts and strand an otherwise healthy
 task until redelivery.
 
-`deploy/kubernetes/scaled/worker-hpa.yaml` ships both a KEDA `ScaledObject`
-(preferred — reads Prometheus directly and can scale to **zero**, which
-matters because idle workers are pure cost) and a plain HPA for clusters
-without it.
-
-The API tier scales on CPU with a five-minute scale-down window to avoid churn
-under bursty requests. It keeps only a bounded graph proxy and limits active
-answers per process. The graph tier owns snapshot residency; scale it
-independently on measured graph-query latency or CPU, and give every graph
-replica enough memory for the old and new snapshot during an atomic refresh.
-Preparation workers and indexer replicas address ingestion throughput, not
-completed-answer latency.
+The API tier scales on CPU or request count, with a scale-down window long
+enough to avoid churn under bursty requests; it holds no graph and limits
+active answers per process. Scale the graph tier independently on measured
+graph-query latency or CPU. Preparation workers and indexer replicas address
+ingestion throughput, not answer latency.
 
 ## The ceiling, and knowing when you have reached it
 
 Scale preparation workers only when preparation backlog is the constrained
 stage. Extra indexers for one shard are elected hot standbys, because the
-graph, the vectors and the graph FTS are one coordinated commit stream. That
+graph, the vectors and the full-text indexes are one coordinated commit stream. That
 is a real consequence of a globally consistent graph, and it is fine right up
 until a team scales workers, watches ingest stop
 improving, and has nothing to tell them which of the two problems they have:
@@ -401,7 +352,7 @@ deep queue behind an idle indexer is a claim problem, behind a saturated one it
 is the ceiling). It is not an average since boot, or a region that indexed hard
 this morning would report itself full all afternoon. And it publishes nothing
 at all before it has seen a minute of wall time, because two busy seconds in a
-pod's first four are not 50% saturation, and sharding a region that is doing
+process's first four are not 50% saturation, and sharding a region that is doing
 nothing is the most expensive possible response to a misread number.
 
 `pheasant scan` warns before you get there, from the same measured
@@ -421,10 +372,10 @@ pheasant shard plan --shards 2 --emit ./regions
 For each region: a `pheasant.yaml` carrying its own knowledge-base id and only
 its own sources (with retrieval settings copied verbatim — a split must not
 quietly become a second product), a `docker-compose.yml` with its own project
-name, volume names and port, and a `.env.example` with secret stubs. Plus a
-`README.md` saying what the emission did **not** do, which is the part that
-matters: no data moves, no router is configured, and each region indexes its
-own sources from scratch. It refuses to overwrite existing files, so a re-run
+name, PostgreSQL, volume names and port, and a `.env.example` with secret
+stubs. Plus a `README.md` saying what the emission did **not** do, which is
+the part that matters: no data moves, and each region indexes its own sources
+from scratch. It refuses to overwrite existing files, so a re-run
 against an edited region is a diff rather than a loss.
 
 ## Related

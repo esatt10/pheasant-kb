@@ -1,100 +1,56 @@
-# How to back up and restore region state
+# Back up and restore a region
 
-!!! tip "pheasant-kb is the default deployment"
-    This page covers the single-container, SQLite-backed deployment. pheasant-kb
-    keeps its index in Postgres; back it up as described in
-    [Operate pheasant-kb](../pheasant-kb/operate.md#back-up-and-restore).
-    Start with [Run pheasant-kb](../pheasant-kb/index.md).
+A region's user data is in two places that have to be copied together: the
+**PostgreSQL database** (state, chunks, the full-text index, the graph's rows,
+usage, evaluation and tuning) and **`/state`** (vectors, graph history
+snapshots, media, uploads, artifact records). pheasant-kb also has the
+`/memory` volume (a 1.x region's `agent-memory` records) and its generated
+tokens.
 
-`/state` is pheasant's operational source of truth — SQLite, the graph and its
-snapshots, manifests, the published contract, the event stream, and the vector
-index. Treat it as **user data** and back it up.
+## Back up
 
-## What's in a backup
-
-`pheasant backup` writes a single `.tar.zst` archive containing:
-
-| Item | Notes |
-|---|---|
-| `pheasant.db` | A **consistent** SQLite snapshot via `VACUUM INTO` (never a raw copy; survives WAL). |
-| `graphs/` | Graph snapshots (`graph.<ts>.json.zst`), plus `graph.latest.json.zst` on `storage.graph_format: node_link_json`. On the default `rows` backend the published graph is in the database, so it is covered by the row above. |
-| `contract.latest.json` | The published Synapse contract, when present. |
-| `events/` | The append-only NDJSON sync-event stream, when present. |
-| `vectors/` | The per-region vector index, when present. |
-
-The archive is written durably (temp file + fsync + atomic rename).
-
-## Create a backup
+One command copies all of it as one checksummed folder:
 
 ```bash
-pheasant backup ./backups/pheasant-$(date -u +%Y%m%dT%H%M%SZ).tar.zst \
-  --config pheasant.yaml
+docker compose stop indexer && docker compose run --rm backup && docker compose start indexer
 ```
 
-The first positional argument is the output path; `--config` / `-c` points at
-your config so the correct `/state` is located.
+The backup runs `pg_dump` in the same Postgres image the stack serves from, so
+the dump always matches the server. Stopping the indexer makes the database and
+`/state` an exact pair; without it the backup still runs, warns, and is
+usable after a repair sync. Each backup is a folder in `./backups`
+(`PHEASANT_BACKUP_PATH`) holding `db.pgdump`, `state.tar.gz`, `memory.tar.gz`,
+`secrets.tar.gz` and `SHA256SUMS`. A backup that fails half way leaves no
+folder, so one that exists is complete.
 
-## Restore a backup
+## Restore
 
 ```bash
-pheasant restore ./backups/pheasant-20260621T120000Z.tar.zst \
-  --config pheasant.yaml
+docker compose stop api graph indexer logger worker
+docker compose run --rm restore pheasant-kb-20261021T203120Z --force
+docker compose up -d
 ```
 
-Restore is **safe by default**:
+Restore checks every file against `SHA256SUMS` first, refuses while a pheasant
+service is running, refuses a populated stack without `--force`, and with it
+keeps what it replaces (the current database dumped to
+`backups/pre-restore-<time>/`, `/state` and `/memory` moved into
+`.replaced-<time>` folders). The database is restored in one transaction.
 
-- It refuses a non-empty target unless you pass `--force`.
-- Extraction is protected against path traversal.
-- The DB is validated (`PRAGMA integrity_check`) before being swapped in.
-- The swap is atomic; the previous state is preserved as
-  `<name>.replaced-<ts>` — never deleted.
+The full procedure, including the repair sync after a live backup and moving a
+backup between hosts, is in
+[Operate pheasant-kb](../pheasant-kb/operate.md#back-up-and-restore).
 
-To overwrite an existing populated state:
+## Graph history snapshots
 
-```bash
-pheasant restore ./backups/pheasant-20260621T120000Z.tar.zst \
-  --config pheasant.yaml --force
-```
+Independently of backups, the indexer writes zstd-compressed node-link
+snapshots of the published graph (`graphs/<kb_id>/graph.<utc-ts>.json.zst`
+under `/state`), materialized from the rows on a separate publisher so a
+snapshot can never block a commit or be half written. They are:
 
-## Validate after restore
-
-After a restore, confirm the region is healthy and consistent:
-
-```bash
-# config + environment
-pheasant validate pheasant.yaml
-pheasant doctor --config pheasant.yaml
-
-# rebuild any missing/invalid derived state from manifests + DB
-pheasant repair --config pheasant.yaml
-
-# runtime health
-pheasant start --config pheasant.yaml &
-curl http://localhost:8765/health
-curl http://localhost:8765/ready
-```
-
-If a source looks stale or partially indexed, run a targeted repair or a full
-sync:
-
-```bash
-pheasant sync --config pheasant.yaml --source <name> --mode repair
-pheasant sync --config pheasant.yaml --source <name> --mode full
-```
-
-## Graph snapshots and retention
-
-Independently of explicit backups, pheasant writes zstd-compressed, timestamped
-graph snapshots after a successful sync
-(`graphs/<kb_id>/graph.<utc-ts>.json.zst`). Snapshots are files on both
-`storage.graph_format` backends — on `rows` the snapshot is materialized from
-the rows, so a history file is the same document whichever backend produced it.
-They are:
-
-- **Throttled** by `storage.graph_snapshot_interval_seconds` (default 900s).
-- **Bounded** by `storage.max_state_size_gb` — when the cap is exceeded, the
-  oldest snapshots are evicted first; the published graph, the SQLite DB, and
-  the contract are **never** evicted.
+- **Throttled** by `storage.graph_snapshot_interval_seconds` (900 s by default).
+- **Bounded** by `storage.max_state_size_gb`: past the cap the oldest snapshots
+  are evicted first. Nothing else under `/state` is ever evicted.
 
 ```yaml
 storage:
@@ -104,12 +60,13 @@ storage:
   max_state_size_gb: 10
 ```
 
-Snapshots are point-in-time history; `pheasant backup` is the portable archive
-you copy off-box.
+Snapshots are point-in-time history; a backup is the portable copy you take off
+the host.
 
-## Operational notes
+## Notes
 
-- Never point two independent pheasant instances at the same writable `/state`.
-  Use one volume per instance.
-- Back up before upgrades or migrations. State migrations are one-shot and
-  idempotent and preserve originals, but a fresh archive is cheap insurance.
+- One region, one database and one `/state`. Never point two regions at the
+  same writable volume or the same database.
+- `/exports` is regenerable (`pheasant export parquet`) and is not backed up.
+- `storage.max_state_size_gb` bounds snapshot history; the knowledge base's own
+  size limit is `storage.knowledge_base_limit_gb`, measured as indexed content.

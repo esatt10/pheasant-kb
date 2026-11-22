@@ -339,6 +339,23 @@ def test_simple_workflow_synthesizes_with_a_model() -> None:
     assert [step.name for step in result.steps] == ["retrieve", "answer"]
 
 
+def test_the_retrieve_step_has_a_chip_for_facts_and_figures() -> None:
+    """The step's duration includes both graph lookups, so its chips must too:
+    a total its chips do not add up to reads as time that went nowhere."""
+
+    result = SimpleWorkflow().run(WorkflowRequest(question="hash"), _retriever(), None)
+    retrieve = result.steps[0]
+    phases = [timing["phase"] for timing in retrieve.fanout_timings]
+
+    assert phases[0] == "search"
+    assert {"facts", "figures"} <= set(phases)
+    evidence = [t for t in retrieve.fanout_timings if t["phase"] in {"facts", "figures"}]
+    assert all(t["mode"] == "graph" and t["items"] >= 0 for t in evidence)
+    assert sum(t["duration_seconds"] for t in retrieve.fanout_timings) <= (
+        retrieve.duration_seconds + 1e-6
+    )
+
+
 # ------------------------------------------------------------------- agentic
 
 
@@ -463,6 +480,9 @@ def test_agentic_audit_reports_configured_modes_usage_and_seconds(agentic, monke
         step.duration_seconds is not None and step.duration_seconds >= 0 for step in result.steps
     )
     assert next(s for s in result.steps if s.name == "retrieve").input_tokens == 0
+    # Facts and figures are read inside the synthesize node, so its step names them.
+    synthesize = next(s for s in result.steps if s.name == "synthesize")
+    assert {t["phase"] for t in synthesize.fanout_timings} >= {"facts", "figures"}
 
 
 def test_agentic_marks_unreported_provider_usage_unknown(agentic, monkeypatch) -> None:

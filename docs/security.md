@@ -9,71 +9,62 @@ pheasant indexes local content for agents, so it must be conservative about path
 - Exclude secrets and generated dependency/build folders by default.
 - Do not execute code from indexed repositories.
 - Keep MCP tools limited to retrieval, sync, registration, export, and status operations.
-- Prefer read-only source mounts in Docker and Kubernetes.
-- Bind local API/UI carefully and protect enterprise ingress with cluster controls.
+- Prefer read-only source mounts (`/data` in pheasant-kb is mounted read-only on the api).
+- Require the API token on every tier, and put an authenticating ingress in front of anything public.
 - Where a corpus must exclude specific content (benchmark answer keys, evaluation
   artifacts), enforce it with `readiness.corpus_denylist` rather than by convention —
   it refuses the write at every door rather than detecting the leak afterwards.
 
 ## Trust model for the HTTP API
 
-**One container: no authentication, and the bind address is the control.**
-Every route — including the ones that write config, register sources and
-trigger syncs — is open to anything that can reach the port. That is a
-deliberate local-first choice for a tool running on somebody's own machine
-behind their own perimeter, and it makes two controls load-bearing:
+**Every tier of pheasant-kb requires a token.** `secrets-init` generates
+`PHEASANT_API_TOKEN` on first start (an `.env` value wins), every caller sends
+`Authorization: Bearer <value>`, and everything outside
+`security.api_auth.public_paths` (`/health`, `/ready`, `/metrics`) is refused
+with `401`. A region that signs in with Entra replaces the shared token with
+people's own identities ([Host a region](how-to/hosted-regions.md)).
 
-- **Bind address.** Loopback by default on both paths: `pheasant up`
-  generates `host: 127.0.0.1`, and compose publishes
-  `127.0.0.1:8765:8765`. The container itself still binds `0.0.0.0`, because
-  binding loopback *inside* a container makes it unreachable from the host —
-  it is the published port that is restricted. Set `PHEASANT_BIND=0.0.0.0`
-  to expose it, and only behind an authenticating ingress. Note that Docker's
-  port publishing writes its own iptables rules, so a host firewall is not a
+The surface behind the token can register a source over any allow-listed
+path, rewrite the config and trigger syncs, so the token is the region's
+front-door credential. Two more controls sit beside it:
+
+- **Bind address.** `compose.yaml` publishes the api on `127.0.0.1` only. The
+  container itself binds `0.0.0.0`, because binding loopback *inside* a
+  container makes it unreachable from the host; it is the published port that
+  is restricted. Widen it only behind an authenticating ingress. Docker's port
+  publishing writes its own iptables rules, so a host firewall is not a
   substitute for this.
 - **CORS origins.** `server.api.cors_origins` is an allowlist, not `*`.
-  Without it, any web page the user visits can script the whole API from
-  their browser: read the index, rewrite the config, or repoint the
-  embedding provider at an attacker's host and ship a server-held API key
-  with the next request. The bundled UI proxies `/api/*` same-origin in
-  both dev (Vite) and compose (nginx), so it needs no CORS entry at all.
+  Without it, any web page the user visits could script the API from their
+  browser with a token it found there. The bundled UI is served by the api
+  itself, same-origin, so it needs no CORS entry.
   `server.api.cors_allow_all_origins: true` restores the wildcard for
   deployments that authenticate upstream.
 
-Anything reachable over that API is reachable by whoever can reach the port.
-Treat "who can open :8765" as the real authorization boundary.
+### The startup refusal
 
-### A fleet is the other case, and it is enforced
-
-That posture does not survive the role split, and until Phase 35.8 it shipped
-into it unchanged. In a fleet the API is a multi-replica Service; the pods bind
-`0.0.0.0` because a Service cannot reach a loopback-bound pod, so the bind
-address stops being a control at all — and the surface behind it can register a
-source over any allow-listed path and read what it finds. "Unauthenticated"
-plus "can mount anything" plus "one port-publishing decision away from the
-network" is a combination that stays safe by luck.
-
-So every role **but `all`** refuses to start on a routable bind unless one of
-two things is true:
+Every role **but `all`** refuses to start on a routable bind unless one of two
+things is true:
 
 | Setting | Means |
 |---|---|
-| `security.api_auth.token_env` resolves to a value | Callers send `Authorization: Bearer <value>`. Everything outside `security.api_auth.public_paths` (`/health`, `/ready`, `/metrics`) is refused with `401`. |
+| `security.api_auth.token_env` resolves to a value | Callers send `Authorization: Bearer <value>`. |
 | `security.api_auth.behind_authenticating_proxy: true` | "Something in front of this authenticates callers." Explicit, because the failure it suppresses is silent. |
 
-`all` is exempt, and that exemption is the point: a laptop, a `pheasant up`
-and every existing standalone container keep starting with no configuration at
-all. The token is deliberately a static shared secret and nothing more — enough
-to make "behind an authenticating ingress" the default rather than the
-instruction, and small enough that it cannot rot into a half-built identity
-system. Richer authentication belongs to the ingress.
+Every tier binds `0.0.0.0` inside its container, because a load balancer or a
+sibling container cannot reach a loopback-bound one, so the bind address is
+not a control there and the refusal is what keeps "no token" from being a
+deployment. `all` is exempt, so a one-process development region starts with
+no configuration; it is not a shape to expose. The token is deliberately a
+static shared secret and nothing more. Richer authentication is Entra sign-in
+or the ingress.
 
 `/internal/*` is exempt from the API token structurally, not by configuration:
 those routes already enforce a token for their own boundary (the worker token,
-the graph token), and requiring a second would mean handing the region's
-front-door credential to every preparation worker.
+the graph token, the landing token), and requiring a second would mean handing
+the region's front-door credential to every preparation worker.
 
-The fleet profiles also turn `security.acl_enforced` on with
+pheasant-kb also turns `security.acl_enforced` on with
 `default_visibility: public`, so ACLs are honoured where they exist without
 requiring every artifact to carry one first.
 
@@ -108,10 +99,10 @@ variable.
 
 `validate_role` is a per-role allow-list, not just a set of "can it work"
 checks. A worker refuses to start holding a database DSN, any model provider
-key, the IdP token, the graph-service token, a source list, or a non-SQLite
-state backend — none of which it can use, since it is handed bytes and returns
+key, the IdP token, the graph-service token, the landing token or a source
+list — none of which it can use, since it is handed bytes and returns
 chunks. The refusal names the variable and says where to put it instead
-(a worker's own `environment:` block, or its own Secret).
+(a worker's own `environment:` block, or its own secret).
 
 A worker also serves no knowledge-base API: `server.api.enabled: false` is
 enforced rather than declared, so such a process answers `/health`, `/ready`,
@@ -234,10 +225,10 @@ tenable:
    `include: ["**/*.json", "**/*.yaml"]` sweeps up live tokens.
 2. **The traversal is bounded** (`sync.limits`) and refuses rather than
    truncates, so a mistaken source is a clear stop, not an OOM.
-3. **The API is not exposed to the network by default** — `pheasant up`
-   generates `host: 127.0.0.1`, and compose publishes to loopback. Since the
-   API is unauthenticated, this is what keeps "can read any path" from
-   meaning "anyone on the network can read any path".
+3. **The API is not exposed to the network by default**, and it requires the
+   token: compose publishes to loopback, and every tier refuses anonymous
+   callers. That is what keeps "can read any path" from meaning "anyone on
+   the network can read any path".
 4. **The container does not run as root**, so in a Docker deployment the
    reachable filesystem is narrower than the host's.
 
@@ -246,10 +237,10 @@ Set `allow_user_selected_source_paths: false` (with explicit
 callers should not choose paths at all. The cost is that the UI file browser
 can no longer leave the configured roots; the CLI is unaffected either way.
 
-**What this does not protect against:** anything that can reach the API can
-still ask it to index any path the process can read, and read the result
-back. If you expose the port, put an authenticating proxy in front of it and
-turn the flag off.
+**What this does not protect against:** anything holding the token can still
+ask the region to index any path the process can read, and read the result
+back. For a region other people use, turn the flag off and grant roles
+([Host a region](how-to/hosted-regions.md)) rather than sharing the token.
 - **Config writes.** Source promotion (`POST /sources/{id}/promote`, MCP
   `promote_runtime_source_to_config`) may only write this server's own
   config file or a path under a configured root. It deliberately does *not*
@@ -269,7 +260,7 @@ turn the flag off.
   fetch its own instance credentials into a searchable index. The check runs
   at registration, not on every fetch, so it does not defend against DNS
   rebinding, and a hostname that does not resolve is allowed. Registrations
-  from YAML, the UI and `pheasant up` are unaffected: an operator indexing an
+  from YAML and the UI are unaffected: an operator indexing an
   intranet wiki is doing a normal thing. (`security/url_policy.py`)
 - **Cloning.** Clone URLs must name a known transport (`http`, `https`,
   `ssh`, `git`) or the `user@host:path` form. Transport helpers such as
@@ -277,9 +268,6 @@ turn the flag off.
   `-` (which git parses as an option) are refused before `git clone` sees
   them; the clone subprocess additionally runs with `protocol.allow=never`
   plus explicit per-protocol allowances and `GIT_TERMINAL_PROMPT=0`.
-- **Backup restore.** Archive members are checked for traversal *and* for
-  links whose target escapes the destination, then extracted with the
-  stdlib `data` filter.
 
 ### Content that may never be indexed (`readiness.corpus_denylist`)
 
@@ -423,7 +411,7 @@ security:
 With enforcement on, `search_context` (library, MCP, HTTP `/search`) accepts
 `principal` + `principal_groups` and filters candidates against artifact ACLs
 before results are merged. The trust model: the region enforces *visibility*;
-the caller (the Synapse router, or your deployment perimeter) authenticates.
+the caller (an Entra sign-in, or your deployment perimeter) authenticates.
 
 A graph hit is judged by the file that owns it. A `chunk`, `heading` or
 `symbol` definition is minted once per file (its id embeds the path), so its
@@ -461,7 +449,7 @@ security:
     staleness_max_minutes: 1440   # the SLA
 ```
 
-The mapping persists in the region's SQLite state and refreshes on the
+The mapping persists in the region's state store and refreshes on the
 scheduler beat or on demand (`POST /security/idp/sync`;
 `GET /security/idp/status` reports the last heartbeat and SLA verdict).
 **Staleness SLA:** if the last successful sync is older than

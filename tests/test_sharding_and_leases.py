@@ -643,6 +643,45 @@ def test_the_emitted_compose_is_a_file_docker_will_accept(tmp_path: Path) -> Non
     assert {"/state", "/workspace", "/exports"} <= mounted
 
 
+def test_an_emitted_region_runs_its_own_database_and_one_process(tmp_path: Path) -> None:
+    """2.0 has no file-backed state store, so a region without a database
+    cannot start; and a copied pheasant-kb config names a queue, a graph
+    service and workers that do not exist beside one container."""
+
+    import yaml
+
+    from pheasant.sharding import POSTGRES_IMAGE, render_artifacts
+
+    config = _plan_config(tmp_path, ["docs"])
+    plan = plan_shards([SourceSize("docs", 500)])
+    artifacts = render_artifacts(plan, config)
+    compose = yaml.safe_load(artifacts["atlas-shard-1/docker-compose.yml"])
+    region = yaml.safe_load(artifacts["atlas-shard-1/pheasant.yaml"])
+
+    assert POSTGRES_IMAGE in compose["services"]["postgres"]["image"]
+    assert "atlas-shard-1-postgres" in compose["volumes"]
+    service = compose["services"]["pheasant"]
+    assert service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert "@postgres:5432/" in service["environment"]["PHEASANT_DATABASE_URL"]
+
+    assert region["server"]["role"] == "all"
+    assert region["storage"]["dsn_env"] == "PHEASANT_DATABASE_URL"
+    assert region["sync"]["queue"]["enabled"] is False
+    assert region["graph"]["query_service_url"] is None
+    assert region["sync"]["concurrency"]["file_executor"] == "thread"
+    assert region["observability"]["interactions"]["queue"]["enabled"] is False
+    # Retrieval is copied, not reset.
+    assert region["search"]["ranking"]["rrf_k"] == 42
+    PheasantConfig.model_validate(region)
+
+
+def test_the_emitted_database_image_is_the_one_deploy_postgres_builds() -> None:
+    from pheasant.sharding import POSTGRES_IMAGE
+
+    tag = (Path(__file__).resolve().parents[1] / "deploy" / "postgres" / "TAG").read_text()
+    assert POSTGRES_IMAGE == f"ghcr.io/esatt10/pheasant-postgres:{tag.strip()}"
+
+
 def test_a_region_config_names_container_paths(tmp_path: Path) -> None:
     """Not wherever the planning machine happened to keep its state."""
 

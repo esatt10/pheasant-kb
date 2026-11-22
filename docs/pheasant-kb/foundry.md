@@ -249,10 +249,10 @@ code or commented examples does not itself send data to Anthropic.
 
 ## Other deployment shapes
 
-The single container and the generic fleet read the same config sections. Set
-the four model sections as in step 3 and pass `AZURE_FOUNDRY_API_KEY` to the
-process. In a one-container setup that means
-`docker run -e AZURE_FOUNDRY_API_KEY=…` or the `.env` its compose file reads.
+The generic fleet (`docker-compose.scale.yml`) and Container Apps read the
+same config sections. Set the four model sections as in step 3 and pass
+`AZURE_FOUNDRY_API_KEY` to every tier that calls a model (the api and the
+indexer), or give them a managed identity with access to the resource.
 
 ## Switch back
 

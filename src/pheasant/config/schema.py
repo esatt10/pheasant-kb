@@ -1334,7 +1334,7 @@ class InteractionSettings(ModelMixin):
 
     Observations are rows, never files. They are not chunked, not indexed,
     and never returned by ``search_context`` — a UI session's chat does not
-    become knowledge because it was observed. See ``docs/memory-formation.md``.
+    become knowledge because it was observed. See ``docs/observation-and-formation.md``.
     """
 
     enabled: bool = False

@@ -78,9 +78,8 @@ Your `.env`, your
 
 Since pheasant-kb became pheasant's default configuration, a config that names
 no defaults table is built on pheasant-kb's. pheasant-kb configs are
-unaffected. A config of your own for a *different* shape, such as a laptop
-`pheasant up` config written before this release, needs `defaults: standalone`
-under `pheasant:` to keep running on SQLite; see
+unaffected. A config of your own for a *different* shape, such as a
+one-process region, needs `defaults: standalone` under `pheasant:`; see
 [Defaults](../configuration.md#defaults-pheasant-kb-or-standalone). If
 you keep a config copy, compare it with the new
 `deploy/compose/pheasant-kb.yaml` for settings you may want to adopt.
@@ -125,7 +124,8 @@ docker compose up -d
 - It refuses a stack that already holds data unless you pass `--force`. Even
   then nothing is deleted: the current database is dumped to
   `backups/pre-restore-<time>/`, and the current `/state` and `/memory`
-  contents are moved into a `.replaced-<time>` folder on their own volumes.
+  contents (`/memory` holds a 1.x region's `agent-memory` records) are moved
+  into a `.replaced-<time>` folder on their own volumes.
   Remove those once the restored stack checks out.
 - The database is restored in one transaction, so a failed restore leaves it
   as it was.
@@ -137,11 +137,6 @@ Both commands run in the Postgres image, so `pg_dump` always matches the
 server's version, and neither runs on `docker compose up`. Their scripts are
 `deploy/compose/backup.sh` and `deploy/compose/restore.sh`. Copy the
 `backups` folder off the machine to make it a backup in any useful sense.
-
-`pheasant backup` and `pheasant restore` are for the single-container,
-SQLite-backed deployment ([Backup & restore](../how-to/backup-restore.md)).
-On a Postgres region they refuse and point here, rather than writing an
-archive without the database.
 
 ## Rotate a token
 

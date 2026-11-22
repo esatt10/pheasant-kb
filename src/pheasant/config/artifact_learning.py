@@ -12,7 +12,7 @@ class MemorySynthesisSettings(ModelMixin):
     """L3 compaction (Phase 4): abstractive merge of a near-duplicate
     cluster deterministic methods cannot resolve — complementary partial
     facts, progressive refinement, or genuine abstraction across records.
-    See `docs/memory-system.md` §8 for what deterministic clustering (L1/L2)
+    See `docs/artifact-records.md` §8 for what deterministic clustering (L1/L2)
     already handles and why this tier exists for what it cannot.
 
     Mirrors `AssistantSettings` field-for-field on purpose: an operator who
@@ -24,8 +24,8 @@ class MemorySynthesisSettings(ModelMixin):
     or compaction (Phase 3), which are pure metadata operations, this makes
     a network call — CLAUDE.md rule 1 forbids an LLM on the indexing path,
     and the scheduler's maintenance beat is exactly that path. Synthesis
-    runs only through the explicit `memory_synthesize` MCP tool /
-    `POST /memory/synthesize`, never automatically, so `pytest` stays
+    runs only through the explicit `synthesize_artifacts` MCP tool /
+    `POST /artifacts/synthesize`, never automatically, so `pytest` stays
     network-free by construction (the default `provider` resolves to
     nothing reachable) rather than by mocking.
     """
@@ -84,7 +84,7 @@ class MemoryFormationSettings(ModelMixin):
     already is, so a repeat pass over unchanged observations under
     unchanged parameters writes nothing.
 
-    See ``docs/memory-formation.md``.
+    See ``docs/observation-and-formation.md``.
     """
 
     #: Master switch. Off, nothing reads the observation plane and no
@@ -253,5 +253,5 @@ class MemorySettings(ModelMixin):
 
     # --- formation (observation -> candidate -> record) --------------------
     #: Reading the observation plane and proposing records. Off by default;
-    #: see `MemoryFormationSettings` and ``docs/memory-formation.md``.
+    #: see `MemoryFormationSettings` and ``docs/observation-and-formation.md``.
     formation: MemoryFormationSettings = field(default_factory=MemoryFormationSettings)

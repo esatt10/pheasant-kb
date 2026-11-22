@@ -577,7 +577,7 @@ CREATE INDEX IF NOT EXISTS idx_log_tasks_claim
 -- a UI session's chat does not become knowledge because it was observed. The
 -- only path from here into memory is a *candidate* that something admits,
 -- and admission goes through MemoryStore.append like every other write. See
--- docs/memory-formation.md.
+-- docs/observation-and-formation.md.
 --
 -- Unlike every other table in this file, this one is high-churn and
 -- retention-bounded: rows are deleted once past

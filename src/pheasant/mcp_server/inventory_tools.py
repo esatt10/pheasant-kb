@@ -304,7 +304,7 @@ def register_inventory_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         first). Pages with limit (at most 500) and offset, and returns the
         total with has_more. Each document's id is its graph node id, so
         get_graph_neighbors, explain_node and get_file_summary (with its path)
-        follow on. Memory records are not listed (use memory_list). With
+        follow on. Artifact records are not listed (use list_artifact_records). With
         security.acl_enforced on, only documents the principal may read.
         """
 

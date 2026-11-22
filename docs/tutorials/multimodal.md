@@ -14,16 +14,18 @@ This tutorial uses the **offline stub** captioner and transcriber (the
 defaults), so it needs no API keys and no model downloads. Everything is
 copy-pasteable.
 
-!!! info "Two ways to get good text, both offline"
-    1. **Stub captioner/transcriber (default):** produces a deterministic
-       placeholder caption/transcript derived from the file name plus a stable
-       content fingerprint. Good enough to make files discoverable and to
-       exercise the pipeline; the same file always yields the same text.
-    2. **Authored sidecar (recommended for real content):** drop a
-       `<file>.caption.txt` or `<file>.transcript.txt` next to the media file.
-       pheasant uses its contents **verbatim**, and the sidecar wins over both
-       the stub and any network captioner. This is the offline way to get
-       accurate text without calling a model.
+> [!NOTE]
+> **Two ways to get good text, both offline**
+>
+> 1. **Stub captioner/transcriber (default):** produces a deterministic
+>    placeholder caption/transcript derived from the file name plus a stable
+>    content fingerprint. Good enough to make files discoverable and to
+>    exercise the pipeline; the same file always yields the same text.
+> 2. **Authored sidecar (recommended for real content):** drop a
+>    `<file>.caption.txt` or `<file>.transcript.txt` next to the media file.
+>    pheasant uses its contents **verbatim**, and the sidecar wins over both
+>    the stub and any network captioner. This is the offline way to get
+>    accurate text without calling a model.
 
 ## 1. Add a media folder to your config
 
@@ -102,11 +104,13 @@ Sync kb-demo (incremental): 4 artifacts, 5 chunks indexed, 0 skipped
 The image and audio files are now `image` / `audio` artifacts whose chunk text
 is the caption / transcript.
 
-!!! tip "Idempotent — never re-captions or re-transcribes unchanged media"
-    On the next incremental sync, an unchanged image or audio file is skipped by
-    content `sha256` **before it is read**, so it is never captioned or
-    transcribed again (zero work, same guarantee as the embedder). Change the
-    file (or its sidecar) and it is re-processed.
+> [!TIP]
+> **Idempotent — never re-captions or re-transcribes unchanged media**
+>
+> On the next incremental sync, an unchanged image or audio file is skipped by
+> content `sha256` **before it is read**, so it is never captioned or
+> transcribed again (zero work, same guarantee as the embedder). Change the
+> file (or its sidecar) and it is re-processed.
 
 ```bash
 pheasant sync --config pheasant.yaml --source kb-demo --mode incremental
@@ -152,10 +156,6 @@ stub default, the snippet is the deterministic placeholder
 - Where present, **sidecars** overrode the stub with your exact text.
 - The caption/transcript flowed through the normal chunk/graph path and became
   searchable.
-- Because an image/audio source is configured, this region's published Synapse
-  contract will automatically advertise the `image` / `audio` modality so a
-  fleet router can route modality-filtered queries here (see
-  [Attach to a Synapse fleet](../how-to/attach-to-synapse.md)).
 
 ## Going to production
 

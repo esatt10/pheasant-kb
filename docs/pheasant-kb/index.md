@@ -12,17 +12,19 @@ You need Docker with Compose v2 (Docker Desktop on macOS and Windows, or Docker
 Engine with the compose plugin on Linux) and an OpenAI API key. To use an Azure
 AI Foundry resource instead, see [Use Azure AI Foundry models](foundry.md).
 
-=== "macOS / Linux"
+**macOS / Linux**
 
-    ```bash
-    git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb && echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
-    ```
 
-=== "Windows (PowerShell)"
+```bash
+git clone https://github.com/esatt10/pheasant-kb && cd pheasant-kb && echo "OPENAI_API_KEY=sk-..." > .env && docker compose up -d
+```
 
-    ```powershell
-    git clone https://github.com/esatt10/pheasant-kb; cd pheasant-kb; Set-Content .env "OPENAI_API_KEY=sk-..."; docker compose up -d
-    ```
+**Windows (PowerShell)**
+
+
+```powershell
+git clone https://github.com/esatt10/pheasant-kb; cd pheasant-kb; Set-Content .env "OPENAI_API_KEY=sk-..."; docker compose up -d
+```
 
 That is the whole install. `compose.yaml` at the root of the repository is
 pheasant-kb; `.env` beside it holds your key and any setting you change later
@@ -53,7 +55,7 @@ which rewrites a bare `/run/...` argument into a Windows path.
 | A Git repository | **Sources → Add** with its URL. The indexer clones it into the workspace volume and keeps it fetched. Set `GITHUB_TOKEN` in `.env` for private repositories. |
 | A web page or site section | **Sources → Add** with its URL. Each page is re-checked on its own schedule. |
 | A folder on this machine | Mount it into the stack, then add its container path as a source. See [Index a folder on the host](configure.md#index-a-folder-on-the-host). |
-| Notes an agent should remember | MCP `record_artifact` or `POST /artifacts/records`, into the `artifact-records` source (`memory_write` and `/memory` are deprecated aliases). |
+| Facts an agent should record | MCP `record_artifact` or `POST /artifacts/records`, into the `artifact-records` source. See [Give your agents durable records](../how-to/agent-records.md). |
 
 Everything above is also available to agents over MCP (`register_source`,
 `submit_documents`, `sync_source`).
@@ -112,7 +114,7 @@ Named volumes, prefixed with the project name (`pheasant-kb_`):
 | `pheasant-postgres17` | The Postgres database: state, chunks, graph rows, full-text index | **User data.** Back it up. |
 | `pheasant-pg17` | The database of a stack that ran the TimescaleDB image, read-only and never written | Keep it until the new stack is confirmed; moving its data: `deploy/postgres/README.md` |
 | `pheasant-state` | LanceDB vectors, graph snapshots, image bytes, the upload landing zone | **User data.** Back it up. |
-| `pheasant-memory` | Agent memory records, one Markdown file each | **User data.** |
+| `pheasant-memory` | The 1.x `agent-memory` source's records, one Markdown file each, kept for regions that had one (new records go to `artifact-records` under `/state`) | **User data.** |
 | `pheasant-workspace` | Clones of repositories added by URL | Re-cloneable |
 | `pheasant-exports` | Parquet exports and cold observation partitions | Regenerable |
 | `pheasant-nats` | Queue storage | Transient |
@@ -128,11 +130,12 @@ value. It turns on the full product:
   (`text-embedding-3-small` in LanceDB, held in memory, with an HNSW index) and
   the graph, fused by reciprocal rank.
 - **Grounded answers** from `gpt-6-luna` with an agentic loop that judges
-  evidence before writing, bounded to four concurrent answers.
+  evidence before writing, bounded to sixteen concurrent answers (a seventeenth
+  waits up to fifteen seconds for a slot).
 - **Ingestion** of code, documents (PDF, Word, PowerPoint, Excel and more),
   images (captioned) and audio (transcribed), chunked per file by its structure,
   with a heading taxonomy.
-- **Durable agent memory**, the interaction ledger (seven days), and the
+- **Artifacts and artifact records**, the interaction ledger (seven days), and the
   evaluation, tuning and readiness planes, available for manual runs.
 - **Access control**: every request needs the API token, results respect ACLs,
   and the port is bound to loopback.
@@ -147,7 +150,7 @@ value. It turns on the full product:
 - [Operate it](operate.md): status, upgrades, backups, resets, troubleshooting.
 - Using it: [the web UI](../how-to/chat-and-ui.md),
   [answers and visuals](../how-to/conversations-and-visuals.md),
-  [agent memory](../how-to/agent-memory.md).
+  [artifact records](../how-to/agent-records.md).
 
-Want something smaller, such as one container with no key at all, or no
-Docker? See [Other ways to run pheasant](../other-deployments.md).
+For production on Azure Container Apps, the generic fleet file and sharding,
+see [Deployment](../deployment.md).

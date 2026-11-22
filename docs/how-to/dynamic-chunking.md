@@ -32,10 +32,10 @@ sync:
     chunk_strategy: auto
 ```
 
-**It is the default in every shipped fleet profile** — `deploy/compose/fleet.yaml`
-(and the `scalable`/`pheasant-kb` answer files it is generated from) and
-`deploy/kubernetes/scaled/configmap.yaml` — and not in any single-container
-profile, which keeps `fixed`.
+**It is the default in every shipped fleet profile** — `deploy/compose/pheasant-kb.yaml`
+and `deploy/compose/fleet.yaml` (and the `pheasant-kb`/`scalable` answer files
+they are generated from) — and not on the standalone table, which keeps
+`fixed`.
 
 Changing the strategy re-indexes the affected sources once, on their next
 sync. `fixed` (or the legacy default spelling `semantic`) is the old behaviour
@@ -105,7 +105,7 @@ indexing, the same plan is on the artifact's graph node as `chunk_plan`.
 
 ## What it costs and what it buys
 
-Measured with `scripts/compare_chunking.py` (one 4-core host, SQLite, the
+Measured with `scripts/compare_chunking.py` (one 4-core host, 1.x's SQLite store, the
 offline stub embedder; reproduce with the commands in its docstring).
 
 **This repository's docs plus SciFact** (42 Markdown files; 395 abstracts, a

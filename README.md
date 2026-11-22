@@ -29,8 +29,8 @@ the people and agents that need them. Point it at code repositories, folders of
 notes and documents, PDFs and Office files, websites, APIs, Google Drive or OneDrive and SharePoint,
 and it indexes them into one knowledge
 base you can search, ask questions of and map as a graph. Answers cite the
-passages they came from, and agents can read and write durable memory alongside
-the sources.
+passages they came from, and agents can record durable, scoped facts (artifact
+records) alongside the sources.
 
 ```
 your sources  →  pheasant indexes them  →  three ways to ask
@@ -71,7 +71,7 @@ On Windows, the same line in PowerShell is in the
 | `indexer` | The one writer: syncs sources, commits chunks, graph and vectors |
 | `worker` ×4 | Parses and chunks files for the indexer |
 | `graph` | Answers graph queries for the api |
-| `logger` | Records interactions for evaluation and memory formation |
+| `logger` | Records interactions for evaluation and record formation |
 | `postgres`, `nats` | State and full-text index; the durable work queues |
 
 Each one scales on its own, from `.env`: more workers for faster ingest, more
@@ -84,14 +84,9 @@ its knob.
 [Scale it](docs/pheasant-kb/scale.md) ·
 [Operate it](docs/pheasant-kb/operate.md)
 
-Want the smallest footprint instead, with no database and no key? The same
-code runs as one process in one container:
-
-```bash
-docker run -p 127.0.0.1:8765:8765 -v "$PWD:/workspace:ro" -v pheasant-state:/state ghcr.io/esatt10/pheasant
-```
-
-See [other ways to run pheasant](docs/other-deployments.md).
+pheasant-kb is the local shape of the fleet a production region runs on
+Azure Container Apps: the same image, tiers, PostgreSQL and NATS. See
+[Deployment](docs/deployment.md).
 
 ## A tour
 
@@ -207,8 +202,8 @@ claude mcp add --transport http pheasant http://127.0.0.1:8765/mcp \
 ```
 
 Any other MCP client takes the same URL and bearer header. Your agent then gets tools to search, to
-ask a grounded question, to explain a node, to walk the graph, and to read and
-write memory—the same surface the UI uses. The UI's **Connect agent** button
+ask a grounded question, to explain a node, to walk the graph, to compose an
+artifact and to record and recall facts—the same surface the UI uses. The UI's **Connect agent** button
 shows the same snippet and the full tool list.
 
 → [Attach a coding agent](docs/how-to/attach-to-coding-agent.md) ·
@@ -220,10 +215,10 @@ shows the same snippet and the full tool list.
   <img src="docs/assets/ui/graph.png" alt="The whole knowledge graph: 422 nodes in three connected clusters — a documentation tree, a memory cluster and a document corpus — with node-type counts and the most-connected hubs beside it" width="900">
 </p>
 
-Files, directories, symbols, headings, entities and memory records become
+Files, directories, symbols, headings, entities and artifact records become
 nodes; the edges between them are what the graph arm searches and what "explain
 this" traverses. The shape is legible at a glance—here, one knowledge base
-joining a documentation tree, a cluster of memory records and an indexed corpus.
+joining a documentation tree, a cluster of records and an indexed corpus.
 The panel beside it ranks the hubs a traversal will pass through.
 
 See [the graph model](docs/graph_model.md) for the full grammar.
@@ -231,22 +226,23 @@ See [the graph model](docs/graph_model.md) for the full grammar.
 ### Let it remember
 
 <p align="center">
-  <img src="docs/assets/ui/memory.png" alt="The Memory page: a proposed memory expanded to the calls it was mined from, with a panel resolving one result back to its source text" width="900">
+  <img src="docs/assets/ui/records.png" alt="The Artifacts page's records: a proposed record expanded to the calls it was mined from, with a panel resolving one result back to its source text" width="900">
 </p>
 
-Memory records are ordinary Markdown files, indexed like everything else—so
-recall is just search, and a correction supersedes an old record rather than
-overwriting it.
+**Artifact records** are scoped facts an agent or a person records with
+`record_artifact` (or `POST /artifacts/records`). Each is an ordinary Markdown
+file, indexed like everything else—so recall is just search, and a correction
+supersedes an old record rather than overwriting it.
 
-Pheasant can also **propose** memories from how it is actually being used: here
-it noticed six sessions searching for `forecast` and reading documents that say
+Pheasant can also **propose** records from how it is actually being used: here
+it noticed sessions searching for `forecast` and reading documents that say
 `capacity`, and proposes the alias. Open a proposal and it shows the calls it
 was mined from, so "why was this suggested" ends at real content rather than at
 a hash. Nothing proposed is retrievable until you promote it, and a rejection is
 permanent.
 
-→ [The memory system](docs/memory-system.md) ·
-[How memories are formed](docs/memory-formation.md)
+→ [Artifact records](docs/artifact-records.md) ·
+[How records are formed](docs/observation-and-formation.md)
 
 ### Know whether it is actually working
 
@@ -293,7 +289,7 @@ pheasant tune rollback        # back to the base, or --to an earlier bundle
 
 Every screenshot is generated by
 [`scripts/screenshot_ui.py`](scripts/screenshot_ui.py) against a real region it
-seeds and indexes—nothing is mocked for the camera. The proposed memories are
+seeds and indexes—nothing is mocked for the camera. The proposed records are
 genuinely mined from searches the script performs, and the effectiveness and
 tuning numbers come from real batches, which is why some tiles honestly read
 "not enough evidence" and some runs decide to change nothing.
@@ -308,7 +304,7 @@ ablation report an unflattering finding: hybrid scores *below* the text arm
 here, because the graph arm adds little on scientific prose.
 
 The corpus is fetched at screenshot time and never vendored; the test suite
-never touches it and stays offline.
+never touches it and makes no network calls beyond its own Postgres and NATS.
 
 </details>
 
@@ -338,37 +334,20 @@ experiment. A gate set with skipped gates reports `INCOMPLETE`, never `PASS`.
 
 | | |
 |---|---|
-| **Ingest** | Git repositories, folders, single files, web pages and APIs. Every text format a codebase carries is read by default — source in ~40 languages, config, IaC, build files, Dockerfiles, notebooks, CSVs and logs — and 23 languages become graph structure: symbols, calls, and imports resolved to the files they name. Web pages can be added from YAML, `pheasant up <url>`, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
+| **Ingest** | Git repositories, folders, single files, web pages and APIs. Every text format a codebase carries is read by default — source in ~40 languages, config, IaC, build files, Dockerfiles, notebooks, CSVs and logs — and 23 languages become graph structure: symbols, calls, and imports resolved to the files they name. Web pages can be added from YAML, the UI or an agent over MCP, and each page is re-checked on its own schedule: hourly while it changes, backing off to every few days while it does not. Seven document formats (`.pdf`, `.docx`, `.pptx`, `.xlsx`, `.doc`, `.rtf`, `.epub`) extract real text; images are captioned and audio transcribed into the same searchable space, offline by default. |
 | **Connectors** | Google Drive and OneDrive/SharePoint (sites, libraries, lists with attachments, pages) ship first-party; third-party plugins resolve by source type, optionally inside a WASM sandbox. |
 | **Retrieval** | Full-text (BM25), vector (LanceDB) and graph arms fused by reciprocal rank fusion, with source, section, node-type and principal filters available identically on MCP and HTTP. |
 | **Answers** | Grounded, cited answers through MCP, HTTP or the UI—extractive with no model connected, synthesized with one. Optional per-request deadlines, staged hybrid retrieval and an answer-concurrency cap (`429 ASSISTANT_BUSY`) keep latency bounded under load. With an OpenAI key, evidence sufficiency, the next search and answer acceptance are typed judgements through the Decisions API (beta): the lab's median answer went from 8.7 s to 5.7 s at the same fact coverage. Agents doing their own retrieval can ask the same judgements with `assess_evidence`. |
 | **Artifacts** | Composed files, reports, diagrams and whole threads kept by choice (or auto-saved), filed by day, person and conversation, traced, searchable, linked to their evidence, archived by retention, exported to Parquet. |
-| **Memory** | Durable agent memory as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
+| **Records** | Durable, scoped artifact records as searchable Markdown, with supersession, time travel (`as_of`), per-scope isolation and reviewable proposals. |
 | **Measurement** | Effectiveness evaluation and per-stage retrieval tuning, both off by default and read-only when on. |
 | **Readiness** | A machine-readable capability contract and executable go/no-go gates for using this region as an experiment's substrate: ingestion receipts, sealed snapshots, per-result lineage, isolation proofs and structured refusal codes. |
-| **Operations** | Idempotent, incremental sync on a per-source schedule (15 minutes to weekly, set on the Syncs page); SQLite or PostgreSQL; backup, restore and Parquet exports; Prometheus metrics. |
-| **Scale** | Optional NATS queue, gRPC preparation workers, split API/indexer/worker roles and corpus sharding—each a selectable backend, never a prerequisite. |
+| **Operations** | Idempotent, incremental sync on a per-source schedule (15 minutes to weekly, set on the Syncs page); PostgreSQL 17 with pg_textsearch BM25; one-command backup and restore; Parquet exports; Prometheus metrics and OpenTelemetry traces. |
+| **Scale** | Split api, graph, indexer, worker and logger tiers over a NATS JetStream queue and gRPC preparation workers; each tier scales on its own signal, and `pheasant shard plan` splits a corpus across regions when one indexer is the ceiling. |
+| **Hosting** | Access granted inside the region (Entra, multi-tenant), a model catalog, per-caller usage and cost, a monthly spend limit and kill switch, knowledge-base size limits and a fleet directory of slots. |
 
-pheasant-kb turns all of this on, and its configuration is pheasant's default:
-a key you do not set takes pheasant-kb's value. The other table, `standalone`
-(SQLite, local text search, no queue, one process, no key), is what the
-[single container](docs/other-deployments.md#single-container) and
-`pheasant up` run on, and one setting selects it anywhere:
-`PHEASANT_DEFAULTS=standalone`.
-
-<details>
-<summary><b>Also: pheasant can join a federated fleet</b></summary>
-
-<br>
-
-Pheasant is the **region** half of [Synapse](https://github.com/esatt10/pheasant-flock).
-Each container can publish a semantic contract describing what it knows; a
-router scores those contracts and fans a global query out to the regions that
-can answer it. It is entirely optional and off by default—a router-less
-pheasant is a complete product. See
-[pheasant as a Synapse region](docs/SYNAPSE_INTEGRATION.md).
-
-</details>
+pheasant-kb's configuration is pheasant's default: a key you do not set takes
+pheasant-kb's value.
 
 ## Deploy
 
@@ -384,18 +363,26 @@ as the reference:
 - [Operate it](docs/pheasant-kb/operate.md): upgrades, backups, token
   rotation, troubleshooting
 
-[Other ways to run pheasant](docs/other-deployments.md) covers the single
-container, `pip install`, the local profiles, Kubernetes and sharding. Every
-command, route and MCP tool is in the
-[interface matrix](docs/reference/interfaces.md); every setting in the
-[configuration reference](docs/configuration.md).
+[Deployment](docs/deployment.md) covers the production shape (Azure Container
+Apps), the generic fleet Compose file and sharding. Every command, route and
+MCP tool is in the [interface matrix](docs/reference/interfaces.md); every
+setting in the [configuration reference](docs/configuration.md).
 
 ## Develop
 
+The suite runs against a real PostgreSQL (with pg_textsearch) and a NATS
+JetStream broker:
+
 ```bash
+docker run -d --name pheasant-test-pg -p 127.0.0.1:55432:5432 \
+  -e POSTGRES_USER=pheasant -e POSTGRES_PASSWORD=test \
+  ghcr.io/esatt10/pheasant-postgres:17.11-pgts1.5.1-r1
+docker run -d --name pheasant-test-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
+
 pip install -e ".[dev,mcp]"
+export PHEASANT_TEST_POSTGRES_DSN=postgresql://pheasant:test@127.0.0.1:55432/pheasant
 pytest -q
-ruff check src tests
+ruff check src tests && ruff format --check src tests
 ```
 
 Read [`CLAUDE.md`](CLAUDE.md) before changing the codebase. It carries the

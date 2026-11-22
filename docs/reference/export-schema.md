@@ -9,19 +9,21 @@ page can reconstruct the corpus text, the knowledge graph and the agent-memory
 record set without calling pheasant — see
 [Export a corpus as Parquet](../how-to/parquet-exports.md) for producing one.
 
-!!! warning "An export carries no access control"
-
-    Inside pheasant, `memory_records.scope` is enforced: `org` records are
-    shared, while `user` and `session` records are readable only by the
-    principal that wrote them, and `artifacts.acl` gates retrieval per
-    principal. **A Parquet file enforces nothing.** Both columns are exported
-    as ordinary data, so whoever can read the directory can read every record
-    of every scope and every ACL-restricted artifact.
-
-    Treat an export as having the union of every principal's access, and put
-    the access control on the directory. If that is not acceptable, filter at
-    export time by exporting a subset of tables, or post-process the files
-    before handing them on.
+> [!WARNING]
+> **An export carries no access control**
+>
+>
+> Inside pheasant, `memory_records.scope` is enforced: `org` records are
+> shared, while `user` and `session` records are readable only by the
+> principal that wrote them, and `artifacts.acl` gates retrieval per
+> principal. **A Parquet file enforces nothing.** Both columns are exported
+> as ordinary data, so whoever can read the directory can read every record
+> of every scope and every ACL-restricted artifact.
+>
+> Treat an export as having the union of every principal's access, and put
+> the access control on the directory. If that is not acceptable, filter at
+> export time by exporting a subset of tables, or post-process the files
+> before handing them on.
 
 ## Layout
 
@@ -112,7 +114,7 @@ One row per configured source. Primary key `id`.
 | `name` | VARCHAR | Same as `id` today. |
 | `type` | VARCHAR | `repository`, `markdown_folder`, `document_folder`, `web_collection`, `single_file`, `api`, `memory`, or a connector-plugin type. Rows written before those types were retired may still read `obsidian_vault` or `s3`. |
 | `path` | VARCHAR | Where the source was read from. |
-| `enabled` | BIGINT | 0/1, not a boolean — SQLite has no boolean type. |
+| `enabled` | BIGINT | 0/1, not a boolean (the export keeps 1.x's integer encoding). |
 | `config_json` | VARCHAR | The source's full resolved config, as JSON text. |
 | `last_indexed_at` | VARCHAR | ISO-8601 UTC. |
 | `last_status` | VARCHAR | Outcome of the last sync. |
@@ -206,7 +208,7 @@ WHERE m.valid_until IS NULL;
 | `tags` | VARCHAR | Free-form tags. |
 | `written_by` | VARCHAR | Principal that wrote it. |
 | `salience` | DOUBLE | Ranking weight. |
-| `uses` | BIGINT | Times recalled (only counted with `memory.usage_tracking` on). |
+| `uses` | BIGINT | Times recalled (only counted with `artifacts.learning.usage_tracking` on). |
 | `last_used_at` | VARCHAR | ISO-8601 UTC — last time `uses` was bumped. |
 | `canon_key` | VARCHAR | Normalized-content dedup key (scope/subject/kind/ACL/text — see `pheasant.artifacts.normalize`); NULL for a record from before compaction. Derived, not earned: recomputed on every re-sync. |
 | `observations` | BIGINT | Times a write re-asserted this record — exactly or as a paraphrase — instead of creating a new file. |
@@ -363,77 +365,77 @@ for diagnostics. Join on the columns.
 
 - **Timestamps are VARCHAR**, ISO-8601 UTC, exactly as stored. Cast when you
   need date maths: `CAST(last_indexed_at AS TIMESTAMP)`.
-- **Booleans are BIGINT** 0/1 (`sources.enabled`), because SQLite has no
-  boolean type and the export does not invent one.
+- **Booleans are BIGINT** 0/1 (`sources.enabled`), as they were when 1.x
+  exported from SQLite, so a reader written then still works.
 - **`*_json` and `attributes` are VARCHAR** holding JSON text.
 - **Row order is the primary key's**, because the export streams by keyset
   pagination on it. Do not rely on it meaning anything else.
-- Both state backends export identically — same columns, same types, same
-  stable IDs, same values; only run timestamps differ, because two indexing
-  runs are two moments. Row *order* follows the database's collation
-  (SQLite compares bytes, Postgres uses its configured collation), which is
-  why order is not a contract. `export.json`'s `state_backend` records which
-  backend produced the file. See
-  [On Postgres](../how-to/parquet-exports.md#on-postgres).
+- Row *order* follows the database's collation, which is why order is not a
+  contract. `export.json`'s `state_backend` records the backend that produced
+  the file (`postgres`; a 1.x export may say `sqlite`, with the same columns
+  and stable IDs).
 
 ## What is not in an export
 
 | Missing | Why, and what to do |
 |---|---|
 | **Embedding vectors** | They live in the LanceDB store under `<state>/vectors/`. An export supports lexical and structural analysis, not semantic search. Copy the vector directory separately if you need it. |
-| **The full-text index** | `chunks_fts` is a derived cache and dialect-specific. Rebuild your own from `chunks.text`. |
+| **The full-text index** | `chunks_fts` is a derived search index. Rebuild your own from `chunks.text`. |
 | **Identity and audit** | `idp_groups`, `idp_sync_meta`, `source_audit_events` are deliberately excluded. |
 | **Operational state** | `source_checkpoints`, `source_leases`, `index_tasks`, `sync_fingerprints`, `manifests` — transient and meaningless outside the region that wrote them. |
 | **Access-control enforcement** | See the warning at the top. |
 
 An export is therefore not a backup: it cannot restore a region. Use
-[`pheasant backup`](../how-to/backup-restore.md) for that.
+[a backup](../how-to/backup-restore.md) for that.
 
 ## Loading the graph elsewhere
 
 The two graph files are an edge list with attributes, which is the input format
 most graph tooling wants.
 
-=== "networkx"
+**networkx**
 
-    ```python
-    import json
-    import duckdb
-    import networkx as nx
 
-    d = "/exports/parquet/my-kb"
-    g = nx.MultiDiGraph()
-    for node_id, kind, label, attrs in duckdb.sql(
-        f"SELECT node_id, type, label, attributes FROM '{d}/graph_nodes.parquet'"
-    ).fetchall():
-        g.add_node(node_id, type=kind, label=label, **json.loads(attrs))
-    for a, b, kind, confidence in duckdb.sql(
-        f"SELECT from_node, to_node, type, confidence FROM '{d}/graph_edges.parquet'"
-    ).fetchall():
-        g.add_edge(a, b, type=kind, confidence=confidence)
-    ```
+```python
+import json
+import duckdb
+import networkx as nx
 
-=== "Neo4j / openCypher"
+d = "/exports/parquet/my-kb"
+g = nx.MultiDiGraph()
+for node_id, kind, label, attrs in duckdb.sql(
+    f"SELECT node_id, type, label, attributes FROM '{d}/graph_nodes.parquet'"
+).fetchall():
+    g.add_node(node_id, type=kind, label=label, **json.loads(attrs))
+for a, b, kind, confidence in duckdb.sql(
+    f"SELECT from_node, to_node, type, confidence FROM '{d}/graph_edges.parquet'"
+).fetchall():
+    g.add_edge(a, b, type=kind, confidence=confidence)
+```
 
-    ```cypher
-    // after exporting the two files to CSV, or via the Parquet loader
-    LOAD CSV WITH HEADERS FROM 'file:///graph_nodes.csv' AS row
-    CREATE (:Node {node_id: row.node_id, type: row.type, label: row.label});
-    CREATE INDEX FOR (n:Node) ON (n.node_id);
-    LOAD CSV WITH HEADERS FROM 'file:///graph_edges.csv' AS row
-    MATCH (a:Node {node_id: row.from_node}), (b:Node {node_id: row.to_node})
-    CREATE (a)-[:REL {type: row.type, confidence: toFloat(row.confidence)}]->(b);
-    ```
+**Neo4j / openCypher**
 
-    Produce the CSVs with
-    `pheasant export query --format csv --limit 0 "SELECT * FROM graph_nodes"`.
 
-=== "A warehouse"
+```cypher
+// after exporting the two files to CSV, or via the Parquet loader
+LOAD CSV WITH HEADERS FROM 'file:///graph_nodes.csv' AS row
+CREATE (:Node {node_id: row.node_id, type: row.type, label: row.label});
+CREATE INDEX FOR (n:Node) ON (n.node_id);
+LOAD CSV WITH HEADERS FROM 'file:///graph_edges.csv' AS row
+MATCH (a:Node {node_id: row.from_node}), (b:Node {node_id: row.to_node})
+CREATE (a)-[:REL {type: row.type, confidence: toFloat(row.confidence)}]->(b);
+```
 
-    Parquet loads natively into BigQuery, Snowflake, Redshift Spectrum, Athena
-    and Spark. Partition by `source_id` if you land several regions in one
-    table, and carry `export.json`'s `kb_id` and `generated_at` as columns so
-    snapshots stay distinguishable.
+Produce the CSVs with
+`pheasant export query --format csv --limit 0 "SELECT * FROM graph_nodes"`.
+
+**A warehouse**
+
+
+Parquet loads natively into BigQuery, Snowflake, Redshift Spectrum, Athena
+and Spark. Partition by `source_id` if you land several regions in one
+table, and carry `export.json`'s `kb_id` and `generated_at` as columns so
+snapshots stay distinguishable.
 
 ## Pulling exports from another system
 

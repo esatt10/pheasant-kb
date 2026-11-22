@@ -40,10 +40,12 @@ Check three things first:
    when the reader wants what the *page URL* names, such as `latest` following
    new releases.
 
-!!! note "Not a headless browser"
-    An adapter makes ordinary HTTP requests to an API and reads data. It does
-    not run the page's JavaScript. That keeps indexing deterministic, and it
-    keeps a fetched site's code out of the indexer.
+> [!NOTE]
+> **Not a headless browser**
+>
+> An adapter makes ordinary HTTP requests to an API and reads data. It does
+> not run the page's JavaScript. That keeps indexing deterministic, and it
+> keeps a fetched site's code out of the indexer.
 
 ## The Terraform Registry case
 

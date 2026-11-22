@@ -9,7 +9,7 @@ this page is the configuration reference.
 
 Captioning/transcription is **opt-in by source include**. The captioner is only
 built when a source's `include` globs admit an image extension; the transcriber
-only when they admit an audio extension. `pheasant setup` and `pheasant up` use
+only when they admit an audio extension. `pheasant setup` and quick add use
 `**/*` for mixed folders, which admits both. A text-only config builds neither
 and is byte-identical to a pheasant without multi-modal.
 
@@ -84,11 +84,13 @@ ingestion:
   `POST {base_url}/audio/transcriptions` (multipart) and reads the response
   `text`. Works against any OpenAI-spec transcription endpoint.
 
-!!! warning "Network calls in the indexing path"
-    Captioning/transcription with `openai-spec` is one of the few sanctioned
-    network calls at sync time (the others are the optional embedder). Keep the
-    `stub` provider for tests and air-gapped runs — it is the default precisely
-    so the offline path stays network-free.
+> [!WARNING]
+> **Network calls in the indexing path**
+>
+> Captioning/transcription with `openai-spec` is one of the few sanctioned
+> network calls at sync time (the others are the optional embedder). Keep the
+> `stub` provider for tests and air-gapped runs — it is the default precisely
+> so the offline path stays network-free.
 
 ## When to use which
 
@@ -136,9 +138,3 @@ Change the media file (or its sidecar) to force reprocessing.
 
 ## How the fleet sees it
 
-When an image source is configured, this region's published Synapse contract
-adds `"image"` to `capabilities.modalities`; an audio source adds `"audio"`.
-A Synapse router can then route modality-filtered queries
-(`--modality image` / `--modality audio`) only to regions that advertise them.
-This is existing contract data — no schema change. See
-[Attach to a Synapse fleet](attach-to-synapse.md).

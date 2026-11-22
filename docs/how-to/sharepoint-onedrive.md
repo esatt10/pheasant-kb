@@ -58,7 +58,7 @@ Links pheasant understands, all on `<tenant>.sharepoint.com` or
 
 From an agent: `add_source` with the link (and `connection` naming the
 Microsoft 365 connection from `list_connections`), then `wait_for_sync`.
-From the CLI: `pheasant up https://contoso.sharepoint.com/sites/Marketing`.
+Over HTTP: `POST /sources/quick-add` with `{"target": "https://contoso.sharepoint.com/sites/Marketing"}`; over MCP, `add_source`.
 In a config file:
 
 ```yaml

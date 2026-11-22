@@ -11,13 +11,13 @@ Legend: — means "not offered on this surface"; use one of the others.
 
 | Capability | CLI | HTTP | Web UI | MCP |
 |---|---|---|---|---|
-| Generate starter config | `pheasant init --profile <p>` | — | — | — |
+| Generate a config (wizard) | `pheasant setup [--advanced\|--accept-defaults\|--answers F]` | — | — | — |
 | Validate config | `pheasant validate <file>` | — | Config editor (diff preview) | — |
 | Show resolved config | `pheasant config show --effective` | `GET /config`, `GET /config/effective` | Config editor | — |
 | Edit config | (edit YAML) | `PUT /config` | Config editor (form + raw YAML) | — |
 | Environment doctor | `pheasant doctor` | `GET /health`, `GET /ready` | — | — |
 | Generate compose env | `pheasant compose-env <file>` | — | — | — |
-| Generate VS Code MCP config | `pheasant client-config vscode` | — | — | — |
+| Generate an MCP client config | `pheasant client-config vscode\|cursor\|claude-code` | — | Connect agent | — |
 
 ## Exploration (sources & sync)
 
@@ -25,10 +25,10 @@ Legend: — means "not offered on this surface"; use one of the others.
 |---|---|---|---|---|
 | List knowledge bases | — | `GET /knowledge-bases` | — | `list_knowledge_bases` |
 | List sources | — | `GET /sources` | Sources page | `list_sources` |
-| Set up from one target (path/URL/glob) | `pheasant up <target>…` | `POST /sources/quick-add` | Sources → **+ Add source** | — |
+| Set up from one target (path/URL/glob) | — | `POST /sources/quick-add` | Sources → **+ Add source** | `add_source` |
 | List registerable source types (built-in + plugins) | — | `GET /sources/types` | Sources → Advanced… (type picker) | — |
 | Register a source (full schema) | (edit YAML) | `POST /sources` | Sources → **Advanced…** | `register_source` (`sync_now`, `wait`) |
-| Add web pages | `pheasant up <url>…`, or a `web_collection` in YAML | `POST /sources` (`type: web_collection`, `urls`) or `POST /sources/quick-add` | Sources → **+ Add source** (paste a URL), or **Advanced… → Web pages** | `register_source` (`source_type: web_collection`, `urls`; public addresses only unless `security.allow_agent_private_urls`) |
+| Add web pages | a `web_collection` in YAML | `POST /sources` (`type: web_collection`, `urls`) or `POST /sources/quick-add` | Sources → **+ Add source** (paste a URL), or **Advanced… → Web pages** | `register_source` (`source_type: web_collection`, `urls`; public addresses only unless `security.allow_agent_private_urls`) |
 | Update a source | (edit YAML) | `PUT /sources/{id}` | Sources → edit | — |
 | Disable a source | (edit YAML) | `POST /sources/{id}/disable` | Sources page | `disable_source` |
 | Remove a source | (edit YAML) | `DELETE /sources/{id}` | Sources page | `remove_source` |
@@ -78,17 +78,41 @@ Legend: — means "not offered on this surface"; use one of the others.
 | Export node-link JSON | — | `GET /graph/export/node-link-json` | — | — |
 | Export Cytoscape JSON | — | `GET /graph/export/cytoscape-json` | — | — |
 
-## Federation (Synapse region)
+## Documents: quality, removal, export
 
 | Capability | CLI | HTTP | Web UI | MCP |
 |---|---|---|---|---|
-| Inspect published contract | — | `GET /contract` | — | `get_contract` |
-| Publish contract | (automatic on sync when `synapse.publish: true`) | — | — | — |
-| Push event to router | (automatic webhook to `<router_url>/v1/synapse/events`) | — | — | — |
+| Files to clean up (unreadable, stale, little text) | — | `GET /quality` | Taxonomy view, file states | `list_quality_issues` |
+| Remove a document and keep it out of every sync | — | `POST /documents/archive` | Taxonomy → **Remove** | `archive_documents` |
+| List and reinstate removed documents | — | `GET /documents/archived`, `POST /documents/reinstate` | — | `list_archived_documents`, `reinstate_documents` |
+| Export a whole source (zip, JSONL, Parquet) | — | `GET /sources/{name}/export`, `POST /sources/{name}/exports` (job) | Taxonomy → **Export source** | `export_source`, `start_source_export` |
 
-Routing, fan-out, merge, and global cross-region search live on the **router**
-(pheasant-flock), not on the region. See
-[Attach to a Synapse fleet](../how-to/attach-to-synapse.md).
+## Artifacts and records
+
+| Capability | CLI | HTTP | Web UI | MCP |
+|---|---|---|---|---|
+| Compose a new artifact from documented parts (job) | — | `POST /assistant/chat` (`intent: compose`) | Chat: `@compose` | `compose_artifact`, `get_job` |
+| Save, list, view, export, delete artifacts | — | `POST /artifacts`, `GET /artifacts`, `GET /artifacts/{id}/view`, `GET /artifacts/{id}/export`, `DELETE /artifacts/{id}` | Artifacts page | `save_artifact`, `list_artifacts`, `view_artifact`, `export_artifact`, `delete_artifact` |
+| Archive, restore and bulk-delete | — | `POST /artifacts/archive`, `POST /artifacts/restore`, `POST /artifacts/delete` | Artifacts page | `archive_artifacts`, `delete_artifacts` |
+| Keeping and retention settings | — | `GET`/`PUT /artifacts/settings` | Artifacts → settings | `get_artifact_settings`, `configure_artifacts` |
+| Record a scoped fact | — | `POST /artifacts/records` | Artifacts → Knowledge records | `record_artifact` |
+| List records | — | `GET /artifacts/records` | Artifacts → Knowledge records | `list_artifact_records` |
+| Review proposed records | — | `GET /artifacts/candidates`, `POST /artifacts/candidates/{id}/promote\|reject` | Artifacts → Proposed | `list_artifact_candidates`, `promote_artifact_candidate`, `reject_artifact_candidate` |
+| Fold near-duplicates; synthesize | — | `POST /artifacts/consolidate`, `POST /artifacts/synthesize` | — | `consolidate_artifacts`, `synthesize_artifacts` |
+
+## Hosting a region
+
+| Capability | CLI | HTTP | Web UI | MCP |
+|---|---|---|---|---|
+| Who may use the region | — | `GET /access`, `POST /access/grants`, `DELETE /access/grants/{id}` | Admin → Access | `list_access`, `grant_access`, `revoke_access` |
+| Connect a customer's Entra tenant | — | `POST /access/organizations`, `DELETE /access/organizations/{tenant}` | Admin → Access | `connect_organization`, `disconnect_organization` |
+| Connected accounts (Drive, SharePoint) | — | `GET`/`POST /connections`, `POST /connections/oauth/start`, `POST /connections/{name}/test` | Sources → connections | `list_connections`, `connect_service`, `start_service_sign_in`, `test_connection`, `remove_connection` |
+| Model catalog, defaults, prices | — | `GET /models`, `PUT /models/defaults`, `GET`/`PUT /models/prices` | Admin → Models | `list_models`, `set_default_models`, `get_model_prices`, `set_model_prices` |
+| Switch the embedding model | — | `PUT /models/embedding` | Admin → Models | `select_embedding_model` |
+| Usage, cost and traces | — | `GET /usage`, `GET /usage/sessions[/{id}]`, `GET /usage/export` | Admin → Usage | `get_usage`, `list_usage_sessions`, `get_usage_session`, `export_usage`, `export_usage_traces` |
+| Kill switch and monthly spend limit | — | `GET`/`PUT /region/controls` | Admin → Controls | `get_region_controls`, `set_region_controls` |
+| Waking from zero | — | `GET /region/status` | Banner | `get_region_status` |
+| Fleet directory: slots and capacity requests | — | `GET /fleet`, `POST /fleet/knowledge-bases`, `POST /fleet/requests` | Admin → Knowledge bases | `list_fleet`, `create_knowledge_base`, `request_capacity`, `resolve_capacity_request` |
 
 ## Knowledge effectiveness (evaluation plane)
 
@@ -138,12 +162,14 @@ disqualifying for a result somebody will publish. See
 
 | Capability | CLI |
 |---|---|
-| Host a configured container (+ UI) for targets | `pheasant host <target>…` |
-| Start HTTP API + MCP | `pheasant start` |
-| Serve (container entrypoint) | `pheasant serve` |
-| Standalone MCP server | `pheasant mcp --transport stdio\|streamable-http\|sse` |
-| Backup state | `pheasant backup <out>` |
-| Restore state | `pheasant restore <in> [--force]` |
+| Serve a role (container entrypoint) | `pheasant serve --role all\|api\|graph\|indexer\|logger` |
+| Preparation worker | `pheasant worker --transport grpc` |
+| Start HTTP API + MCP on a layered config | `pheasant start` |
+| MCP server on its own (stdio clients) | `pheasant mcp --transport stdio\|streamable-http\|sse` |
+| Index queue | `pheasant queue status\|drain\|requeue-dead` |
+| Plan a corpus split | `pheasant shard plan [--emit DIR]` |
+| Project RAM, disk and time | `pheasant scan` |
+| Back up and restore pheasant-kb | `docker compose run --rm backup` / `restore <name> [--force]` |
 | Export state as Parquet | `pheasant export parquet [--table NAME]` |
 | Query an export | `pheasant export query "<SQL>"` |
 | List exportable tables | `pheasant export tables` |

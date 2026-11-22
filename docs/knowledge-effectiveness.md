@@ -27,7 +27,7 @@ true.
 An evaluation record is **about** the knowledge base and is never part of it.
 Nothing this plane writes is a file, is chunked, is indexed, or is returned by
 an ordinary search. It is the same boundary
-[the observation plane](memory-formation.md) draws, and it is drawn again here
+[the observation plane](observation-and-formation.md) draws, and it is drawn again here
 because the temptation is stronger: an evaluation report *reads* like knowledge.
 
 ```
@@ -124,31 +124,34 @@ merges:
 
 Retrieval already records what it served. Only the caller knows what came of it.
 
-=== "HTTP"
+**HTTP**
 
-    ```bash
-    curl -X POST localhost:8765/evaluation/evidence -H 'content-type: application/json' -d '{
-      "query": "where is invoice retry configured",
-      "target_id": "file:docs:invoice.md:branch=none",
-      "event_type": "explicit_accept",
-      "principal": "user:ada",
-      "session_id": "s-91"
-    }'
-    ```
 
-=== "MCP"
+```bash
+curl -X POST localhost:8765/evaluation/evidence -H 'content-type: application/json' -d '{
+  "query": "where is invoice retry configured",
+  "target_id": "file:docs:invoice.md:branch=none",
+  "event_type": "explicit_accept",
+  "principal": "user:ada",
+  "session_id": "s-91"
+}'
+```
 
-    ```
-    record_evidence(knowledge_base="kb", query="…", target_id="…",
-                    event_type="selected")
-    ```
+**MCP**
 
-=== "CLI"
 
-    ```bash
-    pheasant eval proof --query "…" --target "file:docs:invoice.md:branch=none" \
-                        --event explicit_accept
-    ```
+```
+record_evidence(knowledge_base="kb", query="…", target_id="…",
+                event_type="selected")
+```
+
+**CLI**
+
+
+```bash
+pheasant eval proof --query "…" --target "file:docs:invoice.md:branch=none" \
+                    --event explicit_accept
+```
 
 The response shows the weight **and its four multipliers** (type, strength,
 temporal, source), because a reader shown only `0.25` cannot tell a conclusive
@@ -286,7 +289,7 @@ everywhere and mean nothing anywhere.
 
 ## Candidate promotion
 
-[Memory formation](memory-formation.md) already proposes candidates. What was
+[Memory formation](observation-and-formation.md) already proposes candidates. What was
 missing is the evidence a promotion decision could be made *on*, and the
 guarantee that gathering it cannot itself change what production returns.
 
@@ -615,7 +618,7 @@ function to the registry rather than a design.
 
 ## See also
 
-* [Memory formation](memory-formation.md) — the observation plane this reads
-* [The memory system](memory-system.md) — validity, steering, tiers
+* [Memory formation](observation-and-formation.md) — the observation plane this reads
+* [The memory system](artifact-records.md) — validity, steering, tiers
 * [Configuration](configuration.md#evaluation-knowledge-effectiveness-measurement-optional)
 * [HTTP API](reference/http-api.md) · [MCP tools](mcp_tools.md)
