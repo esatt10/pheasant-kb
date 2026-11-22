@@ -93,6 +93,7 @@ from pheasant.assistant.workflows.compose import (
     revision_draft,
     synthesis_window,
 )
+from pheasant.assistant.workflows.evidence import gather as gather_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -1007,10 +1008,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
     draft = decision_gates.prepare_synthesis(state, ctx, options, passages)
     passages, llm = draft.passages, draft.llm
     citations = passages_to_citations(passages, int(options["max_context_passages"]))
-    node_ids = [c["node_id"] for c in citations if c.get("node_id")]
-    facts = retriever.facts(node_ids, int(options["max_facts"]))
-    collect = getattr(retriever, "figures", None)
-    figures = collect(citations) if callable(collect) and citations else []
+    facts, figures, evidence_timings = gather_evidence(retriever, citations, options["max_facts"])
 
     if llm is None or not citations:
         return {
@@ -1084,6 +1082,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                     + ("" if depth == "short" or whole else f" ({depth})")
                     + (f" at {draft.effort} effort" if draft.effort else ""),
                     passages=len(citations),
+                    fanout_timings=evidence_timings,
                 )
             )
             if whole and options.get("compose_review", True) and documents:
@@ -1108,6 +1107,7 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
                     name="synthesize",
                     detail="model unavailable; returned extracted passages",
                     passages=len(citations),
+                    fanout_timings=evidence_timings,
                 ),
             ],
         }

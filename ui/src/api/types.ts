@@ -550,12 +550,14 @@ export interface GraphFact {
 /** One recorded step of an agent workflow, for the "what did it do" trace. */
 export interface QueryFanoutTiming {
   mode: string;
-  phase: "search" | "embedding";
+  phase: "search" | "embedding" | "facts" | "figures";
   query_index?: number | null;
   query_label?: string;
   query_count?: number;
   duration_seconds: number;
   passages?: number;
+  /** Facts or figures found, for those two phases. */
+  items?: number;
 }
 
 export interface WorkflowStep {
