@@ -1,20 +1,20 @@
-# Memory formation
+# Observation and record formation
 
-How a region turns **what agents and people actually do** into durable memory —
-and, just as deliberately, what it refuses to turn into memory.
+How a region turns **what agents and people actually do** into durable artifact
+records — and, just as deliberately, what it refuses to turn into one.
 
 This is the design document for the observation plane, the log tier that
 carries it, and the formation policy that decides what becomes a record. For
-what a memory record *is* once written, see
-[The memory system](memory-system.md). For the task-oriented version, see
-[Agent memory](how-to/agent-memory.md).
+what a record *is* once written, see [Artifact records](artifact-records.md).
+For the task-oriented version, see
+[Give your agents durable records](how-to/agent-records.md).
 
 ---
 
 ## 1. The problem
 
 pheasant has a mature memory *store* and nothing feeding it. Every record
-arrives through an explicit `memory_write` — an agent has to decide, in the
+arrives through an explicit `record_artifact` — an agent has to decide, in the
 moment, that something is worth remembering, and say so. That is a high bar,
 and it means the region learns nothing from being used.
 
@@ -80,7 +80,7 @@ table.
 
 **Rejected, on measured grounds:**
 
-- `docs/memory-system.md` §12 measures **83.2 ms** for a default `sync=True`
+- `docs/artifact-records.md` §12 measures **83.2 ms** for a default `sync=True`
   write. One file per interaction at request rates is untenable, and the
   batched `sync=False` path defeats the read-your-writes guarantee that makes
   the write path worth using.
@@ -145,7 +145,7 @@ every other piece of log work happens on its own tier with its own queue, its
 own workers and its own failure domain.
 
 ```
-request ──► bounded ring buffer ──► batch ──► log_tasks queue ──► --role logger
+request ──► bounded ring buffer ──► batch ──► log stream (JetStream) ──► --role logger
              (drops under load,                                       │
               never blocks)                                    ┌──────┴──────┐
                                                                ▼             ▼
@@ -214,14 +214,13 @@ region forms memory more slowly — not incorrectly.
 
 ### Why a separate queue
 
-`log_tasks` is its own table, not a `kind` column on `index_tasks`.
-Request-rate churn in the same table the indexer claims from means vacuum
-pressure on PostgreSQL and constant churn on `idx_index_tasks_claim` — exactly
-the burden the tier exists to avoid. The cost of separating is small because
-the abstraction was already right: `drain()` is fully task-agnostic and is
-reused verbatim, `LocalQueue` takes a table and a row-mapper so the race-free
-conditional-`UPDATE` claim stays one implementation, and `NatsQueue` takes its
-own stream, subject and durable.
+The log tier has its own JetStream stream, subject and durable consumer, not a
+`kind` on the index queue. Request-rate traffic in the stream the indexer
+claims from would put observation churn on the index claim path and let a
+burst of requests delay a sync, which is exactly the burden the tier exists to
+avoid. The cost of separating is small because the abstraction was already
+right: `drain()` is fully task-agnostic and is reused verbatim, and
+`NatsLogQueue` is `NatsQueue` with its own names.
 
 At-least-once redelivery is free rather than dangerous: a row's id is
 `blake2b(trace_id|span_id)` and the insert is `ON CONFLICT DO NOTHING`, so a
@@ -230,17 +229,16 @@ replayed batch is a no-op.
 ### Why a separate role
 
 `--role logger` scales on `pheasant_log_queue_depth`, independently of request
-traffic and of ingest. `ALL` deliberately does **not** drain the log queue —
-mirroring the existing decision that `ALL` does not drain the index queue, so
-that a single container stays byte-identical when a queue is switched on. In
-one container the roll runs inline on the maintenance beat, bounded by
+traffic and of ingest. `ALL` deliberately does **not** drain the log queue,
+mirroring the decision that `ALL` does not drain the index queue. Without a
+log tier the roll runs inline on the maintenance beat, bounded by
 `max_rows_per_pass` so it cannot stall sync, the same way
 `MEMORY_TARGETED_ARCHIVE_MAX` picks targeted deletes over a full re-sync.
 
 Honestly scoped: buffering and batching alone remove most of the burden. The
 separate tier buys *independent scaling* and keeps the roll off `sync_lock`.
-For a single container it is pure overhead, which is why it is fleet-only and
-off by default.
+For one process it is pure overhead, which is why it is off on the standalone
+table; pheasant-kb runs it.
 
 ---
 
@@ -312,7 +310,7 @@ the one column an operator reads to find slow calls.
 ambient, and every outbound hop injects it:
 
 ```
-agent (traceparent) ─► POST /sync ──► index_tasks.payload.traceparent
+agent (traceparent) ─► POST /sync ──► index task payload.traceparent
                           │                      │
                           │                      ▼  claimed, minutes later,
                           │              indexer adopts the trace
@@ -516,10 +514,10 @@ re-suggesting what somebody just declined is the fastest way to make a review
 queue worth ignoring. A pending proposal nobody acted on expires after
 `candidate_ttl_days`; a rejection never does.
 
-Surfaces: `GET /memory/candidates`,
-`GET /memory/candidates/{id}/evidence`, `POST /memory/candidates/{id}/promote`,
-`POST /memory/candidates/{id}/reject`, the MCP tools `list_memory_candidates` /
-`promote_memory_candidate` / `reject_memory_candidate`, and a **Proposed**
+Surfaces: `GET /artifacts/candidates`,
+`GET /artifacts/candidates/{id}/evidence`, `POST /artifacts/candidates/{id}/promote`,
+`POST /artifacts/candidates/{id}/reject`, the MCP tools `list_artifact_candidates` /
+`promote_artifact_candidate` / `reject_artifact_candidate`, and a **Proposed**
 section at the top of the Memory tab showing each proposal with the evidence
 behind it.
 
@@ -560,7 +558,7 @@ written one — the posture `llm-synthesized` already establishes for synthesis.
 The ledger is a real evaluation corpus: actual queries, from actual principals,
 with the results the region actually returned and — where a promotion followed
 — the record that answered it. `pheasant eval bootstrap` turns that into a case
-set `memory/benchmark.py` consumes, alongside the synthetic generator that
+set `artifacts/benchmark.py` consumes, alongside the synthetic generator that
 exists today.
 
 ```bash

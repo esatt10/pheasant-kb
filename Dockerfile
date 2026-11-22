@@ -1,30 +1,21 @@
-# The universal pheasant image: API + MCP + web UI, one container, one port.
-#
-# Two things make it "universal", and both are deliberate:
+# The pheasant image: every tier of a region (api, graph, indexer, worker,
+# logger) and the web UI, from one build.
 #
 # 1. **Every optional code path is installed.** PHEASANT_EXTRAS defaults to all
-#    of them, so any config a user writes actually works — semantic search
+#    of them, so any config a user writes actually works: semantic search
 #    (lancedb), the agentic answer loop (langgraph), sandboxed connectors
-#    (wasmtime), and the fleet's backends — Postgres state (pg8000 +
-#    SQLAlchemy's pool), the gRPC worker transport and the NATS index queue.
-#    Every deployment selects all three, so leaving one out ships an image
-#    that cannot run the topology this repo publishes. The old default of "mcp"
-#    meant a perfectly valid pheasant.yaml could fail at runtime in the
-#    published image with a missing-extra error, which is a bad trade for an
-#    image size nobody was optimising anyway. Slim builds are still one flag:
+#    (wasmtime), the gRPC worker transport, the analytics export and OTLP
+#    traces. The state store's driver (pg8000 + SQLAlchemy's pool) and the
+#    NATS client are core dependencies. Slim builds are one flag:
 #      docker build --build-arg PHEASANT_EXTRAS=mcp .
 #
-# 2. **The UI is baked in and served by the API itself.** No sidecar, no nginx,
-#    no second port to publish and no CORS origin to get right. The separate
-#    ghcr.io/esatt10/pheasant-ui image still exists for deployments that want
-#    to scale or cache the static bundle independently.
+# 2. **The UI is baked in and served by the api tier itself.** No sidecar, no
+#    nginx, no second port and no CORS origin to get right.
 #
-# So the zero-config path is genuinely one line:
-#   docker run -p 8765:8765 -v "$PWD:/workspace:ro" -v pheasant-state:/state \
-#     ghcr.io/esatt10/pheasant
-# With nothing mounted at /config the entrypoint writes a config on the
-# standalone defaults (SQLite, one process). pheasant's own default is
-# pheasant-kb's configuration, which compose.yaml mounts for every tier.
+# compose.yaml (pheasant-kb) runs this image once per tier, each with its own
+# command and its own mounted config. With nothing mounted at /config the
+# entrypoint writes a one-process config (standalone defaults); its state is
+# still PostgreSQL, at PHEASANT_DATABASE_URL.
 
 # --------------------------------------------------------------------------
 # Stage 1 — the web UI bundle.
@@ -66,7 +57,7 @@ RUN apt-get update \
 # Install from pyproject so the image's dependencies never drift from the
 # package's declared deps (a hand-maintained list previously omitted core deps
 # added later — numpy (21.4) and zstandard (21.6a) — breaking the smoke test).
-ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,postgres,grpc,queue,analytics,otel
+ARG PHEASANT_EXTRAS=mcp,agent,vector,wasm,grpc,analytics,otel
 COPY pyproject.toml README.md LICENSE /app/
 # Resolve runtime dependencies before copying application source. A one-line
 # code edit should not invalidate and redownload the entire universal stack;
@@ -82,8 +73,7 @@ RUN pip install --no-cache-dir --no-deps .
 COPY --from=ui /ui/dist /app/ui
 COPY pheasant.example.yaml /app/pheasant.default.yaml
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-COPY docker-fresh-entrypoint.sh /app/docker-fresh-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh /app/docker-fresh-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Run as an unprivileged user. The indexer reads whatever paths it is pointed
 # at, so running it as root means a misconfigured source — or a bug in the

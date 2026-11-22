@@ -33,6 +33,8 @@ from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services import source_export
 from pheasant.services.errors import InvalidRequest, ServiceError, SourceNotFound
 
+pytestmark = pytest.mark.module_database
+
 #: A 1x1 PNG: a document whose original bytes a zip should carry as-is.
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="

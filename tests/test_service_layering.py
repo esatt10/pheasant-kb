@@ -130,14 +130,6 @@ COMPOSITION_ROOTS = {
     # Measures the MCP facade's latency, so it has to construct one.
     "memory/benchmark.py",
     "artifacts/benchmark.py",  # The canonical home of the same end-to-end harness.
-    # Drives both transports to establish that they expose what the capability
-    # contract claims. Same justification as `memory/benchmark.py` and the one
-    # this set's own docstring gives: a module whose subject *is* a transport
-    # has to be able to look at it. The alternative was to assert the
-    # contract-to-facade agreement only in this suite, which proves it in CI
-    # and leaves a deployed region unable to answer the question a harness's
-    # preflight actually asks. It is asserted in both places.
-    "readiness/probes/identity.py",
 }
 
 

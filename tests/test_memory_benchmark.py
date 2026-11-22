@@ -36,7 +36,7 @@ CI_REDUNDANCY_SPEC = RedundancyBenchSpec(n_facts=6, seed=99)
 #: close competitors for one query instead of one. `stale_leak_rate` stayed
 #: 0.0 throughout — the old record never leaked into a result set, so this
 #: is a ranking-competition cost, not a correctness bug. See
-#: `docs/memory-system.md` §4 and `tests/test_memory_retention.py`.
+#: `docs/artifact-records.md` §4 and `tests/test_memory_retention.py`.
 
 
 def _tools(tmp_path: Path, *, compaction_enabled: bool = False) -> PheasantTools:

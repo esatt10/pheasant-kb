@@ -1,27 +1,13 @@
-"""The state schema, per dialect (Phase 35.2).
+"""The state schema: every table, for PostgreSQL.
 
-The table definitions are **shared verbatim** between SQLite and Postgres —
-same names, same columns, same constraints — so every one of the ~57 raw SQL
-call sites and, more importantly, every stable ID built from these rows is
-identical whichever backend is running. Only the type spellings differ, and
-only where SQLite's affinities have no Postgres equivalent.
-
-Full-text search is the one genuine divergence. SQLite uses FTS5 virtual
-tables; Postgres has no such thing. The port keeps ``chunks_fts`` as a real
-table with the *same columns*, so every write in
-:mod:`pheasant.persistence.state_store` — the per-artifact ``INSERT``, the
-``DELETE … WHERE artifact_id=?``, the source-wide delete — runs unchanged, and
-adds a generated ``search_vector`` column plus a GIN index. Only the *query*
-side differs, and that lives in :mod:`pheasant.search.sqlite_store`.
-
-The column weights are the load-bearing detail. SQLite ranks with
-``bm25(chunks_fts, 8, 3, 2, 1)`` over title/path/heading_path/text — weights
-measured in the 2026-08-03 retrieval overhaul that took MRR from 0.230 to
-0.594. Postgres's ``setweight`` has exactly four classes, A-D, which is a
-lucky fit: title→A, path→B, heading_path→C, text→D preserves the *ordering* of
-the four fields' importance. It does not reproduce BM25's arithmetic, and
-nothing here pretends it does — ``tests/test_backend_parity.py`` gates on
-measured retrieval quality rather than on scores matching.
+:data:`CORE_SCHEMA` is written in portable type spellings that
+:class:`~pheasant.persistence.sql.Dialect` rewrites for Postgres
+(:func:`schema_for`), and :data:`POSTGRES_EXTRAS` adds the full-text table:
+``chunks_fts`` as a real table whose generated ``search_vector`` carries the
+four column weights (title A, path B, heading_path C, text D) — the ordering
+of the 8/3/2/1 weights the 2026-08-03 retrieval overhaul measured. The
+ranked query is pg_textsearch's BM25 (``search/pg_textsearch.py``); the
+``tsvector`` is its fallback.
 """
 
 from __future__ import annotations
@@ -461,11 +447,9 @@ CREATE INDEX IF NOT EXISTS idx_memory_compactions_member
 -- space). A restart compares the live config against these: same fingerprint
 -- means the stored artifacts/chunks/vectors are still valid and there is
 -- nothing to redo. See pheasant.sync.fingerprint.
--- Phase 35.4: per-source write leases. EngineLease permits one writer per
--- /state dir, which is the right model for SQLite and is the ceiling Phase 35
--- lifts: two different sources have no reason to wait for each other. The row
--- is claimed by a single conditional UPDATE, so the database arbitrates races
--- rather than a read-then-write in Python.
+-- Phase 35.4: per-source write leases, so two different sources have no reason
+-- to wait for each other. The row is claimed by a single conditional UPDATE,
+-- so the database arbitrates races rather than a read-then-write in Python.
 CREATE TABLE IF NOT EXISTS source_leases (
   source_id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
@@ -593,7 +577,7 @@ CREATE INDEX IF NOT EXISTS idx_log_tasks_claim
 -- a UI session's chat does not become knowledge because it was observed. The
 -- only path from here into memory is a *candidate* that something admits,
 -- and admission goes through MemoryStore.append like every other write. See
--- docs/memory-formation.md.
+-- docs/observation-and-formation.md.
 --
 -- Unlike every other table in this file, this one is high-churn and
 -- retention-bounded: rows are deleted once past
@@ -1089,49 +1073,21 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_seals_kb
   ON snapshot_seals(kb_id, sealed_at);
 """
 
-#: SQLite-only: WAL, plus the FTS5 virtual tables.
 # DDL kept beside the module that owns the table; core in every other sense.
 CORE_SCHEMA += ACCESS_GRANTS_SCHEMA + USAGE_SCHEMA
 
-SQLITE_EXTRAS = """\
-PRAGMA journal_mode=WAL;
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-  chunk_id UNINDEXED,
-  source_id UNINDEXED,
-  artifact_id UNINDEXED,
-  title,
-  path,
-  heading_path,
-  text
-);
--- The corpus's own vocabulary, with document frequencies, read straight off
--- the FTS index. `fts5vocab` is a view over chunks_fts's internal term table:
--- it stores nothing of its own and stays exact as the index changes.
---
--- This replaces the concept layer as the source of "what is this corpus
--- about" (the Synapse contract's vocabulary.top_concepts + minhash, and the
--- planner's structural grounding). Concept extraction had been materializing
--- 141k nodes and 1.27M artifact_terms rows to answer that question; SQLite
--- was already maintaining the same information for free.
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vocab USING fts5vocab(chunks_fts, 'row');
-"""
-
-#: Postgres-only: ``chunks_fts`` as a real table with the same columns, so the
-#: write path is untouched, plus the generated search vector and its index.
+#: ``chunks_fts`` as a real table, plus the generated search vector and its index.
 #:
 #: ``search_vector`` is a STORED generated column rather than a trigger: it
 #: cannot drift from its row, and there is no ordering hazard between the
 #: INSERT and a trigger that a concurrent reader could observe.
 #:
 #: **Punctuation is flattened to spaces before tokenizing**, which is not
-#: cosmetic. SQLite indexes these columns with FTS5's ``unicode61`` tokenizer,
-#: which splits on every non-alphanumeric: ``deploy-gateway.md`` becomes
-#: ``deploy``, ``gateway``, ``md``. Postgres's ``simple`` dictionary keeps it
-#: as the single lexeme ``deploy-gateway.md``, so a search for "deploy" did
-#: not match the file *named* for it at all — silently, with no error and a
-#: perfectly plausible result list. Measured: the file named for the query
-#: ranked below a decoy that merely repeats it in prose. The regexp restores
-#: unicode61's splitting so both backends see the same terms.
+#: cosmetic: the ``simple`` dictionary keeps ``deploy-gateway.md`` as one
+#: lexeme, so a search for "deploy" did not match the file *named* for it at
+#: all — silently, with a perfectly plausible result list. Measured: the file
+#: named for the query ranked below a decoy that merely repeats it in prose.
+#: Splitting on every non-alphanumeric makes it ``deploy``, ``gateway``, ``md``.
 POSTGRES_EXTRAS = """\
 CREATE TABLE IF NOT EXISTS chunks_fts (
   chunk_id TEXT PRIMARY KEY,
@@ -1169,8 +1125,7 @@ def schema_for(dialect: Dialect) -> str:
     body = CORE_SCHEMA
     for source, target in sorted(dialect.types.items(), key=lambda kv: -len(kv[0])):
         body = body.replace(source, target)
-    extras = POSTGRES_EXTRAS if dialect.is_postgres else SQLITE_EXTRAS
-    return body + extras
+    return body + POSTGRES_EXTRAS
 
 
 #: One ``CREATE TABLE IF NOT EXISTS <name> ( … );`` block in :data:`CORE_SCHEMA`.

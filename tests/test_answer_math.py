@@ -28,6 +28,8 @@ from pheasant.assistant.replies import json_object
 from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_server.tools import PheasantTools
 
+pytestmark = pytest.mark.module_database
+
 # ---------------------------------------------------------------------------
 # 1. Reading a question or a passage as mathematical
 # ---------------------------------------------------------------------------

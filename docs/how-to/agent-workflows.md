@@ -25,11 +25,13 @@ model to plan with is pure overhead, so the fallback is deliberate — and it is
 never an error: an unknown or failing workflow degrades to `simple` with the
 reason attached to the answer rather than returning a 500.
 
-!!! note "Still no LLM in the indexing path"
-    Workflows are a query-time surface. Nothing here runs during a sync, so
-    re-indexing unchanged content stays byte-for-byte deterministic. With no
-    provider reachable both workflows still answer **extractively** — the top
-    passages with citations and graph facts intact.
+> [!NOTE]
+> **Still no LLM in the indexing path**
+>
+> Workflows are a query-time surface. Nothing here runs during a sync, so
+> re-indexing unchanged content stays byte-for-byte deterministic. With no
+> provider reachable both workflows still answer **extractively** — the top
+> passages with citations and graph facts intact.
 
 ---
 

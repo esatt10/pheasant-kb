@@ -448,8 +448,9 @@ def test_build_transport_selects_by_name() -> None:
 
 
 def test_the_worker_cli_refuses_to_start_when_the_role_is_not_enabled(
-    tmp_path: Path, capsys: Any
+    tmp_path: Path, capsys: Any, no_state_database: None
 ) -> None:
+    # Without the state credential, or the worker refuses for holding it first.
     import yaml
 
     from pheasant.cli import main
@@ -483,7 +484,7 @@ def test_a_taxonomy_source_is_prepared_by_the_fleet_and_matches_local(
 
     def indexed(engine: SyncEngine) -> list[tuple[Any, ...]]:
         return [
-            tuple(row)
+            tuple(row.values())
             for row in engine.state.rows(
                 "SELECT id, text, start_line, end_line, heading_path FROM chunks ORDER BY id", ()
             )

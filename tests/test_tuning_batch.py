@@ -416,26 +416,6 @@ def test_a_stopped_batch_is_reclaimed_and_its_trials_survive(seeded: Any) -> Non
     assert tuning_store.load_trials(seeded.state, experiment["experiment_id"]) == trials_before
 
 
-def test_the_tuning_tables_survive_a_migration(seeded: Any) -> None:
-    """`/state` is user data, and the applied overlay is operationally live."""
-
-    from pheasant.persistence.migrate import NOT_MIGRATED, TABLE_ORDER
-
-    for table in (
-        "tuning_experiments",
-        "tuning_trials",
-        "tuning_decisions",
-        "tuning_bundles",
-    ):
-        assert table in TABLE_ORDER, f"{table} would be silently dropped by a migration"
-        assert table not in NOT_MIGRATED
-
-
-# --------------------------------------------------------------------------
-# Refusing to tune
-# --------------------------------------------------------------------------
-
-
 def test_it_declines_when_the_failures_are_not_in_a_tunable_stage() -> None:
     """The most valuable thing this plane can say is "do not tune"."""
 

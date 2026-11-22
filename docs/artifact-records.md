@@ -1,19 +1,29 @@
-# The memory system
+# Artifact records
 
-How agent memory works in pheasant, end to end — what a memory *is*, how it
-gets written, indexed, filtered, ranked and forgotten, and which invariants the
-subsystem must not break.
+How durable, scoped facts work in pheasant, end to end — what a record *is*,
+how it gets written, indexed, filtered, ranked and forgotten, and which
+invariants the subsystem must not break.
 
-This is the explanation. For the task-oriented version — enable it, write a
-record, recall it — see [Agent memory](how-to/agent-memory.md). For the config
-keys, see [Configuration](configuration.md#memory-deprecated-compatibility-settings).
+A record is an **artifact** in the sense the rest of pheasant uses: durable
+knowledge the region keeps. It was called *agent memory* before 2.0; the
+deprecated `memory_*` tools and `/memory` routes are gone, and the operations
+are `record_artifact`, `list_artifact_records`, `GET/POST /artifacts/records`,
+the `artifact_policy` request field and the candidate tools below. Persisted
+ids and the `memory_*` tables are unchanged, so a region upgrading keeps every
+record it had.
+
+This is the explanation. For the task-oriented version — write a record,
+recall it — see [Give your agents durable records](how-to/agent-records.md).
+For the settings, see [`artifacts.learning`](configuration.md).
 
 ---
 
-## 1. The load-bearing decision: a memory is source content
+## 1. The load-bearing decision: a record is source content
 
-A memory record is **one append-only Markdown file** under a built-in
-`type: memory` filesystem source. Frontmatter above, the remembered text below.
+A record is **one append-only Markdown file** in the region's `artifact-records`
+source (type `artifact`, under `/state/artifact-records`, created by the first
+`record_artifact`). Frontmatter above, the recorded text below. A region that
+had an `agent-memory` source (type `memory`) keeps writing to it.
 
 Everything else follows from that. Indexing a memory is the ordinary
 deterministic chunk → embed → graph pipeline that indexes any other file, so:
@@ -31,14 +41,14 @@ The write path only ever *creates files*. It never reaches into the index
 directly.
 
 ```
-memory_write / POST /memory
+record_artifact / POST /artifacts/records
         │
         ▼
   MemoryStore.append ──────► <root>/<scope>/mem-<instant>-<digest>.md
         │                                    │
         │ (sync=true, the default)           │  ordinary filesystem source
         ▼                                    ▼
-   incremental sync ────► chunks + FTS5 ─┬─► text arm
+   incremental sync ────► chunks + BM25 ─┬─► text arm
                      └──► vectors ───────┼─► vector arm
                      └──► graph nodes ───┴─► graph arm
                      └──► memory_records (projection)
@@ -53,14 +63,14 @@ memory_write / POST /memory
 
 | Module | Owns |
 |---|---|
-| `memory/store.py` | The record file format, id derivation, append-only writes, archiving, consolidation |
-| `memory/projection.py` | Deriving the `memory_records` SQLite rows from the files |
-| `memory/policy.py` | `MemoryPolicy` — what one query is allowed to see, in two encodings |
-| `memory/steering.py` | Turning `alias`/`preference`/`exclusion` records into ranking rules |
-| `memory/salience.py` | The deterministic keep-worthiness formula |
-| `memory/maintenance.py` | One consolidation + capacity pass, run by the scheduler or on demand |
-| `memory/bridge.py` | `about` and `supersedes` edges into the knowledge graph |
-| `memory/benchmark.py` | The offline LongMemEval-style recall benchmark |
+| `artifacts/store.py` | The record file format, id derivation, append-only writes, archiving, consolidation |
+| `artifacts/projection.py` | Deriving the `memory_records` rows from the files |
+| `artifacts/policy.py` | `MemoryPolicy` — what one query is allowed to see, in two encodings |
+| `artifacts/steering.py` | Turning `alias`/`preference`/`exclusion` records into ranking rules |
+| `artifacts/salience.py` | The deterministic keep-worthiness formula |
+| `artifacts/maintenance.py` | One consolidation + capacity pass, run by the scheduler or on demand |
+| `artifacts/bridge.py` | `about` and `supersedes` edges into the knowledge graph |
+| `artifacts/benchmark.py` | The offline LongMemEval-style recall benchmark |
 | `security/acl.py` | Turning a record's scope into a read ACL |
 
 ---
@@ -139,8 +149,8 @@ archives an invalidated record's file the moment it is no longer current** —
 a `.md.archived` file drops out of the source's `**/*.md` include glob, so
 the next sync removes its row entirely. That made the guarantee above true
 only in the window between a correction and the next consolidation beat:
-seconds at agent write rates, since an agent can call `memory_consolidate`
-itself. `memory.supersede_retention_days` (Phase 2, default `0`, opt-in)
+seconds at agent write rates, since an agent can call `consolidate_artifacts`
+itself. `artifacts.learning.supersede_retention_days` (Phase 2, default `0`, opt-in)
 keeps an invalidated record's file — and so its row — around for that many
 days past the instant it stopped being current, before archiving it. No new
 column and no policy change: the *same* `valid_until` predicate that already
@@ -200,7 +210,7 @@ Measured on the vscode corpus: with them included, the alias rule
 file service implemented", pushing the real `fileService.ts` to rank 5 and
 dropping corpus MRR from 0.462 to 0.335. It also hands an agent rule syntax
 dressed as retrieved knowledge. The rules stay fully in force and fully
-inspectable via `describe_retrieval` and `GET /memory`.
+inspectable via `describe_retrieval` and `GET /artifacts/records`.
 
 ### Trust containment
 
@@ -219,7 +229,7 @@ A record whose payload is a deterministic retrieval rule rather than prose.
 This is the half that changes queries returning **no memory at all**.
 
 ```
-alias       router -> pheasant-flock, flock
+alias       router -> ingress-gateway, gateway
 preference  when: deploy, docker -> prefer: docs/, deploy/
 exclusion   never: vendor/**
 ```
@@ -232,8 +242,8 @@ Two things that are easy to get wrong and are pinned by tests:
 
 - **Triggers are matched against the tokenized query**, split the same way
   `_query_tokens` splits, with *every* part required. Matching one token would
-  let a rule about `pheasant-flock` fire on a query that merely said
-  `pheasant`; splitting on too few separators leaves `ci/cd`, `fs.watch` and
+  let a rule about `ingress-gateway` fire on a query that merely said
+  `ingress`; splitting on too few separators leaves `ci/cd`, `fs.watch` and
   `api:gateway` silently dead while still reporting themselves in force.
 - **Scope gating is a security property.** A rule applies only to a query whose
   policy admits its scope, so `session` steering stays in that session. `mode`
@@ -241,11 +251,11 @@ Two things that are easy to get wrong and are pinned by tests:
   and a caller who wants no remembered passages still wants the region's
   remembered vocabulary.
 
-Rule text is reassembled from its chunks in `chunk_index` order, because SQLite
-does not guarantee the order an aggregate sees its input and a rule long enough
+Rule text is reassembled from its chunks in `chunk_index` order, because the
+database does not guarantee the order an aggregate sees its input and a rule long enough
 to span two chunks could otherwise parse differently between runs.
 
-Off by default (`memory.steering_enabled`): memory that silently re-orders
+Off by default (`artifacts.learning.steering_enabled`): memory that silently re-orders
 results is a surprise unless it was asked for.
 
 ---
@@ -264,7 +274,7 @@ Memory is not a graph island. Records become `memory_record` nodes, with:
   drawn from) never feeds `effective_valid_until`. See §8.
 - **`about` edges** to what the record is *about*, drawn by a precedence
   ladder — **reference → symbol → heading → entity**, first rung wins, capped
-  at `memory.about_max_targets`.
+  at `artifacts.learning.about_max_targets`.
 
 The ladder exists because `entity` cannot be the bridge on its own: entity
 extraction runs only for `.md/.txt/.html/.xml`, so an entity-only bridge looks
@@ -283,9 +293,9 @@ Coverage is reported, not silent: `describe_retrieval` carries
 
 At agent write rates a fact is rarely asserted once — it is restated,
 paraphrased and re-derived, and each restatement used to be indistinguishable
-from a new fact. **Reinforcement** (`memory.reinforcement_enabled`, on by
+from a new fact. **Reinforcement** (`artifacts.learning.reinforcement_enabled`, on by
 default) closes that gap on the write path: before creating a file, a write is
-checked against a *normalized* form of its text (`pheasant.memory.normalize` —
+checked against a *normalized* form of its text (`pheasant.artifacts.normalize` —
 Unicode-folded, whitespace-collapsed, stripped of leading articles and framing
 clauses like "note that", but never token-sorted and never stripped of
 quantifiers like "not" — see that module for why) scoped to the same
@@ -294,7 +304,7 @@ one thing. A match — whether the write is byte-identical or merely a
 paraphrase — does not create a new record: it bumps that record's
 `observations` counter and `last_seen` timestamp, and remembers the submitted
 surface form as a `variant` (bounded to 8) when it differs from what is
-stored. `memory_write`'s response gains `outcome: "created" | "reinforced"`
+stored. `record_artifact`'s response gains `outcome: "created" | "reinforced"`
 alongside the existing `created` boolean, and `submitted_text` when what was
 written differs from what is now stored.
 
@@ -342,7 +352,7 @@ records what was *written*, not what anyone *looked up*) and is on by default;
 in a region that never enables usage tracking, `observations` is what keeps
 salience from degenerating to age-and-scope-only ranking.
 
-`memory.max_records` archives the least salient beyond the cap, via the same
+`artifacts.learning.max_records` archives the least salient beyond the cap, via the same
 in-place rename consolidation uses, with the score written back so a prune is
 explainable. Unbounded by default.
 
@@ -372,7 +382,7 @@ different casing or framing. It cannot fold two records an agent phrased
 genuinely differently but which still assert the same thing; that is a
 *similarity* judgement, not an equivalence, and the write path is
 deliberately never allowed to make one (nothing lossy happens before a
-caller sees the result of their own write). `memory.compaction_enabled`
+caller sees the result of their own write). `artifacts.learning.compaction_enabled`
 (off by default — see below) runs that judgement offline, on the same
 consolidation pass as archival and capacity pruning:
 
@@ -381,13 +391,13 @@ consolidation pass as archival and capacity pruning:
    across scope, never across a steering kind, never across principal at
    `user`/`session` scope.
 2. **Cluster** within a bucket by exact Jaccard similarity over normalized
-   content tokens (`memory.compaction_similarity_threshold`, default `0.6`),
+   content tokens (`artifacts.learning.compaction_similarity_threshold`, default `0.6`),
    using a postings index for candidate generation — the same shape as the
    corpus's own (retired, dormant) `_similarity_edges` pass, reused here
    because a memory bucket is small enough that an inverted index plus exact
    Jaccard needs no probabilistic signature.
 3. **Promote a medoid**: within each cluster of at least
-   `memory.compaction_min_cluster_size` (default `2`) members, the record
+   `artifacts.learning.compaction_min_cluster_size` (default `2`) members, the record
    maximizing summed similarity to every other member becomes canonical —
    ties break on the lowest `record_id`. Nothing is machine-authored: the
    "summary" is a real record a real writer wrote, so provenance stays
@@ -431,14 +441,14 @@ concrete cases it provably does not cover —
    "…Wednesday" → "deploys have been failing all week" is generalization,
    not selection.
 
-`memory.synthesis` (Phase 4) is a model call for exactly this gap, and
+`artifacts.learning.synthesis` (Phase 4) is a model call for exactly this gap, and
 nothing more. **The model is a writer, never an indexer** — it produces one
 ordinary record through the same `MemoryStore.append` path a human or
 agent write uses, and the deterministic pipeline then indexes it
 identically to every other record. No LLM call ever happens on the
 indexing path (CLAUDE.md rule 1), and it is **never invoked automatically**
 — not from the scheduler beat, not from consolidation — only through the
-explicit `memory_synthesize` MCP tool / `POST /memory/synthesize`. `pytest`
+explicit `synthesize_artifacts` MCP tool / `POST /artifacts/synthesize`. `pytest`
 stays network-free by construction: the default `provider: auto` resolves
 to nothing reachable when no API key is set, so a pass degrades to
 `{"skipped": "no model reachable"}` rather than needing a mock.
@@ -447,15 +457,16 @@ Configuration mirrors `AssistantSettings` field for field — an operator who
 has already pointed the assistant at a model recognizes every knob:
 
 ```yaml
-memory:
-  synthesis:
-    enabled: false          # opt-in, and never automatic regardless
-    provider: auto           # auto | anthropic | openai | gemini | none
-    model: null               # explicit model id; null = provider default
-    max_calls_per_pass: 20
-    max_input_chars: 6000     # combined member text; over this, skip the cluster
-    min_cluster_size: 3
-    max_jaccard: 0.55         # above this, medoid promotion already has it
+artifacts:
+  learning:
+    synthesis:
+      enabled: false          # opt-in, and never automatic regardless
+      provider: auto           # auto | anthropic | openai | gemini | none
+      model: null               # explicit model id; null = provider default
+      max_calls_per_pass: 20
+      max_input_chars: 6000     # combined member text; over this, skip the cluster
+      min_cluster_size: 3
+      max_jaccard: 0.55         # above this, medoid promotion already has it
 ```
 
 Candidates are subject-tagged buckets (the same `(scope, subject, kind, ACL
@@ -514,9 +525,9 @@ file must be trusted input.
 
 | Surface | Write | Read | Maintain |
 |---|---|---|---|
-| MCP | `memory_write` | `search_context(memory=…)`, `describe_retrieval`, `pheasant://…/memory` | `memory_consolidate` |
-| HTTP | `POST /memory` | `GET /memory`, `POST /search` | `POST /memory/consolidate`, `POST /memory/enable` |
-| UI | `/memory` page | citation chips, `use memory` chat toggle | Settings → Memory panel |
+| MCP | `record_artifact` | `list_artifact_records`, `search_context(artifact_policy=…)`, `describe_retrieval` | `consolidate_artifacts`, `synthesize_artifacts`, `list_/promote_/reject_artifact_candidate` |
+| HTTP | `POST /artifacts/records` | `GET /artifacts/records`, `GET /artifacts/records/{id}`, `POST /search` | `POST /artifacts/consolidate`, `POST /artifacts/synthesize`, `/artifacts/candidates…` |
+| UI | **Artifacts** page → Records | citation chips, the **use artifacts** chat toggle | **Artifacts** page → Proposed |
 
 The MCP tool surface is public API: additive evolution only, deprecate before
 remove.
@@ -544,8 +555,8 @@ Things this subsystem must keep true:
 
 ## 12. Measured
 
-From `memory/benchmark.py` (deterministic, offline, through the real
-`memory_write` → index → `search_context` path):
+From `artifacts/benchmark.py` (deterministic, offline, through the real
+`record_artifact` → index → `search_context` path):
 
 | Metric | Value |
 |---|---|
@@ -561,7 +572,7 @@ From `memory/benchmark.py` (deterministic, offline, through the real
 **The two write-latency rows measure different things, on purpose (Phase
 5).** The batched number reflects a script seeding a corpus — every write in
 that loop skips the per-write index update, with one `sync_source` call at
-the end. `memory_write`'s actual default (`sync=True`) is what an agent's
+the end. `record_artifact`'s actual default (`sync=True`) is what an agent's
 own write pays: one incremental sync with `enrich="deferred"` per call
 (finding (2) of the compaction plan). The batched number was, for three
 phases, the only one published — nobody had measured the path an agent
@@ -581,7 +592,7 @@ pattern —
 `compaction_enabled` at its default (off): the same write pattern, the
 same reinforcement, but nothing left to fold the surviving near-duplicate
 into its canonical record. Reproduce both with
-`python -m pheasant.memory.benchmark`.
+`python -m pheasant.artifacts.benchmark`.
 
 On a real corpus (microsoft/vscode, partial index), through the real MCP stdio
 surface: corpus MRR 0.462 → **0.495** with memory on (memory is not a tax),
@@ -602,12 +613,10 @@ moved team-vocabulary queries **0.029 → 0.467** while control queries moved
   record whose id it knows. Injection can no longer *forge* the field, but the
   API accepts it as a legitimate parameter, and cross-principal correction is
   currently by design rather than by decision.
-- **Taxonomy is not published on the Synapse contract** — the outline is
-  region-local retrieval structure, not routing signal.
 - **Reinforcement, tier, and observation counters live only in `/state`.**
   A `/state` restore predating N reinforcements resets those counters —
   record *content* is never at risk (the `.md` files are the truth, and
   restoring an older `/state` cannot lose or alter a written record), but
   compaction's inputs (`observations`, `tier`, `subsumed_by`, the
-  `memory_compactions` ledger) are covered by `pheasant backup`, not by the
+  `memory_compactions` ledger) are covered by a [backup](how-to/backup-restore.md), not by the
   record files themselves.

@@ -111,8 +111,6 @@ class GraphRowStore:
         self.state = state
         #: ``(kb_id, generation_id) -> edge types``; see :meth:`edge_types`.
         self._edge_types: dict[str, tuple[str, tuple[str, ...]]] = {}
-        dialect = getattr(state, "dialect", None)
-        self._postgres = bool(dialect is not None and dialect.is_postgres)
 
     # --- writing ---------------------------------------------------------
 

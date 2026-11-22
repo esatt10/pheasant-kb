@@ -1,45 +1,35 @@
-# Give your agents durable memory
+# Give your agents durable records
 
-!!! note "Memory is now Artifacts"
-    The memory viewpoint and tools are deprecated compatibility surfaces.
-    Use [Replace memory with artifacts](artifact-migration.md) for the canonical
-    UI, HTTP/MCP operations, learning settings and retention behavior.
-    No shipped configuration declares an `agent-memory` source any more:
-    `record_artifact` creates `artifact-records` under `/state` on its first
-    write. A region that already has one keeps it.
-
-A pheasant region can be an **agent memory store** (Product Framework Step
-33.1): agents write facts through MCP or HTTP, and those facts become
-ordinary indexed knowledge — searchable with the same `search_context` /
-`/search` surface as everything else, provenance included. No separate
-memory database, no second retrieval path.
+Agents (and people) record scoped facts with `record_artifact` over MCP or
+`POST /artifacts/records` over HTTP, and those facts become ordinary indexed
+knowledge — searchable with the same `search_context` / `POST /search` surface
+as everything else, provenance included. No separate database, no second
+retrieval path. The first record creates the `artifact-records` source under
+`/state`; nothing has to be configured first.
 
 > For how the whole subsystem fits together — the validity model, the two
 > encodings of the query policy, the graph bridge, salience and the invariants
-> — see [The memory system](../memory-system.md).
+> — see [Artifact records](../artifact-records.md).
 
-## 1. Configure a memory source
+## 1. Where records live
 
-One block in `pheasant.yaml`:
+Nowhere you have to configure. The first `record_artifact` creates the
+`artifact-records` source (type `artifact`) at `/state/artifact-records`. On a
+fleet, where an api replica mounts `/state` read-only, the record file is
+handed to the indexer through the artifact outbox and written there. A region
+upgraded from 1.x that declared an `agent-memory` source (type `memory`) keeps
+it, and records keep going there.
 
-```yaml
-sources:
-  - name: agent-memory
-    type: memory
-    path: memory        # a directory, anchored to workspace_root
-```
+Either way it is a folder of Markdown: the scheduler, include globs and backups
+treat it like any other source.
 
-A `memory` source is a filesystem source: the watcher, scheduler, include
-globs and backups all treat it like any folder
-of Markdown.
+## 2. Write records
 
-## 2. Write memories
-
-From an MCP agent (Claude Code, Cursor, …) via the `memory_write` tool, or
+From an MCP agent (Claude Code, Cursor, …) via the `record_artifact` tool, or
 over HTTP:
 
 ```bash
-curl -s localhost:8765/memory -X POST -H 'content-type: application/json' -d '{
+curl -s localhost:8765/artifacts/records -X POST -H 'content-type: application/json' -d '{
   "text": "The staging cluster lives in us-east-2.",
   "scope": "org",
   "subject": "infra",
@@ -63,9 +53,9 @@ caller forge frontmatter and escalate a private note to `org`. Everything else
 **Restating a fact reinforces it, it does not duplicate it.** An agent that
 asserts the same thing in fresh words every time it comes up — the normal
 case at agent write rates — does not grow the store one record per
-paraphrase. `memory.reinforcement_enabled` (on by default) checks a new
+paraphrase. `artifacts.learning.reinforcement_enabled` (on by default) checks a new
 write's normalized text (case/whitespace/framing folded, nothing else — see
-`docs/memory-system.md` §8) against the same `(scope, subject, kind)` bucket
+`docs/artifact-records.md` §8) against the same `(scope, subject, kind)` bucket
 before creating a file; a match reinforces the existing record instead. The
 response's `outcome` says which happened:
 
@@ -87,7 +77,7 @@ curl -s localhost:8765/search -X POST -H 'content-type: application/json' \
 ```
 
 Memory records rank alongside (and link into) the rest of the knowledge
-graph. `GET /memory?scope=org` lists raw records for inspection.
+graph. `GET /artifacts/records?scope=org` lists raw records for inspection.
 
 ## What a record looks like on disk
 
@@ -114,7 +104,7 @@ signal.
 ## Corrections, decay, and consolidation
 
 Pass `supersedes: <record_id>` when a memory corrects an earlier one. The
-old record is then no longer *current* — `GET /memory?current_only=true`
+old record is then no longer *current* — `GET /artifacts/records?current_only=true`
 filters it immediately — and the next **consolidation pass** archives it:
 the file is renamed `<id>.md.archived` in place (bytes preserved forever,
 nothing deleted), so search stops surfacing the stale fact while the audit
@@ -124,20 +114,21 @@ full re-sync of the (small) memory source — either way the result is the
 same, only the cost differs.
 
 Consolidation runs automatically on the scheduler beat, or on demand via
-the `memory_consolidate` MCP tool / `POST /memory/consolidate`. Per-scope
+the `consolidate_artifacts` MCP tool / `POST /artifacts/consolidate`. Per-scope
 decay is opt-in:
 
 ```yaml
-memory:
-  consolidation_enabled: true   # default — supersedes chains get archived
-  session_ttl_days: 14          # opt-in: scratch session memories decay
-  user_ttl_days: null           # null = the scope never expires (default)
-  org_ttl_days: null
-  supersede_retention_days: 0   # opt-in: keep a correction's old record
-                                 # indexed (reachable via as_of) for this
-                                 # many days before archiving it. 0 = archive
-                                 # on the very next pass. See "point-in-time
-                                 # recall" note below.
+artifacts:
+  learning:
+    consolidation_enabled: true   # default — supersedes chains get archived
+    session_ttl_days: 14          # opt-in: scratch session memories decay
+    user_ttl_days: null           # null = the scope never expires (default)
+    org_ttl_days: null
+    supersede_retention_days: 0   # opt-in: keep a correction's old record
+                                   # indexed (reachable via as_of) for this
+                                   # many days before archiving it. 0 = archive
+                                   # on the very next pass. See "point-in-time
+                                   # recall" note below.
 ```
 
 **Want `as_of` to reliably reach a value from last week?** Set
@@ -145,18 +136,9 @@ memory:
 because it is a real trade-off, not a free fix: a superseded record's file
 stays indexed alongside its correction for that many days, and near-duplicate
 text competing for the same query measurably affects ranking under hybrid
-(RRF) fusion — see `docs/memory-system.md` §4 for the numbers. At `0`
+(RRF) fusion — see `docs/artifact-records.md` §4 for the numbers. At `0`
 (default), a corrected fact is dropped from the index on the very next
 consolidation pass, same as before this knob existed.
-
-## Fleet routing
-
-A region with a memory source advertises `memory` in its contract's
-`capabilities.modalities`, so a Synapse router directs remember/recall
-traffic with the existing `--modality memory` filter — no wire-format
-change. Router-side, the `synapse_remember` MCP tool (Step 33.3) routes a
-write to the fleet's memory-capable region and recall stays ordinary
-`synapse_search`.
 
 ## Controlling memory at query time
 
@@ -165,9 +147,9 @@ Every retrieval surface takes a `memory` argument — MCP `search_context`,
 covers the common cases:
 
 ```jsonc
-{"query": "rollout password", "memory": "off"}    // no memory in the results
-{"query": "rollout password", "memory": "only"}   // memory and nothing else
-{"query": "rollout password", "memory": "prefer"} // memory keeps a share of the slots
+{"query": "rollout password", "artifact_policy": "off"}    // no memory in the results
+{"query": "rollout password", "artifact_policy": "only"}   // memory and nothing else
+{"query": "rollout password", "artifact_policy": "prefer"} // memory keeps a share of the slots
 ```
 
 or an object for the rest:
@@ -175,7 +157,7 @@ or an object for the rest:
 ```json
 {
   "query": "rollout password",
-  "memory": {
+  "artifact_policy": {
     "scopes": ["user"],
     "subject": "deploy",
     "as_of": "2026-01-01T00:00:00Z",
@@ -186,7 +168,7 @@ or an object for the rest:
 ```
 
 `tiers` (Phase 3, `["hot"]` \| `["cold"]` \| `["hot","cold"]`) reaches
-records demoted by [compaction](#compaction) — omit it and a plain query
+records demoted by [compaction](#compaction--folding-near-duplicates-without-losing-them) — omit it and a plain query
 sees `hot` only, exactly like before compaction existed; `current_only:
 false` or `as_of` widen to `["hot","cold"]` automatically, the same signal
 that already widens the validity window.
@@ -208,21 +190,21 @@ Results that came from memory carry a `memory` block:
 counts, how many records are wired into the graph, and any steering in force —
 so an agent never has to guess.
 
-## Steering — memory that improves every query {#steering}
+## Steering — records that improve every query
 
-Set `memory.steering_enabled: true` and a record's `kind` becomes a retrieval
-rule rather than an assertion to recall. This is the one part of memory that
+Set `artifacts.learning.steering_enabled: true` and a record's `kind` becomes a retrieval
+rule rather than an assertion to recall. This is the one part of records that
 changes queries returning **no memory at all**.
 
 | kind | Write | Effect |
 |---|---|---|
-| `alias` | `router -> pheasant-flock, flock` | Expands the query, so asking about "the router" finds documents that only say "pheasant-flock" |
+| `alias` | `router -> ingress-gateway, gateway` | Expands the query, so asking about "the router" finds documents that only say "ingress-gateway" |
 | `preference` | `when: deploy, docker -> prefer: docs/, deploy/` | Adds a path prior alongside the built-in depth/tests/samples ones |
 | `exclusion` | `never: vendor/**` | Suppresses matching paths |
 
 ```bash
-curl -X POST localhost:8765/memory -H 'content-type: application/json' \
-  -d '{"text": "router -> pheasant-flock, flock", "kind": "alias", "scope": "org"}'
+curl -X POST localhost:8765/artifacts/records -H 'content-type: application/json' \
+  -d '{"text": "router -> ingress-gateway, gateway", "kind": "alias", "scope": "org"}'
 ```
 
 Paths are matched against a source-relative `relative_path`, so a source rooted
@@ -232,7 +214,7 @@ at `docs/` uses `vendor/`, not `docs/vendor/`.
 where its scope does: `session` steering is confined to that session, `user` to
 that principal, `org` fleet-wide. A corrected or expired rule steers nothing —
 the same validity predicate governs steering and retrieval, so the two cannot
-disagree. Note that `memory: "off"` suppresses memory *content* but still
+disagree. Note that `artifact_policy: "off"` suppresses record *content* but still
 honours steering: not wanting remembered passages is not the same as not
 wanting the region's remembered vocabulary.
 
@@ -240,20 +222,20 @@ wanting the region's remembered vocabulary.
 machinery, so it is excluded from result lists by default — measured live, an
 alias rule was taking rank 1 for the very query it was written to improve,
 pushing the real answer down five places. It stays fully in force and fully
-inspectable via `describe_retrieval` and `GET /memory`. Pass
-`"memory": {"include_rules": true}` to see rules in results anyway.
+inspectable via `describe_retrieval` and `GET /artifacts/records`. Pass
+`"artifact_policy": {"include_rules": true}` to see rules in results anyway.
 
 **Triggers match the tokenized query.** Write them however reads naturally —
-`filewatch daemon`, `pheasant-flock`, `ci/cd`, `fs.watch` all work — and every
+`filewatch daemon`, `ingress-gateway`, `ci/cd`, `fs.watch` all work — and every
 part of the trigger must be present for the rule to fire, so a rule about
-`pheasant-flock` does not fire on a query that merely said `pheasant`.
+`ingress-gateway` does not fire on a query that merely said `ingress`.
 
 ## Salience and bounded growth
 
 With `memory.usage_tracking: true`, retrieval counts which records it actually
 returned. That feeds a deterministic salience score — recency (90-day half
 life) × use (with diminishing returns) × scope weight — which decides what goes
-first when `memory.max_records` is set. Pruning archives with the same in-place
+first when `artifacts.learning.max_records` is set. Pruning archives with the same in-place
 `.md.archived` rename consolidation uses: bytes are preserved, never deleted.
 
 Both are off by default. Usage tracking is a write on the read path, and
@@ -275,19 +257,20 @@ Each defaults to unbounded; where a record's own scope cap, its subject's
 cap, and the global `max_records` backstop all apply, it is archived once,
 not three times.
 
-## Compaction — folding near-duplicates without losing them {#compaction}
+## Compaction — folding near-duplicates without losing them
 
 An agent restates the same fact in fresh words every time it comes up.
 Reinforcement (above the write examples) already folds *exact* restatements
-at write time; `memory.compaction_enabled` (off by default) additionally
+at write time; `artifacts.learning.compaction_enabled` (off by default) additionally
 clusters genuinely-different-wording near-duplicates **offline**, on the
 consolidation pass:
 
 ```yaml
-memory:
-  compaction_enabled: false            # opt-in
-  compaction_similarity_threshold: 0.6 # exact-Jaccard, over normalized tokens
-  compaction_min_cluster_size: 2
+artifacts:
+  learning:
+    compaction_enabled: false            # opt-in
+    compaction_similarity_threshold: 0.6 # exact-Jaccard, over normalized tokens
+    compaction_min_cluster_size: 2
 ```
 
 Within one `(scope, subject, kind, ACL partition)` bucket — never crossing
@@ -302,7 +285,7 @@ indexed, and stays reachable:
 ```bash
 curl -s localhost:8765/search -X POST -H 'content-type: application/json' -d '{
   "query": "staging cluster region",
-  "memory": {"tiers": ["cold"]}
+  "artifact_policy": {"tiers": ["cold"]}
 }'
 ```
 
@@ -318,20 +301,21 @@ Clustering folds redundancy — many phrasings of one claim. It cannot
 **merge** two records that are each true and each say something the other
 doesn't ("runs in us-east-2" + "owned by ada"), or abstract across several
 ("deploy failed Mon/Tue/Wed" → "failing all week"). For that,
-`memory.synthesis` calls a model — opt-in, and unlike everything else on
+`artifacts.learning.synthesis` calls a model — opt-in, and unlike everything else on
 this page, **never automatic**: only an explicit call runs it.
 
 ```yaml
-memory:
-  synthesis:
-    enabled: false      # opt-in
-    provider: auto        # auto | anthropic | openai | gemini | none
-    model: null
-    max_calls_per_pass: 20
+artifacts:
+  learning:
+    synthesis:
+      enabled: false      # opt-in
+      provider: auto        # auto | anthropic | openai | gemini | none
+      model: null
+      max_calls_per_pass: 20
 ```
 
 ```bash
-curl -s localhost:8765/memory/synthesize -X POST
+curl -s localhost:8765/artifacts/synthesize -X POST
 ```
 
 The model only ever sees clusters clustering already tried and couldn't
@@ -345,20 +329,21 @@ over an unchanged, already-subsumed cluster costs nothing.
 
 ## In the UI
 
-The **Memory** tab lists what has been recorded, grouped by subject, with the
-scope, when it was asserted and who wrote it. Corrections are made by
-*superseding* — never by editing — so the history `as_of` reads stays intact;
-the "Correct" button pre-fills a superseding write. Consolidation runs from the
-same page.
+The **Artifacts** page has a **Knowledge records** panel that lists what has
+been recorded, with its scope. Corrections are made by *superseding* — never by
+editing — so the history `as_of` reads stays intact; **Correct** pre-fills a
+superseding write, and saving it keeps the earlier version and its evidence.
+Proposed records wait under **Proposed** on the same page until someone
+promotes or rejects them.
 
-In chat, a **use memory** switch on the composer sends the same `memory` field
-MCP and the router send, and any passage that came from memory is chipped with
-its scope so an answer never silently passes off a remembered assertion as a
-document.
+In chat, the **use artifacts** switch on the composer lets knowledge records,
+saved reports and composed work inform the answer, and any passage that came
+from a record is chipped with its scope so an answer never silently passes off
+a recorded assertion as a document.
 
 ## Isolation
 
 When `security.acl_enforced` is on, a record's ACL follows its scope: `org` is
 shared, while `user` and `session` records are readable only by the principal
-that wrote them (`memory_write(..., principal="user:alice")`). Without a
+that wrote them (`record_artifact(..., principal="user:alice")`). Without a
 recorded writer nothing is asserted and the region default applies.

@@ -208,7 +208,7 @@ def test_cli_plans_sources_registered_at_runtime(
 
 
 def _store() -> StateStore:
-    store = StateStore(backend=PostgresBackend(DSN))
+    store = StateStore(backend=PostgresBackend(os.environ["PHEASANT_DATABASE_URL"]))
     store.migrate()
     return store
 
@@ -323,7 +323,11 @@ def test_concurrent_claims_produce_exactly_one_winner() -> None:
     start = threading.Barrier(6)
 
     def claim(name: str) -> None:
-        lease = SourceLease(StateStore(backend=PostgresBackend(DSN)), "race", owner=name)
+        lease = SourceLease(
+            StateStore(backend=PostgresBackend(os.environ["PHEASANT_DATABASE_URL"])),
+            "race",
+            owner=name,
+        )
         start.wait(timeout=10)
         won = lease.try_acquire()
         with lock:
@@ -348,58 +352,6 @@ def test_concurrent_claims_produce_exactly_one_winner() -> None:
             lease.release()
             lease.state.close()
         store.close()
-
-
-def test_sqlite_keeps_the_whole_state_lease(tmp_path: Path) -> None:
-    """Rule 7. SQLite genuinely permits one writer per file, so the
-    whole-state lease there is an accurate model, not a limitation to route
-    around. Runs everywhere, because that is the default deployment."""
-
-    from pheasant.sync.engine import SyncEngine
-
-    workspace = tmp_path / "docs"
-    workspace.mkdir()
-    (workspace / "a.md").write_text("# A\n\nGateway notes.\n", encoding="utf-8")
-    config = PheasantConfig.model_validate(
-        {
-            "pheasant": {
-                "name": "kb",
-                "state_path": str(tmp_path / "state"),
-                "workspace_root": str(tmp_path),
-                "exports_path": str(tmp_path / "exports"),
-            },
-            "storage": {"graph_snapshots": False},
-            "sync": {"watcher": {"enabled": False}, "scheduler": {"enabled": False}},
-            "sources": [
-                {
-                    "name": "docs",
-                    "type": "markdown_folder",
-                    "path": str(workspace),
-                    "include": ["**/*.md"],
-                }
-            ],
-        }
-    )
-    engine = SyncEngine(config)
-    try:
-        assert engine.state.dialect.name == "sqlite"
-        assert engine.sync_source("docs", "full").indexed_artifacts == 1
-        # The whole-state lease was taken, and no per-source rows were written.
-        assert engine.lease.held
-        assert engine.state.rows("SELECT source_id FROM source_leases") == []
-    finally:
-        engine.close()
-
-
-# ---------------------------------------------------------------------------
-# Phase 35.8 — the ceiling, published; the split, emitted
-#
-# The single-writer ceiling is a defensible consequence of a globally
-# consistent graph. What was not defensible is that it was undocumented as a
-# cliff and the escape from it was unautomated: a team scales workers, watches
-# ingest stop improving, and has nothing telling them they have reached the
-# commit-authority limit rather than a tuning problem.
-# ---------------------------------------------------------------------------
 
 
 class _Clock:
@@ -689,6 +641,45 @@ def test_the_emitted_compose_is_a_file_docker_will_accept(tmp_path: Path) -> Non
     # The container paths the emitted config names must be the ones mounted.
     mounted = {entry.split(":")[1] for entry in service["volumes"]}
     assert {"/state", "/workspace", "/exports"} <= mounted
+
+
+def test_an_emitted_region_runs_its_own_database_and_one_process(tmp_path: Path) -> None:
+    """2.0 has no file-backed state store, so a region without a database
+    cannot start; and a copied pheasant-kb config names a queue, a graph
+    service and workers that do not exist beside one container."""
+
+    import yaml
+
+    from pheasant.sharding import POSTGRES_IMAGE, render_artifacts
+
+    config = _plan_config(tmp_path, ["docs"])
+    plan = plan_shards([SourceSize("docs", 500)])
+    artifacts = render_artifacts(plan, config)
+    compose = yaml.safe_load(artifacts["atlas-shard-1/docker-compose.yml"])
+    region = yaml.safe_load(artifacts["atlas-shard-1/pheasant.yaml"])
+
+    assert POSTGRES_IMAGE in compose["services"]["postgres"]["image"]
+    assert "atlas-shard-1-postgres" in compose["volumes"]
+    service = compose["services"]["pheasant"]
+    assert service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert "@postgres:5432/" in service["environment"]["PHEASANT_DATABASE_URL"]
+
+    assert region["server"]["role"] == "all"
+    assert region["storage"]["dsn_env"] == "PHEASANT_DATABASE_URL"
+    assert region["sync"]["queue"]["enabled"] is False
+    assert region["graph"]["query_service_url"] is None
+    assert region["sync"]["concurrency"]["file_executor"] == "thread"
+    assert region["observability"]["interactions"]["queue"]["enabled"] is False
+    # Retrieval is copied, not reset.
+    assert region["search"]["ranking"]["rrf_k"] == 42
+    PheasantConfig.model_validate(region)
+
+
+def test_the_emitted_database_image_is_the_one_deploy_postgres_builds() -> None:
+    from pheasant.sharding import POSTGRES_IMAGE
+
+    tag = (Path(__file__).resolve().parents[1] / "deploy" / "postgres" / "TAG").read_text()
+    assert POSTGRES_IMAGE == f"ghcr.io/esatt10/pheasant-postgres:{tag.strip()}"
 
 
 def test_a_region_config_names_container_paths(tmp_path: Path) -> None:

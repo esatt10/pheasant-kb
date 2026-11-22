@@ -19,7 +19,6 @@ Four things are held here:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,6 +28,8 @@ from pheasant.search.criteria import Exclusion, path_of, path_within
 from pheasant.services import ServiceContext, scope
 from pheasant.services.errors import DocumentNotFound, InvalidRequest, ServiceError
 from tests.test_source_browser import _region
+
+pytestmark = pytest.mark.module_database
 
 OPEN = {"current_document": "docs/guide/rotation.txt", "current_directory": "docs/guide"}
 QUERY = "vault rotation installer runbook gateway port guidebook"
@@ -393,47 +394,3 @@ def test_an_unscoped_question_carries_no_scope(region: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
-
-
-@pytest.mark.skipif(not POSTGRES_DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
-def test_an_exclusion_resolves_and_applies_alike_on_both_backends(tmp_path: Path) -> None:
-    """Resolution is hand-written SQL (`LOWER … LIKE … ESCAPE`, `NOT IN`)."""
-
-    from pheasant.persistence import pg_driver
-
-    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.query("DROP SCHEMA public CASCADE")
-        conn.query("CREATE SCHEMA public")
-    lite = _region(tmp_path / "sqlite")
-    storage = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}
-    lexical = os.environ.get("PHEASANT_TEST_LEXICAL_INDEX")
-    if lexical:
-        storage["lexical_index"] = lexical
-    pg = _region(tmp_path / "postgres", storage=storage)
-
-    for names, within in [
-        (["deploy.md"], None),
-        (["DEPLOY.md", "guide/rotation.txt"], None),
-        (["docs/data/table.csv"], None),
-        (["deploy.md"], "guide"),
-        (["table.csv"], "guide"),
-    ]:
-        a = scope.resolve(
-            _context(lite), source_name="docs", path_prefix=within, exclude_documents=names
-        )
-        b = scope.resolve(
-            _context(pg), source_name="docs", path_prefix=within, exclude_documents=names
-        )
-        assert (a.excluded, a.unresolved, a.kind) == (b.excluded, b.unresolved, b.kind), names
-    for side in (lite, pg):
-        found = side["tools"].search_context(
-            side["kb"], QUERY, source_name="docs", exclude_documents=["rotation.txt"]
-        )
-        assert found["results"] and "guide/rotation.txt" not in _paths(found)
-        listed = side["tools"].list_documents(
-            side["kb"], source_name="docs", path_prefix="guide", exclude_documents=["deploy.md"]
-        )
-        assert [r["path"] for r in listed["documents"]] == [
-            "guide/Setup/install.md",
-            "guide/rotation.txt",
-        ]

@@ -37,7 +37,9 @@ jobs:
             extras: "dev,mcp"
             require-agent: "0"
           - python-version: "3.12"
-            extras: "dev,mcp,agent,otel,grpc"
+            # `vector`: tests/test_flagship_defaults.py runs pheasant-kb's own
+            # defaults (LanceDB included) on stub models.
+            extras: "dev,mcp,agent,otel,grpc,vector"
             require-agent: "1"
 
     steps:
@@ -70,9 +72,26 @@ jobs:
       - name: Check installed dependencies
         run: python -m pip check
 
+      # The state store is PostgreSQL 17 with pg_textsearch preloaded, built
+      # from deploy/postgres (the image every shipped Postgres runs). The suite
+      # clones one migrated template database per test.
+      # PHEASANT_REQUIRE_PG_TEXTSEARCH turns the pg_textsearch suite's skips
+      # into failures, so a server that lost the extension cannot pass by
+      # skipping. `tests/test_workflow_coverage.py` holds all of it.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_ci
+
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
+
       - name: Run pytest suite
         env:
           PHEASANT_REQUIRE_AGENT: ${{ matrix.require-agent }}
+          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_ci
+          PHEASANT_REQUIRE_PG_TEXTSEARCH: "1"
         run: python -m pytest -q
 
   mcp-app-browser:
@@ -119,66 +138,20 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - name: Run the view's browser tests
-        env:
-          PHEASANT_REQUIRE_BROWSER: "1"
-        run: python -m pytest tests/test_mcp_app_expand.py tests/test_dictation_browser.py -q
-
-  backend-parity:
-    # The scale-out backend, on EVERY pull request.
-    #
-    # Postgres used to be exercised only by the evaluation, memory and tuning
-    # workflows, each behind a `paths:` filter -- so whether the fleet's
-    # database backend got tested depended on which files a change happened to
-    # touch. Measured at the time this job was added: three of the twenty-two
-    # modules carrying dialect branching matched no filter at all, and one of
-    # them was `sync/locks.py` -- the per-source lease, the mechanism several
-    # indexers rest on, and the exact file where a `rowcount` divergence once
-    # made a claim fail on SQLite and pass on Postgres.
-    #
-    # No `paths:` here, and the whole suite rather than a list of
-    # dialect-sensitive modules: a curated list is the thing that went stale
-    # the first time, and repeating it one level down would buy nothing.
-    # `tests/test_workflow_coverage.py` fails if this job stops being
-    # unfiltered, stops running Postgres, or stops setting the DSN.
-    #
-    # The image is the one every shipped Postgres runs: Postgres 17 with
-    # pg_textsearch preloaded (deploy/postgres, built in the job), because the
-    # lexical arm defaults to it there.
-    # PHEASANT_REQUIRE_PG_TEXTSEARCH turns that suite's skips into failures, so
-    # a server that lost the extension cannot pass by skipping.
-    name: Backend parity against a real Postgres
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      # PostgreSQL 17 with pg_textsearch preloaded, built from deploy/postgres
-      # (the image every shipped Postgres runs).
       - name: Start PostgreSQL
         uses: ./.github/actions/pheasant-postgres
         with:
-          database: pheasant_parity
+          database: pheasant_ci
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
 
-      # `vector` too: tests/test_flagship_defaults.py runs pheasant-kb's own
-      # defaults (Postgres + LanceDB) on stub models here, the one job with a
-      # database to run them against.
-      - name: Install project, test and Postgres dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,mcp,postgres,vector]"
-
-      - name: Run pytest suite against Postgres
+      - name: Run the view's browser tests
         env:
-          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_parity
-          PHEASANT_REQUIRE_PG_TEXTSEARCH: "1"
-        run: python -m pytest -q
+          PHEASANT_REQUIRE_BROWSER: "1"
+          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_ci
+        run: python -m pytest tests/test_mcp_app_expand.py tests/test_dictation_browser.py -q
 
   package-build:
     name: Build Python package
@@ -230,8 +203,14 @@ jobs:
             --output .ci-corpus \
             --jobs 3
 
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_benchmark
+
       - name: Run stub-only indexing and retrieval budgets
         env:
+          PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_benchmark
           # Defense in depth: the benchmark config also pins provider=stub and
           # assistant.provider=none. A future refactor must not discover a CI
           # secret and silently turn this into a metered/network test.
@@ -285,11 +264,8 @@ jobs:
 
       - name: Validate Docker Compose config
         run: |
-          python -m pheasant compose-env pheasant.example.yaml --output .pheasant/compose.env
-          docker compose --env-file .pheasant/compose.env \
-            -f deploy/compose/docker-compose.yml config --quiet
-          # The advanced, scale-out and reset topologies are published artifacts too,
-          # and nothing else in CI parses them. `config` resolves the image
+          # The scale-out topology is a published artifact too, and nothing
+          # else in CI parses it. `config` resolves the image
           # references and every interpolation, so a malformed one fails here
           # rather than on a user's host. The fleet declares its four secrets
           # as required-with-no-default on purpose; placeholders satisfy the
@@ -302,9 +278,6 @@ jobs:
           PHEASANT_INGESTION_SERVICE_TOKEN=ci-config-check-ingestion \
           OPENAI_API_KEY=ci-config-check \
             docker compose -f deploy/compose/docker-compose.scale.yml config --quiet
-          OPENAI_API_KEY=ci-config-check \
-            docker compose -f deploy/compose/docker-compose.advanced.yml config --quiet
-          docker compose -f deploy/compose/docker-compose.fresh.yml config --quiet
           # pheasant-kb, the default deployment, and its on-demand tools.
           OPENAI_API_KEY=ci-config-check docker compose config --quiet
           OPENAI_API_KEY=ci-config-check docker compose --profile tools config --quiet
@@ -322,12 +295,22 @@ jobs:
           load: true
           tags: pheasant:ci
 
+      # The image's first-boot config is the standalone table, which is the
+      # same PostgreSQL state store as every other: building the app needs a
+      # database, and nothing else (no key, no queue, no mount).
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_smoke
+
       - name: Smoke test built image
         run: |
           docker run --rm pheasant:ci python -m pheasant --help
           docker run --rm pheasant:ci python -m pheasant validate /config/pheasant.yaml --no-require-paths
           # With nothing mounted the image writes its own config, on the
           # standalone table (one process cannot run pheasant-kb's), so the app
-          # builds with no database and no key.
-          docker run --rm pheasant:ci python -c "from pheasant.api.app import create_app; print(create_app(config_path='/config/pheasant.yaml').title)"
+          # builds with a database and no key.
+          docker run --rm --network host \
+            -e PHEASANT_DATABASE_URL=postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_smoke \
+            pheasant:ci python -c "from pheasant.api.app import create_app; print(create_app(config_path='/config/pheasant.yaml').title)"
           docker run --rm pheasant:ci grep -q "defaults: standalone" /config/pheasant.yaml

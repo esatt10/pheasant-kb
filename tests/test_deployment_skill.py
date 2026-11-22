@@ -14,7 +14,6 @@ def test_repository_deployment_skill_routes_blank_and_preset_workflows() -> None
     assert "Blank canvas" in text
     assert "Preset" in text
     assert "Never hand-write `pheasant.yaml`" in text
-    assert "deploy/compose/docker-compose.advanced.yml" in text
     assert "deploy/compose/docker-compose.scale.yml" in text
     assert "record_artifact" in text
 

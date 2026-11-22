@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,10 @@ from pheasant.graph.working_set import RowWorkingSet
 from pheasant.sync.engine import SyncEngine
 
 
-def _config(root: Path, workspace: Path) -> PheasantConfig:
+def _config(root: Path, workspace: Path, dsn_env: str | None = None) -> PheasantConfig:
+    storage: dict = {"graph_snapshots": False}
+    if dsn_env:
+        storage["dsn_env"] = dsn_env  # a region of its own beside another
     return PheasantConfig.model_validate(
         {
             "pheasant": {
@@ -21,7 +25,7 @@ def _config(root: Path, workspace: Path) -> PheasantConfig:
                 "workspace_root": str(workspace),
                 "exports_path": str(root / "exports"),
             },
-            "storage": {"graph_snapshots": False},
+            "storage": storage,
             "sources": [
                 {
                     "name": "docs",
@@ -51,13 +55,17 @@ def _content(engine):
     )
 
 
-def test_cold_changed_files_match_resident_graph_without_whole_graph_reads(tmp_path, monkeypatch):
+def test_cold_changed_files_match_resident_graph_without_whole_graph_reads(
+    tmp_path, monkeypatch, database_variable
+):
     workspace = tmp_path / "ws"
     workspace.mkdir()
     (workspace / "app.py").write_text("import target\ndef before():\n    return helper()\n")
     (workspace / "guide.md").write_text("# Gateway\n\nSee [later](later.md).\n")
     resident = SyncEngine(_config(tmp_path / "resident", workspace))
-    row = SyncEngine(_config(tmp_path / "rows", workspace), defer_persisted_graph_load=True)
+    row = SyncEngine(
+        _config(tmp_path / "rows", workspace, database_variable()), defer_persisted_graph_load=True
+    )
     catalog_reads = []
     typed_nodes = RowWorkingSet.typed_nodes
 
@@ -176,7 +184,9 @@ def test_returned_failed_result_discards_the_writer(monkeypatch, capsys):
 
     class Engine:
         def __init__(self, *args, **kwargs):
-            self.lease = SimpleNamespace(wait_timeout_s=0)
+            self.config = SimpleNamespace(
+                sync=SimpleNamespace(concurrency=SimpleNamespace(lock_timeout_seconds=0))
+            )
             self._graph_loaded = False
             self.graph_builder = SimpleNamespace(graph=SimpleNamespace())
 
@@ -199,7 +209,7 @@ def test_returned_failed_result_discards_the_writer(monkeypatch, capsys):
     assert calls == ["task", "closed"]
 
 
-@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+@pytest.mark.parametrize("backend", ["postgres"])
 def test_a_full_resync_on_the_fleet_writer_keeps_every_edge(tmp_path, backend):
     """A full sync removes a source's nodes and re-adds them in one delta. The
     rows still held the removed nodes' edges until the commit's cascade, and
@@ -208,15 +218,11 @@ def test_a_full_resync_on_the_fleet_writer_keeps_every_edge(tmp_path, backend):
     full sync dropped every `indexes`, `contains` and `has_chunk` edge and most
     `mentions` and `references`; it must equal what the resident writer keeps."""
 
-    import os
-
     dsn = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
     if backend == "postgres":
         if not dsn:
             pytest.skip("set PHEASANT_TEST_POSTGRES_DSN to run on Postgres")
-        from tests.test_backend_parity import _reset
 
-        _reset(dsn)
     workspace = tmp_path / "ws"
     workspace.mkdir()
     (workspace / "app.py").write_text("import target\ndef before():\n    return helper()\n")
@@ -228,7 +234,7 @@ def test_a_full_resync_on_the_fleet_writer_keeps_every_edge(tmp_path, backend):
     config = _config(tmp_path / "rows", workspace)
     if backend == "postgres":
         config.storage.backend = "postgres"
-        config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+        config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     resident = SyncEngine(_config(tmp_path / "resident", workspace))
     try:
         resident.sync_source("docs", "full")

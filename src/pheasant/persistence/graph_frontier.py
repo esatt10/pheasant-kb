@@ -112,15 +112,8 @@ def bounded_rows(
     reads nothing else -- the bounded walk.
     """
 
-    dialect = state.dialect
     columns = _KEY_COLUMNS if keys_only else "e.*"
-    if dialect.is_postgres:
-        yield from _postgres_rows(state, kb_id, sources, priority_types, limit, columns)
-        return
-    statement, extra = _source_statement(dialect, "?", priority_types, columns)
-    for source in sources:
-        params = [*_arm_params(kb_id, priority_types, limit, source, extra), limit, kb_id, source]
-        yield from state.rows(statement, tuple(params))
+    yield from _postgres_rows(state, kb_id, sources, priority_types, limit, columns)
 
 
 def _arms(dialect: Any, source_ref: str, priority_types: Sequence[str]) -> tuple[str, list[Any]]:

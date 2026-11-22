@@ -177,8 +177,10 @@ def file_summary(
     whatever order the join produced — and returned no content at all.
     """
 
+    in_source = " AND artifacts.source_id=?" if source_name is not None else ""
+    params = (path, source_name) if source_name is not None else (path,)
     rows = context.state.rows(
-        """SELECT artifacts.*,
+        f"""SELECT artifacts.*,
         (SELECT GROUP_CONCAT(summary, '\n') FROM
             (SELECT summary FROM chunks WHERE artifact_id=artifacts.id
              ORDER BY chunk_index)) AS summary,
@@ -186,9 +188,9 @@ def file_summary(
             (SELECT text FROM chunks WHERE artifact_id=artifacts.id
              ORDER BY chunk_index)) AS content
         FROM artifacts
-        WHERE artifacts.relative_path=? AND (? IS NULL OR artifacts.source_id=?)
+        WHERE artifacts.relative_path=?{in_source}
         LIMIT 1""",
-        (path, source_name, source_name),
+        params,
     )
     if not rows:
         return {"path": path, "summary": None}

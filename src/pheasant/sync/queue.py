@@ -21,9 +21,9 @@ pillar 1 of this project — so a redelivered task re-indexes to the identical
 state. The queue is cheap precisely because that guarantee was already paid
 for.
 
-**Off by default** (``sync.queue.enabled: false``). With it off, ``sync_all``
-is byte-identical to what it always did; rule 7 is not negotiable, and a
-single container indexing a folder should not need a queue to do it.
+The queue is NATS JetStream (:class:`NatsQueue`). **Off by default**
+(``sync.queue.enabled: false``): with it off, ``sync_all`` indexes in-process,
+which is what one process with no api tier wants. pheasant-kb turns it on.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from pheasant.persistence.heartbeat import WARN_EVERY
@@ -59,10 +59,9 @@ DEAD = "dead"
 DEFAULT_VISIBILITY_SECONDS = 300.0
 
 #: JetStream's default ``ack_wait`` is 30 seconds. The visibility setting is
-#: also used by the local queue and is commonly much larger, so deriving the
-#: first heartbeat from it alone can let NATS redeliver a healthy task before
-#: the first ping. Ten seconds is below that broker default and negligible
-#: overhead compared with a repository sync.
+#: commonly much larger, so deriving the first heartbeat from it alone can let
+#: NATS redeliver a healthy task before the first ping. Ten seconds is below
+#: that broker default and negligible overhead compared with a repository sync.
 MAX_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 #: Attempts before a task is dead-lettered. Three is the point at which a
@@ -168,307 +167,13 @@ class TaskQueue:
         """Release backend resources. Default no-op."""
 
 
-class LocalQueue(TaskQueue):
-    """The state store *is* the queue.
-
-    No broker to run, and it works identically on SQLite and Postgres — which
-    is the whole reason it is the default: a single container gets crash
-    resumption without operating anything, and the same code multiplexes
-    across indexers once the state backend is Postgres.
-
-    Claiming is one conditional ``UPDATE ... RETURNING``, so the database
-    arbitrates races rather than a read-then-write in Python.
-
-    **The outer ``visible_at<=?`` is the whole race-freedom argument**, and it
-    is easy to get subtly wrong. Under READ COMMITTED, a Postgres UPDATE that
-    blocks on a row another transaction is updating re-evaluates its WHERE
-    against the *new* row version once that commits. Only the outer clause is
-    re-evaluated — the subquery is not — so the outer clause has to be a
-    predicate the winner's own write falsifies. ``status`` alone does not:
-    this queue deliberately allows claiming an ``inflight`` row (that is how a
-    dead worker's task is redelivered), so after the winner sets
-    ``status='inflight'`` the guard is still true and both transactions claim
-    the row. Repeating the visibility check outside is what makes the loser
-    match nothing: the winner has just pushed ``visible_at`` into the future.
-
-    This was found by a Postgres concurrency test, after mutation testing
-    showed the SQLite suite could not tell the difference — SQLite serializes
-    writers, so no arrangement of guards fails there.
-
-    The outer ``status IN (...)`` beside it is **defence in depth and is not
-    covered by a test**, recorded here rather than left to look load-bearing:
-    it catches an ack landing between the subquery and the update, which
-    leaves ``visible_at`` in the past (ack does not touch it) while the row is
-    no longer claimable. Forcing that interleaving needs two hand-driven
-    transactions, so mutation testing correctly reports the guard as
-    unkilled; it is kept because the case is real and the clause is free.
-    """
-
-    #: The table this queue lives in, and the columns it carries beyond the
-    #: generic lifecycle set. Both are class-level seams so the log tier can
-    #: reuse **this** claim -- the one with the race argument above -- instead
-    #: of copying it into a second table where it could drift. The index
-    #: queue's own generated SQL is unchanged by the parameterization, and
-    #: `tests/test_log_queue.py` asserts exactly that rather than trusting it.
-    TABLE = "index_tasks"
-    EXTRA_COLUMNS: tuple[str, ...] = ("source_id", "mode")
-
-    def __init__(self, state: Any) -> None:
-        self.state = state
-
-    # -- subclass seams ----------------------------------------------------
-
-    def _extra_values(self, task: Any) -> tuple[Any, ...]:
-        return (task.source_id, task.mode)
-
-    def _build_task(self, row: Any) -> Any:
-        return IndexTask(
-            id=str(row["id"]),
-            source_id=str(row["source_id"]),
-            mode=str(row["mode"]),
-            payload=json.loads(row["payload"] or "{}"),
-            attempts=int(row["attempts"]),
-            max_attempts=int(row["max_attempts"]),
-        )
-
-    def publish(self, task: IndexTask) -> IndexTask:
-        """Enqueue a task, or re-arm one that has already run.
-
-        The task id is content-addressed on (knowledge base, source, mode) so
-        that two replicas answering one user's double-click enqueue one task.
-        A plain ``INSERT`` turns that dedup into something much worse: once the
-        row reaches ``done`` it can never be inserted again, and the caller
-        swallows the primary-key error as "already queued". Every ``sync_all``
-        after the first then found nothing claimable and indexed **nothing**,
-        silently — including the scheduler beat, so a queue-enabled deployment
-        stopped re-indexing entirely after its first pass.
-
-        Dedup means "do not queue it twice while it is outstanding", not
-        "never queue it again". So a ``done`` row is re-armed; ``pending`` and
-        ``inflight`` rows are left alone (that is the dedup); and a ``dead``
-        row stays dead, because dead-lettering exists to stop a poison task
-        consuming the fleet and ``requeue-dead`` is how an operator overrides
-        that deliberately.
-        """
-
-        now = _now()
-        self.state.execute(self._publish_sql(), self._publish_params(task, now))
-        return task
-
-    def _publish_sql(self) -> str:
-        extra = "".join(f"{name}, " for name in self.EXTRA_COLUMNS)
-        # 10 lifecycle columns (id, payload, status, attempts, max_attempts,
-        # owner, visible_at, enqueued_at, updated_at, last_error) plus whatever
-        # this queue's rows carry of their own.
-        slots = ",".join("?" for _ in range(10 + len(self.EXTRA_COLUMNS)))
-        return (
-            f"INSERT INTO {self.TABLE}("
-            f"id, {extra}payload, status, attempts, max_attempts, owner, "
-            "visible_at, enqueued_at, updated_at, last_error"
-            f") VALUES({slots}) "
-            "ON CONFLICT(id) DO UPDATE SET "
-            "status=excluded.status, attempts=0, owner=NULL, "
-            "payload=excluded.payload, max_attempts=excluded.max_attempts, "
-            "visible_at=excluded.visible_at, enqueued_at=excluded.enqueued_at, "
-            "updated_at=excluded.updated_at, last_error=NULL "
-            f"WHERE {self.TABLE}.status=?"
-        )
-
-    def _publish_params(self, task: Any, now: datetime) -> tuple[Any, ...]:
-        return (
-            task.id,
-            *self._extra_values(task),
-            json.dumps(task.payload, sort_keys=True),
-            PENDING,
-            0,
-            int(task.max_attempts),
-            None,
-            _iso(now),
-            _iso(now),
-            _iso(now),
-            None,
-            DONE,
-        )
-
-    def claim(
-        self, owner: str, *, visibility_seconds: float = DEFAULT_VISIBILITY_SECONDS
-    ) -> IndexTask | None:
-        now = _now()
-        deadline = _iso(now + timedelta(seconds=visibility_seconds))
-        for _ in range(CLAIM_ATTEMPTS):
-            # execute_returning, not rows: a claim is a *write*, and running
-            # it through the read path leaves the transaction open — which on
-            # SQLite holds the write lock against every other claimant and
-            # makes the claim invisible to another process entirely.
-            rows = self.state.execute_returning(
-                self._claim_sql(),
-                (
-                    INFLIGHT,
-                    owner,
-                    deadline,
-                    _iso(now),
-                    PENDING,
-                    INFLIGHT,
-                    _iso(now),
-                    PENDING,
-                    INFLIGHT,
-                    _iso(now),
-                ),
-            )
-            if not rows:
-                # Either the queue is empty or another worker won the row we
-                # picked. Look again; a bounded loop distinguishes the two
-                # without a second query.
-                if not self._has_claimable(now):
-                    return None
-                continue
-            task = self._build_task(rows[0])
-            if task.attempts > task.max_attempts:
-                self._dead_letter(task, "exceeded max_attempts before running")
-                continue
-            return task
-        return None
-
-    def _claim_sql(self) -> str:
-        """The conditional UPDATE the class docstring's race argument is about.
-
-        Built from :attr:`TABLE` and :attr:`EXTRA_COLUMNS` and nothing else --
-        every predicate is a literal, so parameterizing the table cannot move a
-        guard.
-        """
-
-        returning = "".join(f"{name}, " for name in self.EXTRA_COLUMNS)
-        return (
-            f"UPDATE {self.TABLE} SET status=?, owner=?, attempts=attempts+1, "
-            "visible_at=?, updated_at=? WHERE id=("
-            f"  SELECT id FROM {self.TABLE} WHERE status IN (?,?) AND visible_at<=? "
-            "  ORDER BY enqueued_at, id LIMIT 1"
-            ") AND status IN (?,?) AND visible_at<=? "
-            f"RETURNING id, {returning}payload, attempts, max_attempts"
-        )
-
-    def _has_claimable(self, now: datetime) -> bool:
-        rows = self.state.rows(
-            f"SELECT COUNT(*) AS c FROM {self.TABLE} WHERE status IN (?,?) AND visible_at<=?",
-            (PENDING, INFLIGHT, _iso(now)),
-        )
-        return bool(rows and int(rows[0]["c"]) > 0)
-
-    def ack(self, task: IndexTask) -> None:
-        self.state.execute(
-            f"UPDATE {self.TABLE} SET status=?, owner=NULL, updated_at=?, last_error=NULL "
-            "WHERE id=?",
-            (DONE, _iso(_now()), task.id),
-        )
-
-    def nack(self, task: IndexTask, error: str, *, retry_in_seconds: float = 30.0) -> None:
-        if task.attempts >= task.max_attempts:
-            self._dead_letter(task, error)
-            return
-        now = _now()
-        self.state.execute(
-            f"UPDATE {self.TABLE} SET status=?, owner=NULL, visible_at=?, updated_at=?, "
-            "last_error=? WHERE id=?",
-            (
-                PENDING,
-                _iso(now + timedelta(seconds=max(0.0, retry_in_seconds))),
-                _iso(now),
-                error[:500],
-                task.id,
-            ),
-        )
-
-    def _dead_letter(self, task: IndexTask, error: str) -> None:
-        logger.error(
-            "%s task %s (%s) dead-lettered after %d attempt(s): %s",
-            self.TABLE,
-            task.id,
-            getattr(task, "source_id", "-"),
-            task.attempts,
-            error,
-        )
-        self.state.execute(
-            f"UPDATE {self.TABLE} SET status=?, owner=NULL, updated_at=?, last_error=? WHERE id=?",
-            (DEAD, _iso(_now()), error[:500], task.id),
-        )
-
-    def heartbeat(
-        self, task: IndexTask, *, visibility_seconds: float = DEFAULT_VISIBILITY_SECONDS
-    ) -> None:
-        now = _now()
-        self.state.execute(
-            f"UPDATE {self.TABLE} SET visible_at=?, updated_at=? WHERE id=? AND status=?",
-            (_iso(now + timedelta(seconds=visibility_seconds)), _iso(now), task.id, INFLIGHT),
-        )
-
-    def depth(self) -> dict[str, int]:
-        counts = {PENDING: 0, INFLIGHT: 0, DONE: 0, DEAD: 0}
-        for row in self.state.rows(
-            f"SELECT status, COUNT(*) AS c FROM {self.TABLE} GROUP BY status", ()
-        ):
-            counts[str(row["status"])] = int(row["c"])
-        return counts
-
-    def outstanding(self, limit: int = 50) -> list[dict[str, Any]] | None:
-        """Pending, in-flight and dead rows, oldest first: the pre-claim backlog.
-
-        Read straight off the claim index's leading column. Nothing here
-        claims or touches a row, so a reader polling it cannot perturb the
-        race argument above.
-        """
-
-        rows = self.state.rows(
-            f"SELECT id, {', '.join(self.EXTRA_COLUMNS)}, status, attempts, max_attempts, "
-            f"owner, visible_at, enqueued_at, updated_at, last_error FROM {self.TABLE} "
-            "WHERE status IN (?,?,?) ORDER BY enqueued_at, id LIMIT ?",
-            (PENDING, INFLIGHT, DEAD, max(1, int(limit))),
-        )
-        return [dict(row) for row in rows]
-
-    def requeue_dead(self) -> int:
-        """Replay dead-lettered tasks after the cause is fixed.
-
-        One statement, not a read followed by an ``UPDATE`` per row: the same
-        rows either way, in one commit rather than one per task.
-        """
-
-        now = _now()
-        rows = self.state.execute_returning(
-            f"UPDATE {self.TABLE} SET status=?, attempts=0, owner=NULL, visible_at=?, "
-            "updated_at=? WHERE status=? RETURNING id",
-            (PENDING, _iso(now), _iso(now), DEAD),
-        )
-        return len(rows)
-
-    def purge_completed(self, older_than_seconds: float = 86_400.0) -> int:
-        """Keep the table from growing without bound; failures are kept.
-
-        One ``DELETE``, for the reason `requeue_dead` gives. The log tier's
-        maintenance pass calls it (`log_queue._purge_completed_batches`),
-        where every batch is a new row. Index tasks need no purge: their ids
-        are content-addressed over (knowledge base, source, mode, payload), so
-        a re-run re-arms an existing row rather than adding one.
-        """
-
-        cutoff = _iso(_now() - timedelta(seconds=max(0.0, older_than_seconds)))
-        rows = self.state.execute_returning(
-            f"DELETE FROM {self.TABLE} WHERE status=? AND updated_at<? RETURNING id",
-            (DONE, cutoff),
-        )
-        return len(rows)
-
-
 class NatsQueue(TaskQueue):
-    """NATS JetStream, for a fleet that outgrows one database.
+    """NATS JetStream: the index work queue.
 
     Chosen over Redis Streams for durable acks, redelivery on ack timeout and
     a dead-letter path that is part of the product rather than a convention
     layered on top. The verbs map straight across — ``ack``/``nak``/
     ``in_progress`` are JetStream's own — which is why the seam is this small.
-
-    A local queue is still the default. This buys fan-out across machines
-    without a shared database; it does not buy correctness the local queue
-    lacks, and it is one more thing to run.
 
     **A new stream uses work-queue retention**: a task is removed when it is
     acked, which is what a task is. The stream used to be created with the
@@ -502,7 +207,7 @@ class NatsQueue(TaskQueue):
             import nats  # noqa: F401
         except ImportError as exc:
             raise QueueUnavailable(
-                "sync.queue.backend: nats needs the [queue] extra: pip install 'pheasant[queue]'"
+                "the work queue needs nats-py, a core dependency: reinstall pheasant-kb"
             ) from exc
         self.servers = list(servers)
         self.stream = stream
@@ -721,9 +426,9 @@ class NatsQueue(TaskQueue):
                 # it. The attempt cap lived only in `nack`, which a crash
                 # never reaches, so a task that kills its worker was
                 # redelivered forever -- the consumer's `max_deliver` is
-                # unlimited. The same check `LocalQueue.claim` makes, and the
-                # same outcome: a dead letter someone can replay, rather than
-                # a consumer-side cap that stops delivering without one.
+                # unlimited. The outcome is a dead letter someone can replay,
+                # rather than a consumer-side cap that stops delivering
+                # without one.
                 self.nack(task, "exceeded max_attempts before running")
                 continue
             return task
@@ -910,25 +615,27 @@ class QueueUnavailable(RuntimeError):
 def queue_from_config(config: Any, state: Any) -> TaskQueue | None:
     """Build the configured queue, or ``None`` when queuing is off.
 
-    ``None`` is the default and means ``sync_all`` behaves exactly as it did
-    before this module existed — the rule-7 escape hatch, checked in one
-    place so no caller has to remember it.
+    ``None`` is the default and means ``sync_all`` indexes in-process, checked
+    in one place so no caller has to remember it. ``state`` is unused, kept so
+    every caller's signature stays the one the log queue's factory shares.
     """
 
+    del state
     settings = getattr(config.sync, "queue", None)
     if settings is None or not getattr(settings, "enabled", False):
         return None
-    backend = str(getattr(settings, "backend", "local") or "local").lower()
-    if backend == "nats":
-        return NatsQueue(
-            list(settings.nats_servers or ["nats://127.0.0.1:4222"]),
-            stream=settings.nats_stream,
-            subject=settings.nats_subject,
-            durable=settings.nats_durable,
+    backend = str(getattr(settings, "backend", "nats") or "nats").lower()
+    if backend != "nats":
+        raise ValueError(
+            f"sync.queue.backend is {backend!r}; the work queue is NATS JetStream "
+            "(`nats`). The database-backed `local` queue was removed in 2.0."
         )
-    if backend != "local":
-        logger.warning("Unknown sync.queue.backend=%r; using the local queue", backend)
-    return LocalQueue(state)
+    return NatsQueue(
+        list(settings.nats_servers or ["nats://127.0.0.1:4222"]),
+        stream=settings.nats_stream,
+        subject=settings.nats_subject,
+        durable=settings.nats_durable,
+    )
 
 
 def drain(

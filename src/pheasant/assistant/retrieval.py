@@ -112,20 +112,11 @@ _STRUCTURE_CACHE: dict[tuple, Any] = {}
 
 
 def _top_directories_sql(state: Any) -> str:
-    """Directory roll-up in the configured database's SQL dialect."""
+    """Directory roll-up: the twelve largest top-level folders."""
 
-    dialect = getattr(state, "dialect", None)
-    if bool(dialect is not None and dialect.is_postgres):
-        return (
-            "SELECT CASE WHEN strpos(relative_path, '/') > 0 "
-            "THEN substr(relative_path, 1, strpos(relative_path, '/') - 1) "
-            "ELSE '(root)' END AS dir, COUNT(*) AS n "
-            "FROM artifacts WHERE relative_path IS NOT NULL "
-            "GROUP BY dir ORDER BY n DESC LIMIT 12"
-        )
     return (
-        "SELECT CASE WHEN instr(relative_path, '/') > 0 "
-        "THEN substr(relative_path, 1, instr(relative_path, '/') - 1) "
+        "SELECT CASE WHEN strpos(relative_path, '/') > 0 "
+        "THEN substr(relative_path, 1, strpos(relative_path, '/') - 1) "
         "ELSE '(root)' END AS dir, COUNT(*) AS n "
         "FROM artifacts WHERE relative_path IS NOT NULL "
         "GROUP BY dir ORDER BY n DESC LIMIT 12"
@@ -729,8 +720,7 @@ class PheasantRetriever:
             # Two keeps network/vector overlap without turning query latency
             # into CPU contention. One extra slot lets the batched embedding
             # request overlap with text retrieval.
-            postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
-            search_workers = 2 if postgres else 8
+            search_workers = 2
             pool_workers = min(len(concurrent), search_workers) + int(embed_in_pool)
             with ThreadPoolExecutor(max_workers=max(1, pool_workers)) as pool:
                 embedding_context = copy_context()

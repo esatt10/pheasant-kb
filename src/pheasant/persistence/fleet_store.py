@@ -103,8 +103,8 @@ def open_store(config: Any) -> Any | None:
     fleet = getattr(config, "fleet", None)
     if fleet is None or not fleet.enabled or not str(fleet.slot).strip():
         return None
-    dsn = os.environ.get(str(fleet.dsn_env or ""), "") if not fleet.path else ""
-    target = str(fleet.path) if fleet.path else dsn
+    dsn = os.environ.get(str(fleet.dsn_env or ""), "").strip()
+    target = dsn
     if not target:
         return None
     with _LOCK:
@@ -114,11 +114,7 @@ def open_store(config: Any) -> Any | None:
         from pheasant.persistence.backends import open_backend
         from pheasant.persistence.state_store import StateStore
 
-        if fleet.path:
-            fleet.path.parent.mkdir(parents=True, exist_ok=True)
-            backend = open_backend(fleet.path)
-        else:
-            backend = open_backend(backend="postgres", dsn=dsn, pool_size=2)
+        backend = open_backend(dsn, pool_size=2)
         store = StateStore(backend=backend)
         store.backend.executescript(FLEET_SCHEMA)
         # The directory's mirror of every stack's usage is append-only too.

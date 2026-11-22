@@ -34,7 +34,7 @@ from pheasant.assistant.chat import (
     system_prompt_for,
 )
 from pheasant.assistant.providers import ProviderError, collect_token_usage
-from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep
+from pheasant.assistant.workflows import WorkflowRequest, WorkflowResult, WorkflowStep, evidence
 
 
 class SimpleWorkflow:
@@ -110,8 +110,10 @@ class SimpleWorkflow:
             )
         citations = passages_to_citations(passages, limit)
         node_ids = [c["node_id"] for c in citations if c.get("node_id")]
-        facts = retriever.facts(node_ids, int(options.get("max_facts", 12)))
-        figures = _figures(retriever, citations)
+        facts, figures, evidence_timings = evidence.gather(
+            retriever, citations, int(options.get("max_facts", 12))
+        )
+        fanout_timings.extend(evidence_timings)
         steps.append(
             WorkflowStep(
                 name="retrieve",
@@ -231,8 +233,3 @@ class SimpleWorkflow:
             figures=figures,
             route=route.as_dict(),
         )
-
-
-def _figures(retriever: Any, citations: list[dict]) -> list[dict]:
-    collect = getattr(retriever, "figures", None)
-    return collect(citations) if callable(collect) and citations else []

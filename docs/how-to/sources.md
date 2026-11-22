@@ -7,19 +7,14 @@ Sources are the inputs pheasant indexes. They live under `sources:` in your
 
 Three routes reach the same place, so pick whichever fits:
 
-- **One command / one field.** `pheasant up <target>` — or **+ Add source**
-  in the UI, or `POST /sources/quick-add` — takes a path, a git URL, a glob
-  or a connector name, detects what it is, names it, registers it and syncs
-  it. Nothing else to fill in. In the UI, registration is immediate and the
-  first sync runs in the background (`wait: false` — see
-  [HTTP API reference](../reference/http-api.md#sync)) — the form closes
-  right away instead of holding the connection open for however long a
-  large source's first clone + index takes; watch it land on the Sources
-  page, which shows a live "syncing" state per source until it finishes.
-  `pheasant up`/CLI calls still block by default (`wait: true`), matching
-  the shell's own expectation of a command that returns when it's done.
-  In a role-split fleet, the API only records a repository URL and publishes
-  the sync task; the writable indexer clones or fast-forwards it under
+- **One field.** **+ Add source** in the UI, `POST /sources/quick-add` or
+  MCP `add_source` takes a path, a git URL, a glob or a connector name,
+  detects what it is, names it, registers it and syncs it. Nothing else to
+  fill in. Registration is immediate and the first sync runs in the
+  background (see [HTTP API reference](../reference/http-api.md#sync)): the
+  form closes right away, and the **Syncs** page shows the run until it
+  finishes; `GET /sources/{name}/wait` (MCP `wait_for_sync`) answers when it
+  has. The api only records a repository URL and publishes the sync task; the writable indexer clones or fast-forwards it under
   `/workspace` before indexing. The API does not need write access to
   `/state` or `/workspace`.
 - **The form.** **Sources → Advanced…** in the UI exposes every field on this
@@ -36,7 +31,7 @@ Three routes reach the same place, so pick whichever fits:
 | `document_folder` | Mixed supported text, documents, images, audio and ZIPs |
 | `single_file` | One file, including a ZIP or tar archive of mixed supported files |
 | `web_collection` | A set of web URLs |
-| `memory` | Agent-memory records (see [Agent memory](agent-memory.md)) |
+| `memory` | Agent-memory records (see [Agent memory](agent-records.md)) |
 | `gdrive` | Google Drive docs + text files (`connector.api_key_env`, default `GDRIVE_TOKEN`) |
 | `sharepoint` | OneDrive and SharePoint: the sites, libraries, folders, lists (with attachments) and pages its `urls` name — see [OneDrive and SharePoint](sharepoint-onedrive.md) |
 | `api` | Experimental — an HTTP API source |
@@ -51,7 +46,7 @@ those types still loads, and its sync is refused with what to do instead.
 
 Filesystem-backed sources can also index archives with nested folders of
 supported files: ZIP, and tar plain or compressed (`.tar`, `.tar.gz`, `.tgz`,
-`.tar.bz2`, `.tar.xz`). Use `pheasant up path/to/archive.zip`, upload an
+`.tar.bz2`, `.tar.xz`). Paste an archive's path into **+ Add source**, upload an
 archive, or add `"**/*.zip"` (or `"**/*.tgz"` ...) to a folder source's
 `include` list. Each member keeps a stable `archive.zip/path/to/file`
 identity. See [document ingestion](document-ingest.md)
@@ -75,7 +70,7 @@ source was deprecated and removed. Unlinked memories are left alone.
 
 List the URLs; nothing else is required. `path` may be omitted — the
 connector never opens it. In a config file the connector needs the explicit
-experimental opt-in (the UI, `pheasant up` and the MCP tool imply it):
+experimental opt-in (the UI, quick add and the MCP tool imply it):
 
 ```yaml
 ingestion:
@@ -156,7 +151,6 @@ same way; folder sources are not affected.
 
 ### Other ways to add web pages
 
-- `pheasant up <url>` writes the opt-in for you;
 - **Sources → + Add source** in the UI takes a pasted URL, and
   **Sources → Advanced… → Web pages** takes a list;
 - `POST /sources` with `"type": "web_collection"` and `"urls"` (the opt-in is
@@ -166,7 +160,7 @@ same way; folder sources are not affected.
   `security.allow_agent_private_urls: true`, because an agent can be steered
   by what it reads into asking the region to fetch an internal endpoint.
 
-A pasted URL (UI quick add, `pheasant up`) names its collection after the
+A pasted URL (UI quick add, MCP `add_source`) names its collection after the
 site, and **every page of one site joins that collection**: adding
 `https://developers.openai.com/api/docs/models`, then
 `https://developers.openai.com/chatgpt`, gives one `developers-openai-com`
@@ -197,7 +191,7 @@ is already taken.)
 
 ### Names that would collide
 
-Quick add and `pheasant up` name a source after what was pasted, so two
+Quick add names a source after what was pasted, so two
 different things can derive one name. Neither ever replaces the source already
 there: a second folder called `docs` becomes `docs-2`, a second repository
 called `tools` becomes `tools-2` with a checkout of its own, and a second

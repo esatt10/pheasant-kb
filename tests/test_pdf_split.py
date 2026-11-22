@@ -417,7 +417,7 @@ def test_a_sync_reads_a_long_pdf_on_the_fleet_and_indexes_what_a_local_sync_does
             result = engine.sync_source("tariff", "full")
             assert result.indexed_artifacts == 1
             return [
-                tuple(row)
+                tuple(row.values())
                 for row in engine.state.rows(
                     "SELECT id, text, start_line, end_line, heading_path FROM chunks "
                     "WHERE artifact_id LIKE 'file:tariff:%' ORDER BY id"

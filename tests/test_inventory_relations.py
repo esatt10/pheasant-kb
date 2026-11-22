@@ -37,6 +37,8 @@ from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services import ServiceContext, inventory_detail
 from pheasant.services.errors import DocumentNotFound, ServiceError
 
+pytestmark = pytest.mark.module_database
+
 SOURCES = ["notes", "code"]
 
 CORPUS = {
@@ -582,58 +584,3 @@ def test_an_acl_enforcing_region_describes_only_what_the_caller_may_read(
 
 
 POSTGRES_DSN = __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
-
-
-@pytest.mark.skipif(not POSTGRES_DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
-def test_details_agree_across_backends(tmp_path: Path) -> None:
-    """The detail SQL is hand-written for both dialects: `LIKE … ESCAPE`, the
-    `GROUP BY` outline, `= ANY(?)` key sets, and the target-index seek."""
-
-    from pheasant.persistence import pg_driver
-
-    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.query("DROP SCHEMA public CASCADE")
-        conn.query("CREATE SCHEMA public")
-    lite = _region(tmp_path / "sqlite")
-    pg = _region(
-        tmp_path / "postgres",
-        storage={"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"},
-    )
-
-    def same(name: str, *args: Any, **kwargs: Any) -> None:
-        a = getattr(lite["tools"], name)(lite["kb"], *args, **kwargs)
-        b = getattr(pg["tools"], name)(pg["kb"], *args, **kwargs)
-        for payload in (a, b):
-            for key in ("document", "source"):
-                if isinstance(payload.get(key), dict):
-                    # The clock, and the two regions' own temp directories.
-                    for varies in ("last_indexed_at", "location"):
-                        payload[key].pop(varies, None)
-                    if isinstance(payload[key].get("health"), dict):
-                        payload[key]["health"].pop("as_of", None)
-            if isinstance(payload.get("last_sync"), dict):
-                # When each region's sync ran: seconds apart, so the clock.
-                for varies in ("started_at", "finished_at"):
-                    payload["last_sync"].pop(varies, None)
-                if isinstance(payload["last_sync"].get("health"), dict):
-                    payload["last_sync"]["health"].pop("as_of", None)
-            payload.pop("recent", None)
-        assert a == b, (name, args, kwargs)
-
-    same("list_document_links")
-    same("list_document_links", cross_source_only=True)
-    same("list_document_links", document="sync.py", direction="in")
-    for path in ("sync.py", "deploy.md", "rotation", "s_n"):
-        try:
-            same("describe_document", path)
-        except DocumentNotFound:
-            pass
-    for name in SOURCES:
-        same("describe_source", name)
-    stored = ServiceContext(
-        config=pg["config"],
-        state=pg["tools"].services.state,
-        searcher=pg["tools"].services.searcher,
-        graph=SqlGraph(pg["tools"].services.state, pg["kb"]),
-    )
-    assert inventory_detail.document(stored, "sync.py")["linked_from"]["total"] == 2

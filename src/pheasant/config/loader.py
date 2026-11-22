@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from pheasant.config.flagship import DEFAULTS_ENV, STANDALONE, default_config_data
-from pheasant.config.profiles import profile_data, profile_names
+from pheasant.config.flagship import default_config_data
+from pheasant.config.profiles import profile_data
 from pheasant.config.schema import PheasantConfig
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,10 @@ REMOVED_SETTINGS: dict[str, str] = {
     "synapse": (
         "Synapse federation was removed in 2.0: a region no longer publishes a "
         "semantic contract or posts sync events to a router. Delete the section."
+    ),
+    "storage.sqlite_path": (
+        "the SQLite state store was removed in 2.0: the state store is PostgreSQL, "
+        "at the DSN in the variable storage.dsn_env names. Delete the key."
     ),
     "pheasant.vault_path": (
         "the Obsidian vault projection was removed, so pheasant no longer "
@@ -124,23 +127,6 @@ def effective_config_dict(
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return load_layered_config(path, profile, overrides).model_dump(mode="json")
-
-
-def render_init_config(profile: str = "quickstart") -> str:
-    # `pheasant init` starts a config for `pheasant start` on this machine, one
-    # process, like `pheasant up`: built on the standalone table unless
-    # PHEASANT_DEFAULTS asks for the flagship (pheasant.config.flagship).
-    base = default_config_data(os.environ.get(DEFAULTS_ENV) or STANDALONE)
-    data = deep_merge(base, profile_data(profile))
-    data["sources"] = []
-    header = (
-        f"# pheasant {profile} profile configuration\n"
-        f"# Available profiles: {', '.join(profile_names())}\n"
-        "# Add sources under the sources: list when ready.\n"
-    )
-    rendered = dump_config_yaml(data)
-    rendered = rendered.replace("sources:\n\n", "sources: []\n")
-    return header + rendered
 
 
 def dump_config_yaml(data: dict[str, Any]) -> str:

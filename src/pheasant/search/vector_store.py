@@ -76,7 +76,7 @@ from pheasant.search.embedding_client import (
     collect_query_embedding_metrics as collect_query_embedding_metrics,
 )
 from pheasant.search.ranking import DEFAULT_FILTER_OVERFETCH
-from pheasant.search.sqlite_store import _row_result
+from pheasant.search.text_store import _row_result
 from pheasant.search.vector_indexer import VectorIndexer
 
 if TYPE_CHECKING:

@@ -21,7 +21,7 @@ import pytest
 
 from pheasant.persistence import pg_driver
 from pheasant.persistence.pg_liveness import is_disconnect, is_pool_timeout
-from pheasant.persistence.sql import POSTGRES, SQLITE
+from pheasant.persistence.sql import POSTGRES
 
 DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
 postgres = pytest.mark.skipif(not DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run")
@@ -175,11 +175,6 @@ def test_named_placeholders_bind_by_name_and_reuse_their_number() -> None:
         POSTGRES.compile("SELECT ?, :a")
 
 
-def test_sqlite_sql_is_untouched() -> None:
-    sql = "SELECT * FROM t WHERE a = ? AND b LIKE '%x%'"
-    assert SQLITE.translate(sql) == sql and SQLITE.compile(sql).text == sql
-
-
 def test_parameter_types_are_the_ones_psycopg_sent() -> None:
     """Measured against psycopg 3.3 on PostgreSQL 17 before it was removed:
     ``pg_typeof(%s)`` of each value. A different choice changes which
@@ -235,12 +230,8 @@ def test_psycopg_is_not_a_dependency() -> None:
     requirements = [Requirement(text) for text in metadata.requires("pheasant-kb") or []]
     names = {requirement.name.lower() for requirement in requirements}
     assert not names & {"psycopg", "psycopg-binary", "psycopg-pool", "pymupdf", "fitz"}
-    postgres_extra = {
-        requirement.name.lower()
-        for requirement in requirements
-        if requirement.marker and "postgres" in str(requirement.marker)
-    }
-    assert postgres_extra == {"pg8000", "sqlalchemy"}
+    core = {requirement.name.lower() for requirement in requirements if not requirement.marker}
+    assert {"pg8000", "sqlalchemy"} <= core, "the state store's driver is a core dependency"
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +256,7 @@ class _Trips:
 
 @postgres
 def test_a_statement_is_one_round_trip_and_executemany_is_pipelined() -> None:
-    with pg_driver.connect(DSN) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"]) as conn:
         conn.execute_script(
             "DROP TABLE IF EXISTS pg_driver_trips; CREATE TABLE pg_driver_trips(id bigint, v text)"
         )
@@ -286,7 +277,7 @@ def test_values_round_trip_with_their_types() -> None:
     import datetime
     import decimal
 
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
         moment = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
         row = conn.execute(
             "SELECT $1::text, $2::bigint, $3::float8, $4::bool, $5::bytea, $6::numeric, "
@@ -325,7 +316,7 @@ def test_values_round_trip_with_their_types() -> None:
 
 @postgres
 def test_a_failed_statement_leaves_a_connection_that_can_roll_back_and_go_on() -> None:
-    with pg_driver.connect(DSN) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"]) as conn:
         with pytest.raises(pg_driver.ProgrammingError) as missing:
             conn.execute("SELECT * FROM no_such_table_here", ())
         assert missing.value.sqlstate == "42P01"
@@ -337,7 +328,7 @@ def test_a_failed_statement_leaves_a_connection_that_can_roll_back_and_go_on() -
 
 @postgres
 def test_a_text_run_five_times_is_prepared_and_still_answers() -> None:
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
         for value in range(8):
             assert conn.execute("SELECT $1::bigint + 1", (value,)).rows == [[value + 1]]
         assert len(conn._prepared) == 1
@@ -403,7 +394,7 @@ def test_waiters_beyond_the_pool_complete_or_time_out_and_nothing_leaks() -> Non
     try:
         assert outcomes.count("ok") == 8
         assert pool.stats["checked_out"] == 0
-        with pg_driver.connect(DSN, autocommit=True) as admin:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as admin:
             name = pool._application_name
             idle_in_transaction = admin.execute(
                 "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1 "
@@ -444,7 +435,7 @@ def test_a_statement_timeout_does_not_outlive_its_read() -> None:
     from pheasant.persistence.backends import PostgresBackend
     from pheasant.request_budget import DeadlineExceeded, activate
 
-    backend = PostgresBackend(DSN, pool_size=1)
+    backend = PostgresBackend(os.environ["PHEASANT_DATABASE_URL"], pool_size=1)
     try:
         with activate(time.monotonic() + 0.3), pytest.raises((DeadlineExceeded, pg_driver.Error)):
             backend.rows("SELECT pg_sleep(2)")

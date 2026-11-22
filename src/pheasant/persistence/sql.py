@@ -1,25 +1,12 @@
-"""SQL dialect handling for the state backend seam (Phase 35.2).
+"""Compiling pheasant's portable SQL for PostgreSQL.
 
-pheasant's state lives in ~50 typed methods on :class:`~pheasant.persistence.
-state_store.StateStore`, but it also exposes a raw ``rows(sql, params)`` escape
-hatch that **57 call sites across 15 modules** use directly. Converting all of
-them to typed methods was the plan; reading them changed it. The SQL they run
-is almost entirely ANSI — the dialect-specific surface is three things:
-
-* the placeholder style (``?`` vs ``%s``),
-* ``GROUP_CONCAT`` vs ``string_agg``,
-* ``INSERT OR REPLACE`` vs ``INSERT … ON CONFLICT DO UPDATE``,
-
-plus full-text search, which is not translated here at all: FTS5's ``MATCH`` +
-``bm25()`` and Postgres's ``tsvector`` + ``ts_rank_cd`` are different enough
-that pretending otherwise would produce a query that runs and ranks wrongly.
-:mod:`pheasant.search.sqlite_store` carries a real per-dialect implementation
-instead. **A wrong answer is worse than an error**, which is the whole reason
-translation is kept this narrow.
-
-Rewriting 57 call sites would have been 57 chances to change behaviour on the
-default path. Translating at the boundary is one place to get right and leaves
-the SQLite path executing byte-identical SQL.
+The state store's raw ``rows(sql, params)`` escape hatch is used directly by
+dozens of call sites, written with ``?`` (or ``:name``) placeholders. They are
+compiled once per statement text, at the boundary: placeholders to ``$n``,
+``GROUP_CONCAT`` to ``string_agg``, ``INSERT OR REPLACE`` to ``INSERT``. The
+schema's portable type spellings are rewritten by :data:`POSTGRES.types`.
+Full-text search is not translated here at all: it is written for Postgres
+where it is used (``search/text_store.py``, ``search/pg_textsearch.py``).
 """
 
 from __future__ import annotations
@@ -43,11 +30,10 @@ _INSERT_OR_REPLACE = re.compile(r"\bINSERT\s+OR\s+REPLACE\s+INTO\b", re.IGNORECA
 class Row(dict):
     """A result row supporting both ``row["col"]`` and ``row[0]``.
 
-    ``sqlite3.Row`` allows both, and pheasant's call sites use both — the
-    typed accessors mostly use names, while ``assistant/retrieval.py`` and
-    three places in the state store index positionally. Returning a plain dict
-    from the Postgres backend would break those, so this preserves the
-    contract rather than asking 57 call sites to agree on one style.
+    pheasant's call sites use both — the typed accessors mostly use names,
+    while ``assistant/retrieval.py`` and three places in the state store index
+    positionally. A row is a mapping, so iterating one yields its column
+    names: ``row.values()`` is its values.
 
     Subclasses ``dict`` so ``dict(row)``, ``.keys()``, ``.get()`` and
     ``**row`` all keep working unchanged.
@@ -85,7 +71,7 @@ class Dialect:
     name: str
     #: DB-API paramstyle. Drives placeholder translation.
     paramstyle: str
-    #: Whether this dialect has FTS5 virtual tables (SQLite) or tsvector.
+    #: The full-text mechanism: ``tsvector``.
     fulltext: str
     #: Type substitutions applied to the portable DDL, longest key first so
     #: ``INTEGER PRIMARY KEY`` is never half-replaced by ``INTEGER``.
@@ -100,45 +86,31 @@ class Dialect:
 
         ``column IN (?,?,?)`` makes the *statement text* a function of how
         many keys were passed, so a batched read issues a differently-spelled
-        statement on nearly every call. SQLite reparses cheaply and in
-        process; `pg_driver` prepares a statement after its fifth execution,
-        so on Postgres a text that never repeats is a statement that is never
-        prepared and a plan built from scratch every time. Measured on a
+        statement on nearly every call. `pg_driver` prepares a statement after
+        its fifth execution, so a text that never repeats is a statement that
+        is never prepared and a plan built from scratch every time. Measured on a
         500-key node fetch — the graph search arm's block size — **8.93ms
         against 6.15ms**.
 
-        Postgres therefore gets ``column = ANY(?)`` with the whole list as one
-        array parameter: one text, one plan, one prepared statement for every
-        batch size. SQLite keeps the ``IN`` list, which is its own reference
-        spelling and has no array type to bind to.
+        So it is ``column = ANY(?)`` with the whole list as one array
+        parameter: one text, one plan, one prepared statement for every batch
+        size.
 
         Returns the fragment and the parameters to splice in at its position,
         so a caller composes it into a larger ``WHERE`` rather than being
         handed a whole statement.
         """
 
-        items = list(values)
-        if self.is_postgres:
-            return f"{column} = ANY(?)", [items]
-        return f"{column} IN ({','.join('?' for _ in items)})", items
+        return f"{column} = ANY(?)", [list(values)]
 
     def translate(self, sql: str) -> str:
-        """Rewrite portable SQL for this dialect.
+        """Rewrite portable SQL for Postgres."""
 
-        SQLite is the reference dialect: it returns its input untouched, so
-        the default path executes exactly the SQL it always did and cannot
-        regress through this function.
-        """
-
-        if not self.is_postgres:
-            return sql
         return _compile_postgres(sql).text
 
     def compile(self, sql: str) -> Compiled:
         """:meth:`translate`, plus how to bind ``params`` to the result."""
 
-        if not self.is_postgres:
-            return Compiled(sql, None)
         return _compile_postgres(sql)
 
 
@@ -239,30 +211,15 @@ def _rewrite_placeholders(sql: str) -> Compiled:
     return Compiled("".join(out), tuple(names) if names else None)
 
 
-SQLITE = Dialect(name="sqlite", paramstyle="qmark", fulltext="fts5")
-
 POSTGRES = Dialect(
     name="postgres",
     paramstyle="numeric",
     fulltext="tsvector",
     types={
-        # SQLite's TEXT/INTEGER/REAL are affinities, not widths. The mapping
-        # keeps column names and semantics identical so every ANSI query in
-        # the codebase — and every stable ID built from these rows — is
-        # unchanged across backends.
+        # The schema's portable spellings. Column names and semantics stay as
+        # written, so every stable ID built from these rows is unchanged.
         "INTEGER PRIMARY KEY": "BIGINT PRIMARY KEY",
         "INTEGER": "BIGINT",
         "REAL": "DOUBLE PRECISION",
     },
 )
-
-DIALECTS = {"sqlite": SQLITE, "postgres": POSTGRES}
-
-
-def dialect_for(name: str) -> Dialect:
-    try:
-        return DIALECTS[str(name or "sqlite").lower()]
-    except KeyError:
-        raise ValueError(
-            f"Unknown storage backend {name!r}. Valid values: {', '.join(sorted(DIALECTS))}"
-        ) from None

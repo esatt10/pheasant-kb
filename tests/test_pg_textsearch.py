@@ -36,10 +36,10 @@ from pheasant.search import pg_textsearch
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.pg_textsearch import bm25_counts_for, bm25_query_text, pg_textsearch_sql
 from pheasant.search.ranking import RankingParameters
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 from pheasant.telemetry import metrics
-from tests.test_backend_parity import DSN, GOLD, _config, _corpus, _reset
+from tests.test_backend_parity import DSN, GOLD, _config, _corpus
 
 
 def _lexical(index: str, path: str) -> float:
@@ -59,49 +59,10 @@ def test_postgres_ranks_with_pg_textsearch_by_default() -> None:
     assert config.storage.lexical_index == "pg_textsearch"
 
 
-def test_sqlite_searches_are_counted_as_fts5(tmp_path: Path) -> None:
-    """The standalone default reports itself, so a dashboard never shows a gap."""
-
-    store = StateStore(tmp_path / "state.db")
-    store.migrate()
-    before = _lexical("fts5", "sqlite")
-    SearchStore(store).search("anything at all")
-    assert _lexical("fts5", "sqlite") == before + 1
-
-
-def test_sqlite_ranks_with_fts5_whatever_the_setting_says(tmp_path: Path) -> None:
-    """Rule 7: the default must not change what a standalone region does.
-
-    ``pg_textsearch`` is the setting's default, so SQLite has to accept it,
-    and it must not reach the weights rule either — a standalone region with
-    a fractional column weight ranks with FTS5, which takes any weight.
-    """
-
-    for value in ("pg_textsearch", "tsvector"):
-        store = StateStore(tmp_path / f"{value}.db", lexical_index=value)
-        assert store.bm25_counts is None
-    fractional = StateStore(
-        tmp_path / "f.db", lexical_index="pg_textsearch", lexical_weights=(8.5, 3, 2, 1)
-    )
-    assert fractional.bm25_counts is None
-    with pytest.raises(ValueError, match="Unknown storage.lexical_index"):
-        StateStore(tmp_path / "s.db", lexical_index="pg_search")
-
-
-def test_the_standalone_default_config_opens_on_fts5(tmp_path: Path) -> None:
-    config = PheasantConfig.model_validate(
-        {"pheasant": {"name": "kb", "state_path": str(tmp_path / "state")}}
-    )
-    store = StateStore.from_config(config, tmp_path / "s.db")
-    store.migrate()
-    assert not store.dialect.is_postgres
-    assert store.lexical_index == "pg_textsearch" and store.bm25_counts is None
-
-
 def test_a_store_opened_without_config_never_manages_the_index(tmp_path: Path) -> None:
     """A migration tool or a test must not drop what the region's config built."""
 
-    store = StateStore(tmp_path / "s.db")
+    store = StateStore()
     assert store.lexical_index is None
     assert store.bm25_counts is None
 
@@ -230,7 +191,7 @@ def _extension_available() -> str:
         return "set PHEASANT_TEST_POSTGRES_DSN to a throwaway database"
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(DSN, autocommit=True) as conn:  # server-wide: any database
         available = conn.query(
             "SELECT 1 FROM pg_available_extensions WHERE name = 'pg_textsearch'"
         ).fetchone()
@@ -263,7 +224,7 @@ def _engine(root: Path, workspace: Path, lexical_index: str, **ranking: float) -
 def _bm25_indexes() -> set[str]:
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
         rows = conn.query(
             "SELECT indexname FROM pg_indexes WHERE indexname LIKE 'idx_chunks_fts_bm25_%'"
         ).fetchall()
@@ -278,7 +239,6 @@ def _ranked(engine: SyncEngine, query: str) -> list[str]:
 
 @pytest.fixture()
 def indexed(tmp_path: Path, require_extension):
-    _reset(DSN)
     workspace = _corpus(tmp_path)
     engine = _engine(tmp_path, workspace, "pg_textsearch")
     engine.sync_source("docs", "full")
@@ -328,7 +288,6 @@ def test_the_bm25_index_is_what_answers(indexed, monkeypatch) -> None:
 def test_the_index_follows_the_config(tmp_path: Path, require_extension) -> None:
     """Built when selected, rebuilt when the weights move, dropped when not."""
 
-    _reset(DSN)
     workspace = _corpus(tmp_path)
     engine = _engine(tmp_path, workspace, "pg_textsearch")
     engine.sync_source("docs", "full")
@@ -359,7 +318,7 @@ def test_filters_reach_inside_the_index_scan(indexed, monkeypatch) -> None:
     # The fixture indexes without a taxonomy, so give one chunk a section.
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
         conn.query(
             "UPDATE chunks SET heading_path = 'Kestrel Runbook > Schedule' "
             "WHERE artifact_id IN (SELECT id FROM artifacts WHERE relative_path = 'runbook.md')"
@@ -418,7 +377,7 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
     statement = sql
 
     def run(setting: str) -> tuple[str, list[tuple[str, float]]]:
-        with pg_driver.connect(DSN, autocommit=True) as conn:
+        with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
             conn.query(setting)
             plan = "\n".join(
                 str(row[0])
@@ -445,7 +404,7 @@ def test_the_reused_score_is_the_standalone_score(indexed) -> None:
 def _unfenced(state, query: str, **kwargs) -> list[str]:
     """What the statement before the fence returned, for the same search."""
 
-    from pheasant.search import sqlite_store
+    from pheasant.search import text_store
 
     def unfenced(state, text, counts, **parts):
         sql, params = pg_textsearch.pg_textsearch_unfenced_sql(
@@ -460,12 +419,12 @@ def _unfenced(state, query: str, **kwargs) -> list[str]:
         )
         return state.rows(sql, tuple(params)), "unfenced"
 
-    fenced = sqlite_store.bm25_rows
-    sqlite_store.bm25_rows = unfenced
+    fenced = text_store.bm25_rows
+    text_store.bm25_rows = unfenced
     try:
         return [hit["relative_path"] for hit in SearchStore(state).search(query, **kwargs)]
     finally:
-        sqlite_store.bm25_rows = fenced
+        text_store.bm25_rows = fenced
 
 
 def test_the_fenced_scan_returns_what_the_unfenced_statement_did(indexed, monkeypatch) -> None:
@@ -536,7 +495,7 @@ def test_a_changed_column_weight_ranks_with_tsvector(indexed, monkeypatch) -> No
 def test_a_missing_index_falls_back_to_tsvector_not_to_like(indexed, caplog) -> None:
     from pheasant.persistence import pg_driver
 
-    with pg_driver.connect(DSN, autocommit=True) as conn:
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
         conn.query("DROP INDEX idx_chunks_fts_bm25_w8_3_2_1")
     pg_textsearch._bm25_fallback_warned = False
     with caplog.at_level(logging.WARNING, logger="pheasant.search.pg_textsearch"):
@@ -550,7 +509,6 @@ def test_a_missing_index_falls_back_to_tsvector_not_to_like(indexed, caplog) -> 
 def test_an_edit_and_a_deletion_reach_the_index(tmp_path: Path, require_extension) -> None:
     """The index is maintained by the same per-artifact DELETE and INSERT."""
 
-    _reset(DSN)
     workspace = _corpus(tmp_path)
     engine = _engine(tmp_path, workspace, "pg_textsearch")
     try:
@@ -571,7 +529,6 @@ def test_a_server_without_the_extension_is_a_refusal(
 ) -> None:
     """Not a quiet fallback that ranks differently from what the config says."""
 
-    _reset(DSN)
     config = _config(tmp_path, _corpus(tmp_path), "postgres")
     config.storage.lexical_index = "pg_textsearch"
     store = StateStore.from_config(config)

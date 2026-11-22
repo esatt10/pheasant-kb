@@ -57,7 +57,7 @@ def _spend_rows(state: Any, *, day: str, model: str, input_tokens: int, output_t
 @pytest.fixture
 def region(tmp_path: Path):
     config = _config(tmp_path)
-    state = StateStore(tmp_path / "controls.db")
+    state = StateStore()
     state.migrate()
     spend.GUARD.bind(config, state)
     yield ServiceContext(config, state, None)
@@ -408,30 +408,18 @@ def test_the_usage_ledger_is_append_only(region):
 
 def test_a_dropped_trigger_comes_back_on_the_next_start(region):
     state = region.state
-    state.execute("DROP TRIGGER usage_daily_no_delete")
+    state.execute("DROP TRIGGER usage_daily_append_only ON usage_daily")
     state.migrate()
     _spend_rows(state, day=TODAY.isoformat(), model="gpt-6-luna", input_tokens=10)
     with pytest.raises(Exception, match="append-only"):
         state.execute("DELETE FROM usage_daily")
 
 
-@pytest.mark.skipif(
-    not __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
-    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
-)
-def test_the_usage_ledger_is_append_only_on_a_real_postgres(tmp_path):
-    from pheasant.persistence.backends import open_backend
-
-    backend = open_backend(
-        backend="postgres", dsn=__import__("os").environ["PHEASANT_TEST_POSTGRES_DSN"]
-    )
-    state = StateStore(backend=backend)
+def test_the_usage_ledger_is_append_only_even_to_truncate():
+    state = StateStore()
     try:
         state.migrate()
         state.migrate()  # the second boot finds the triggers and leaves them
-        state.execute("ALTER TABLE usage_daily DISABLE TRIGGER usage_daily_append_only")
-        state.execute("DELETE FROM usage_daily WHERE kb_id='kb'")
-        state.execute("ALTER TABLE usage_daily ENABLE TRIGGER usage_daily_append_only")
         _assert_append_only(state)
         with pytest.raises(Exception, match="append-only"):
             state.execute("TRUNCATE usage_daily")
@@ -499,7 +487,7 @@ def test_the_fleet_directorys_mirror_is_append_only_too(tmp_path):
     from pheasant.persistence import fleet_store
 
     config = SimpleNamespace(
-        fleet=SimpleNamespace(enabled=True, slot="kb-01", path=tmp_path / "fleet.db", dsn_env="")
+        fleet=SimpleNamespace(enabled=True, slot="kb-01", dsn_env="PHEASANT_DATABASE_URL")
     )
     store = fleet_store.open_store(config)
     try:

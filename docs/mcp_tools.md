@@ -59,20 +59,22 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 
 ## Tools
 
-!!! warning "Removed in 0.10.0: `export_obsidian_notes`"
-
-    The Obsidian vault projection was removed, and with it the
-    `export_obsidian_notes` tool and the `POST /obsidian/export` endpoint. The
-    UI's graph workspace (`/graph`) covers what the vault was used for.
-
-    This is a **breaking change to the MCP tool surface**, which is otherwise
-    evolved additively — an agent still calling `export_obsidian_notes` will
-    get an unknown-tool error rather than a deprecation warning. It was
-    removed outright rather than deprecated because, with the exporter gone,
-    there is nothing left for the tool to do.
-
-    Indexing an Obsidian vault as a **source** is supported as
-    `type: markdown_folder` (the retired `obsidian_vault` loads as that).
+> [!WARNING]
+> **Removed in 0.10.0: `export_obsidian_notes`**
+>
+>
+> The Obsidian vault projection was removed, and with it the
+> `export_obsidian_notes` tool and the `POST /obsidian/export` endpoint. The
+> UI's graph workspace (`/graph`) covers what the vault was used for.
+>
+> This is a **breaking change to the MCP tool surface**, which is otherwise
+> evolved additively — an agent still calling `export_obsidian_notes` will
+> get an unknown-tool error rather than a deprecation warning. It was
+> removed outright rather than deprecated because, with the exporter gone,
+> there is nothing left for the tool to do.
+>
+> Indexing an Obsidian vault as a **source** is supported as
+> `type: markdown_folder` (the retired `obsidian_vault` loads as that).
 
 | Tool | Purpose |
 |---|---|
@@ -116,12 +118,12 @@ The committed template contains no host-specific paths. `.vscode/mcp.json` is ig
 | `promote_runtime_source_to_config` | Return a deterministic YAML patch, or write one by policy, for runtime sources. |
 | `sync_source` | Trigger `incremental`, `full`, `validate_only`, or `repair` sync for one source. |
 | `sync_all` | Trigger sync for all enabled sources. |
-| `memory_write` | Append one agent-memory record (`session`/`user`/`org` scope, optional `subject`/`supersedes`/`tags`) to the configured `type: memory` source and, by default, index it immediately — the memory is retrievable via `search_context` in the same session. Recall is ordinary search; there is no separate read path. |
-| `memory_consolidate` | Run one consolidation pass now: archive superseded and TTL-expired memory records (files renamed `.md.archived`, never deleted) and re-sync the memory source so they leave the index. The scheduler runs this automatically; this is the on-demand edge. |
-| `list_memory_candidates` | Memory this region has **proposed** from how it is used, awaiting a decision. These are not memories: nothing listed is retrievable, and nothing becomes retrievable until it is promoted. Each carries the evidence behind it — which rule, how many observations, across how many sessions. |
-| `promote_memory_candidate` | Admit one proposal, making it an ordinary record through the same write path `memory_write` uses. |
-| `reject_memory_candidate` | Decline one proposal, permanently. The rule that proposed it will not suggest it again. |
-| `search_context` | Search graph/search state in `text` (SQLite full-text over chunk content and paths), `graph` (node/relationship labels, types and attribute values), `vector` (embedding similarity; requires `search.embeddings.enabled`, otherwise contributes nothing), or `hybrid` (merged and re-ranked) mode. Also accepts **retrieval criteria** an agent can set per call instead of relying on how the region was configured: `source_name`, `source_names`, `path_prefix`, `exclude_documents`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`. `source_names` keeps several sources at once (`["notes", "runbooks"]`); one name means exactly what `source_name` means, and a `source_name` given beside it joins the list. `path_prefix` keeps one file, or everything under one folder, of `source_name` (a path as `browse_source` lists it, matched exactly); like `section` it narrows every arm rather than filtering a ranked page. `exclude_documents` leaves documents out — each a file name (`deploy.md`: every document in scope with that name), a path (`guide/deploy.md`), a `source/path`, or an artifact id; at most 50 names. A name that matches no document at all is refused (`UNKNOWN_DOCUMENT`), and one that matches only documents outside the scope needs nothing doing; the response's `scope` block lists what was left out. `source_types` scopes by the *kind* of source (`repository`, `gdrive`, `web_collection`, …) rather than by name, which is what you want when you do not already know every source in the region; every hit reports its own as `provenance.source_type`, and `describe_retrieval` lists the types present. All optional and additive — an existing caller is unaffected. `snapshot_id` pins the search to a sealed snapshot: the region answers from that state or refuses with `SNAPSHOT_DRIFTED`, naming the sections that moved. `as_of` is the instant memory validity is evaluated at, echoed into the lineage even where the region holds no memory — which is where a caller most needs to be told it did nothing. `expand` attaches each hit's **graph neighbourhood** under `hit.graph` — see [raw retrieval with graph expansion](#raw-retrieval-with-graph-expansion). `include_chunks` and `include_graph_neighbors` are accepted for compatibility and do nothing. Each hit inside an [OKF bundle](how-to/okf-bundles.md#what-its-nearest-index-says-at-retrieval) also carries `okf`: what its nearest `index.md` says of it, and a `verdict`. |
+| `record_artifact` | Append one agent-memory record (`session`/`user`/`org` scope, optional `subject`/`supersedes`/`tags`) to the configured `type: memory` source and, by default, index it immediately — the memory is retrievable via `search_context` in the same session. Recall is ordinary search; there is no separate read path. |
+| `consolidate_artifacts` | Run one consolidation pass now: archive superseded and TTL-expired memory records (files renamed `.md.archived`, never deleted) and re-sync the memory source so they leave the index. The scheduler runs this automatically; this is the on-demand edge. |
+| `list_artifact_candidates` | Memory this region has **proposed** from how it is used, awaiting a decision. These are not memories: nothing listed is retrievable, and nothing becomes retrievable until it is promoted. Each carries the evidence behind it — which rule, how many observations, across how many sessions. |
+| `promote_artifact_candidate` | Admit one proposal, making it an ordinary record through the same write path `record_artifact` uses. |
+| `reject_artifact_candidate` | Decline one proposal, permanently. The rule that proposed it will not suggest it again. |
+| `search_context` | Search graph/search state in `text` (BM25 full-text over chunk content and paths), `graph` (node/relationship labels, types and attribute values), `vector` (embedding similarity; requires `search.embeddings.enabled`, otherwise contributes nothing), or `hybrid` (merged and re-ranked) mode. Also accepts **retrieval criteria** an agent can set per call instead of relying on how the region was configured: `source_name`, `source_names`, `path_prefix`, `exclude_documents`, `source_types`, `exclude_source_types`, `exclude_sources`, `node_types`, `min_score`. `source_names` keeps several sources at once (`["notes", "runbooks"]`); one name means exactly what `source_name` means, and a `source_name` given beside it joins the list. `path_prefix` keeps one file, or everything under one folder, of `source_name` (a path as `browse_source` lists it, matched exactly); like `section` it narrows every arm rather than filtering a ranked page. `exclude_documents` leaves documents out — each a file name (`deploy.md`: every document in scope with that name), a path (`guide/deploy.md`), a `source/path`, or an artifact id; at most 50 names. A name that matches no document at all is refused (`UNKNOWN_DOCUMENT`), and one that matches only documents outside the scope needs nothing doing; the response's `scope` block lists what was left out. `source_types` scopes by the *kind* of source (`repository`, `gdrive`, `web_collection`, …) rather than by name, which is what you want when you do not already know every source in the region; every hit reports its own as `provenance.source_type`, and `describe_retrieval` lists the types present. All optional and additive — an existing caller is unaffected. `snapshot_id` pins the search to a sealed snapshot: the region answers from that state or refuses with `SNAPSHOT_DRIFTED`, naming the sections that moved. `as_of` is the instant memory validity is evaluated at, echoed into the lineage even where the region holds no memory — which is where a caller most needs to be told it did nothing. `expand` attaches each hit's **graph neighbourhood** under `hit.graph` — see [raw retrieval with graph expansion](#raw-retrieval-with-graph-expansion). `include_chunks` and `include_graph_neighbors` are accepted for compatibility and do nothing. Each hit inside an [OKF bundle](how-to/okf-bundles.md#what-its-nearest-index-says-at-retrieval) also carries `okf`: what its nearest `index.md` says of it, and a `verdict`. |
 | `search_context_batch` | Bulk context retrieval: up to 25 `queries` in one call, at most 1,000 hits in total (`queries × max_results`). Every other argument means exactly what it means on `search_context` and applies to every query, and each query is answered exactly as it would be alone. `results` is the merged context — each passage once, ordered **by rank across queries** (every query's best hit, then every query's second), so truncating it keeps coverage of every query; each hit's `batch` block names the query indexes that found it and its best rank. `searches` holds each query's own payload unless `per_query` is false. A `snapshot_id` pin is verified once for the whole batch. `counts.overlap` is how many hits a query shared with an earlier one — high overlap means the queries are paraphrases rather than facets. `expand` is applied once, to the merged `results`; the per-query `searches` are not expanded. |
 | `describe_retrieval` | Report how this knowledge base retrieves and what an agent may override per call: default mode and result count, which modes actually work here (`vector` is only offered when a vector index exists), the sources present, the `assistant.retrieval` settings, and one line of help per knob. Call this before guessing at parameters for an unfamiliar region. |
 | `preview_retrieval` | Run retrieval criteria and report how they differ from the standing configuration — both result sets plus the delta (added / dropped / kept). Lets an agent test a setting against real content before anyone writes it into `pheasant.yaml`. Read-only: nothing is persisted. |
@@ -267,27 +269,27 @@ anything was composed from it) or `"only"` (search what has been composed).
 `exclude_sources` entry and shows in the response's `criteria`; `only` beside
 a scope naming another source is refused.
 
-`memory_write` takes `kind` (`fact` by default; `alias` / `preference` /
+`record_artifact` takes `kind` (`fact` by default; `alias` / `preference` /
 `exclusion` are retrieval rules), `principal` (who asserted it — part of the
 record id, and what scopes it under `security.acl_enforced`) and `valid_until`.
 Its response carries `outcome` (`"created"` \| `"reinforced"` \| `"duplicate"`)
 alongside the existing `created` boolean — a write whose normalized text
 already matches a live record in the same scope/subject/kind/ACL bucket folds
-into it instead of creating a new file (`memory.reinforcement_enabled`, on by
+into it instead of creating a new file (`artifacts.learning.reinforcement_enabled`, on by
 default). A fold only ever targets a record a *default* query can return: a
 claim a later record corrected becomes its own new record rather than folding
 into the record it contradicts, and a write matching a compaction-demoted
-record folds into that cluster's canonical one. See `docs/memory-system.md` §8
+record folds into that cluster's canonical one. See `docs/artifact-records.md` §8
 for reinforcement and compaction.
 
 `describe_retrieval` reports the memory source's name, its scopes and counts,
 how many records are wired into the graph, and any steering in force, so an
 agent never has to guess the source name to exclude it.
 
-`memory_synthesize` LLM-merges a near-duplicate cluster deterministic
+`synthesize_artifacts` LLM-merges a near-duplicate cluster deterministic
 compaction could not resolve (complementary partial facts, progressive
 refinement, abstraction) into one canonical record, subsuming the inputs the
-same way medoid promotion does. Off by default (`memory.synthesis.enabled`)
+same way medoid promotion does. Off by default (`artifacts.learning.synthesis.enabled`)
 and **never automatic** — only this explicit call runs it, so the scheduler
 beat never makes a network request. Returns `{"skipped": reason}` when
 disabled, no memory source is configured, or no model is reachable.

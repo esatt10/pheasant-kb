@@ -21,6 +21,7 @@ from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound, transient_refusal
 from pheasant.services.sync_wait import MAX_WAIT_SECONDS, WaitRequest, wait_for_sync
 from pheasant.sync.engine import SyncEngine
+from tests.conftest import make_nats_queue_settings
 
 
 def _config(root: Path, *, queue: bool = False) -> PheasantConfig:
@@ -39,7 +40,7 @@ def _config(root: Path, *, queue: bool = False) -> PheasantConfig:
         "sources": [{"name": "notes", "type": "document_folder", "path": str(workspace)}],
     }
     if queue:
-        raw["sync"] = {"queue": {"enabled": True, "backend": "local"}}
+        raw["sync"] = {"queue": make_nats_queue_settings()}
     return PheasantConfig.model_validate(raw)
 
 
@@ -114,7 +115,9 @@ def test_a_published_task_is_queued_and_the_wait_is_bounded(tmp_path: Path) -> N
         engine.close()
     assert answer["state"] == "queued"
     assert answer["timed_out"] is True
-    assert [task["task_id"] for task in answer["queued_tasks"]] == ["idx-notes"]
+    # JetStream counts its backlog but cannot list it: the depth, not the ids.
+    assert answer["queued_tasks"] == []
+    assert answer["queue_depth"] >= 1
     assert clock.now == pytest.approx(MAX_WAIT_SECONDS), "a wait longer than its cap"
 
 

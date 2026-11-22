@@ -6,12 +6,16 @@ to prevent for image tags — so this seeds a region, drives a real browser
 against the real built UI, and overwrites `docs/assets/ui/*.png`.
 
     npm --prefix ui ci && npm --prefix ui run build
-    python scripts/screenshot_ui.py
+    PHEASANT_DATABASE_URL=postgresql://... python scripts/screenshot_ui.py
+
+The state store is PostgreSQL with pg_textsearch, so point
+`PHEASANT_DATABASE_URL` at an empty database on the `deploy/postgres` image;
+the region is written into it.
 
 Everything it shows is produced by the product: the corpus is indexed by the
-ordinary pipeline, the records are written through `record_artifact`, and
-the proposals in the Memory tab are mined from real searches this script
-performs. Nothing is mocked for the camera.
+ordinary pipeline, the records are written through `POST /artifacts/records`,
+and the proposals on the Artifacts page are mined from real searches this
+script performs. Nothing is mocked for the camera.
 """
 
 from __future__ import annotations
@@ -41,10 +45,10 @@ MIN_GRAPH_NODES = 50
 #: A corpus small enough to seed in a second and real enough to search. The
 #: vocabulary mismatch is deliberate: the docs say `pheasant-flock`, the
 #: searches below say `router`, and that is exactly the pattern
-#: `alias-cooccurrence-v1` is built to notice — so the Memory tab's proposals
+#: `alias-cooccurrence-v1` is built to notice — so the Artifacts page's proposals
 #: are genuinely mined rather than staged.
 #: Enough vocabulary mismatch to produce a review queue worth showing. The
-#: Memory tab's job at scale is triage, and a screenshot of three proposals
+#: candidate review's job at scale is triage, and a screenshot of three proposals
 #: does not show whether the page can do it.
 TEAM_WORDS = {
     "router": "pheasant-flock",
@@ -130,7 +134,7 @@ def _fetch_benchmark(root: Path) -> dict | None:
 
     The handbook is a *narrative*: a handful of runbooks whose repeated,
     related questions are what memory formation keys on. It is the right
-    corpus for the notebook and memory screenshots and a useless one for
+    corpus for the notebook and records screenshots and a useless one for
     retrieval measurement — with nine documents and a top-10, every query is
     served whatever the ranking does.
 
@@ -175,7 +179,7 @@ def _seed(root: Path, benchmark: dict | None = None) -> Path:
         path = workspace / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    for name in ("state", "exports", "memory"):
+    for name in ("state", "exports"):
         (root / name).mkdir(parents=True, exist_ok=True)
 
     config = {
@@ -205,9 +209,11 @@ def _seed(root: Path, benchmark: dict | None = None) -> Path:
                 "stage_sample_rate": 1.0,
             }
         },
-        "memory": {
-            "steering_enabled": True,
-            "formation": {"enabled": True, "min_observations": 2, "min_sessions": 2},
+        "artifacts": {
+            "learning": {
+                "steering_enabled": True,
+                "formation": {"enabled": True, "min_observations": 2, "min_sessions": 2},
+            },
         },
         # `max_results: 2` against a corpus this size is what makes *rank*
         # matter: a top-10 over nine documents returns everything, so every
@@ -239,12 +245,6 @@ def _seed(root: Path, benchmark: dict | None = None) -> Path:
                 "type": "markdown_folder",
                 "path": str(workspace),
                 "include": ["**/*.md"],
-                "sync": {"on_startup": False},
-            },
-            {
-                "name": "agent-memory",
-                "type": "memory",
-                "path": str(root / "memory"),
                 "sync": {"on_startup": False},
             },
         ],
@@ -337,6 +337,7 @@ def _drive(app, benchmark: dict | None = None) -> None:
     from fastapi.testclient import TestClient
 
     from pheasant.artifacts.formation import run_candidate_rules, run_session_digests
+    from pheasant.services.artifact_records import RECORDS_SOURCE
 
     engine = app.state.engine
     engine.sync_source("handbook", "full")
@@ -395,7 +396,7 @@ def _drive(app, benchmark: dict | None = None) -> None:
 
     run_session_digests(engine)
     run_candidate_rules(engine)
-    engine.sync_source("agent-memory", "full")
+    engine.sync_source(RECORDS_SOURCE, "full")
     _evaluate(engine)
     _tune(engine)
 
@@ -440,7 +441,7 @@ def _shoot(port: int, shots: dict[str, str]) -> None:
     """Navigate the way a person does: load once, then click.
 
     Deep links now work -- a 404 falls back to the UI shell -- so `goto` would
-    reach most pages. Two reasons this still clicks. `/memory`, `/sources` and
+    reach most pages. Two reasons this still clicks. `/artifacts`, `/sources` and
     `/graph` are *also* API routes, and FastAPI resolves those before the
     static mount, so a hard load of one photographs a JSON body regardless of
     the fallback. And clicking is what a person does, so it exercises the
@@ -481,7 +482,7 @@ def _shoot(port: int, shots: dict[str, str]) -> None:
             # the same as a settled layout.
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(1200)
-            if name == "memory":
+            if name == "records":
                 # Open the layers. A screenshot of collapsed rows shows the
                 # triage view and hides the thing that makes a proposal
                 # reviewable at all: what was asked, what came back, the
@@ -710,12 +711,15 @@ def _shoot_taxonomy(port: int) -> None:
 
         page.get_by_role("button", name="Collapse Sources", exact=True).click()
         page.wait_for_timeout(400)
+        # Taxonomy is a tab of the right-hand panel by default. Pop it out (it
+        # lands just below the panel, in the panel's column), then move it up
+        # above the panel with the grip's keyboard handle.
+        page.get_by_role("button", name="Open Taxonomy as its own tile", exact=True).click()
+        page.wait_for_timeout(400)
         grip = page.locator('[data-tile-grip="taxonomy"]')
         grip.focus()
-        # inner -> center -> right (appended below the graph), then up above it.
-        for key in ("ArrowRight", "ArrowRight", "ArrowUp"):
-            page.keyboard.press(key)
-            page.wait_for_timeout(300)
+        page.keyboard.press("ArrowUp")
+        page.wait_for_timeout(300)
         if not page.locator('[data-column="right"] > [data-tile="taxonomy"]').count():
             raise SystemExit("the taxonomy tile did not reach the right column")
         page.wait_for_timeout(800)
@@ -745,11 +749,9 @@ def _shoot_run_states(port: int, config) -> None:
 
     from pheasant.evaluation import store as evaluation_store
     from pheasant.evaluation.runner import reclaim_interrupted_runs
-    from pheasant.persistence.paths import StatePaths
     from pheasant.persistence.state_store import StateStore
 
-    paths = StatePaths.from_config(config)
-    state = StateStore.from_config(config, paths.sqlite)
+    state = StateStore.from_config(config)
     provisioned = Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
     launch: dict[str, object] = {}
     if provisioned.exists():
@@ -834,6 +836,17 @@ def main() -> int:
         "--keep", action="store_true", help="Leave the seeded region on disk for inspection."
     )
     parser.add_argument(
+        "--root",
+        type=Path,
+        help=(
+            "Seed the region here (a directory that must not exist yet) instead of a "
+            "temporary one. The Sources rail shows each source's path, and a temporary "
+            "directory under a home folder puts the user name in every published "
+            "screenshot; a neutral root such as C:/pheasant-shots or /tmp/pheasant-shots "
+            "does not."
+        ),
+    )
+    parser.add_argument(
         "--no-benchmark",
         action="store_true",
         help=(
@@ -851,6 +864,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    import os
+
+    if not os.environ.get("PHEASANT_DATABASE_URL"):
+        raise SystemExit(
+            "PHEASANT_DATABASE_URL is unset. The state store is PostgreSQL; point it at an\n"
+            "empty database on the deploy/postgres image (pg_textsearch preloaded)."
+        )
     dist = REPO / "ui" / "dist"
     if not (dist / "index.html").exists():
         raise SystemExit(
@@ -862,7 +882,13 @@ def main() -> int:
     from pheasant.api.app import create_app
     from pheasant.config.schema import PheasantConfig
 
-    root = Path(tempfile.mkdtemp(prefix="pheasant-shots-"))
+    if args.root:
+        if args.root.exists():
+            raise SystemExit(f"--root {args.root} already exists; name a directory to create")
+        args.root.mkdir(parents=True)
+        root = args.root.resolve()
+    else:
+        root = Path(tempfile.mkdtemp(prefix="pheasant-shots-"))
     try:
         benchmark = None if args.no_benchmark else _fetch_benchmark(root)
         config_path = _seed(root, benchmark)
@@ -896,7 +922,7 @@ def main() -> int:
                 port,
                 {
                     "notebook": "Notebook",
-                    "memory": "Memory",
+                    "records": "Artifacts",
                     "evaluation": "Effectiveness",
                     "tuning": "Tuning",
                     "sources": "Sources",

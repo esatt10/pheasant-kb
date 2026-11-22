@@ -17,13 +17,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  # One image: the api tier serves the web UI's bundle itself.
   IMAGE_NAME: pheasant
-  # The web UI is a separate workload (static bundle + nginx), so it is a
-  # separate image — but it is published from the same commit and tagged with
-  # the same version, so `pheasant host` can pin the two together. Without
-  # this, generated sidecar manifests reference a UI image that was
-  # never pushed and the sidecar fails to start.
-  UI_IMAGE_NAME: pheasant-ui
 
 concurrency:
   group: publish-container-main
@@ -90,7 +85,6 @@ jobs:
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "ref=${REGISTRY}/${owner}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "ui_ref=${REGISTRY}/${owner}/${UI_IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Check version alignment
         run: python scripts/sync_version.py --check
@@ -204,32 +198,18 @@ jobs:
             ${{ steps.image.outputs.ref }}:${{ steps.version.outputs.version }}
             ${{ steps.image.outputs.ref }}:latest
 
-      # The UI sidecar, from the same commit and under the same version tag.
-      # `latest` is pushed too so compose files from older releases (which
-      # pinned `:latest`) resolve to a real image instead of failing to pull.
-      - name: Push UI image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./ui
-          push: true
-          tags: |
-            ${{ steps.image.outputs.ui_ref }}:${{ steps.version.outputs.version }}
-            ${{ steps.image.outputs.ui_ref }}:latest
-
       # Read back what the registry actually holds before main is allowed to
       # name it. `--check-ghcr-tags` above proved the version was free; this
-      # proves the push filled it, for both packages and for `latest` too.
+      # proves the push filled it, `latest` included.
       - name: Verify the published tags are live
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for package in "${IMAGE_NAME}" "${UI_IMAGE_NAME}"; do
-            python scripts/sync_version.py \
-              --require-ghcr-tags \
-              --owner "${GITHUB_REPOSITORY_OWNER}" \
-              --package "${package}" \
-              --token "${GITHUB_TOKEN}"
-          done
+          python scripts/sync_version.py \
+            --require-ghcr-tags \
+            --owner "${GITHUB_REPOSITORY_OWNER}" \
+            --package "${IMAGE_NAME}" \
+            --token "${GITHUB_TOKEN}"
 
       # Last, and deliberately so. This commit pins the new version into every
       # compose file and manifest on main, so it must not run until the images

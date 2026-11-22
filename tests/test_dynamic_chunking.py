@@ -208,7 +208,7 @@ def test_small_sections_are_merged_under_their_common_heading() -> None:
     assert len(definitions) < 8
     # ...and a chunk holding several names every one of them under the heading
     # they share, so the `section` criterion still finds each by number.
-    from pheasant.search.sqlite_store import section_matches
+    from pheasant.search.text_store import section_matches
 
     merged = [chunk for chunk in definitions if chunk.text.count("Defined Term") > 1]
     assert merged

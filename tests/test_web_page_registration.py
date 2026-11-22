@@ -25,7 +25,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
@@ -676,32 +675,6 @@ def test_pages_of_one_site_in_one_call_are_one_target(tmp_path: Path) -> None:
     )
     assert [t.name for t in targets] == ["developers-example-com", "other-example-com"]
     assert targets[0].urls == urls
-
-
-def test_pheasant_up_adds_a_page_to_the_sites_collection(tmp_path: Path) -> None:
-    """A second `pheasant up <url>` of one site said "already configured" and
-    dropped the page: matching by path found the first page's collection."""
-
-    from pheasant.quickstart import added_sources, ensure_up_config
-    from pheasant.targets import resolve_targets
-
-    config_path = tmp_path / "pheasant.yaml"
-    urls = [f"https://developers.example.com{page}" for page in DOCS_PAGES]
-    for url in urls:
-        targets = resolve_targets([url], clone_root=tmp_path / "clones", workspace=tmp_path)
-        ensure_up_config(targets, config_path)
-    assert added_sources() == ["developers-example-com"]
-    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    (source,) = [s for s in written["sources"] if s["type"] == "web_collection"]
-    assert source["urls"] == urls
-
-    unchanged = config_path.read_text(encoding="utf-8")
-    ensure_up_config(
-        resolve_targets([urls[1]], clone_root=tmp_path / "clones", workspace=tmp_path),
-        config_path,
-    )
-    assert added_sources() == []
-    assert config_path.read_text(encoding="utf-8") == unchanged, "a known page rewrites nothing"
 
 
 def test_an_indexer_adopts_a_page_added_on_another_replica(tmp_path: Path, docs_site: str) -> None:

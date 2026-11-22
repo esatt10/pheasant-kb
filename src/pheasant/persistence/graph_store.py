@@ -5,10 +5,8 @@ import json
 import logging
 import os
 import re
-import shutil
 import threading
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -63,53 +61,43 @@ def generation_id(compressed: bytes) -> str:
     return hashlib.sha256(compressed).hexdigest()[:16]
 
 
-#: ``storage.graph_format`` values this store understands.
-#:
-#: ``rows`` is the default and is what makes an incremental commit incremental:
-#: see :mod:`pheasant.persistence.graph_rows` for the measurements. ``node_link_json``
-#: is the pre-35.10 whole-file backend, kept selectable so a region that hits
-#: trouble rolls back with one config line rather than a downgrade — and kept
-#: *working*, because snapshots are still files and are written by the same code.
-GRAPH_FORMATS = ("rows", "node_link_json")
+#: ``storage.graph_format`` values this store understands: ``rows``, the graph
+#: in ``graph_nodes``/``graph_edges`` (see :mod:`pheasant.persistence.graph_rows`
+#: for the measurements). The whole-file ``node_link_json`` backend was removed
+#: in 2.0; a region still holding its file imports it once at boot
+#: (:meth:`GraphStore.import_persisted_file`).
+GRAPH_FORMATS = ("rows",)
 
 
 class GraphStore:
-    """Where the published graph lives, in whichever of two shapes.
+    """Where the published graph lives: rows in the state database.
 
-    The file backend serializes the whole graph per commit and requires every
-    reader to hold it; the row backend writes what changed and lets a reader
-    query. The seam is here rather than at the call sites because the callers —
-    the engine's five save sites, the snapshot scheduler, ``counts`` on the
-    status endpoints — are asking the same question either way.
+    A commit writes what changed and a reader queries; nothing holds the graph
+    but the indexer, whose working set it is. The directory holds history
+    snapshots (whole-graph files, interval-gated) and, on a region upgrading
+    from 1.x, the graph file that is imported once and parked.
 
-    ``state`` is optional so every existing construction (and every test that
-    builds a store over a temp directory) keeps working on the file backend
-    without one. A ``rows`` store without a state handle is a configuration
-    error, not a fallback: silently degrading to the whole-file path would make
-    a region's commit cost depend on how its store happened to be constructed.
+    ``state`` may be ``None`` for a store used only for its snapshot files;
+    everything that reads or writes the published graph needs it.
     """
 
     def __init__(
         self,
         root: str | Path,
         state: Any = None,
-        graph_format: str = "node_link_json",
+        graph_format: str = "rows",
     ):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         if graph_format not in GRAPH_FORMATS:
             raise ValueError(
-                f"Unknown storage.graph_format {graph_format!r}; expected one of "
-                f"{', '.join(GRAPH_FORMATS)}"
-            )
-        if graph_format == "rows" and state is None:
-            raise ValueError(
-                "storage.graph_format='rows' needs a state store; the graph lives in "
-                "the same database as the artifacts it describes."
+                f"storage.graph_format {graph_format!r} is not supported: the graph is "
+                "stored as rows (`rows`). The whole-file node_link_json backend was "
+                "removed in 2.0; delete the setting."
             )
         self.graph_format = graph_format
         self.state = state
-        self.rows = GraphRowStore(state) if graph_format == "rows" else None
+        self.rows = GraphRowStore(state) if state is not None else None
         #: Called with (kb_id, publication record) after a generation is
         #: durable. One hook here rather than a call beside each of the five
         #: `save()` sites, which is how one of them would eventually be
@@ -146,31 +134,16 @@ class GraphStore:
 
         return self.kb_dir(kb_id) / "graph.latest.json"
 
-    def metadata_path(self, kb_id: str) -> Path:
-        """Small publication record for the current immutable graph generation.
+    def _require_rows(self) -> GraphRowStore:
+        if self.rows is None:
+            raise ValueError("the published graph lives in the state database; pass state=")
+        return self.rows
 
-        Readers that only need counts must not decompress and materialize a
-        multi-gigabyte graph.  The file also gives refreshers a generation
-        boundary: it is replaced only after ``graph.latest.json.zst`` is
-        durable, so a reader never treats metadata for an unpublished graph as
-        current.
-        """
+    def save(self, kb_id: str, graph: SimpleMultiDiGraph) -> None:
+        """Publish the graph: write its delta to the rows and name the result."""
 
-        return self.kb_dir(kb_id) / "graph.latest.meta.json"
-
-    def save(self, kb_id: str, graph: SimpleMultiDiGraph) -> Path | None:
-        """Publish the graph. Returns the file written, or None on ``rows``.
-
-        The return value was always the path and one caller reads it (the
-        snapshot scheduler asks whether there is a file). ``None`` says "there
-        is no file for this generation", which is the truth on the row backend
-        and is what makes a snapshot materialize instead of copy.
-        """
-
-        if self.rows is not None:
-            self._save_rows(kb_id, graph)
-            return None
-        return self._save_file(kb_id, graph)
+        self._require_rows()
+        self._save_rows(kb_id, graph)
 
     def _save_rows(self, kb_id: str, graph: SimpleMultiDiGraph) -> None:
         """Write what changed, then name the result.
@@ -195,102 +168,25 @@ class GraphStore:
         metadata = self.rows.publish(kb_id)
         self._announce(kb_id, metadata)
 
-    def _save_file(self, kb_id: str, graph: SimpleMultiDiGraph) -> Path:
-        import zstandard as zstd
-
-        path = self.graph_path(kb_id)
-        tmp = _tmp_for(path)
-        metadata_path = self.metadata_path(kb_id)
-        metadata_tmp = _tmp_for(metadata_path)
-        # Durable tmp+rename (Synapse step 21.2): fsync the file before the
-        # rename and best-effort fsync the directory after it, so a crash
-        # never leaves a torn or vanished graph.latest.json.
-        try:
-            with self._write_lock:
-                # Compact, key-sorted: sorting keeps the bytes deterministic
-                # for a given graph, and dropping the indentation removes
-                # hundreds of megabytes of whitespace nothing reads.
-                payload = json.dumps(
-                    graph.to_node_link(), sort_keys=True, separators=(",", ":")
-                ).encode("utf-8")
-                compressed = zstd.ZstdCompressor(level=3).compress(payload)
-                with tmp.open("wb") as fh:
-                    # Level 3: the write path is latency-sensitive (it runs
-                    # mid-sync), and levels above this cost far more CPU for a
-                    # few percent of size. Snapshots, written rarely, use 10.
-                    fh.write(compressed)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp, path)
-                # Build the publication record from the file after its atomic
-                # rename.  Its stat tuple lets ``counts`` reject stale metadata
-                # if a process was killed between these two replacements.
-                stat = path.stat()
-                metadata = {
-                    "version": 2,
-                    "published_at": datetime.now(UTC).isoformat(),
-                    "generation_id": generation_id(compressed),
-                    "nodes": graph.number_of_nodes(),
-                    "edges": graph.number_of_edges(),
-                    "compressed_bytes": stat.st_size,
-                    "graph_mtime_ns": stat.st_mtime_ns,
-                }
-                with metadata_tmp.open("w", encoding="utf-8", newline="\n") as fh:
-                    json.dump(metadata, fh, sort_keys=True, separators=(",", ":"))
-                    fh.write("\n")
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(metadata_tmp, metadata_path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            metadata_tmp.unlink(missing_ok=True)
-            raise
-        self._fsync_dir(path.parent)
-        self._retire_legacy(kb_id)
-        self._sweep_stale_tmp(path.parent)
-        self._announce(kb_id, metadata)
-        return path
-
     def publication_stamp(self, kb_id: str) -> Any:
         """Something that changes when a new generation is published, or None.
 
-        The poll's key. On the file backend it is the graph file's own stat
-        tuple, which is what the refresher used directly and which works on a
-        state directory too old to carry a generation id. On ``rows`` there is
-        no file to stat, so it is the published id itself — content-addressed,
-        so an unchanged graph re-published still compares equal and does not
-        provoke a pointless reload.
-
-        Asked of the store rather than computed by the caller because "what
-        identifies the current published graph" is the store's question, and
-        the refresher reading a path that only one backend has is how a poll
-        silently stops finding anything.
+        The published id itself — content-addressed, so an unchanged graph
+        re-published still compares equal and does not provoke a reload.
         """
 
-        if self.rows is not None:
-            record = self.rows.published_generation(kb_id)
-            return record["generation_id"] if record else None
-        try:
-            stat = self.graph_path(kb_id).stat()
-        except OSError:
-            return None
-        return (stat.st_mtime_ns, stat.st_size)
+        record = self._require_rows().published_generation(kb_id)
+        return record["generation_id"] if record else None
 
     def serving_graph(self, kb_id: str) -> Any:
-        """A graph to answer queries from, without deciding to hold one.
+        """A graph to answer queries from, without holding one.
 
-        On ``rows`` this is a :class:`~pheasant.graph.sql.SqlGraph`: a bounded
-        walk is a bounded query, so a replica that only serves holds nothing.
-        That is the residency the ``graph`` role was invented to stop every
-        replica paying — 1.5 GB at 100k files, measured.
-
-        On ``node_link_json`` there is no such thing, so this is
-        :meth:`load` and the caller is back to holding the graph. The seam is
-        real either way; only one side of it can be cheap.
+        A :class:`~pheasant.graph.sql.SqlGraph`: a bounded walk is a bounded
+        query, so a replica that only serves holds nothing — 1.5 GB at 100k
+        files, measured, was the residency this replaced.
         """
 
-        if self.rows is None:
-            return self.load(kb_id)
+        self._require_rows()
         from pheasant.graph.sql import SqlGraph
 
         return SqlGraph(self.state, kb_id)
@@ -298,8 +194,8 @@ class GraphStore:
     def import_persisted_file(self, kb_id: str) -> dict[str, int] | None:
         """One-shot: move a graph file into rows, keeping the file.
 
-        Runs on the row backend when a graph file exists and the tables are
-        empty — a region upgrading into 35.10. Idempotent by that condition and
+        Runs when a graph file exists and the tables are empty — a region
+        upgrading from the whole-file backend. Idempotent by that condition and
         by the write itself (the rows are content-addressed, so a repeat
         produces the same digests and the same generation id).
 
@@ -360,95 +256,14 @@ class GraphStore:
             logger.warning("Could not announce a graph generation", exc_info=True)
 
     def published_generation(self, kb_id: str) -> dict[str, object] | None:
-        """The publication record for the graph currently on disk, or None.
+        """The publication record for the published graph, or None (one row)."""
 
-        Cheap by construction — a small JSON sidecar, never the graph — and
-        validated against the graph file's own stat tuple, so a process killed
-        between the two atomic renames reports "no current generation" rather
-        than a record describing bytes that were never published.
-
-        A state directory written before generations existed has no id to
-        report. It gets one on its next save; until then the mtime/size stamp
-        the refresher already uses is what detects a change, which is why this
-        returning ``None`` is a missing *label*, never a missing reload.
-        """
-
-        if self.rows is not None:
-            return self.rows.published_generation(kb_id)
-        path, metadata_path = self.graph_path(kb_id), self.metadata_path(kb_id)
-        if not path.exists() or not metadata_path.exists():
-            return None
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            stat = path.stat()
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        if int(metadata.get("compressed_bytes", -1)) != stat.st_size:
-            return None
-        if int(metadata.get("graph_mtime_ns", -1)) != stat.st_mtime_ns:
-            return None
-        identifier = str(metadata.get("generation_id") or "")
-        if not identifier:
-            return None
-        return {
-            "generation_id": identifier,
-            "published_at": metadata.get("published_at"),
-            "nodes": int(metadata.get("nodes", 0)),
-            "edges": int(metadata.get("edges", 0)),
-            "compressed_bytes": int(metadata.get("compressed_bytes", 0)),
-        }
+        return self._require_rows().published_generation(kb_id)
 
     def counts(self, kb_id: str) -> tuple[int, int]:
-        """Return published graph counts without loading the graph when possible.
+        """Published node and edge counts, maintained on write (never counted)."""
 
-        Old state directories have no metadata file.  They transparently pay
-        one legacy load; their next graph save writes the sidecar.
-        """
-
-        if self.rows is not None:
-            return self.rows.counts(kb_id)
-        path = self.graph_path(kb_id)
-        metadata_path = self.metadata_path(kb_id)
-        if path.exists() and metadata_path.exists():
-            try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                stat = path.stat()
-                if (
-                    int(metadata.get("compressed_bytes", -1)) == stat.st_size
-                    and int(metadata.get("graph_mtime_ns", -1)) == stat.st_mtime_ns
-                ):
-                    return int(metadata.get("nodes", 0)), int(metadata.get("edges", 0))
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                pass
-        graph = self.load(kb_id)
-        nodes, edges = graph.number_of_nodes(), graph.number_of_edges()
-        # One-time migration for pre-generation state.  The expensive legacy
-        # load has already happened; record its counts now so every subsequent
-        # unchanged sync remains metadata-only.
-        if path.exists():
-            metadata_tmp = _tmp_for(metadata_path)
-            try:
-                with self._write_lock:
-                    stat = path.stat()
-                    metadata = {
-                        "version": 2,
-                        "published_at": datetime.now(UTC).isoformat(),
-                        "generation_id": generation_id(path.read_bytes()),
-                        "nodes": nodes,
-                        "edges": edges,
-                        "compressed_bytes": stat.st_size,
-                        "graph_mtime_ns": stat.st_mtime_ns,
-                    }
-                    with metadata_tmp.open("w", encoding="utf-8", newline="\n") as fh:
-                        json.dump(metadata, fh, sort_keys=True, separators=(",", ":"))
-                        fh.write("\n")
-                        fh.flush()
-                        os.fsync(fh.fileno())
-                    os.replace(metadata_tmp, metadata_path)
-                self._fsync_dir(metadata_path.parent)
-            except OSError:
-                metadata_tmp.unlink(missing_ok=True)
-        return nodes, edges
+        return self._require_rows().counts(kb_id)
 
     @staticmethod
     def _sweep_stale_tmp(directory: Path, max_age_s: float = 3600.0) -> None:
@@ -468,48 +283,23 @@ class GraphStore:
             except OSError:  # pragma: no cover - racing another writer is fine
                 pass
 
-    def _retire_legacy(self, kb_id: str) -> None:
-        """One-shot: park a pre-compression graph beside the new one.
-
-        Renamed, never deleted — /state is user data — and only after the
-        compressed file it was replaced by is safely on disk.
-        """
-
-        legacy = self.legacy_graph_path(kb_id)
-        if not legacy.exists():
-            return
-        try:
-            legacy.rename(legacy.with_suffix(".json.migrated"))
-        except OSError:  # pragma: no cover - best effort, never fails a sync
-            pass
-
     def load(self, kb_id: str) -> SimpleMultiDiGraph:
         """Materialize the whole graph into memory.
 
-        Still the right call for the **indexer**, whose working set this is:
-        the builder mutates it and the whole-graph enrichment passes walk it.
-        It is the wrong call for a process that only answers queries, which is
-        what :meth:`serving_graph` is for — on the row backend that process now
-        holds nothing at all.
+        The right call for the **indexer**, whose working set this is: the
+        builder mutates it and the whole-graph enrichment passes walk it. A
+        process that only answers queries uses :meth:`serving_graph` instead.
         """
 
-        if self.rows is not None:
-            # Loading is not a change, so the graph comes back owing the store
-            # nothing. Otherwise the first commit after a restart would
-            # rewrite every row it had just read — an O(total) write, which is
-            # the exact cost this backend exists to remove.
-            return SimpleMultiDiGraph.from_stored(
-                self.rows.iter_nodes(kb_id), self.rows.iter_edges(kb_id)
-            )
-        return self._load_file(kb_id)
+        rows = self._require_rows()
+        # Loading is not a change, so the graph comes back owing the store
+        # nothing. Otherwise the first commit after a restart would rewrite
+        # every row it had just read — an O(total) write, which is the exact
+        # cost this backend exists to remove.
+        return SimpleMultiDiGraph.from_stored(rows.iter_nodes(kb_id), rows.iter_edges(kb_id))
 
     def _load_file(self, kb_id: str) -> SimpleMultiDiGraph:
-        """Read the whole-file backend's payload, whichever generation wrote it.
-
-        Reachable on the ``rows`` backend too, and only from
-        :meth:`import_persisted_file` — that is the one moment a row-backed
-        region has a reason to read a graph file.
-        """
+        """Read a 1.x graph file, for :meth:`import_persisted_file` only."""
 
         import zstandard as zstd
 
@@ -579,51 +369,28 @@ class GraphStore:
     def snapshot_current(
         self, kb_id: str, utc_ts: str, resident: SimpleMultiDiGraph | None = None
     ) -> Path:
-        """Preserve the already-published immutable generation as history.
+        """Preserve the published generation as a history file.
 
-        Re-serializing the in-memory graph and recompressing it at level 10
-        made a snapshot an inline compaction pass after every otherwise-fast
-        source commit. ``graph.latest.json.zst`` is already complete,
-        compressed and durable; copying those exact bytes is both more
-        consistent and orders of magnitude cheaper.
+        The snapshot is materialized. O(graph), and in the right place:
+        snapshots are history, they are interval-gated rather than per-commit,
+        and they are read whole or not at all.
 
         ``resident`` is the working set of a process that loaded this kb's
-        graph from the store. The row backend serializes it instead of reading
-        the rows back, but only while it owes the store nothing
+        graph from the store. It is serialized instead of reading the rows
+        back, but only while it owes the store nothing
         (:meth:`SimpleMultiDiGraph.settled_node_link`): then it *is* the
-        published generation.
+        published generation. From a settled working set it is 16 s where
+        reading the rows back is 87 s (123k nodes / 761k edges, Postgres),
+        because the indexer has just paid for that read once already.
         """
 
-        if self.rows is not None:
-            # No file to copy, so the snapshot is materialized. O(graph), and
-            # in the right place: snapshots are history, they are interval-gated
-            # rather than per-commit, and they are read whole or not at all.
-            # From a settled working set it is 16 s where reading the rows
-            # back is 87 s (123k nodes / 761k edges, Postgres), because the
-            # indexer has just paid for that read once already.
-            node_link = resident.settled_node_link() if resident is not None else None
-            if node_link is None:
-                from pheasant.graph.sql import SqlGraph
+        self._require_rows()
+        node_link = resident.settled_node_link() if resident is not None else None
+        if node_link is None:
+            from pheasant.graph.sql import SqlGraph
 
-                node_link = SqlGraph(self.state, kb_id).to_node_link()
-            return self.write_snapshot_payload(kb_id, node_link, utc_ts)
-        source = self.graph_path(kb_id)
-        if not source.exists():
-            raise FileNotFoundError(f"No published graph generation for {kb_id}")
-        path = self.snapshot_path(kb_id, utc_ts)
-        tmp = _tmp_for(path)
-        try:
-            with self._write_lock:
-                with source.open("rb") as src, tmp.open("wb") as dst:
-                    shutil.copyfileobj(src, dst, length=1024 * 1024)
-                    dst.flush()
-                    os.fsync(dst.fileno())
-                os.replace(tmp, path)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-        self._fsync_dir(path.parent)
-        return path
+            node_link = SqlGraph(self.state, kb_id).to_node_link()
+        return self.write_snapshot_payload(kb_id, node_link, utc_ts)
 
     def read_snapshot(self, path: str | Path) -> SimpleMultiDiGraph:
         """Decompress + load a ``graph.<ts>.json.zst`` snapshot."""

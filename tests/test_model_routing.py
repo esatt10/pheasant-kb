@@ -34,7 +34,7 @@ def context(tmp_path, monkeypatch):
         replace(luna, id="missing", model="missing", api_key_env="NO_SUCH_ROUTING_KEY"),
     ]
     config.assistant.decisions.api_key_env = "TEST_FOUNDRY_KEY"
-    state = StateStore(tmp_path / "routing.db")
+    state = StateStore()
     state.migrate()
     decisions.reset_circuit()
     monkeypatch.setattr(llm, "_UNAVAILABLE", {})
@@ -342,7 +342,7 @@ def test_runtime_is_available_to_readers_but_saving_requires_a_contributor(conte
         else:
             model_routing.save(context, policy)
             # Another replica reads the row, without a restart or local YAML change.
-            other = StateStore(context.state.path)
+            other = StateStore()
             try:
                 replica = replace(context, state=other)
                 assert model_routing.current(replica)["criteria"] == policy["criteria"]

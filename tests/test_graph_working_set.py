@@ -360,9 +360,7 @@ def test_the_graph_node_indexes_exist(tmp_path: Path, index: str) -> None:
 
     engine = SyncEngine(_config(tmp_path))
     try:
-        rows = engine.state.rows(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name=?", (index,)
-        )
+        rows = engine.state.rows("SELECT indexname FROM pg_indexes WHERE indexname=?", (index,))
     finally:
         engine.close()
 

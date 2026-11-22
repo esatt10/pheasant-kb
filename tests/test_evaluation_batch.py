@@ -401,7 +401,7 @@ def test_measurements_are_not_retrievable_as_knowledge(seeded: Any) -> None:
     outcome = evaluation.run(seeded)
     assert outcome.run_id
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     searcher = HybridSearch(SearchStore(seeded.state))
     for query in ("known_positive_recall", "evaluation run", outcome.run_id):

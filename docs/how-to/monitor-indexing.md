@@ -117,12 +117,14 @@ On an incremental pass, `skipped` is often the number that matters:
 `2,996 unchanged · 4 indexed` is the difference between "working correctly" and
 "re-indexing everything again", and nothing in the UI used to say which.
 
-!!! note "Per-file failures abort the pass today"
-
-    `failed` and `failures` are reported but currently always empty: a file
-    that fails to prepare raises and ends the whole sync, which surfaces as the
-    job's `error` instead. Per-item fault tolerance and a dead-letter queue are
-    Phase 35.4; the fields are here because that is where the counts will land.
+> [!NOTE]
+> **Per-file failures abort the pass today**
+>
+>
+> `failed` and `failures` are reported but currently always empty: a file
+> that fails to prepare raises and ends the whole sync, which surfaces as the
+> job's `error` instead. Per-item fault tolerance and a dead-letter queue are
+> Phase 35.4; the fields are here because that is where the counts will land.
 
 ## Metrics
 
@@ -147,13 +149,13 @@ No extra dependency and no configuration — it is always on.
 | `pheasant_embedding_requests_total{outcome}` | counter | Provider health. |
 | `pheasant_graph_nodes`, `pheasant_graph_edges` | gauge | Graph size — the RAM driver. |
 | `pheasant_memory_records{scope,tier}` | gauge | Live memory records, per scope and tier — a `tier="cold"` count rising is compaction working. |
-| `pheasant_memory_writes_total{outcome}` | counter | `memory_write` calls: `created`, `reinforced`, or `duplicate`. |
+| `pheasant_memory_writes_total{outcome}` | counter | `record_artifact` calls: `created`, `reinforced`, or `duplicate`. |
 | `pheasant_memory_l0_folds_total{kind}` | counter | Writes folded by L0, by `kind`: `exact` (byte-identical, the dedup that predates reinforcement) or `normalized` (a paraphrase matched). |
 | `pheasant_memory_reinforcement_ratio` | gauge | Of the writes that either created a record or were folded as a **paraphrase**, the fraction folded — "is reinforcement earning its keep". Byte-identical repeats are in neither half: they never would have become a record. |
 | `pheasant_memory_maintenance_seconds` | histogram | One consolidation pass (archival + capacity pruning). |
 | `pheasant_memory_compactions_total{op}` | counter | New `memory_compactions` ledger rows, by `op` (`subsume`, `synthesize`). |
-| `pheasant_memory_compaction_seconds` | histogram | One L1/L2 clustering pass, when `memory.compaction_enabled`. |
-| `pheasant_memory_synthesis_calls_total{outcome}` | counter | L3 synthesis cluster attempts (`synthesized`, `cached`, `empty`, `collision`) — only moves when `memory.synthesis.enabled` and `memory_synthesize` is called; never on the scheduler beat. |
+| `pheasant_memory_compaction_seconds` | histogram | One L1/L2 clustering pass, when `artifacts.learning.compaction_enabled`. |
+| `pheasant_memory_synthesis_calls_total{outcome}` | counter | L3 synthesis cluster attempts (`synthesized`, `cached`, `empty`, `collision`) — only moves when `artifacts.learning.synthesis.enabled` and `synthesize_artifacts` is called; never on the scheduler beat. |
 | `pheasant_process_resident_bytes` | gauge | This process's RSS. |
 | `pheasant_requests_capacity_remaining` | gauge | Free API admission slots when request limiting is enabled. |
 | `pheasant_build_info{version}` | gauge | Always 1; the version is the label. |
@@ -184,14 +186,16 @@ histogram_quantile(0.95, sum by (le, mode) (rate(pheasant_search_duration_second
 sum(rate(pheasant_memory_writes_total[1h])) and sum(rate(pheasant_memory_compactions_total[1h]))
 ```
 
-!!! warning "Metrics are per process"
-
-    Counters live in the process that serves the scrape. Indexing runs in a
-    **child process**, so its throughput reaches `/metrics` through the job
-    registry rather than from a counter the indexer owns — which is also why
-    the indexing series are gauges sampled at scrape time rather than counters
-    you can `rate()` over. Run one scrape target per pheasant container and
-    aggregate in Prometheus, not in pheasant.
+> [!WARNING]
+> **Metrics are per process**
+>
+>
+> Counters live in the process that serves the scrape. Indexing runs in a
+> **child process**, so its throughput reaches `/metrics` through the job
+> registry rather than from a counter the indexer owns — which is also why
+> the indexing series are gauges sampled at scrape time rather than counters
+> you can `rate()` over. Run one scrape target per pheasant container and
+> aggregate in Prometheus, not in pheasant.
 
 ## Related
 

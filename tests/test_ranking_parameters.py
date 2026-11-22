@@ -25,7 +25,7 @@ from pheasant.search.ranking import (
     RankingParameters,
     RankingResolver,
 )
-from pheasant.search.sqlite_store import _structural_prior_sql
+from pheasant.search.text_store import _structural_prior_sql
 
 
 def test_the_default_bm25_weights_are_the_measured_constants() -> None:

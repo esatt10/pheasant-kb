@@ -20,6 +20,7 @@ skipped.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,7 @@ CORPUS = {
 }
 
 
-def _region(root: Path, *, configured: bool) -> PheasantConfig:
+def _region(root: Path, *, configured: bool, dsn_env: str | None = None) -> PheasantConfig:
     """A region set up for an experiment, or one that merely runs.
 
     ``configured`` is the whole variable: a memory source, ACL enforcement and
@@ -67,7 +68,7 @@ def _region(root: Path, *, configured: bool) -> PheasantConfig:
             "exports_path": str(root / "exports"),
         },
         "server": {"host": "127.0.0.1"},
-        "storage": {"graph_snapshots": False},
+        "storage": {"graph_snapshots": False, **({"dsn_env": dsn_env} if dsn_env else {})},
         "readiness": {
             "enabled": True,
             "latency_probe_queries": 5,
@@ -97,13 +98,19 @@ def _run(config: PheasantConfig) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def configured(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    return _run(_region(tmp_path_factory.mktemp("ready"), configured=True))
+def configured(
+    tmp_path_factory: pytest.TempPathFactory, session_database_variable: Callable[[], str]
+) -> dict[str, Any]:
+    root = tmp_path_factory.mktemp("ready")
+    return _run(_region(root, configured=True, dsn_env=session_database_variable()))
 
 
 @pytest.fixture(scope="module")
-def bare(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    return _run(_region(tmp_path_factory.mktemp("bare"), configured=False))
+def bare(
+    tmp_path_factory: pytest.TempPathFactory, session_database_variable: Callable[[], str]
+) -> dict[str, Any]:
+    root = tmp_path_factory.mktemp("bare")
+    return _run(_region(root, configured=False, dsn_env=session_database_variable()))
 
 
 def test_a_configured_region_reaches_go(configured: dict[str, Any]) -> None:

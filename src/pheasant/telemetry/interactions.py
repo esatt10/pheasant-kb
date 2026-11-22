@@ -7,7 +7,7 @@ a UI session's chat does not become knowledge because it was observed. The only
 path from here into memory is a *candidate* that something admits, and admission
 goes through :meth:`pheasant.artifacts.store.MemoryStore.append` like every other
 write, so memory's first invariant ("records are files, no second ingestion
-path") never bends. See ``docs/memory-formation.md``.
+path") never bends. See ``docs/observation-and-formation.md``.
 
 Three things in this module are load-bearing and easy to get wrong:
 
@@ -336,7 +336,7 @@ class InteractionContext:
     Every field is **asserted by the caller**, exactly as ``principal`` already
     is everywhere else in pheasant -- there is no authentication here and this
     module does not pretend otherwise. The consequence is recorded as a known
-    limit in ``docs/memory-formation.md``: one caller can claim another's
+    limit in ``docs/observation-and-formation.md``: one caller can claim another's
     session, the same category as "``supersedes`` is not authorization-checked".
     """
 

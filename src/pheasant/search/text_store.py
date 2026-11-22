@@ -161,19 +161,13 @@ def _structural_prior(
     steering: Any,
     tokens: list[str],
     *,
-    postgres: bool = False,
     ranking: RankingParameters = DEFAULT_RANKING,
 ) -> tuple[str, list[object]]:
     """The ranking divisor, plus any `preference` bonus in force.
 
     Returns SQL and its params, because a preference is a per-query LIKE
-    pattern and cannot live in the module-level constant.
-
-    ``MAX(a, b)`` is a *scalar* two-argument function in SQLite and an
-    *aggregate* in Postgres, where the scalar spelling is ``GREATEST``. Left
-    untranslated this raises rather than silently mis-ranking, but only for
-    callers who have a `preference` rule in force — which is a narrow enough
-    path that it could sit broken for a long time unnoticed.
+    pattern and cannot live in the module-level constant. ``GREATEST``, not
+    ``MAX``: in Postgres the two-argument scalar is ``GREATEST``.
     """
     prior = _structural_prior_sql(ranking)
     if not steering:
@@ -183,9 +177,8 @@ def _structural_prior(
         return prior, []
     cases = " ".join("WHEN artifacts.relative_path LIKE ? THEN 1 " for _ in prefixes)
     params: list[object] = [f"{prefix.rstrip('/*')}%" for prefix in prefixes]
-    greatest = "GREATEST" if postgres else "MAX"
     return (
-        f"{greatest}({ranking.prior_floor}, "
+        f"GREATEST({ranking.prior_floor}, "
         f"{prior} - {ranking.prefer_bonus} * (CASE {cases} ELSE 0 END))",
         params,
     )
@@ -399,13 +392,10 @@ class SearchStore:
         # queries that return no memory at all.
         if steering:
             tokens = steering.expand(tokens)
-        match_expr = " OR ".join(f'"{token}"' for token in tokens) if tokens else query
+        match_expr = query
 
-        postgres = bool(getattr(self.state, "dialect", None) and self.state.dialect.is_postgres)
         ranking = self.ranking_parameters()
-        prior_sql, prior_params = _structural_prior(
-            steering, tokens, postgres=postgres, ranking=ranking
-        )
+        prior_sql, prior_params = _structural_prior(steering, tokens, ranking=ranking)
         # The filters every lexical query shape applies, as an `AND …` suffix
         # and its params in placeholder order.
         # All three joined Postgres tables carry source_id. Leaving this
@@ -446,11 +436,9 @@ class SearchStore:
         joined_params = filter_params[len(source_params) :]
         rows: list[Any] | None = None
         # Which mechanism ranked this search, for `pheasant_retrieval_lexical_total`.
-        lexical: tuple[str, str] = ("fts5", "sqlite")
-        bm25_counts = bm25_counts_for(self.state, ranking) if postgres else None
-        if postgres:
-            configured = getattr(self.state, "lexical_index", None) == "pg_textsearch"
-            lexical = ("tsvector", "weights_differ" if configured else "configured")
+        bm25_counts = bm25_counts_for(self.state, ranking)
+        configured = getattr(self.state, "lexical_index", None) == "pg_textsearch"
+        lexical: tuple[str, str] = ("tsvector", "weights_differ" if configured else "configured")
         bm25_text = bm25_query_text(tokens) if bm25_counts else ""
         # No searchable term at all: the tsvector path below handles that
         # shape already (its LIKE fallback), so there is nothing to win here.
@@ -490,18 +478,15 @@ class SearchStore:
         elif bm25_counts:
             lexical = ("tsvector", "no_terms")
         if rows is None:
-            rank_sql, rank_params = "", []
-            if postgres:
-                rank_sql, rank_params, match_tokens = _postgres_rank_expression(
-                    self.state, tokens, source_name, ranking=ranking
-                )
-                match_expr = " | ".join(match_tokens) if match_tokens else query
+            rank_sql, rank_params, match_tokens = _postgres_rank_expression(
+                self.state, tokens, source_name, ranking=ranking
+            )
+            match_expr = " | ".join(match_tokens) if match_tokens else query
             # Params are positional, so they must be assembled in the order the
-            # placeholders appear in the final SQL. On Postgres the ranking
-            # expression (`-{rank_sql}`) precedes the divisor (`/ {prior_sql}`),
-            # which precedes the CROSS JOIN's tsquery, which precedes every
-            # WHERE clause. On SQLite `bm25(...)` takes no parameters, so
-            # `prior_params` is still first and this is the order it always was.
+            # placeholders appear in the final SQL: the ranking expression
+            # (`-{rank_sql}`) precedes the divisor (`/ {prior_sql}`), which
+            # precedes the CROSS JOIN's tsquery, which precedes every WHERE
+            # clause.
             params: list[object] = [
                 *rank_params,
                 *prior_params,
@@ -509,24 +494,18 @@ class SearchStore:
                 *filter_params,
                 max_results,
             ]
-            where = "search_vector @@ query_ts" if postgres else "chunks_fts MATCH ?"
-            where += filter_where
-            if postgres:
-                # `ts_rank_cd` is positive-better; `bm25()` is negative-better
-                # and everything downstream — the ORDER BY, and the `raw < 0`
-                # score mapping below — is built around that. Negating here
-                # preserves both, so the result-processing loop is shared
-                # rather than forked.
-                #
-                # The weight array is ordered {D,C,B,A}. It carries the measured
-                # 8/3/2/1 column weights from the 2026-08-03 retrieval overhaul,
-                # normalized onto ts_rank_cd's 0-1 scale: title A, path B,
-                # heading_path C, text D. This preserves the *ordering* of the
-                # four fields' importance. It does not reproduce BM25's
-                # arithmetic, and `tests/test_backend_parity.py` gates on
-                # measured retrieval quality rather than on the two backends
-                # agreeing on a number.
-                sql = f"""
+            where = "search_vector @@ query_ts" + filter_where
+            # `ts_rank_cd` is positive-better and everything downstream (the
+            # ORDER BY, and the `raw < 0` score mapping below) is built around
+            # a negative-better cost, so it is negated here.
+            #
+            # The weight array is ordered {D,C,B,A}. It carries the measured
+            # 8/3/2/1 column weights from the 2026-08-03 retrieval overhaul,
+            # normalized onto ts_rank_cd's 0-1 scale: title A, path B,
+            # heading_path C, text D. This preserves the *ordering* of the four
+            # fields' importance, not BM25's arithmetic: it is the fallback when
+            # the pg_textsearch index cannot answer.
+            sql = f"""
                 SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
                        chunks_fts.path, chunks_fts.heading_path, chunks.text,
                        chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
@@ -540,33 +519,18 @@ class SearchStore:
                 WHERE {where}
                 ORDER BY rank_score LIMIT ?
                 """
-            else:
-                sql = f"""
-                SELECT chunks_fts.chunk_id, chunks_fts.source_id, chunks_fts.artifact_id,
-                       chunks_fts.path, chunks_fts.heading_path, chunks.text,
-                       chunks.start_line, chunks.end_line, artifacts.path AS absolute_path,
-                       artifacts.relative_path,
-                       bm25(chunks_fts, {ranking.bm25_weights}) / {prior_sql} AS rank_score
-                FROM chunks_fts
-                JOIN chunks ON chunks.id = chunks_fts.chunk_id
-                JOIN artifacts ON artifacts.id = chunks_fts.artifact_id
-                {memory_join}
-                WHERE {where}
-                ORDER BY rank_score LIMIT ?
-                """
             try:
                 started = time.perf_counter()
                 try:
                     rows = self.state.rows(sql, tuple(params))
                 finally:
-                    if postgres:
-                        from pheasant.request_budget import record_active_timing
+                    from pheasant.request_budget import record_active_timing
 
-                        record_active_timing(
-                            "postgres_lexical_rank",
-                            time.perf_counter() - started,
-                            query_terms=len(tokens),
-                        )
+                    record_active_timing(
+                        "postgres_lexical_rank",
+                        time.perf_counter() - started,
+                        query_terms=len(tokens),
+                    )
             except Exception:
                 lexical = ("like", "query_failed")
                 fallback_where = "(chunks.text LIKE ? OR artifacts.relative_path LIKE ?)"
@@ -583,7 +547,7 @@ class SearchStore:
                 fallback_params.extend(scope_params)
                 # The fallback has to enforce the same policy. Leaving it out
                 # would make a corrected memory reappear on exactly the path
-                # taken when FTS5 is unavailable — a leak that only shows up in
+                # taken when the ranked query fails — a leak that only shows up in
                 # the degraded configuration, which is the worst place to have
                 # one.
                 fallback_where += memory_where
@@ -613,14 +577,14 @@ class SearchStore:
         count_lexical(*lexical)
         results = []
         for i, row in enumerate(rows, start=1):
-            # FTS5 bm25() is a cost: more negative = better. Map it to a
-            # monotone [0, 1) relevance so downstream merges (hybrid mode)
-            # keep FTS's own ordering — the old 1/(1+|bm25|) *inverted* it
-            # (found by the Step-33.4 memory benchmark). The LIKE-fallback
-            # rows carry rank_score 0.0 and keep their historical 1.0.
+            # The rank is a cost: more negative = better. Map it to a monotone
+            # [0, 1) relevance so downstream merges (hybrid mode) keep the
+            # lexical ordering — the old 1/(1+|cost|) *inverted* it (found by
+            # the Step-33.4 memory benchmark). The LIKE-fallback rows carry
+            # rank_score 0.0 and keep their historical 1.0.
             raw_rank = float(row["rank_score"] or 0.0)
             score = (-raw_rank / (1.0 - raw_rank)) if raw_rank < 0 else 1.0
-            results.append(_row_result(row, i, score, "SQLite FTS/path match"))
+            results.append(_row_result(row, i, score, "full-text/path match"))
         return results
 
 
@@ -745,47 +709,22 @@ VOCAB_OVERFETCH = 4
 
 
 def corpus_vocabulary(state: StateStore, limit: int = 64) -> list[tuple[str, int]]:
-    """The corpus's most widely-used content terms, as ``(term, doc_count)``.
+    """The corpus's most widely used terms, with how many chunks hold each.
 
-    Read from ``chunks_vocab``, an ``fts5vocab`` view over the FTS index, so
-    it costs no storage and cannot drift from what is actually searchable.
-
-    This is what replaced concept extraction. "What is this corpus about" was
-    being answered by materializing 141,529 concept nodes and 1.27M
-    ``artifact_terms`` rows, when SQLite was already maintaining a term →
-    document-frequency table for the index. Ordering by document frequency
-    (not raw count) is deliberate: a term repeated 400 times in one file
-    describes that file, while a term appearing once in 400 files describes
-    the corpus.
-
-    On Postgres ``chunks_vocab`` does not exist — ``fts5vocab`` is an SQLite
-    virtual-table module — so the equivalent comes from ``ts_stat`` over the
-    same ``search_vector`` the queries run against. Without that branch the
-    ``except`` below swallowed a missing-relation error and every Postgres
-    region published a contract with an **empty vocabulary**, which is the one
-    field the router scores regions on: the region would have been silently
-    unroutable while looking healthy. ``ts_stat`` scans the index rather than
-    reading a maintained table, but this runs once per sync (contract
-    publication), not per query.
+    From ``ts_stat`` over the ``search_vector`` the queries run against.
+    ``ts_stat`` scans rather than reading a maintained table, so callers hold
+    the answer (``search/corpus_shape.py``) rather than asking per question.
     """
-    postgres = bool(getattr(state, "dialect", None) and state.dialect.is_postgres)
     try:
-        if postgres:
-            rows = state.rows(
-                "SELECT word AS term, ndoc AS doc FROM "
-                "ts_stat('SELECT search_vector FROM chunks_fts') "
-                "WHERE length(word) > 3 AND word !~ '[0-9]' "
-                "ORDER BY ndoc DESC, word ASC LIMIT ?",
-                (limit * VOCAB_OVERFETCH,),
-            )
-        else:
-            rows = state.rows(
-                "SELECT term, doc FROM chunks_vocab WHERE length(term) > 3 "
-                "AND term NOT GLOB '*[0-9]*' ORDER BY doc DESC, term ASC LIMIT ?",
-                (limit * VOCAB_OVERFETCH,),
-            )
-    except Exception:  # fts5vocab unavailable (older SQLite) — degrade quietly
-        logger.warning("Corpus vocabulary unavailable; publishing an empty one", exc_info=True)
+        rows = state.rows(
+            "SELECT word AS term, ndoc AS doc FROM "
+            "ts_stat('SELECT search_vector FROM chunks_fts') "
+            "WHERE length(word) > 3 AND word !~ '[0-9]' "
+            "ORDER BY ndoc DESC, word ASC LIMIT ?",
+            (limit * VOCAB_OVERFETCH,),
+        )
+    except Exception:  # a database refusing the scan — degrade quietly
+        logger.warning("Corpus vocabulary unavailable; returning an empty one", exc_info=True)
         return []
     out: list[tuple[str, int]] = []
     for row in rows:

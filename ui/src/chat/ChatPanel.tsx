@@ -708,14 +708,18 @@ function FanoutBreakdown({ timings }: { timings?: WorkflowStep["fanout_timings"]
   return (
     <div className="trace__fanouts">
       {timings.map((timing, index) => {
+        const evidence = timing.phase === "facts" || timing.phase === "figures";
         const label =
           timing.phase === "embedding"
             ? `${timing.mode} embeddings · ${timing.query_count ?? 0} queries`
-            : `${timing.mode} · ${timing.query_label ?? `query ${(timing.query_index ?? 0) + 1}`}`;
+            : evidence
+              ? `${timing.mode} · ${timing.phase}`
+              : `${timing.mode} · ${timing.query_label ?? `query ${(timing.query_index ?? 0) + 1}`}`;
         return (
           <span className="trace__fanout" key={`${timing.mode}-${timing.phase}-${index}`}>
             <span>{label}</span>
             {timing.passages == null ? null : <span>{timing.passages} passages</span>}
+            {evidence && timing.items != null ? <span>{timing.items} found</span> : null}
             <span className="trace__fanout-time">{timing.duration_seconds.toFixed(3)}s</span>
           </span>
         );

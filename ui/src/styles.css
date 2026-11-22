@@ -736,6 +736,19 @@ select.text-input {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* The reading column: on a wide pane the thread and the composer sit
+     centred in it, so a question and its answer read as one conversation
+     rather than an answer against the left edge and a bubble against the
+     right with the pane's width between them. A pane narrower than this
+     is used whole. */
+  --chat-column: 48rem;
+}
+
+.chat__scroll > *,
+.chat__composer > :is(.composer, .composer__hint) {
+  width: 100%;
+  max-width: var(--chat-column);
+  margin-inline: auto;
 }
 
 .chat__scroll {
@@ -933,12 +946,8 @@ select.text-input {
   display: flex;
   flex-direction: column;
   gap: calc(8px * var(--sp));
-  /* Fills whatever width the chat pane actually has — the pane itself is
-     already fluid (`.notebook`'s middle grid track is `minmax(0, 1fr)`,
-     and the resizer lets it grow further), but a fixed 760px cap here
-     meant a message never grew past that regardless of how wide the pane
-     got, leaving dead space on a wide window instead of the chat actually
-     expanding into it. */
+  /* Fills its turn, which `.chat__scroll > *` centres in the reading
+     column; a message has no width of its own to get wrong. */
   max-width: 100%;
   width: 100%;
 }

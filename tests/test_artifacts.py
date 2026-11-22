@@ -412,7 +412,7 @@ def test_both_kept_tables_round_trip_on_a_real_postgres(loaded_config) -> None:
     from pheasant.sync.engine import SyncEngine
 
     loaded_config.storage.backend = "postgres"
-    loaded_config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    loaded_config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     engine = SyncEngine(loaded_config)
     try:
         context = ServiceContext(config=loaded_config, state=engine.state, searcher=None)

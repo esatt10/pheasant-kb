@@ -10,6 +10,7 @@ criteria.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,7 +28,9 @@ from pheasant.mcp_server.tools import PheasantTools
 NOW = "2026-07-16T12:00:00Z"
 
 
-def _write_config(tmp_path: Path, *, include_memory: bool = True) -> Path:
+def _write_config(
+    tmp_path: Path, *, include_memory: bool = True, dsn_env: str | None = None
+) -> Path:
     memory_block = (
         """  - name: agent-memory
     type: memory
@@ -44,7 +47,7 @@ def _write_config(tmp_path: Path, *, include_memory: bool = True) -> Path:
   state_path: {tmp_path / ".pheasant" / "state"}
   exports_path: {tmp_path / ".pheasant" / "exports"}
   workspace_root: {tmp_path}
-sync:
+{f"storage:{chr(10)}  dsn_env: {dsn_env}{chr(10)}" if dsn_env else ""}sync:
   watcher:
     enabled: false
   scheduler:
@@ -352,10 +355,16 @@ def test_as_of_brings_the_superseded_record_back(corrected) -> None:
     assert "bananas" not in current
 
 
-def test_off_matches_a_region_with_no_memory_source(tmp_path: Path) -> None:
+def test_off_matches_a_region_with_no_memory_source(
+    tmp_path: Path, database_variable: Callable[[], str]
+) -> None:
     """`memory: "off"` must be indistinguishable from having no memory at all."""
     with_memory = PheasantTools(load_config(_write_config(tmp_path / "a")))
-    without = PheasantTools(load_config(_write_config(tmp_path / "b", include_memory=False)))
+    without = PheasantTools(
+        load_config(
+            _write_config(tmp_path / "b", include_memory=False, dsn_env=database_variable())
+        )
+    )
     try:
         with_memory.memory_write("memory-test", "The rollout password is BANANAS.", scope="org")
         with_memory.sync_source("memory-test", "notes", "full")

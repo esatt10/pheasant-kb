@@ -53,7 +53,7 @@ def queue_status(
 
     kb_id = context.knowledge_base(knowledge_base)
     settings = getattr(context.config.sync, "queue", None)
-    backend = str(getattr(settings, "backend", "local") or "local").lower()
+    backend = str(getattr(settings, "backend", "nats") or "nats").lower()
     queue = queue_from_config(context.config, context.state)
     if queue is None:
         # Not a degraded answer: with the queue off every sync runs in the

@@ -43,7 +43,7 @@ from pheasant.search.criteria import (
 )
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.ranking import resolver_for
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.security.authorization import background_target, require_permission
 from pheasant.security.path_policy import resolve_config_write_target, resolve_under
 from pheasant.services import ServiceContext
@@ -102,7 +102,7 @@ class PheasantTools(
         self.config = config
         self.paths = StatePaths.from_config(config)
         self.paths.ensure()
-        self.state = StateStore.from_config(config, self.paths.sqlite)
+        self.state = StateStore.from_config(config)
         self.state.migrate()
         self._remote_graph = bool(str(config.graph.query_service_url or "").strip())
         self.engine = SyncEngine(

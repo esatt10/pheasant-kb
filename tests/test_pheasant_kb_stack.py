@@ -451,32 +451,3 @@ def test_backup_and_restore_are_on_demand_only() -> None:
     assert all(
         volume.endswith(":ro") for volume in backup_volumes if not volume.endswith(":/backups")
     ), "a backup reads the volumes it copies; it must not be able to change them"
-
-
-@pytest.mark.parametrize("command", ["backup", "restore"])
-def test_pheasant_backup_refuses_a_postgres_region(
-    tmp_path: Path, command: str, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """It used to archive /state without the database and report success."""
-
-    from pheasant.cli import main
-
-    config = tmp_path / "pheasant.yaml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "pheasant": {"state_path": str(tmp_path / "state")},
-                "storage": {"backend": "postgres", "dsn_env": "UNSET_FOR_THIS_TEST"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    archive = tmp_path / "out.tar.zst"
-    argv = (
-        ["backup", str(archive), "--config", str(config)]
-        if command == "backup"
-        else ["restore", str(archive), "--config", str(config)]
-    )
-    assert main(argv) == 2
-    assert "docker compose run --rm backup" in capsys.readouterr().err
-    assert not archive.exists()

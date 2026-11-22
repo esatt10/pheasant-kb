@@ -355,7 +355,7 @@ when, from what to what. Totals recorded before a release stored costs are
 priced once, on its first start, at the prices in force then.
 
 **The totals it reads cannot be taken back.** `usage_daily` is append-only in
-the database itself, on SQLite and Postgres alike, and so is the fleet
+the database itself, and so is the fleet
 directory's mirror of it. Triggers refuse every `DELETE`, every `TRUNCATE` and
 any `UPDATE` that lowers a count or moves a row to another day, person or
 knowledge base, whoever sends it: the region, a script or a statement typed

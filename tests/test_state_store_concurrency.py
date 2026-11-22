@@ -43,7 +43,7 @@ QUERIES = [
 
 
 def test_concurrent_rows_calls_never_return_a_row_with_the_wrong_shape(tmp_path) -> None:
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     errors: list[BaseException] = []
@@ -100,7 +100,7 @@ def test_each_thread_gets_its_own_connection(tmp_path) -> None:
     """
 
     workers = 8
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     seen: dict[int, int] = {}
@@ -147,7 +147,7 @@ def test_a_slow_read_does_not_block_a_concurrent_read(tmp_path) -> None:
     it.
     """
 
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
 
     slow_started = threading.Event()
@@ -155,19 +155,23 @@ def test_a_slow_read_does_not_block_a_concurrent_read(tmp_path) -> None:
     fast_finished_while_slow_still_running = threading.Event()
 
     def slow_worker() -> None:
-        conn = store.conn  # this thread's own connection
-        conn.create_function("slow_sleep", 1, lambda seconds: time.sleep(seconds) or 0)
         slow_started.set()
         # Generous on purpose: the assertion is that a trivial `SELECT 1`
         # finishes inside this window on another thread. A shared CI runner can
         # stall a thread for a noticeable fraction of a second, and a margin
         # measured in tenths would fail for scheduling reasons rather than
-        # because reads were serialized.
-        store.rows("SELECT slow_sleep(?)", (3.0,))
+        # because reads were serialized. The server sleeps; this thread waits
+        # on its socket, which releases the GIL.
+        store.rows("SELECT 1 FROM pg_sleep(?)", (3.0,))
         slow_done.set()
 
     def fast_worker() -> None:
-        slow_started.wait(timeout=5)
+        # Must not fall through on a timeout: a slow worker that died before
+        # its read would leave `slow_done` unset and pass this test vacuously,
+        # which is what SQLite's `create_function` did here on PostgreSQL.
+        if not slow_started.wait(timeout=5):
+            return
+        time.sleep(0.2)  # let the slow read reach the server first
         store.rows("SELECT 1")
         if not slow_done.is_set():
             fast_finished_while_slow_still_running.set()
@@ -179,6 +183,7 @@ def test_a_slow_read_does_not_block_a_concurrent_read(tmp_path) -> None:
     slow.join(timeout=30)
     fast.join(timeout=30)
 
+    assert slow_done.is_set(), "the slow read never completed"
     assert fast_finished_while_slow_still_running.is_set(), (
         "a fast read waited for an unrelated slow read on another thread -- "
         "reads are still serialized"

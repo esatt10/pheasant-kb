@@ -45,7 +45,9 @@ sync:
     # contract does not care, and it is right not to: an api replica publishes
     # index work, so a queue is what makes that work reachable.
     enabled: true
-    backend: local
+    backend: nats
+    nats_servers:
+      - nats://nats:4222
 
 observability:
   interactions:

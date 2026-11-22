@@ -41,7 +41,7 @@ def assert_snapshot_consistency(engine, monkeypatch):
     monkeypatch.setattr(snapshot_stream, "_rows", paused)
 
     def export():
-        state = StateStore.from_config(engine.config, engine.paths.sqlite)
+        state = StateStore.from_config(engine.config)
         try:
             store = GraphStore(engine.paths.graphs, state, "rows")
             return write_snapshot(store, kb, "2026-11-12T04:00:00Z", threading.Event())
@@ -71,7 +71,7 @@ def assert_snapshot_consistency(engine, monkeypatch):
     assert rows.get_node(kb, "snapshot-x")["epoch"] == 2
 
 
-def test_streamed_sqlite_snapshot_pins_one_generation(loaded_config, monkeypatch):
+def test_a_streamed_snapshot_pins_one_generation(loaded_config, monkeypatch):
     engine = SyncEngine(loaded_config)
     try:
         assert_snapshot_consistency(engine, monkeypatch)

@@ -9,7 +9,7 @@ docs and code disagree, **the code is authoritative**.
 
 ## 1. What this project is
 
-**pheasant** is a Docker-first, local-first **MCP context server** that turns
+**pheasant** is a Docker-first **MCP context server** that turns
 configured sources (git repositories, folders, single files, web
 collections, the Google Drive connector, APIs) into a queryable **knowledge graph**
 with hybrid self-search, for agents and humans.
@@ -24,23 +24,23 @@ Design pillars — these are product guarantees, not preferences:
    enrichment is rule-based and reproducible. The only sanctioned network calls
    at sync time are the optional embedder, captioner and transcriber, and each
    keeps a stub/offline path so `pytest` stays network-free.
-4. **Persistence split** — `/state` (operational truth: SQLite or Postgres,
-   graph, manifests) and `/exports` (regenerable payloads). State dirs are
-   **user data**.
+4. **Persistence split** — PostgreSQL and `/state` (operational truth: rows,
+   the graph's rows, vectors, manifests, media) and `/exports` (regenerable
+   payloads). Both are **user data**.
 
-### 1.1 pheasant's second role: a Synapse brain region
+### 1.1 What 2.0 removed
 
-pheasant is also the **region** component of **Synapse**, a federated
-knowledge-base system whose router lives in the sibling **pheasant-flock** repo.
-Each container publishes a **semantic contract** derived from its own content;
-the router scores contracts to decide which regions to query and fans out to
-each region's self-search.
-
-Two iron rules: the contract schema is canonical in pheasant-flock — this repo
-only vendors the exported JSON Schema and fixtures under `contracts/` — and
-there is **no Python dependency between the repos**. The boundary is contract
-JSON over HTTP, and a router-less pheasant must keep working unchanged. See
-`docs/SYNAPSE_INTEGRATION.md`.
+2.0 is the enterprise cleanup. Gone, and not to be reintroduced without a
+decision: the SQLite state store (PostgreSQL only), the database-backed
+`local` queue (NATS JetStream only), the `node_link_json` graph file (rows
+only, a 1.x file is imported once and parked), Synapse federation and the
+vendored contract, Helm and the Kubernetes manifests, the MkDocs site, the
+UI's nginx sidecar image, the single-container compose files and the
+`pheasant up` / `init` / `host` / `mount` / `migrate` / `backup` / `restore`
+commands, and the `/memory` routes and `memory_*` MCP tools (records are
+`/artifacts/records` and `record_artifact`). `config/loader.REMOVED_SETTINGS`
+and `config/retired.py` make an old config fail or load with a reason rather
+than silently.
 
 ---
 
@@ -50,29 +50,26 @@ JSON over HTTP, and a router-less pheasant must keep working unchanged. See
 pheasant-kb/
 ├── CLAUDE.md · AGENTS.md      ← agent hand-off (this file is canonical)
 ├── README.md                  ← product front door
-├── pyproject.toml             ← extras: mcp, vector, agent, a2a, wasm,
-│                                postgres, grpc, queue, tuning, docs, dev
+├── pyproject.toml             ← extras: mcp, vector, agent, wasm, grpc,
+│                                analytics, otel, tuning, dev (pg8000, SQLAlchemy's
+│                                pool and nats-py are core)
 ├── pheasant.example.yaml      ← reference config, every section
 ├── compose.yaml               ← pheasant-kb, THE default deployment (§5 below):
 │                                `docker compose up -d` from the root
 ├── .env.example               ← pheasant-kb's .env: OPENAI_API_KEY + size knobs
-├── Dockerfile                 ← one universal image: API + MCP + UI, port 8765
-├── contracts/                 ← VENDORED Synapse schema + fixtures (never edit)
+├── Dockerfile                 ← one image for every tier, UI baked in, port 8765
 ├── deploy/                    ← postgres/ (the database image),
 │                                compose/ (pheasant-kb.yaml + its answers,
-│                                init-secrets.sh, the other profiles),
-│                                kubernetes/ (+ scaled/), helm/
-├── docs/                      ← MkDocs Material site (see mkdocs.yml nav);
-│                                pheasant-kb/ is the primary guide, every
-│                                other shape is in other-deployments.md
+│                                init-secrets.sh, backup/restore, the generic
+│                                fleet and worker configs, foundry/, ci/)
+├── docs/                      ← GitHub-rendered Markdown; index.md is the hub,
+│                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
-│   ├── cli.py                 ← up/host/setup/mount/start/serve/worker/sync/
-│   │                            scan/queue/shard/migrate/backup/restore/
-│   │                            export/mcp/…
+│   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
+│   │                            shard/export/eval/tune/readiness/mcp/…
 │   ├── setup_wizard.py        ← `pheasant setup`, defaults read off the schema
-│   ├── quickstart.py          ← `pheasant up` config generation
 │   ├── capacity.py            ← the one home for sizing coefficients
 │   ├── request_budget.py      ← monotonic end-to-end deadlines for answers
 │   ├── analytics.py           ← Parquet exports + the DuckDB query surface
@@ -146,7 +143,7 @@ pheasant-kb/
 │   │                            media_links (documents -> images they show),
 │   │                            okf (OKF bundle detection + its graph),
 │   │                            figures (what an answer can show)
-│   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
+│   ├── search/                ← text_store (pg_textsearch BM25 / tsvector),
 │   │                            pg_textsearch (the BM25-extension lexical
 │   │                            query), graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
@@ -158,8 +155,7 @@ pheasant-kb/
 │   │                            question path), keep_warm
 │   ├── artifacts/             ← typed records, policy, projection, formation,
 │   │                            reinforcement, synthesis, versions/publications
-│   ├── memory/                ← deprecated import aliases to artifacts/
-│   ├── persistence/           ← state_store, backends (sqlite|postgres),
+│   ├── persistence/           ← state_store, backends (PostgreSQL only),
 │   │                            pg_driver (pg8000 + the pool: DSNs, TLS,
 │   │                            round trips, errors), pg_liveness,
 │   │                            schema, lexical_index (the pg_textsearch
@@ -247,18 +243,17 @@ pheasant-kb/
 │   │                            visual_uml (class/activity/state/use case),
 │   │                            visual_export (Mermaid / Markdown)
 │   ├── sandbox/               ← WASM runtime, sandboxed connector, accel/
-│   ├── deployment/            ← roles, serving durability, mounts, host,
+│   ├── deployment/            ← roles, serving durability, mounts,
 │   │                            wake_gate (the api's port while its
 │   │                            database wakes), database (`wait` and
 │   │                            `ensure` for deployment startup commands)
 │   ├── security/              ← path_policy (what may be read),
 │   │                            corpus_policy (what may never be indexed),
 │   │                            acl, idp
-│   ├── synapse/               ← contract publisher, events, signing
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 231 pytest modules, offline by design
+└── tests/                     ← 227 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -278,24 +273,21 @@ docker compose exec api sh -c 'cat /run/pheasant/secrets/api-token'  # UI/MCP to
 docker compose run --rm backup | restore <name> [--force]             # pheasant-kb backups
 
 pip install -e ".[dev,mcp]"
-pytest -q                                  # offline by design
+docker run -d --name pheasant-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=pheasant \
+  -e POSTGRES_PASSWORD=test ghcr.io/esatt10/pheasant-postgres:$(cat deploy/postgres/TAG)
+docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
+PHEASANT_TEST_POSTGRES_DSN=postgresql://pheasant:test@127.0.0.1:55432/pheasant pytest -q
 ruff check src tests && ruff format --check src tests
-mkdocs build --strict                      # needs the [docs] extra
 
-pheasant up [PATH...]                      # detect → config → index → serve
 pheasant setup [--advanced|--accept-defaults|--answers F]
-pheasant host ~/notes                      # config + compose file, then run it
-pheasant mount <host-path> [--at /data/x]  # bind-mount + allow-list it
 pheasant scan                              # project RAM/disk/time before indexing
 pheasant validate && pheasant doctor
 pheasant sync --source <name> --mode incremental|full|validate_only|repair
-pheasant serve --role all|api|indexer|graph|worker|logger
-pheasant worker                            # stateless preparation worker
+pheasant serve --role all|api|indexer|graph|worker|logger  # worker refuses: use `pheasant worker`
+pheasant worker --transport grpc           # stateless preparation worker
 pheasant queue status|drain|requeue-dead
 pheasant shard plan [--emit DIR]           # split a corpus across regions;
                                            # --emit writes each region's files
-pheasant migrate --to postgres             # one-shot, verified, preserves original
-pheasant backup|restore
 pheasant export parquet [--table NAME]      # /exports/parquet/<kb_id>/*.parquet
 pheasant export query "SELECT …"            # SQL over an export directory
 pheasant export tables [--schema]           # what is exportable; --schema for columns
@@ -320,7 +312,6 @@ pheasant mcp --transport stdio
 pheasant client-config claude-code|cursor|vscode
 pheasant config show                       # resolved config after profile+YAML+--set
 
-docker compose --env-file .env -f deploy/compose/docker-compose.yml up        # single container
 docker compose --env-file .env -f deploy/compose/docker-compose.scale.yml up --scale indexer=1 --scale worker=4  # generic fleet (CI)
 ```
 
@@ -352,47 +343,51 @@ sync, and its job reads `succeeded` before anything is indexed.
    stay green; any sync change adds cases there.
 5. **Keep house style:** argparse CLI, dataclass config schema, ruff
    format + lint, pytest, Python ≥ 3.11, type hints.
-6. **Never import pheasant-flock.** The Synapse boundary is contract JSON over
-   HTTP. Never hand-edit vendored files under `contracts/`.
+6. **PostgreSQL and NATS are the only state store and queue.** Do not add a
+   second backend behind a switch: every one this repo had (SQLite, the
+   database `local` queue, the graph file) doubled the test surface and hid
+   defects on the side CI ran less. A `storage.backend` or queue backend other
+   than the supported one is a startup refusal.
 7. **The defaults are pheasant-kb's; standalone stays one switch away.**
    An unset key takes pheasant-kb's value (`config/flagship.py`, pinned to
-   `deploy/compose/pheasant-kb.yaml`): Postgres, NATS, the role split, gRPC
-   workers, OpenAI models. The values written in `schema.py` are the
-   **standalone** table (SQLite, no queue, `--role all`, offline stubs, no
-   key), selected by `pheasant.defaults: standalone` or
-   `PHEASANT_DEFAULTS=standalone`, and every change must leave it fully
-   functional, router-less and infrastructure-free: the offline suite runs on
-   it (`conftest.py`), each seam owes a test asserting that path is
-   unchanged, and anything that builds a one-process deployment (`pheasant
-   up`, `pheasant init`, the image's first-boot config) builds on it. Every config this repo
-   ships names its table (`tests/test_flagship_defaults.py` fails one that
-   does not), because a partial config that names none silently becomes a
-   pheasant-kb config. `PheasantConfig()` is always standalone (a dataclass
-   constructor cannot consult a table); "the default" is `model_validate` or
+   `deploy/compose/pheasant-kb.yaml`): the queue, the role split, the graph
+   service, gRPC workers, OpenAI models. The values written in `schema.py`
+   are the **standalone** table (the same PostgreSQL state store, no queue,
+   `--role all`, offline stubs, no key), selected by `pheasant.defaults:
+   standalone` or `PHEASANT_DEFAULTS=standalone`, and every change must leave
+   it fully functional and model-free: the suite runs on it (`conftest.py`),
+   each seam owes a test asserting that path is unchanged, and the image's
+   first-boot config builds on it. Every config this repo ships names its
+   table (`tests/test_flagship_defaults.py` fails one that does not), because
+   a partial config that names none silently becomes a pheasant-kb config.
+   `PheasantConfig()` is always standalone (a dataclass constructor cannot
+   consult a table); "the default" is `model_validate` or
    `flagship.default_config()`, and a caller that edits a default dump and
    builds again takes `default_config_data()`, which leaves the storage paths
-   derived from `state_path` unset (dumped, they pinned `/state/pheasant.db`
-   under a config whose `state_path` `pheasant up` then moved).
+   derived from `state_path` unset.
 8. **The MCP tool surface is public API.** Renaming or removing a tool breaks
    deployed agents — additive evolution only, deprecate before remove. One
    sanctioned exception to date: `export_obsidian_notes` was removed outright
    when the exporter behind it was deleted, because there was nothing left for
    the tool to do. That is a precedent for "the feature is gone", not for
    renames.
-9. **Cross-repo work** (anything the Synapse spec marks `[x-repo]`) uses
-   identical branch names in both repos, contract fixture parity (sha256), and
-   both test suites green before either push.
+9. **Some things stay local.** The Azure kit and case study under
+   `examples/compose-ai-platform/` are never pushed, and irreversible
+   operations (state migrations on a live region, production applies,
+   package deletes) are run by the owner, not by an agent.
 10. **Verify against the real thing.** Postgres, NATS, wasmtime and a real
     container have each caught bugs a mock could not. When a change touches a
     backend, run that backend. When it touches the image, build the image.
-    CI does the Postgres half for you on **every** PR (`ci.yml`'s
-    `backend-parity` job, deliberately unfiltered, on `deploy/postgres`
-    -- built in the job by `.github/actions/pheasant-postgres` -- with
-    `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`);
-    locally it is `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a
-    Postgres 17 that preloads pg_textsearch, which turns on the parity suite
-    and the lease/queue differential. Neither replaces running the thing you
-    changed. The same holds for the `agent` extra the image ships: CI's 3.12
+    The suite itself runs on PostgreSQL and NATS: every CI test job starts
+    `deploy/postgres` (built by `.github/actions/pheasant-postgres`) with
+    `PHEASANT_REQUIRE_PG_TEXTSEARCH=1` and a JetStream broker, and
+    `tests/conftest.py` clones a migrated template database per test (a
+    module-scoped fixture shares its module's) and gives each test its own
+    stream, subject and durable. Locally it is
+    `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a Postgres 17 that
+    preloads pg_textsearch (the conftest exits with the `docker run` line if
+    the variable is unset), with NATS at `PHEASANT_TEST_NATS_URL` (default
+    `nats://127.0.0.1:14222`; a queue test fails, never skips, without it). Neither replaces running the thing you changed. The same holds for the `agent` extra the image ships: CI's 3.12
     leg installs it with `PHEASANT_REQUIRE_AGENT=1` (a skipped agentic test is
     a failure there) and the 3.11 leg does not, so both sides of
     `workflow: auto` run on every PR — `tests/test_workflow_coverage.py` holds
@@ -417,8 +412,8 @@ sync, and its job reads `succeeded` before anything is indexed.
     claims), which is a bulk-columnar engine's worst case; DuckDB's FTS index
     is rebuilt wholesale rather than maintained, which would break pillar 2;
     and its exclusive *file* lock blocks other processes from opening the
-    database at all, where SQLite's WAL is what lets `deploy/compose/docker-compose.scale.yml`
-    mount `/state:ro` on the API replicas while the indexer writes. The export
+    database at all, where every tier of a region reads the state store at
+    once. The export
     takes no lease and issues nothing but `SELECT`, which is what makes it safe
     to run during a sync.
 13. **One operation, one implementation.** An operation both surfaces expose
@@ -564,7 +559,7 @@ splits only what exceeds the ceiling, and overlaps only inside a split.
 `fixed` (alias `semantic`, the default) is byte-identical to before; the
 other strategies put `PLANNER_VERSION` in the source fingerprint and record
 the plan on the artifact node as `chunk_plan`. Every shipped fleet profile
-(`deploy/compose/fleet.yaml` and its answer files, `deploy/kubernetes/scaled/`)
+(`deploy/compose/pheasant-kb.yaml`, `deploy/compose/fleet.yaml` and their answer files)
 sets `sync.source_processing.chunk_strategy: auto`; single-container profiles
 stay `fixed` (rule 7), and `tests/test_fleet_manifests.py` holds both.
 
@@ -615,7 +610,7 @@ it**: relationship search and the row store's `candidate_edges` skip the edge
 types, node search and the node index skip the attributes, facts call them
 structural, answer expansion does not root at chunks or headings, and a
 search's `expand` excludes them by default. `tests/test_chunk_provenance.py`
-compares every one with the structure stripped, on SQLite and Postgres, and
+compares every one with the structure stripped, and
 each guard was seen failing without it. Re-indexing also removes sections a
 document no longer has. A region adopts it with a `full` sync.
 
@@ -721,7 +716,7 @@ affected rows and incident edges, without loading or enriching the corpus
 (`ServiceContext.indexing` says which).
 
 **A pasted target never replaces a different source**
-(`registry/placement.py`). Quick add and `pheasant up` name a source after
+(`registry/placement.py`). Quick add names a source after
 what was pasted, so two things can derive one name: a web or API page *joins*
 the collection named after its host, the same folder/checkout is re-added as
 it stands, and anything else takes `name-2` (a repository with its own
@@ -753,9 +748,9 @@ nothing is pruned; a 401 fails the source. `tests/test_sharepoint_connector.py`.
 
 ### Where the graph lives
 
-`storage.graph_format`: **`rows` (default)** or `node_link_json`. The graph was
-one zstd node-link file that every commit re-serialized whole and every process
-answering a graph query held resident. Measured with
+The graph is **rows** (`graph_nodes`, `graph_edges`; `storage.graph_format`
+accepts only `rows`). In 1.x it was one zstd node-link file that every commit
+re-serialized whole and every process answering a graph query held resident. Measured with
 `python -m pheasant.graph.capacity` at 100k files (630k nodes / 630k edges):
 
 | | file | rows |
@@ -799,14 +794,13 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
 - **A serving replica cannot be stale.** Staleness is a property of *copies*.
   A row-backed api replica reads the rows the indexer committed, so `/ready`
   publishes `loaded == published` by construction and the refresher finds
-  nothing to do. The whole-file backend still needs all of it, and still has
-  it.
+  nothing to do.
 - **Snapshots stay files.** History is read whole or not at all and is
   interval-gated rather than per-commit. A row-backed fleet writer requests
   history on a separate publisher (`sync/history_publisher.py`), streamed from
   one read-only transaction (`persistence/snapshot_stream.py`; repeatable-read
   on PostgreSQL). It cannot block task completion or publish a partial file.
-  Interval zero and standalone/file-backed history retain inline behavior.
+  Interval zero writes history inline.
 - **What did not change.** Artifacts and chunks were already rows and are
   untouched; they are the model this followed. Vectors stay in LanceDB, which
   is columnar and append-incremental and never had the whole-file-rewrite
@@ -814,9 +808,9 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   what reconciles them. What *did* improve for free: the graph and the chunks
   it describes now commit in **one transaction** instead of a database write
   followed by a separate file rename.
-- **Migration.** A region upgrading imports its existing file once at boot and
-  parks it as `*.migrated` (rule 2). `node_link_json` stays selectable and
-  working, so a region that hits trouble reverts with one config line.
+- **Migration.** A 1.x region imports its existing file once at boot and
+  parks it as `*.migrated` (rule 2). `GraphStore` without a state store reads
+  and writes snapshot files only.
 - **The indexer still holds one, and that is now the only place residency is
   required.** The builder mutates it and the enrichment passes walk it. Those
   passes were written when "walk the whole graph" was free — because the whole
@@ -863,9 +857,8 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   the unchanged re-sync are untouched, which is the check that nothing leaked
   sideways.
 - **And measured again on the fleet's own shape: Postgres, five sources.**
-  The table above is one SQLite region with one source, which is the
-  *standalone* deployment. The fleet is `storage.backend: postgres` with
-  several repositories in one region, so that was run too — five repositories
+  The table above is one 1.x SQLite region with one source. The fleet is
+  PostgreSQL with several repositories in one region, so that was run too — five repositories
   of 1,600 files each (40,122 nodes / 112,111 edges / 88,000 cross-repo
   reference edges), same corpus and same Postgres both sides:
 
@@ -887,7 +880,7 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   | stored bytes (db + `/state`) | 141 MB | 240 MB | 1.7× *larger* |
 
   Same shape as the SQLite run, which is the point of running it: nothing
-  about the trade is a SQLite artifact. Two things only the fleet shape shows.
+  about the trade was a SQLite artifact. Two things only the fleet shape shows.
   **Cross-source resolution did not get more expensive** — 88,000 reference
   edges across five repositories resolve in the same 2.75s, so narrowing that
   pass to `external_reference` + artifacts held up on a corpus where it has
@@ -915,17 +908,6 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   throughput per core, and no graph residency per replica.** Four file-backed
   replicas hold four copies of the graph — 524 MB here, 6.6 GB at 100k files —
   to serve 36 qps; four row-backed ones hold none to serve 32.
-- **Serving concurrency on SQLite is the one caveat worth knowing.** Hybrid
-  throughput held at 1 thread and fell 3.7× at 4. The cause is not the design:
-  concurrent SQLite reads do not scale *in a container like this one* — the
-  same probe against the **baseline's** database reading `chunks` went 486/s
-  to 13/s across 1→4 threads, with per-thread connections and no WAL backlog.
-  The row backend simply moved graph reads onto that resource, so the graph
-  paths inherit it. Postgres does not share it: the same batched fetch scales
-  41 → 86 → 160 qps across 1 → 4 → 8 threads, which is where the fleet runs
-  and where replicas exist. A standalone SQLite container serving heavily
-  concurrent *graph* queries is the one shape that is worse off than before,
-  and `storage.graph_format: node_link_json` is still there for it.
 - **The fleet writer no longer needs the resident corpus.** Its supervised
   interpreter uses `graph/working_set.py`: lazy node and pair reads, a tracked
   delta, and clean-cache release between tasks. `graph/reference_catalog.py`
@@ -933,26 +915,26 @@ disk, roughly 55×, stated as `capacity.GRAPH_ROW_BYTES_PER_NODE` (measured
   against the full path set; adding a late target still repairs earlier links.
   `graph/row_enrichment.py` reads memory bridge inputs from rows. An external
   generation invalidates these caches; a failed result discards the child.
-  Standalone and file-backed engines retain the resident path. Batching still
+  A one-process engine (`--role all`) keeps the resident path. Batching still
   matters: the measured PostgreSQL point-read cost was 456µs versus 46.5µs
   batched, so resolved pairs are fetched together.
 
 ### Retrieval
 
-Three arms — text (BM25 over an FTS5 or `tsvector` index), vector (LanceDB),
+Three arms — text (BM25 from pg_textsearch, or `tsvector`), vector (LanceDB),
 and graph — fused by **reciprocal rank fusion**, because the arms score on
 incomparable scales and raw-score merging silently degraded to text-only.
 
-**On Postgres the lexical arm is BM25 from the pg_textsearch extension**
+**The lexical arm is BM25 from the pg_textsearch extension**
 (`storage.lexical_index`, default `pg_textsearch`; Postgres 17+ with the
 extension preloaded, which is why every shipped Postgres and every CI job runs
 `deploy/postgres`: the official PostgreSQL 17 image plus pg_textsearch and
 nothing else). One expression index over a per-chunk
-document in which each column is repeated by its weight, which is FTS5's
+document in which each column is repeated by its weight, which is 1.x FTS5's
 weighting (weight as term frequency, then saturation), and one Block-Max WAND
 top-k scan per search: 3.6 ms against `tsvector`'s 75.5 ms at 20k chunks, 4.7
-against 330.7 at 102k, and the gold set ranks as SQLite does. The weights live
-in the index, so column weights must be integers on Postgres and a bundle that
+against 330.7 at 102k. The weights live
+in the index, so column weights must be integers and a bundle that
 moves one is served by `tsvector` until the config matches. The scan runs in a
 subquery over `chunks_fts` alone (the source filter inside it) and every
 filter needing a join is applied outside, widened while too few rows pass and
@@ -961,7 +943,7 @@ the planner drop the index (see the traps). `pheasant_retrieval_lexical_total
 {index,path}` says which mechanism answered each search. The index is built
 (or dropped, under `tsvector`) at boot, and costs ~1.3-1.5x on chunk writes. A
 server without the extension is a startup refusal; `tsvector` is the stock-
-Postgres way out. SQLite ignores the setting (rule 7). `docs/configuration.md`,
+Postgres way out. `docs/configuration.md`,
 `persistence/lexical_index.py`, `search/pg_textsearch.py`.
 
 Ranking carries deliberate structure: `chunks_fts.title` holds the file's
@@ -981,8 +963,7 @@ elsewhere) and (source, path) pairs (the other arms); a name matching nothing is
 question. `path_prefix` (one file, or everything under one folder) is
 the taxonomy view's "search only here": like `section` it is pushed into the
 text arm's SQL and applied to vector and graph hits with the shared over-fetch,
-spelled `substr(...) = ?` because SQLite's `LIKE` folds case and Postgres's
-does not; the answering retriever holds it for every search and evidence read.
+spelled `substr(...) = ?` (case-sensitive, as a path is); the answering retriever holds it for every search and evidence read.
 
 **The vector arm has two opt-in speed paths**, both measured on the
 pheasant-kb stack (60k x 1536-d, the api tier's one core, where LanceDB's
@@ -1028,7 +1009,7 @@ Concept extraction was **retired**: it was 87% of nodes and 98.6% of edges and
 failed every test set for it. `graph.enrichment._add_concept` is a no-op whose
 docstring carries the measurements.
 
-### Memory
+### Artifact records (memory, before 2.0)
 
 Memory records are **source content** — one frontmatter Markdown file per
 record, indexed by the ordinary pipeline. Recall *is* search. On top of that:
@@ -1059,10 +1040,10 @@ record, indexed by the ordinary pipeline. Recall *is* search. On top of that:
   always set and taken from a **monotonic** clock while `started_at` is wall
   clock. The trace is ambient for the call and injected into every hop
   pheasant makes of its own — the graph-query call, remote preparation, and
-  `index_tasks.payload` (attached *after* the id digest, or the content-
+  the index task's payload (attached *after* the id digest, or the content-
   addressed dedup that makes two replicas enqueue one task would break).
-  `docs/memory-formation.md`.
-- **Formation** (`memory.formation`, off) — deterministic rules read the
+  `docs/observation-and-formation.md`.
+- **Formation** (`artifacts.learning.formation`, off) — deterministic rules read the
   observation plane and produce memory. `session-digest-v1` is the first:
   one record per `(session, principal)`, refined by **superseding itself**,
   so `current_only` returns exactly one and `as_of` reads the session's
@@ -1917,11 +1898,10 @@ observation queue on and nothing else drains it. Host folders mount under
 cannot create a mountpoint inside a read-only volume (measured). **Backups
 are one command:** `backup`/`restore` (profile `tools`) run
 `deploy/compose/backup.sh`/`restore.sh` in the Postgres image, so pg_dump
-matches the server, and copy the database, `/state`, `/memory` and the
-tokens as one checksummed folder; restore refuses running services and
-populated targets without `--force`, and keeps what it replaces (rule 2).
-`pheasant backup` refuses a Postgres region: it used to write the archive
-without the database and report success. Images: pheasant from GHCR
+matches the server, and copy the database, `/state`, `/memory` (a 1.x
+stack's `agent-memory` records) and the tokens as one checksummed folder;
+restore refuses running services and populated targets without `--force`,
+and keeps what it replaces (rule 2). Images: pheasant from GHCR
 (published by `container.yml` on every green merge to main, which then
 rewrites `compose.yaml`'s pin), Postgres and NATS from Docker Hub.
 `docker-compose.scale.yml` + `fleet.yaml` stay as the generic fleet the CI
@@ -1937,14 +1917,14 @@ own region names `defaults: standalone`; the benchmarks do.
 
 ### Scale
 
-One container until it shouldn't be. Then four independent axes:
+pheasant-kb is already split by role. Four independent axes:
 
 | Axis | Mechanism | Scales on |
 |---|---|---|
 | Request traffic | `serve --role api` replicas; publish instead of index | CPU / RPS |
 | Ingest throughput | `--role indexer` claiming from a durable queue, `--role worker` preparing | `pheasant_index_queue_depth` |
 | Corpus size | `pheasant shard plan` packs **whole sources** per region | graph nodes |
-| Observation volume | `--role logger` draining its **own** queue (`log_tasks`, never `index_tasks`) | `pheasant_log_queue_depth` |
+| Observation volume | `--role logger` draining its **own** JetStream stream, never the index queue's | `pheasant_log_queue_depth` |
 
 The second axis has a ceiling the others do not: one indexer is the sole commit
 authority per shard, so extra indexers are elected hot standbys and the third
@@ -1954,24 +1934,17 @@ moved down as the corpus grew. With the graph in rows a commit costs what the
 change costs, and the third axis is a decision about the indexer's own working
 set rather than about every replica's.
 
-Selectable backends, dependency-free side first: `storage.backend`
-sqlite|postgres, `sync.queue.backend` off|local|nats,
-`sync.concurrency.worker_transport` http|grpc,
-`observability.interactions.queue.backend` off|local|nats. The first of each
-is the standalone table's value and the second pheasant-kb's, which is the
-default (rule 7). Within the standalone table, two exceptions, both
-deliberate. `storage.graph_format` defaults to `rows`, the side that is
-*better*, because both sides need the same state store and neither adds a
-dependency — the rule is about not requiring infrastructure, not about
-preferring the older mechanism. And `storage.lexical_index` defaults to
-`pg_textsearch`, which does ask more of the server than stock Postgres; it is
-the default anyway because it only applies once a region has already chosen
-Postgres, the standalone SQLite path is untouched, and every Postgres pheasant
-ships is a server that has it.
+The state store is PostgreSQL and the queue is NATS JetStream, with no
+alternative (rule 6); `sync.concurrency.worker_transport` is http|grpc
+(pheasant-kb runs gRPC). On the standalone table the queue is off, so a sync
+runs in-process; pheasant-kb turns it on. `storage.lexical_index` defaults to
+`pg_textsearch`, which needs the extension preloaded, and every Postgres
+pheasant ships is a server that has it; `tsvector` is the stock-Postgres way
+out.
 
 The fourth axis rises with **request traffic, not corpus churn**, which is why
-it is a separate queue and a separate role rather than a `kind` column: sharing
-`index_tasks` would put request-rate churn on the index claim path. Two things
+it is a separate stream and a separate role rather than a `kind` on the index
+queue: sharing it would put request-rate churn on the index claim path. Two things
 it must keep true. **The request path only appends to a bounded ring** — a
 ledger write per request puts a database write on the same Postgres the lexical
 arm already contends on (`docs/architecture.md`'s measured bottleneck). **The
@@ -2011,14 +1984,14 @@ when everything is `ready`. `tests/test_region_status.py`.
 **The fleet's invariants are refusals, not conventions** (`deployment/roles.py`,
 one pass at startup). A serving role other than `all` refuses a bind other
 machines can reach with neither `security.api_auth.token_env` resolving nor
-`behind_authenticating_proxy` set — `all` is exempt so a laptop and every
-standalone container keep starting with no configuration at all, but a pod
-binds `0.0.0.0` by necessity and the bind address is not a control there. The
+`behind_authenticating_proxy` set — `all` is exempt so a one-process
+development region starts with no configuration, but every tier binds
+`0.0.0.0` by necessity and the bind address is not a control there. The
 graph and worker tokens must not name one variable or resolve to one value:
 two boundaries, and workers hold the second by necessity — and since the
 landing service the same is true of *its* token, which is a write credential.
 A `worker` refuses to hold a DSN, a model key, the IdP token, the graph token,
-the landing token, a source list or a non-SQLite backend, and
+the landing token or a source list, and
 `server.api.enabled: false` is *enforced* — such a process answers the probes,
 `/metrics` and its own `/internal` routes and 404s the rest. `/internal/*` is
 exempt from the API token structurally, because requiring it there would hand
@@ -2043,15 +2016,15 @@ should do: `LANDING_ZONE_UNWRITABLE` (not retryable — an operator must change 
 mount) and `LANDING_SERVICE_UNAVAILABLE` (retryable — the writer was down).
 
 **A published sync is visible before it is claimed.** A sync requested where
-nothing indexes answers `status: queued` and becomes a row in `index_tasks`,
-not a job — and for as long as no indexer claimed it, every surface used to
+nothing indexes answers `status: queued` and becomes a JetStream task, not a
+job — and for as long as no indexer claimed it, every surface used to
 show nothing at all, so a person saw a button that did nothing and an agent's
 ingest barrier saw `still_accepted` hold for no stated reason.
 `services/index_queue.py` names the interval (`GET /queue`, MCP
 `get_index_queue`): each task is `awaiting_claim`, `retry_scheduled`,
-`claimed`, `claim_lapsed` or `dead`, from its row and the clock. A backend that
-can count but not list (NATS) says `listing: "unavailable"`, never an empty
-list. The web UI's banner, jobs tray and Sources badge read it.
+`claimed`, `claim_lapsed` or `dead` where the backend can list them. JetStream
+counts but does not list, so the answer is the depth with `listing:
+"unavailable"`, never an empty list. The web UI's banner, jobs tray and Sources badge read it.
 
 **The graph handoff is announced, and the poll is the backstop.** Each commit
 publishes a content-addressed `generation_id` in the publication record and,
@@ -2143,6 +2116,8 @@ never a correctness dependency.
 ## 6. Traps this codebase has already fallen into
 
 Each of these cost real time. They are listed because the shape recurs.
+Several name SQLite, the `local` queue or the graph file, which 2.0 removed;
+they stay for the lesson, not as a description of the code.
 
 - **A new table reaches an existing Postgres region only through
   `_migrate_postgres`'s `required` map.** On Postgres the DDL is skipped
@@ -2831,10 +2806,8 @@ Each of these cost real time. They are listed because the shape recurs.
   predicate that never repeats its spelling is one that is never
   prepared and re-planned on every call — **8.93 ms against 6.15 ms** for a
   500-key node fetch. Postgres gets `= ANY(?)` with the list as one array
-  parameter: one text, one plan, every batch size. SQLite keeps the `IN`
-  list, which is its reference spelling and has no array type to bind. It is
-  `Dialect.in_clause`, so the choice is made once rather than at each of the
-  call sites that batch.
+  parameter: one text, one plan, every batch size. It is `Dialect.in_clause`,
+  so the choice is made once rather than at each of the call sites that batch.
 - **Two fixes were built, measured and thrown away in the same pass.** An
   out-adjacency index for `remove_nodes_from` measured 122.5ms against
   126.0ms, and an exact short-circuit in `_node_score` — provably identical
@@ -3599,8 +3572,8 @@ Each of these cost real time. They are listed because the shape recurs.
   `docs/reference/export-schema.md` (the contract an outside reader gets)
   — `/exports` is a PVC/named volume an outside reader mounts; nothing is
   served over HTTP
-- **Memory:** `docs/memory-system.md`, `docs/how-to/agent-memory.md`
-- **Observation & formation:** `docs/memory-formation.md` — the two planes,
+- **Memory:** `docs/artifact-records.md`, `docs/how-to/agent-records.md`
+- **Observation & formation:** `docs/observation-and-formation.md` — the two planes,
   the log tier, and the two combination designs that were rejected
 - **Evaluation:** `docs/knowledge-effectiveness.md` — the evidence taxonomy,
   the cohort split, the ablation matrix, the gates, and what it refuses to claim

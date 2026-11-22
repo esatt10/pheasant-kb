@@ -23,17 +23,19 @@ import pytest
 
 from pheasant.persistence.state_store import StateStore, _basename
 from pheasant.search.hybrid import RRF_K, _merge_rrf
-from pheasant.search.sqlite_store import (
+from pheasant.search.text_store import (
     SearchStore,
     _postgres_rank_expression,
     _query_tokens,
 )
+from tests.conftest import seed_source
 
 
 def _index(tmp_path, files: dict[str, str]) -> SearchStore:
     """Build a real index from ``{relative_path: body}``."""
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
+    seed_source(store)
     for i, (path, body) in enumerate(files.items()):
         artifact_id = f"file:demo:{path}"
         store.conn.execute(
@@ -106,7 +108,7 @@ def test_postgres_uses_the_rarest_terms_to_bound_the_candidate_set(monkeypatch) 
         "langchain": 6769,
     }
     monkeypatch.setattr(
-        "pheasant.search.sqlite_store._postgres_document_frequencies",
+        "pheasant.search.text_store._postgres_document_frequencies",
         lambda _state, _tokens, _source=None: (19_865, frequencies),
     )
 
@@ -124,7 +126,7 @@ def test_postgres_rank_statistics_are_routed_to_the_requested_source(monkeypatch
         seen.append(source_name)
         return 10, {"needle": 1}
 
-    monkeypatch.setattr("pheasant.search.sqlite_store._postgres_document_frequencies", frequencies)
+    monkeypatch.setattr("pheasant.search.text_store._postgres_document_frequencies", frequencies)
 
     _postgres_rank_expression(object(), ["needle"], "docs")
 
@@ -226,34 +228,6 @@ def test_a_strong_deep_match_still_beats_a_weak_shallow_one(tmp_path) -> None:
 
 
 # ------------------------------------------------------------------ migration
-
-
-def test_fts_title_migration_is_one_shot_and_idempotent(tmp_path) -> None:
-    store = StateStore(tmp_path / "state.db")
-    store.migrate()
-    store.conn.execute(
-        "INSERT INTO artifacts (id, source_id, type, path, relative_path, status)"
-        " VALUES ('a','demo','file','/w/docs/deep/guide.md','docs/deep/guide.md','indexed')"
-    )
-    store.conn.execute(
-        "INSERT INTO chunks (id, artifact_id, source_id, chunk_index, text, text_hash)"
-        " VALUES ('a#0','a','demo',0,'body','h')"
-    )
-    # Pre-migration shape: title held the whole path.
-    store.conn.execute(
-        "INSERT INTO chunks_fts (chunk_id, source_id, artifact_id, title, path, heading_path, text)"
-        " VALUES ('a#0','demo','a','docs/deep/guide.md','docs/deep/guide.md','','body')"
-    )
-    store.conn.commit()
-
-    store.migrate()
-    rows = store.rows("SELECT title, path FROM chunks_fts")
-    assert [r["title"] for r in rows] == ["guide.md"]
-    assert [r["path"] for r in rows] == ["docs/deep/guide.md"]
-
-    # Second pass is a no-op and must not duplicate rows.
-    store.migrate()
-    assert len(store.rows("SELECT chunk_id FROM chunks_fts")) == 1
 
 
 def test_basename_is_posix_only() -> None:

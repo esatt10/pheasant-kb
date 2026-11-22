@@ -7,7 +7,6 @@ Everything here is offline and deterministic.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ import pytest
 from pheasant.config.loader import load_config
 from pheasant.config.schema import PheasantConfig
 from pheasant.graph.simple import SimpleMultiDiGraph
-from pheasant.persistence.backup import create_backup, restore_backup
 from pheasant.persistence.graph_store import GraphStore
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import run_sync
@@ -53,39 +51,6 @@ def test_write_and_read_snapshot_round_trips(tmp_path: Path) -> None:
     restored = store.read_snapshot(path)
     assert restored.number_of_nodes() == graph.number_of_nodes()
     assert restored.number_of_edges() == graph.number_of_edges()
-
-
-def test_current_generation_snapshot_copies_published_bytes(tmp_path: Path) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    graph = _graph(6)
-    current = store.save("kb", graph)
-
-    snapshot = store.snapshot_current("kb", "2026-06-18T01:00:00Z")
-
-    assert snapshot.read_bytes() == current.read_bytes()
-    restored = store.read_snapshot(snapshot)
-    assert (restored.number_of_nodes(), restored.number_of_edges()) == (6, 5)
-
-
-def test_save_publishes_small_generation_metadata_for_count_only_readers(
-    tmp_path: Path,
-) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    graph = _graph(7)
-
-    store.save("kb", graph)
-
-    assert store.metadata_path("kb").exists()
-    assert store.counts("kb") == (7, 6)
-
-
-def test_counting_a_legacy_graph_migrates_it_to_metadata_only_reads(tmp_path: Path) -> None:
-    store = GraphStore(tmp_path / "graphs")
-    store.save("kb", _graph(4))
-    store.metadata_path("kb").unlink()
-
-    assert store.counts("kb") == (4, 3)
-    assert store.metadata_path("kb").exists()
 
 
 def test_list_snapshots_is_oldest_first(tmp_path: Path) -> None:
@@ -131,23 +96,6 @@ def test_retention_keeps_at_least_one_snapshot(tmp_path: Path) -> None:
     # Cap below a single snapshot — newest is still kept.
     store.enforce_retention("kb", max_bytes=1)
     assert len(store.list_snapshots("kb")) == 1
-
-
-def test_retention_never_touches_latest_db_or_contract(tmp_path: Path) -> None:
-    graphs = tmp_path / "graphs"
-    store = GraphStore(graphs)
-    kb = "kb"
-    store.save(kb, _graph(10))
-    for hour in range(1, 4):
-        store.write_snapshot(kb, _graph(50), f"2026-06-18T0{hour}:00:00Z")
-    latest = store.graph_path(kb)
-    assert latest.exists()
-    store.enforce_retention(kb, max_bytes=1)
-    # latest.json must survive any retention pass.
-    assert latest.exists()
-
-
-# --- engine integration: interval throttling ---------------------------------
 
 
 def test_snapshot_interval_respected(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,80 +167,3 @@ def _fts_hits(cfg: PheasantConfig, query: str) -> list:
         return list(result.get("results", []))
     finally:
         engine.close()
-
-
-def test_backup_restore_round_trip(config_path: Path, tmp_path: Path) -> None:
-    cfg = _build_state(config_path)
-    original_nodes, original_edges = _engine_counts(cfg)
-    assert original_nodes > 0 and original_edges > 0
-
-    query = "architecture"
-    original_hits = _fts_hits(cfg, query)
-    assert original_hits, "expected the fixture workspace to answer an FTS query"
-
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-    assert archive.exists()
-    # Original state dir must be untouched by backup.
-    assert (cfg.state_path / "pheasant.db").exists()
-
-    # Restore into a fresh state dir and rebind config to it.
-    fresh_state = tmp_path / "restored-state"
-    restore_backup(archive, fresh_state)
-
-    restored_cfg = load_config(config_path)
-    restored_cfg.pheasant.state_path = fresh_state
-    restored_cfg.storage.sqlite_path = fresh_state / "pheasant.db"
-    restored_cfg.storage.graph_path = fresh_state / "graphs"
-    restored_cfg.storage.manifest_path = fresh_state / "manifests"
-
-    restored_nodes, restored_edges = _engine_counts(restored_cfg)
-    assert (restored_nodes, restored_edges) == (original_nodes, original_edges)
-
-    restored_hits = _fts_hits(restored_cfg, query)
-    assert [h.get("chunk_id") for h in restored_hits] == [h.get("chunk_id") for h in original_hits]
-
-    # integrity_check on the restored db.
-    conn = sqlite3.connect(fresh_state / "pheasant.db")
-    try:
-        row = conn.execute("PRAGMA integrity_check").fetchone()
-    finally:
-        conn.close()
-    assert row[0] == "ok"
-
-
-def test_restore_refuses_nonempty_without_force(config_path: Path, tmp_path: Path) -> None:
-    cfg = _build_state(config_path)
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-
-    target = tmp_path / "occupied-state"
-    target.mkdir()
-    sentinel = target / "do-not-touch.txt"
-    sentinel.write_text("precious user data", encoding="utf-8")
-
-    with pytest.raises(FileExistsError):
-        restore_backup(archive, target)
-    # Target left completely untouched.
-    assert sentinel.read_text(encoding="utf-8") == "precious user data"
-    assert list(target.iterdir()) == [sentinel]
-
-
-def test_restore_force_swaps_cleanly_and_preserves_original(
-    config_path: Path, tmp_path: Path
-) -> None:
-    cfg = _build_state(config_path)
-    archive = tmp_path / "backup.tar.zst"
-    create_backup(cfg.state_path, archive, sqlite_path=cfg.storage.sqlite_path)
-
-    target = tmp_path / "occupied-state"
-    target.mkdir()
-    (target / "old-marker.txt").write_text("old", encoding="utf-8")
-
-    restore_backup(archive, target, force=True, now="2026-06-18T05:00:00Z")
-    assert (target / "pheasant.db").exists()
-    assert not (target / "old-marker.txt").exists()
-    # The old directory is preserved aside, never deleted.
-    preserved = list(tmp_path.glob("occupied-state.replaced-*"))
-    assert preserved, "expected the displaced state dir to be preserved"
-    assert (preserved[0] / "old-marker.txt").read_text(encoding="utf-8") == "old"

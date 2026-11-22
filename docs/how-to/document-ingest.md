@@ -61,19 +61,19 @@ content.
 Quickest way to tell:
 
 ```bash
-# Chunk count per artifact. A document with 0 chunks contributed no text.
-sqlite3 /state/pheasant.db "
-  SELECT a.relative_path, COUNT(c.id) AS chunks
-  FROM artifacts a LEFT JOIN chunks c ON c.artifact_id = a.id
-  WHERE a.type = 'document'
-  GROUP BY a.relative_path;"
+# Every file with a problem, and why: `no_text` is a document that
+# contributed no chunks.
+curl -s -H "Authorization: Bearer $TOKEN" "localhost:8765/quality?source=<name>"
 ```
+
+The taxonomy view shows the same per file, and MCP `list_quality_issues`
+answers it for an agent.
 
 ## Turn it on
 
 Extraction is **opt-in by source include** — the extractor is only built when a
 source's `include` globs admit a document extension. The default `include` list
-is code/markdown/config only. `pheasant setup` and `pheasant up` emit
+is code/markdown/config only. `pheasant setup` and quick add emit
 `**/*` for a detected mixed document folder; hand-written sources should add
 the extensions they want explicitly:
 
@@ -193,13 +193,6 @@ sources keep their stored text until you re-sync them with `--mode full`; a
 A web page is recognised as HTML by the content type the server sends as well
 as by its extension, so `https://example.com/blog/post` served as `text/html`
 is extracted like `post.html`.
-
-## Federation note
-
-A region configured for documents advertises `"document"` in its semantic
-contract's `capabilities.modalities`, so a Synapse router's
-`--modality document` filter routes document questions only to regions that can
-actually read them. This is existing contract data — no wire-format change.
 
 ## Troubleshooting
 

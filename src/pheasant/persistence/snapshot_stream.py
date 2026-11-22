@@ -52,11 +52,8 @@ def write_snapshot(store: Any, kb: str, timestamp: str, cancelled: Any):
 
     try:
         with state.conn:
-            if state.dialect.is_postgres:
-                state.conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-                state.conn.execute("SET LOCAL statement_timeout=10000")
-            else:
-                state.conn.execute("BEGIN")
+            state.conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            state.conn.execute("SET LOCAL statement_timeout=10000")
             expected = store.rows.counts(kb)
             with temporary.open("wb") as raw:
                 with zstd.ZstdCompressor(level=3).stream_writer(raw, closefd=False) as stream:

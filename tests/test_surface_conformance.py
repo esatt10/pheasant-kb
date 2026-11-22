@@ -49,6 +49,8 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services.errors import ServiceError
 
+pytestmark = pytest.mark.module_database
+
 CORPUS = {
     "guide/deploy.md": (
         "# Deployment guide\n\n"

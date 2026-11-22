@@ -8,10 +8,11 @@ does not set a value gets pheasant-kb's: :data:`FLAGSHIP_DEFAULTS` is laid
 under every config :meth:`PheasantConfig.model_validate` builds.
 
 The values written into the dataclasses in ``schema.py`` are the other table,
-**standalone**: SQLite, no queue, one process, offline stubs, nothing to stand
-up and no key. A config selects it with ``pheasant.defaults: standalone``, or
-the environment does with ``PHEASANT_DEFAULTS=standalone`` (the single
-container, ``pip install``, stdio MCP and the offline test suite). A config's
+**standalone**: no queue, one process (``--role all``), offline stub models
+and no key, on the same PostgreSQL state store. A config selects it with
+``pheasant.defaults: standalone``, or the environment does with
+``PHEASANT_DEFAULTS=standalone`` (stdio MCP, a preparation worker's config and
+the test suite). A config's
 own value wins over the environment, and the resolved table is recorded on
 ``pheasant.defaults``, so a dumped config reloads on the table it was built on.
 
@@ -102,13 +103,13 @@ def default_config_data(table: str | None = None) -> dict[str, Any]:
 
     The three storage paths ``model_validate`` derives from
     ``pheasant.state_path`` are left unset, as they are in a config nobody has
-    built yet: dumped, they would pin ``/state/pheasant.db`` under a config
+    built yet: dumped, they would pin ``/state/graphs`` under a config
     whose ``state_path`` the caller is about to move, and every write would
     land in the old place.
     """
 
     data = default_config(table).model_dump(mode="json")
-    for key in ("sqlite_path", "graph_path", "manifest_path"):
+    for key in ("graph_path", "manifest_path"):
         data["storage"][key] = None
     return data
 

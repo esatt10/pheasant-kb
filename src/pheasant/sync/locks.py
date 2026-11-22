@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import socket
-import threading
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -76,7 +75,7 @@ def _lock_is_active(lock: Path) -> bool:
     # much alive in the *next* container, so a purely PID-based check declared
     # the source locked forever and bricked every restart. A lock written by
     # anything other than this host/container is stale by definition; live
-    # cross-process writers are excluded by ``EngineLease`` (heartbeat-based),
+    # cross-process writers are excluded by ``SourceLease`` (heartbeat-based),
     # not by this file. Legacy locks carry no hostname and are treated the same.
     if payload.get("hostname") != socket.gethostname():
         logger.warning(
@@ -144,176 +143,6 @@ def source_lock(
         _unlink_lock(lock)
 
 
-class EngineLeaseError(RuntimeError):
-    """A different live engine process already holds the writer lease."""
-
-
-class EngineLease:
-    """Single-writer lease for one state directory (Synapse step 21.2).
-
-    The lease is a JSON file ``<state>/engine.lease`` recording the owning
-    PID, hostname, and an ISO heartbeat timestamp that a daemon thread
-    refreshes every ``heartbeat_interval_s`` seconds while held. A second
-    *process* attempting to acquire against the same state directory fails
-    fast with :class:`EngineLeaseError`; a stale lease (heartbeat older than
-    ``stale_after_s``, or the owning PID provably dead on this host) is taken
-    over with a logged warning. Engines within the same process share the
-    lease (PID match), so in-process concurrency is serialized elsewhere
-    (``SyncEngine._sync_mutex``), not here.
-    """
-
-    def __init__(
-        self,
-        state_dir: str | Path,
-        *,
-        heartbeat_interval_s: float = 5.0,
-        stale_after_s: float = 30.0,
-        wait_timeout_s: float = 0.0,
-        poll_interval_s: float = 0.25,
-    ):
-        self.path = Path(state_dir) / "engine.lease"
-        self.heartbeat_interval_s = heartbeat_interval_s
-        self.stale_after_s = stale_after_s
-        self.wait_timeout_s = wait_timeout_s
-        self.poll_interval_s = poll_interval_s
-        self._held = False
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    @property
-    def held(self) -> bool:
-        return self._held
-
-    def acquire(self) -> None:
-        """Take the lease, optionally waiting for the current writer.
-
-        Interactive/embedded engines remain fail-fast by default. Server sync
-        workers set ``wait_timeout_s`` because two legitimate background
-        triggers (most commonly startup indexing and a source just added in
-        the UI) should queue, not make the first user-visible sync fail.
-        """
-        if self._held:
-            return
-        deadline = time.monotonic() + self.wait_timeout_s
-        logged_wait = False
-        while True:
-            existing = self._read()
-            if existing is None:
-                break
-            pid = existing.get("pid")
-            same_host = existing.get("hostname") in (None, socket.gethostname())
-            if isinstance(pid, int) and pid == os.getpid() and same_host:
-                break  # another engine in this process holds it; share ownership
-            elif self._is_stale(existing, same_host):
-                logger.warning(
-                    "Taking over stale engine lease %s (pid=%s, heartbeat_at=%s)",
-                    self.path,
-                    pid,
-                    existing.get("heartbeat_at"),
-                )
-                break
-            elif time.monotonic() >= deadline:
-                raise EngineLeaseError(
-                    f"Another pheasant engine (pid={pid}, "
-                    f"host={existing.get('hostname')}) holds the writer lease at "
-                    f"{self.path} (heartbeat_at={existing.get('heartbeat_at')}). "
-                    f"Stop that process before syncing this state directory, or "
-                    f"wait ~{self.stale_after_s:.0f}s for the lease to go stale "
-                    f"if the process crashed."
-                )
-            else:
-                if not logged_wait:
-                    logger.info(
-                        "Waiting for pheasant writer lease %s (pid=%s, host=%s)",
-                        self.path,
-                        pid,
-                        existing.get("hostname"),
-                    )
-                    logged_wait = True
-                time.sleep(self.poll_interval_s)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._write()
-        self._held = True
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._heartbeat_loop,
-            name="pheasant-engine-lease",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def release(self) -> None:
-        """Stop heartbeating and remove the lease if this process owns it."""
-        if not self._held:
-            return
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self.heartbeat_interval_s * 2))
-            self._thread = None
-        self._held = False
-        existing = self._read()
-        if existing is not None and existing.get("pid") == os.getpid():
-            self.path.unlink(missing_ok=True)
-
-    def _is_stale(self, payload: dict[str, Any], same_host: bool) -> bool:
-        heartbeat_raw = payload.get("heartbeat_at")
-        try:
-            heartbeat = datetime.fromisoformat(str(heartbeat_raw))
-        except (TypeError, ValueError):
-            return True
-        age_s = (datetime.now(UTC) - heartbeat).total_seconds()
-        if age_s > self.stale_after_s:
-            return True
-        pid = payload.get("pid")
-        return same_host and isinstance(pid, int) and not _pid_is_running(pid)
-
-    def _read(self) -> dict[str, Any] | None:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return payload if isinstance(payload, dict) else None
-
-    def _write(self) -> None:
-        payload = {
-            "pid": os.getpid(),
-            "hostname": socket.gethostname(),
-            "heartbeat_at": datetime.now(UTC).isoformat(),
-        }
-        # Unique per writer. Engines in one process share this lease and each
-        # heartbeats it, so a fixed `engine.lease.tmp` let one engine's rename
-        # take another's temp file mid-write -- a FileNotFoundError logged from
-        # a daemon thread, which on Python 3.12 aborts the interpreter if it
-        # lands during shutdown. A failed write removes its own temp file, or
-        # unique names would leave one orphan per failure.
-        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        try:
-            with tmp.open("w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-                fh.flush()
-                os.fsync(fh.fileno())
-            for attempt in range(8):
-                try:
-                    os.replace(tmp, self.path)
-                    break
-                except PermissionError:
-                    # Windows can briefly deny replacement during another
-                    # heartbeat's rename/read. Keep the old complete lease.
-                    if os.name != "nt" or attempt == 7:
-                        raise
-                    time.sleep(0.005 * (attempt + 1))
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-
-    def _heartbeat_loop(self) -> None:
-        while not self._stop.wait(self.heartbeat_interval_s):
-            try:
-                self._write()
-            except OSError as exc:  # pragma: no cover - disk-failure path
-                logger.warning("Failed to refresh engine lease %s: %s", self.path, exc)
-
-
 class SourceLeaseError(RuntimeError):
     """Another live writer holds this source's lease."""
 
@@ -329,12 +158,8 @@ SOURCE_STALE_SECONDS = 45.0
 class SourceLease:
     """A per-**source** write lease, held in the state database (Phase 35.4).
 
-    :class:`EngineLease` permits exactly one writer process per ``/state``
-    directory. That is correct for SQLite — which serializes writers anyway —
-    and it is the ceiling Phase 35 exists to lift: with several indexers
-    available, two different *sources* have no reason to wait for each other.
-
-    So on a shared backend the unit of exclusion becomes the source. Two
+    With several indexers available, two different *sources* have no reason
+    to wait for each other, so the unit of exclusion is the source. Two
     indexers can commit ``docs`` and ``code`` concurrently; two indexers can
     never both commit ``docs``, because a source's artifacts, chunks, graph
     nodes and manifest are one consistent set.
@@ -342,9 +167,6 @@ class SourceLease:
     Exclusion is a single conditional ``UPDATE``: a row is claimed only if it
     is unheld, already ours, or provably stale. The database decides, so two
     processes racing cannot both win — a read-then-write would let them.
-
-    **This does not replace ``EngineLease`` on SQLite.** There, one writer per
-    file is the honest model and the whole-state lease still enforces it.
     """
 
     def __init__(

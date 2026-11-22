@@ -31,6 +31,8 @@ from pheasant.services import retrieval as retrieval_service
 from pheasant.services import snapshots as snapshot_service
 from pheasant.services.errors import ServiceError
 
+pytestmark = pytest.mark.module_database
+
 CORPUS = {
     "runbook.md": (
         "# Rotation runbook\n\nThe gateway rotates credentials nightly and the "

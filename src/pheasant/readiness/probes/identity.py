@@ -1,11 +1,8 @@
 """Who is answering, and does it expose what the contract says.
 
-Two probes and a layering exception. `mcp_discovery` imports the MCP facade,
-which is a transport, and this module is therefore named in
-`tests/test_service_layering.py`'s COMPOSITION_ROOTS — for the reason that set
-already gives `memory/benchmark.py`: a module whose *subject* is a transport
-has to be able to look at one. Keeping that exception to two probes in one
-small file is why this is not in `ingestion.py` alongside everything else.
+Two probes. `mcp_discovery` checks the contract's tool names against the
+served tool table in `security/permissions.py`, so it needs no transport
+import and this module sits in its layer like any other probe.
 """
 
 from __future__ import annotations
@@ -41,18 +38,19 @@ def _service_identity(context: ProbeContext) -> ProbeResult:
 def _mcp_discovery(context: ProbeContext) -> ProbeResult:
     """Every operation the contract names as an MCP tool actually exists.
 
-    Introspection of `PheasantTools` rather than a live `tools/list` round
-    trip: the SDK's registration is asserted by `tests/test_mcp_lifecycle.py`,
-    and what a *harness* gets wrong is assuming a tool name. So this checks the
-    names in the contract against the facade, which is the mapping a harness
-    would otherwise guess at.
+    Checked against the served tool table (`MCP_PERMISSIONS`, which
+    `tests/test_role_permissions.py` holds to every registered tool) rather
+    than a live `tools/list` round trip: what a *harness* gets wrong is
+    assuming a tool name. It used to check `PheasantTools`, the facade, which
+    stopped being the tool surface when tools such as `list_artifact_records`
+    were registered beside it rather than on it.
     """
 
-    from pheasant.mcp_server.tools import PheasantTools
     from pheasant.readiness.contract import CAPABILITIES
+    from pheasant.security.permissions import MCP_PERMISSIONS
 
     declared = sorted({tool for cap in CAPABILITIES for tool in cap.mcp_tools})
-    missing = [name for name in declared if not hasattr(PheasantTools, name)]
+    missing = [name for name in declared if name not in MCP_PERMISSIONS]
     return ProbeResult(
         "mcp_discovery",
         not missing,

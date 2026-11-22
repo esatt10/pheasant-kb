@@ -18,7 +18,7 @@ import pytest
 from pheasant.config.schema import PheasantConfig
 from pheasant.ingestion.captioner import StubCaptioner, build_captioner
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 FIXTURE_IMAGE = Path(__file__).parent / "fixtures" / "sample_workspace" / "images" / "diagram.png"

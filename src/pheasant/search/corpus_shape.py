@@ -66,7 +66,7 @@ def _database_key(state: Any) -> tuple:
 def vocabulary(state: Any, limit: int) -> list[tuple[str, int]]:
     """``corpus_vocabulary(state, limit)``, held and refreshed off the caller."""
 
-    from pheasant.search.sqlite_store import corpus_vocabulary
+    from pheasant.search.text_store import corpus_vocabulary
 
     key = (_database_key(state), int(limit))
     with _lock:

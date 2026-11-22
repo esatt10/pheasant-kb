@@ -1,7 +1,7 @@
 """The retrieval parameters that ranking actually reads.
 
 Every number in here used to be a module constant inside
-:mod:`pheasant.search.sqlite_store` or :mod:`pheasant.search.hybrid`, baked
+:mod:`pheasant.search.text_store` or :mod:`pheasant.search.hybrid`, baked
 into an SQL f-string or a fusion loop. That was fine while they were the
 output of a one-off tuning pass; it stopped being fine the moment the region
 grew a plane whose whole job is to *propose better values* for them. A
