@@ -1,6 +1,6 @@
 """The lexical arm on pg_textsearch's BM25 index (``storage.lexical_index``).
 
-:class:`~pheasant.search.sqlite_store.SearchStore` builds its filters and the
+:class:`~pheasant.search.text_store.SearchStore` builds its filters and the
 structural prior once and hands them here when the region ranks with the
 extension; everything else about a search — tokens, steering, the score
 mapping, the LIKE fallback — stays where it is, so the three lexical

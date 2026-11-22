@@ -36,6 +36,8 @@ from pheasant.assistant.llm import LLM
 from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_server.tools import PheasantTools
 
+pytestmark = pytest.mark.module_database
+
 SOURCES = ["notes", "code"]
 
 # (question, action or None for "answer it by retrieval")
@@ -430,47 +432,3 @@ def test_paths_cannot_impersonate_citation_markers() -> None:
 
 
 POSTGRES_DSN = os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
-
-
-@pytest.mark.skipif(not POSTGRES_DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
-def test_listings_agree_across_backends(tmp_path: Path) -> None:
-    """The listing SQL is hand-written for both dialects: `substr`, `LOWER … LIKE
-    … ESCAPE`, a `NULL`-last ordering spelled as a boolean, and patterns passed
-    as parameters, so a user's text never becomes part of the statement."""
-
-    from pheasant.persistence import pg_driver
-
-    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.query("DROP SCHEMA public CASCADE")
-        conn.query("CREATE SCHEMA public")
-    lite = _region(tmp_path / "sqlite")
-    pg = _region(
-        tmp_path / "postgres",
-        storage={"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"},
-    )
-
-    def shape(listed: dict) -> list[tuple]:
-        return [(d["source"], d["path"], d["extension"]) for d in listed["documents"]]
-
-    for kwargs in (
-        {},
-        {"extensions": ["md"]},
-        {"path_contains": "RUN"},
-        {"path_contains": "s_n"},  # `_` is a LIKE wildcard unless escaped
-        {"source_name": "code", "limit": 1, "offset": 1},
-    ):
-        a = lite["tools"].list_documents(lite["kb"], **kwargs)
-        b = pg["tools"].list_documents(pg["kb"], **kwargs)
-        assert shape(a) == shape(b), kwargs
-        assert a["total"] == b["total"] and a["pagination"] == b["pagination"]
-    assert lite["tools"].list_documents(lite["kb"], path_contains="s_n")["total"] == 0
-    recent = pg["tools"].list_documents(pg["kb"], order="recent")
-    assert sorted(shape(recent)) == sorted(shape(lite["tools"].list_documents(lite["kb"])))
-
-    a, b = (r["tools"].describe_knowledge_base(r["kb"]) for r in (lite, pg))
-    assert a["totals"] == b["totals"] and a["by_extension"] == b["by_extension"]
-    assert [(s["name"], s["documents"]) for s in a["sources"]] == [
-        (s["name"], s["documents"]) for s in b["sources"]
-    ]
-    answered = pg["tools"].ask_knowledge_base(pg["kb"], "list all documents")
-    assert answered["inventory"]["result"]["total"] == len(CORPUS)

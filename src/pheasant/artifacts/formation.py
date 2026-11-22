@@ -502,7 +502,7 @@ def _tokens(query: str) -> list[str]:
     and `steering` matches on the same grammar.
     """
 
-    from pheasant.search.sqlite_store import _query_tokens
+    from pheasant.search.text_store import _query_tokens
 
     return _query_tokens(query)
 
@@ -650,7 +650,7 @@ def _dominant_term(bodies: list[str], *, exclude: set[str], state: Any = None) -
     behaviour rather than a crash.
     """
 
-    from pheasant.search.sqlite_store import _STOPWORDS
+    from pheasant.search.text_store import _STOPWORDS
 
     counts: Counter[str] = Counter()
     for body in bodies:
@@ -686,7 +686,7 @@ def _corpus_frequencies(state: Any) -> dict[str, int]:
     if state is None:
         return {}
     try:
-        from pheasant.search.sqlite_store import corpus_vocabulary
+        from pheasant.search.text_store import corpus_vocabulary
 
         return {term: doc for term, doc in corpus_vocabulary(state, limit=512)}
     except Exception:  # noqa: BLE001 - a missing vocabulary is not a failure

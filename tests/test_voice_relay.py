@@ -135,7 +135,7 @@ async def _until(socket: Any, kind: str, timeout: float = 8.0) -> list[dict[str,
 def _store(tmp_path: Any) -> Any:
     from pheasant.persistence.state_store import StateStore
 
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
     return store
 

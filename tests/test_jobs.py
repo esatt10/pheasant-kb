@@ -220,7 +220,7 @@ def test_the_engine_reports_progress_through_a_real_sync(loaded_config) -> None:
     events: list[tuple] = []
     paths = StatePaths.from_config(loaded_config)
     paths.ensure()
-    state = StateStore(paths.sqlite)
+    state = StateStore()
     state.migrate()
     engine = SyncEngine(loaded_config, paths, state)
     try:
@@ -655,7 +655,7 @@ def test_a_durable_jobs_table_from_before_dismissal_is_widened(tmp_path: Path) -
     from pheasant.persistence.durable_jobs import DurableJobStore
     from pheasant.persistence.state_store import StateStore
 
-    state = StateStore(tmp_path / "state.db")
+    state = StateStore()
     state.migrate()
     state.conn.execute("DROP TABLE durable_jobs")
     state.conn.execute(

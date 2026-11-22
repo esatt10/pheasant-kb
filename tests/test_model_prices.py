@@ -21,7 +21,6 @@ Acceptance:
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -46,7 +45,7 @@ MILLION = 1_000_000
 @pytest.fixture
 def region(tmp_path: Path):
     config = _config(tmp_path)
-    state = StateStore(tmp_path / "prices.db")
+    state = StateStore()
     state.migrate()
     METER.bind(state, "kb")
     spend.GUARD.bind(config, state)
@@ -163,41 +162,6 @@ def _assert_cost_only_grows(state: Any) -> None:
 
 def test_a_stored_cost_only_grows(region):
     _assert_cost_only_grows(region.state)
-
-
-@pytest.mark.skipif(
-    not os.environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip(),
-    reason="set PHEASANT_TEST_POSTGRES_DSN to a throwaway database",
-)
-def test_costs_on_a_real_postgres(tmp_path):
-    from pheasant.persistence.backends import open_backend
-
-    state = StateStore(
-        backend=open_backend(backend="postgres", dsn=os.environ["PHEASANT_TEST_POSTGRES_DSN"])
-    )
-    try:
-        state.migrate()
-        state.execute("ALTER TABLE usage_daily DISABLE TRIGGER usage_daily_append_only")
-        state.execute("DELETE FROM usage_daily WHERE kb_id='kb'")
-        state.execute("ALTER TABLE usage_daily ENABLE TRIGGER usage_daily_append_only")
-        key = (DAY, "chat", "gpt-6-luna", "", "b", "ui")
-        usage_ledger.add(state, "kb", {key: Totals(requests=1, input_tokens=2 * MILLION)})
-        usage_ledger.add(
-            state,
-            "kb",
-            {key: Totals(requests=1, input_tokens=MILLION, cost_micros=7 * MILLION)},
-            price_of=lambda model: (4.0, 0.0, None),
-        )
-        assert _stored(state)["gpt-6-luna"] == 15 * MILLION
-        usage_ledger.add(state, "kb", {key: Totals(requests=1, input_tokens=1)})  # unpriced call
-        assert _stored(state)["gpt-6-luna"] == 15 * MILLION
-        frozen_key = (DAY, "chat", "frozen", "", "b", "ui")
-        usage_ledger.add(state, "kb", {frozen_key: Totals(requests=1, input_tokens=MILLION)})
-        assert usage_ledger.freeze_costs(state, "kb", {"frozen": (2.0, None, None)}) == 1
-        assert _stored(state)["frozen"] == 2 * MILLION
-        _assert_cost_only_grows(state)
-    finally:
-        state.close()
 
 
 def test_overrides_are_validated_kept_and_cleared(region, operator):

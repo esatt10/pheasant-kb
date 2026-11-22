@@ -56,7 +56,7 @@ standalone is selected:
 | `server.api.max_concurrent_requests` | `64` | `0` |
 | `server.api.drain_seconds` | `20` | `0` |
 | `server.api.cors_origins` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000", "http://api:8765", "http://host.docker.internal:8765"]` | `["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8765", "http://127.0.0.1:8765", "http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:3000", "http://127.0.0.1:3000"]` |
-| `storage.backend` | `postgres` | `sqlite` |
+| `storage.backend` | `postgres` | `postgres` |
 | `storage.pool_size` | `16` | `10` |
 | `storage.graph_checkpoint_seconds` | `120` | `60` |
 | `storage.graph_checkpoint_max_seconds` | `300` | `1800` |
@@ -98,7 +98,7 @@ standalone is selected:
 | `sync.concurrency.worker_transport` | `grpc` | `http` |
 | `sync.concurrency.lock_timeout_seconds` | `300` | `120` |
 | `sync.queue.enabled` | `true` | `false` |
-| `sync.queue.backend` | `nats` | `local` |
+| `sync.queue.backend` | `nats` | `nats` |
 | `sync.queue.max_attempts` | `5` | `3` |
 | `sync.queue.nats_servers` | `["nats://nats:4222"]` | `[]` |
 | `graph.wasm_cross_source_resolution` | `true` | `false` |
@@ -151,7 +151,7 @@ standalone is selected:
 | `tuning.enabled` | `true` | `false` |
 | `observability.interactions.enabled` | `true` | `false` |
 | `observability.interactions.queue.enabled` | `true` | `false` |
-| `observability.interactions.queue.backend` | `nats` | `local` |
+| `observability.interactions.queue.backend` | `nats` | `nats` |
 | `observability.otlp_endpoint` | `` | unset |
 | `readiness.enabled` | `true` | `false` |
 | `readiness.corpus_denylist` | `["benchmark/*", "*.answers.json"]` | `[]` |

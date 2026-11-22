@@ -7,7 +7,7 @@ from typing import Any
 
 from pheasant.graph.provenance import PROVENANCE_ATTRIBUTES, PROVENANCE_EDGE_TYPES
 from pheasant.graph.simple import SimpleMultiDiGraph
-from pheasant.search.sqlite_store import _STOPWORDS
+from pheasant.search.text_store import _STOPWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -478,7 +478,7 @@ def _tokens(query: str) -> list[str]:
     same headings ("sign-the-contract"). Without them it is 1,032. Measured on the lab
     region: "what is OKF" went from 2,000 candidates and 122 ms to 49 and
     4 ms, with ``OKF`` first instead of an unrelated heading. Same list and
-    same yield rule as ``sqlite_store._query_tokens``: a query made only of
+    same yield rule as ``text_store._query_tokens``: a query made only of
     framing words keeps them rather than matching nothing.
     """
 

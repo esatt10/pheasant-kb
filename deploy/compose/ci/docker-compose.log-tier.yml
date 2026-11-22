@@ -6,7 +6,7 @@
 # bitten this repository four separate times -- read-only mounts, cross-process
 # visibility, a crash on real-world input -- so the tier gets a real run.
 #
-# Deliberately smaller than `docker-compose.scale.yml`: no NATS, no worker, no
+# Deliberately smaller than `docker-compose.scale.yml`: no worker, no
 # graph service. Those are covered elsewhere and each one added here is another
 # way for this to fail for a reason that is not the log tier.
 name: pheasant-log-tier-ci
@@ -23,6 +23,18 @@ services:
       test: ["CMD-SHELL", "pg_isready -U pheasant"]
       interval: 3s
       timeout: 5s
+      retries: 20
+
+  # The work queues are NATS JetStream; this topology publishes to them.
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "127.0.0.1:18222:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8222/healthz >/dev/null || exit 1"]
+      interval: 3s
+      timeout: 3s
       retries: 20
 
   # One migrator, before anything serves. Replaying the schema from several
@@ -56,6 +68,8 @@ services:
       ANTHROPIC_API_KEY: ""
     depends_on:
       postgres:
+        condition: service_healthy
+      nats:
         condition: service_healthy
     volumes: &mounts
       - ./pheasant.log-tier.yaml:/config/pheasant.yaml:ro

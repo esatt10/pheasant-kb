@@ -439,11 +439,11 @@ def _orchestration_supervisor(
     config_path=None,
     sync_lock=None,
 ):
-    """Elect Postgres indexers; standalone/SQLite keeps its direct services."""
+    """Elect one of several indexers; other roles keep their direct services."""
 
     from pheasant.deployment.roles import Role
 
-    if policy.role is not Role.INDEXER or not app_obj.state.state.dialect.is_postgres:
+    if policy.role is not Role.INDEXER:
         return None
 
     def reconcile_on_promotion() -> None:
@@ -1323,7 +1323,7 @@ def _engine(
     cfg = load_config(config_path)
     paths = StatePaths.from_config(cfg)
     paths.ensure()
-    state = StateStore.from_config(cfg, paths.sqlite)
+    state = StateStore.from_config(cfg)
     return SyncEngine(
         cfg,
         paths,
@@ -1496,133 +1496,12 @@ def _run_setup(args) -> int:
     return 0
 
 
-def _run_mount(args) -> int:
-    """Write a bind mount for a host directory, and allow-list it in config.
-
-    Both halves matter: a mount alone makes the path visible but still
-    unregisterable, and an allow-list entry alone points at nothing.
-    """
-    import yaml
-
-    from pheasant.config.loader import dump_config_yaml
-    from pheasant.deployment.mounts import render_compose_override, suggested_container_path
-
-    host = str(Path(args.path).expanduser())
-    container = args.at or suggested_container_path(host)
-    override = Path(args.output)
-    existing = override.read_text(encoding="utf-8") if override.exists() else None
-    try:
-        rendered = render_compose_override(
-            {host: container}, service=args.service, existing=existing
-        )
-    except (ValueError, yaml.YAMLError) as exc:
-        print(f"ERROR: cannot update {override}: {exc}", file=sys.stderr)
-        return 1
-
-    config_path = Path(args.config)
-    config_note = None
-    config_text = None
-    if config_path.exists():
-        try:
-            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as exc:
-            print(f"ERROR: cannot read {config_path}: {exc}", file=sys.stderr)
-            return 1
-        if not isinstance(data, dict):
-            print(f"ERROR: {config_path} is not a pheasant config mapping", file=sys.stderr)
-            return 1
-        security = data.setdefault("security", {})
-        roots = list(security.get("allow_workspace_roots") or [])
-        if container not in roots:
-            # Keep the defaults: replacing the field wholesale with one entry
-            # would lock the user out of /workspace.
-            if not roots:
-                from pheasant.config.schema import SecuritySettings
-
-                roots = [str(p) for p in SecuritySettings().allow_workspace_roots]
-            roots.append(container)
-            security["allow_workspace_roots"] = roots
-            config_text = dump_config_yaml(data)
-            config_note = f"allow_workspace_roots += {container}"
-        else:
-            config_note = f"{container} is already allow-listed"
-
-    if args.print_only:
-        print(f"# {override}")
-        print(rendered, end="")
-        if config_text:
-            print(f"\n# {config_path} ({config_note})")
-            print(config_text, end="")
-        return 0
-
-    override.write_text(rendered, encoding="utf-8")
-    print(f"Wrote {override}: {host} -> {container} (read-only)")
-    if config_text:
-        config_path.write_text(config_text, encoding="utf-8")
-        print(f"Updated {config_path}: {config_note}")
-    elif config_note:
-        print(config_note)
-    else:
-        print(f"No {config_path} found — add {container} to security.allow_workspace_roots.")
-    print("\nApply it with:  docker compose up -d")
-    print(f"Then index it:  pheasant up {container} -c {config_path}")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pheasant",
         description="pheasant knowledge graph indexing server",
     )
     sub = parser.add_subparsers(dest="command")
-    up_p = sub.add_parser(
-        "up",
-        help="zero-config quickstart: detect, generate config, index, serve",
-    )
-    up_p.add_argument(
-        "path",
-        nargs="*",
-        default=["."],
-        help=(
-            "one or more targets: a folder, file, glob (~/clients/*), git URL, "
-            "web URL, or connector (gdrive:folder)"
-        ),
-    )
-    up_p.add_argument("--config", "-c", default="pheasant.yaml")
-    up_p.add_argument("--name", help="knowledge-base name [default: slug of the directory]")
-    up_p.add_argument("--port", type=int, default=8765)
-    up_p.add_argument("--profile", default="quickstart")
-    up_p.add_argument("--mode", default="incremental")
-    up_p.add_argument(
-        "--split",
-        action="store_true",
-        help="index each immediate subdirectory of a target as its own source",
-    )
-    up_p.add_argument(
-        "--no-serve",
-        action="store_true",
-        help="generate + index only; do not start the server",
-    )
-    host_p = sub.add_parser(
-        "host",
-        help="one-line container hosting: generate config + compose file, then run it",
-    )
-    host_p.add_argument("path", nargs="*", default=["."])
-    host_p.add_argument("--config", "-c", default="pheasant.yaml")
-    host_p.add_argument("--name")
-    host_p.add_argument("--port", type=int, default=8765)
-    host_p.add_argument("--ui-port", type=int, default=8080)
-    host_p.add_argument("--profile", default="quickstart")
-    host_p.add_argument("--split", action="store_true")
-    host_p.add_argument("--output", "-o", default="docker-compose.pheasant.yml")
-    host_p.add_argument("--image")
-    host_p.add_argument("--ui-image")
-    host_p.add_argument("--no-ui", action="store_true", help="omit the web UI sidecar")
-    host_p.add_argument(
-        "--print-only",
-        action="store_true",
-        help="write the compose file but do not run docker compose",
-    )
     setup_p = sub.add_parser(
         "setup",
         help="interactive, sectioned wizard: explains every option, writes "
@@ -1656,24 +1535,6 @@ def main(argv: list[str] | None = None) -> int:
         help="which startup commands to print at the end",
     )
     setup_p.add_argument("--force", action="store_true", help="overwrite an existing config")
-    mount_p = sub.add_parser(
-        "mount",
-        help="make a host directory visible inside the container: write the "
-        "bind mount into docker-compose.override.yml and allow-list it",
-    )
-    mount_p.add_argument("path", help="host directory to mount")
-    mount_p.add_argument(
-        "--at",
-        help=f"container path to mount it at [default: {'/data'}/<dirname>]",
-    )
-    mount_p.add_argument("--config", "-c", default="pheasant.yaml")
-    mount_p.add_argument("--service", default="pheasant")
-    mount_p.add_argument("--output", "-o", default="docker-compose.override.yml")
-    mount_p.add_argument(
-        "--print-only",
-        action="store_true",
-        help="show what would be written, change nothing",
-    )
     start_p = sub.add_parser("start")
     start_p.add_argument("--config", "-c", default="pheasant.yaml")
     start_p.add_argument("--profile", default="quickstart")
@@ -1681,10 +1542,6 @@ def main(argv: list[str] | None = None) -> int:
     validate_p = sub.add_parser("validate")
     validate_p.add_argument("config", nargs="?", default="pheasant.example.yaml")
     validate_p.add_argument("--no-require-paths", action="store_true")
-    init_p = sub.add_parser("init")
-    init_p.add_argument("--profile", default="quickstart")
-    init_p.add_argument("--output", "-o", default="pheasant.yaml")
-    init_p.add_argument("--force", action="store_true")
     config_p = sub.add_parser("config")
     config_sub = config_p.add_subparsers(dest="config_command")
     config_show_p = config_sub.add_parser("show")
@@ -1745,7 +1602,7 @@ def main(argv: list[str] | None = None) -> int:
     # config (Dockerfile sets it, docker-entrypoint.sh reads it,
     # troubleshooting.md tells you to check it) — and pheasant's *own*
     # generated MCP client configs put it in the agent's environment
-    # (`deployment/host.py`, `mcp_client/vscode.py`). These two servers
+    # (`mcp_client/vscode.py`). These two servers
     # hardcoded the default instead, so an agent pointed at a non-default
     # config silently got `/config/pheasant.yaml`: the wrong knowledge base,
     # reported as if it were the right one. Explicit `--config` still wins.
@@ -1831,24 +1688,6 @@ def main(argv: list[str] | None = None) -> int:
             "weekend of copying. Nothing is applied and no data moves."
         ),
     )
-    migrate_p = sub.add_parser(
-        "migrate", help="Copy SQLite state into the configured Postgres backend."
-    )
-    migrate_p.add_argument("--config", "-c", default="pheasant.yaml")
-    migrate_p.add_argument(
-        "--to", choices=("postgres",), default="postgres", help="Target backend."
-    )
-    migrate_p.add_argument(
-        "--sqlite-path",
-        help="Source database. Defaults to the state path in the config.",
-    )
-    migrate_p.add_argument(
-        "--keep-original",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Rename the SQLite file to *.migrated instead of leaving it in place.",
-    )
-    migrate_p.add_argument("--json", action="store_true")
     # Imported at parser-build time so `--help` can enumerate the tables from
     # the one place they are declared. Safe on every other command too:
     # `pheasant.analytics` pulls in stdlib and the schema module only —
@@ -2129,92 +1968,12 @@ def main(argv: list[str] | None = None) -> int:
         default=50,
         help="Cap the result set (0 removes the cap). Applied around your statement.",
     )
-    backup_p = sub.add_parser("backup")
-    backup_p.add_argument("output")
-    backup_p.add_argument("--config", "-c", default="pheasant.example.yaml")
-    restore_p = sub.add_parser("restore")
-    restore_p.add_argument("input")
-    restore_p.add_argument("--config", "-c", default="pheasant.example.yaml")
-    restore_p.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
     if args.command in {None, "--help"}:
         parser.print_help()
         return 0
-    if args.command == "up":
-        from pheasant.quickstart import ensure_up_config, resolve_up_targets
-        from pheasant.sync.locks import EngineLeaseError
-        from pheasant.targets import TargetError, fetch_target
-
-        config_path = Path(args.config)
-        specs = args.path if isinstance(args.path, list) else [args.path]
-        if not specs:
-            specs = ["."]
-        try:
-            targets = resolve_up_targets(specs, config_path, split=args.split, name=args.name)
-            for target in targets:
-                status = fetch_target(target)
-                if status:
-                    print(status)
-        except TargetError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        created = ensure_up_config(
-            targets, config_path, name=args.name, port=args.port, profile=args.profile
-        )
-        if created:
-            print(f"Wrote {config_path}")
-            for target in targets:
-                print(f"  + {target.name} ({target.type}) <- {target.path}")
-        else:
-            from pheasant.quickstart import added_sources
-
-            added = added_sources()
-            if added:
-                print(f"Added to existing {config_path} (your settings are untouched)")
-                for target in targets:
-                    if target.name in added:
-                        print(f"  + {target.name} ({target.type}) <- {target.path}")
-            else:
-                print(f"Reusing existing {config_path} — every target is already configured")
-        engine = _engine(config_path)
-        try:
-            results = engine.sync_all(args.mode)
-        except EngineLeaseError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        finally:
-            engine.close()
-        for r in results:
-            print(
-                f"{r.source_id}: indexed={r.indexed_artifacts} "
-                f"skipped={r.skipped_artifacts} nodes={r.graph_nodes} edges={r.graph_edges}"
-            )
-        if args.no_serve:
-            print(f"Ready. Start the server with: pheasant start -c {config_path}")
-            print(
-                "Attach to a coding agent: "
-                f"pheasant client-config claude-code -c {config_path} -o .mcp.json"
-            )
-            return 0
-        from pheasant.config.loader import load_config
-
-        cfg = load_config(config_path)
-        print(f"API + MCP:   http://{cfg.server.host}:{cfg.server.port}")
-        _serve_app(cfg, str(config_path))
-        return 0
     if args.command == "setup":
         return _run_setup(args)
-    if args.command == "mount":
-        return _run_mount(args)
-    if args.command == "host":
-        from pheasant.deployment.host import host_stack
-        from pheasant.targets import TargetError
-
-        try:
-            return host_stack(args)
-        except TargetError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
     if args.command == "start":
         from pheasant.config.loader import load_layered_config, parse_override_pairs
 
@@ -2235,17 +1994,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"ERROR: {error}")
             return 1
         print(f"Config valid: {args.config} ({len(cfg.sources)} sources)")
-        return 0
-    if args.command == "init":
-        from pheasant.config.loader import render_init_config
-
-        output = Path(args.output)
-        if output.exists() and not args.force:
-            print(f"ERROR: {output} already exists. Use --force to overwrite.")
-            return 1
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(render_init_config(args.profile), encoding="utf-8")
-        print(f"Wrote {output}")
         return 0
     if args.command == "config":
         import yaml
@@ -2293,7 +2041,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "sync":
         os.environ.setdefault("PHEASANT_ROLE", "cli")  # a serve's sync child keeps its role
-        from pheasant.sync.locks import EngineLeaseError
+        from pheasant.sync.locks import SourceLeaseError
 
         on_progress = _progress_emitter() if getattr(args, "progress", False) else None
         engine = _engine(Path(args.config), defer_persisted_graph_load=True)
@@ -2301,7 +2049,8 @@ def main(argv: list[str] | None = None) -> int:
 
         configure_tracing(engine.config.observability)
         if args.wait_for_lease is not None:
-            engine.lease.wait_timeout_s = max(0.0, args.wait_for_lease)
+            # How long a source's lease is waited for (`_source_write_lock`).
+            engine.config.sync.concurrency.lock_timeout_seconds = max(0.0, args.wait_for_lease)
         try:
             # This process owns the CPU cost of indexing, so it also owns
             # building the graph search index when it is missing (after an
@@ -2351,7 +2100,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     ]
                 )
-        except EngineLeaseError as exc:
+        except SourceLeaseError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         finally:
@@ -2436,7 +2185,6 @@ def main(argv: list[str] | None = None) -> int:
             DONE,
             INFLIGHT,
             PENDING,
-            LocalQueue,
             drain,
             queue_from_config,
         )
@@ -2444,31 +2192,21 @@ def main(argv: list[str] | None = None) -> int:
         engine = _engine(Path(args.config))
         queue = None
         try:
-            # Built from config, not hardcoded to LocalQueue: with
-            # `sync.queue.backend: nats` the tasks are in JetStream, and
-            # reaching for the SQLite table reported an empty queue on a
-            # backlog of thousands and drained nothing — while `requeue-dead`
-            # silently did nothing to the queue that actually held the dead
-            # letters. `queue_from_config` returns None when queueing is off.
-            queue = queue_from_config(engine.config, engine.state) or LocalQueue(engine.state)
+            # The configured queue (NATS JetStream), or None when queueing is off.
+            queue = queue_from_config(engine.config, engine.state)
+            if queue is None:
+                print(
+                    "sync.queue is off: syncs run in-process and nothing is queued.",
+                    file=sys.stderr,
+                )
+                return 1
             if args.queue_command == "status":
                 depth = queue.depth()
                 print(
                     f"queued: {depth[PENDING]}  in-flight: {depth[INFLIGHT]}  "
                     f"done: {depth[DONE]}  dead: {depth[DEAD]}"
                 )
-                if depth[DEAD] and isinstance(queue, LocalQueue):
-                    # Per-task detail is a property of the local table; a
-                    # JetStream dead letter is terminated on the broker and
-                    # has no row here to read.
-                    for row in engine.state.rows(
-                        "SELECT source_id, attempts, last_error FROM index_tasks "
-                        "WHERE status=? ORDER BY updated_at",
-                        (DEAD,),
-                    ):
-                        print(
-                            f"  ! {row['source_id']} failed {row['attempts']}x: {row['last_error']}"
-                        )
+                if depth[DEAD]:
                     print("\nFix the cause, then: pheasant queue requeue-dead")
                 return 0
             if args.queue_command == "requeue-dead":
@@ -2579,51 +2317,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(json.dumps(plan, indent=2, sort_keys=True) if args.json else render_plan(plan))
         return 0
-    if args.command == "migrate":
-        from pheasant.config.loader import load_config
-        from pheasant.persistence.migrate import MigrationError, migrate_sqlite_to_postgres
-        from pheasant.persistence.paths import StatePaths
-        from pheasant.persistence.secrets import DsnUnavailable, resolve_dsn
-
-        cfg = load_config(Path(args.config))
-        sqlite_path = args.sqlite_path or StatePaths.from_config(cfg).sqlite
-        try:
-            dsn = resolve_dsn(cfg.storage)
-        except DsnUnavailable as exc:
-            # The DSN comes from the environment by design, so the most likely
-            # mistake is a config that still says `backend: sqlite`.
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        try:
-            report = migrate_sqlite_to_postgres(
-                sqlite_path,
-                dsn,
-                pool_size=int(getattr(cfg.storage, "pool_size", 10) or 10),
-                keep_original=bool(args.keep_original),
-            )
-        except MigrationError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        if args.json:
-            print(json.dumps(report, indent=2, sort_keys=True))
-        else:
-            print(f"Migrated {report['source']} -> {report['target']}")
-            for table, count in sorted(report["tables"].items()):
-                print(f"  {table}: {count} row(s)")
-            if report["skipped"]:
-                print(f"  already populated, left alone: {', '.join(report['skipped'])}")
-            print(f"  chunks_fts: rebuilt {report['chunks_fts']} row(s) for this dialect")
-            if report.get("original_renamed_to"):
-                print(f"  original kept at {report['original_renamed_to']}")
-            print("Set storage.backend: postgres in your config and restart.")
-        return 0
     if args.command == "repair":
-        from pheasant.sync.locks import EngineLeaseError
+        from pheasant.sync.locks import SourceLeaseError
 
         engine = _engine(Path(args.config))
         try:
             engine.sync_all("repair")
-        except EngineLeaseError as exc:
+        except SourceLeaseError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         finally:
@@ -2900,7 +2600,7 @@ def main(argv: list[str] | None = None) -> int:
                 cfg = load_config(Path(args.config))
                 paths = StatePaths.from_config(cfg)
                 try:
-                    state = open_state(cfg, paths.sqlite)
+                    state = open_state(cfg)
                 except StateUnavailable as exc:
                     # Printing the declared schema is still useful — the point
                     # of --schema is usually "what will I get", asked before
@@ -2934,7 +2634,7 @@ def main(argv: list[str] | None = None) -> int:
             # or never-synced database — into one actionable line instead of a
             # traceback out of sqlite3 or the PostgreSQL driver.
             try:
-                state = open_state(cfg, paths.sqlite)
+                state = open_state(cfg)
             except StateUnavailable as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
                 return 1
@@ -2945,7 +2645,7 @@ def main(argv: list[str] | None = None) -> int:
                 # state store's connection — on Postgres that is a pooled
                 # server-side process, not just a file handle.
                 graph = (
-                    GraphStore(paths.graphs).load(kb_id)
+                    GraphStore(paths.graphs, state=state).load(kb_id)
                     if any(name in GRAPH_TABLES for name in selected)
                     else None
                 )
@@ -2954,7 +2654,7 @@ def main(argv: list[str] | None = None) -> int:
                     # "this corpus has no structure" rather than "the graph was
                     # not where I looked". Say which it is.
                     print(
-                        f"WARNING: no graph found under {paths.graphs / kb_id}; "
+                        f"WARNING: the published graph for {kb_id} is empty; "
                         "graph_nodes/graph_edges will be empty.",
                         file=sys.stderr,
                     )
@@ -2997,40 +2697,6 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(format_rows(columns, rows, args.format))
             return 0
-    if args.command == "backup":
-        from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, create_backup
-        from pheasant.persistence.paths import StatePaths
-
-        cfg = load_config(Path(args.config))
-        if cfg.storage.backend != "sqlite":
-            print(POSTGRES_BACKUP_REFUSAL.format(action="back up"), file=sys.stderr)
-            return 2
-        paths = StatePaths.from_config(cfg)
-        out = create_backup(paths.state, Path(args.output), sqlite_path=paths.sqlite)
-        size = out.stat().st_size
-        print(f"Backup written: {out} ({size} bytes)")
-        return 0
-    if args.command == "restore":
-        from pheasant.config.loader import load_config
-        from pheasant.persistence.backup import POSTGRES_BACKUP_REFUSAL, restore_backup
-        from pheasant.persistence.paths import StatePaths
-
-        cfg = load_config(Path(args.config))
-        if cfg.storage.backend != "sqlite":
-            print(POSTGRES_BACKUP_REFUSAL.format(action="restore"), file=sys.stderr)
-            return 2
-        paths = StatePaths.from_config(cfg)
-        try:
-            target = restore_backup(Path(args.input), paths.state, force=args.force)
-        except FileExistsError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        except (FileNotFoundError, ValueError) as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        print(f"Restored state into: {target}")
-        return 0
     if args.command == "serve":
         from pheasant.config.loader import load_config
         from pheasant.deployment.roles import RoleConfigurationError

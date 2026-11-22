@@ -35,12 +35,9 @@ COMPOSE_CONFIG = REPO_ROOT / "deploy" / "compose"
 
 def test_compose_manifests_live_under_the_deployment_directory() -> None:
     assert not list(REPO_ROOT.glob("docker-compose*.yml"))
-    assert {
-        "docker-compose.yml",
-        "docker-compose.advanced.yml",
-        "docker-compose.scale.yml",
-        "docker-compose.fresh.yml",
-    }.issubset({path.name for path in COMPOSE_CONFIG.glob("docker-compose*.yml")})
+    assert {path.name for path in COMPOSE_CONFIG.glob("docker-compose*.yml")} == {
+        "docker-compose.scale.yml"
+    }
 
 
 def test_the_compose_fleet_has_the_high_throughput_topology() -> None:
@@ -219,102 +216,6 @@ def test_the_compose_configs_are_valid_for_their_roles(monkeypatch: pytest.Monke
     assert fleet.graph.query_service_token_env == "PHEASANT_GRAPH_SERVICE_TOKEN"
 
 
-def test_the_three_compose_profiles_cover_small_advanced_and_fleet() -> None:
-    small = PheasantConfig.model_validate(
-        yaml.safe_load((COMPOSE_CONFIG / "local-small.yaml").read_text(encoding="utf-8"))
-    )
-    advanced = PheasantConfig.model_validate(
-        yaml.safe_load((COMPOSE_CONFIG / "local-advanced.yaml").read_text(encoding="utf-8"))
-    )
-    fleet = PheasantConfig.model_validate(
-        yaml.safe_load((COMPOSE_CONFIG / "fleet.yaml").read_text(encoding="utf-8"))
-    )
-
-    assert small.storage.backend == "sqlite"
-    assert small.search.embeddings.enabled is False
-    assert small.assistant.provider == "none"
-
-    for config in (advanced, fleet):
-        assert config.search.embeddings.model == "text-embedding-3-small"
-        assert config.search.vector_store.provider == "lancedb"
-        assert config.search.wasm_relationship_search is True
-        assert config.graph.wasm_cross_source_resolution is True
-        assert config.graph.memory_entity_bridging is True
-        assert config.assistant.model == "gpt-6-sol"
-        assert config.assistant.retrieval.grader_model == "gpt-6-luna"
-        assert config.assistant.retrieval.max_rounds == 3
-        assert config.assistant.retrieval.expand_depth == 3
-        assert config.ingestion.captioner.model == "gpt-6-luna"
-        assert config.assistant.workflow == "agentic"
-        assert config.search.default_mode == "hybrid"
-        assert config.assistant.retrieval.expand_graph is True
-        assert config.server.mcp.enabled is True
-
-    assert advanced.assistant.retrieval.retrieval_modes == ["hybrid", "graph"]
-    assert fleet.assistant.retrieval.retrieval_modes == [
-        "vector",
-        "graph",
-        "hybrid",
-    ]
-
-    # The deprecated agent-memory source is gone from every profile: typed
-    # records live in artifact-records under /state, created on first write.
-    for profile in (advanced, fleet):
-        assert not any(source.type.value == "artifact" for source in profile.sources)
-    assert fleet.evaluation.enabled is True
-    assert fleet.tuning.enabled is True
-    assert fleet.tuning.auto.enabled is False
-    assert fleet.tuning.auto.apply is False
-    assert fleet.observability.interactions.enabled is True
-    assert fleet.observability.interactions.queue.enabled is True
-    assert fleet.observability.interactions.hot_retention_days == 7
-    assert fleet.observability.interactions.cold_enabled is False
-    assert fleet.ingestion.extractor.provider == "auto"
-    assert fleet.sync.source_processing.chunk_max_chars == 2000
-    assert fleet.sync.source_processing.taxonomy_enabled is True
-    assert fleet.search.embeddings.rate_limit_max_wait_seconds == 900.0
-
-    assert advanced.storage.backend == "sqlite"
-    assert advanced.sync.queue.enabled is False
-    assert fleet.storage.backend == "postgres"
-    assert fleet.sync.queue.enabled is True
-    assert fleet.sync.queue.backend == "nats"
-
-
-def test_the_default_compose_file_is_still_one_container() -> None:
-    """Rule 7: `docker compose up` must keep needing no infrastructure."""
-
-    compose = yaml.safe_load(
-        (REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8")
-    )
-    services = compose["services"]
-    assert set(services) == {"pheasant"}
-    assert "postgres" not in services
-    assert "worker" not in services
-    assert "command" not in services["pheasant"], "the default container must not pass a role"
-    assert services["pheasant"]["volumes"][:2] == [
-        "pheasant-config:/config",
-        "${PHEASANT_WORKSPACE_PATH:-pheasant-workspace}:/workspace",
-    ]
-    assert services["pheasant"]["environment"]["PHEASANT_WORKSPACE"] == ("/ui-managed-sources")
-
-
-def test_the_advanced_compose_profile_is_one_node_and_uses_its_generated_config() -> None:
-    compose = yaml.safe_load(
-        (COMPOSE_CONFIG / "docker-compose.advanced.yml").read_text(encoding="utf-8")
-    )
-    assert set(compose["services"]) == {"pheasant"}
-    service = compose["services"]["pheasant"]
-    assert "postgres" not in compose["services"]
-    assert "nats" not in compose["services"]
-    assert "./local-advanced.yaml:/config/pheasant.yaml:ro" in service["volumes"]
-    assert "OPENAI_API_KEY" in service["environment"]
-
-
-# --------------------------------------------------------------------------
-# The log tier's CI topology
-# --------------------------------------------------------------------------
-
 CI_COMPOSE = REPO_ROOT / "deploy" / "compose" / "ci" / "docker-compose.log-tier.yml"
 CI_CONFIG = REPO_ROOT / "deploy" / "compose" / "ci" / "pheasant.log-tier.yaml"
 
@@ -332,7 +233,7 @@ def test_the_log_tier_topology_splits_producing_from_draining(
 
     compose = yaml.safe_load(CI_COMPOSE.read_text(encoding="utf-8"))
     services = compose["services"]
-    assert set(services) == {"postgres", "db-init", "api", "logger"}
+    assert set(services) == {"postgres", "nats", "db-init", "api", "logger"}
     assert services["api"]["command"] == ["serve", "--role", "api"]
     assert services["logger"]["command"] == ["serve", "--role", "logger"]
 
@@ -448,14 +349,3 @@ def test_the_lab_fleet_admits_what_pheasant_swarm_search_needs() -> None:
     assert config.readiness.enabled
     assert config.security.api_auth.token_env == "PHEASANT_API_TOKEN"
     assert not any(source.name == "agent-memory" for source in config.sources)
-
-
-@pytest.mark.parametrize("path", [COMPOSE / "local-small.yaml", COMPOSE / "local-advanced.yaml"])
-def test_standalone_profiles_keep_fixed_chunking(path: Path) -> None:
-    """Rule 7: one container keeps exactly what it indexed before."""
-
-    from pheasant.ingestion.chunk_plan import strategy_of
-
-    config = PheasantConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
-    assert strategy_of(_probe_source(config)) == "fixed"
-    assert strategy_of(_probe_source(PheasantConfig())) == "fixed"

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app, graph_neighbors, graph_slice
 from pheasant.graph.simple import SimpleMultiDiGraph
+from tests.conftest import seed_source
 
 
 def _client(config) -> TestClient:
@@ -345,6 +346,7 @@ def test_node_content_concatenates_chunks_in_index_order(loaded_config) -> None:
     """GROUP_CONCAT must respect chunk_index even when rows were written out of order."""
     app = create_app(config=loaded_config)
     state = app.state.state
+    seed_source(state, "test", loaded_config.knowledge_base_id)
     artifact = {
         "id": "file:test:ordered.md:branch=main",
         "source_id": "test",
@@ -374,7 +376,7 @@ def test_node_content_concatenates_chunks_in_index_order(loaded_config) -> None:
             "summary": f"part-{i}",
             "token_estimate": 2,
         }
-        # Insert in reverse so raw rowid order disagrees with chunk order.
+        # Insert in reverse so insertion order disagrees with chunk order.
         for i in (2, 1, 0)
     ]
     state.replace_artifact_chunks(artifact, chunks)

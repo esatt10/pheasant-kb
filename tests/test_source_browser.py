@@ -33,6 +33,8 @@ from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services import source_browser
 from pheasant.services.errors import DocumentNotFound, InvalidRequest, ServiceError, SourceNotFound
 
+pytestmark = pytest.mark.module_database
+
 #: A 1x1 PNG, so the media and raw paths have real image bytes to serve.
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -586,47 +588,3 @@ def test_a_scoped_answer_cites_only_that_folder(region: dict[str, Any]) -> None:
 
 
 POSTGRES_DSN = __import__("os").environ.get("PHEASANT_TEST_POSTGRES_DSN", "").strip()
-
-
-@pytest.mark.skipif(not POSTGRES_DSN, reason="set PHEASANT_TEST_POSTGRES_DSN to run backend parity")
-def test_the_tree_and_reads_agree_across_backends(tmp_path: Path) -> None:
-    """The tree's SQL is hand-written for both dialects (`LIKE … ESCAPE`, the
-    removed-source anti-join, the outline's `GROUP BY`): one corpus, both
-    backends, the same folders, files and text."""
-
-    from pheasant.persistence import pg_driver
-
-    with pg_driver.connect(POSTGRES_DSN, autocommit=True) as conn:
-        conn.query("DROP SCHEMA public CASCADE")
-        conn.query("CREATE SCHEMA public")
-    lite = _region(tmp_path / "sqlite")
-    storage = {"backend": "postgres", "dsn_env": "PHEASANT_TEST_POSTGRES_DSN"}
-    # CI's Postgres preloads pg_textsearch, the default; a stock server (a
-    # developer's local one) runs this with PHEASANT_TEST_LEXICAL_INDEX=tsvector.
-    lexical = __import__("os").environ.get("PHEASANT_TEST_LEXICAL_INDEX")
-    if lexical:
-        storage["lexical_index"] = lexical
-    pg = _region(tmp_path / "postgres", storage=storage)
-
-    def steady(payload: dict[str, Any]) -> dict[str, Any]:
-        for row in [*payload.get("files", []), payload.get("document") or {}]:
-            row.pop("last_indexed_at", None)
-        return payload
-
-    for args in [(), ("docs",), ("docs", "guide"), ("docs", "GUIDE/setup"), ("docs", "data")]:
-        a = steady(lite["tools"].browse_source(lite["kb"], *args))
-        b = steady(pg["tools"].browse_source(pg["kb"], *args))
-        assert a == b, args
-    for path in ("README.md", "guide/rotation.txt", "data/table.csv", "img/logo.png"):
-        a = steady(lite["tools"].read_document(lite["kb"], path, "docs"))
-        b = steady(pg["tools"].read_document(pg["kb"], path, "docs"))
-        assert a == b, path
-    with pytest.raises(InvalidRequest, match="No folder"):
-        pg["tools"].browse_source(pg["kb"], "docs", "nope")
-    from pheasant.search.criteria import path_within
-
-    for scope in ("guide", "guide/rotation.txt"):
-        found = pg["tools"].search_context(
-            pg["kb"], "vault guidebook rotation", source_name="docs", path_prefix=scope
-        )
-        assert found["results"] and all(path_within(p, scope) for p in _paths(found)), scope

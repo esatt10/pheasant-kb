@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import zipfile
 
 import pytest
@@ -27,17 +26,8 @@ from pheasant.tuning import store as tuning_store
 from pheasant.tuning.contracts import Experiment, ParameterPoint
 
 
-@pytest.fixture(params=["sqlite", "postgres"])
-def context(loaded_config, request):
-    if request.param == "postgres":
-        dsn = os.environ.get("PHEASANT_TEST_POSTGRES_DSN")
-        if not dsn:
-            pytest.skip("set a throwaway PHEASANT_TEST_POSTGRES_DSN for backend parity")
-        from tests.test_backend_parity import _reset
-
-        _reset(dsn)
-        loaded_config.storage.backend = "postgres"
-        loaded_config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+@pytest.fixture()
+def context(loaded_config):
     engine = SyncEngine(loaded_config)
     try:
         yield ServiceContext(loaded_config, engine.state, None, engine=engine)
@@ -478,7 +468,7 @@ def test_evaluation_baseline_excludes_typed_and_saved_artifact_content(context):
     from pheasant.evaluation.replay import ReplayEngine
     from pheasant.evaluation.variants import default_matrix
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     written = artifact_records.write(
         context,
@@ -683,7 +673,7 @@ def test_retirement_is_hidden_while_the_fleet_writer_is_deferred(context):
     from pheasant.evaluation.replay import ReplayEngine
     from pheasant.evaluation.variants import default_matrix
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
     from pheasant.services.archive import Indexing
 
     written = artifact_records.write(

@@ -19,7 +19,7 @@ from tests.conftest import make_vector_engine, run_sync
 
 def _search(engine: Any, query: str, mode: str, source_name: str | None = None) -> dict:
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     searcher = HybridSearch(SearchStore(engine.state), vector=engine.vector_searcher())
     return searcher.search_context(
@@ -74,7 +74,7 @@ def test_hybrid_degrades_when_the_vector_arm_raises(tmp_path: Path) -> None:
     built from the arms that were actually healthy.
     """
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     engine = make_vector_engine(tmp_path)
     run_sync(engine, source_name="notes", mode="full")
@@ -968,7 +968,7 @@ def test_a_keep_warm_search_moves_no_metric_and_no_salience(tmp_path: Path) -> N
     from pheasant.config.schema import PheasantConfig
     from pheasant.search.hybrid import HybridSearch
     from pheasant.search.keep_warm import quiet_copy
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
     from pheasant.sync.engine import SyncEngine
     from pheasant.telemetry import metrics
 

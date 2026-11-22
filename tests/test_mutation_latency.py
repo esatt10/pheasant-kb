@@ -209,7 +209,7 @@ def test_projection_failure_keeps_intent_and_retry_indexes_once(loaded_config, m
 
 def test_tombstones_exclude_all_retrieval_arms_before_cleanup(loaded_config, monkeypatch):
     from pheasant.search.hybrid import HybridSearch
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     engine = SyncEngine(loaded_config)
     context = ServiceContext(config=engine.config, state=engine.state, searcher=None, engine=engine)

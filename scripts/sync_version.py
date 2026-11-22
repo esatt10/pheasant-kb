@@ -122,12 +122,6 @@ def replacements(version: str) -> list[Replacement]:
     image = f"ghcr.io/esatt10/pheasant:{version}"
     return [
         Replacement(
-            path=Path("deploy/compose/docker-compose.yml"),
-            pattern=re.compile(r"ghcr\.io/esatt10/pheasant:[0-9A-Za-z._+-]+"),
-            replacement=image,
-            label="Docker Compose default image",
-        ),
-        Replacement(
             path=Path("pheasant.example.yaml"),
             pattern=re.compile(
                 r"(?ms)^(deployment:\r?\n(?:[ \t]+[^\r\n]*\r?\n)*?[ \t]+image_tag:\s*)[^\r\n#]+"
@@ -143,8 +137,6 @@ def replacements(version: str) -> list[Replacement]:
         *_image_reference_replacements(
             version,
             {
-                Path("deploy/compose/docker-compose.fresh.yml"): 1,
-                Path("deploy/compose/docker-compose.advanced.yml"): 1,
                 Path("deploy/compose/docker-compose.scale.yml"): 7,
                 # pheasant-kb, the default deployment: eight pheasant services.
                 Path("compose.yaml"): 8,

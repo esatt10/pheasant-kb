@@ -50,7 +50,7 @@ class HistoryPublisher:
             now = utc_now()
             files = GraphStore(paths.graphs)
             if snapshot_due(files, kb, now, storage.graph_snapshot_interval_seconds):
-                state = StateStore.from_config(config, paths.sqlite)
+                state = StateStore.from_config(config)
                 store = GraphStore(paths.graphs, state=state, graph_format="rows")
                 path = write_snapshot(store, kb, now, self._cancelled)
                 logger.info("Graph history published: %s", path.name)

@@ -7,13 +7,9 @@ claims from -- ``idx_index_tasks_claim`` -- and the vacuum pressure that comes
 with it under PostgreSQL. That is precisely the burden this tier exists to
 remove, so sharing would defeat it.
 
-Almost nothing is duplicated to get that isolation. :class:`LogQueue` subclasses
-:class:`pheasant.sync.queue.LocalQueue` and changes two class attributes, so the
-conditional-``UPDATE`` claim -- the piece with the twenty-line race argument
-about which ``WHERE`` clause PostgreSQL re-evaluates under READ COMMITTED --
-stays a single implementation. ``drain()`` is already task-agnostic and is
-reused verbatim. ``tests/test_log_queue.py`` asserts the index queue's own
-generated SQL did not move.
+Almost nothing is duplicated to get that isolation. :class:`NatsLogQueue` is
+:class:`pheasant.sync.queue.NatsQueue` on its own stream, subject and durable,
+and ``drain()`` is already task-agnostic and is reused verbatim.
 
 The worker is the other half of the answer. Persisting a batch, rolling hot rows
 to Parquet and dropping expired partitions all happen here, on a process that is
@@ -24,7 +20,6 @@ sync for every source in the region.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import uuid
@@ -36,7 +31,6 @@ from typing import Any
 from pheasant.sync.queue import (
     DEFAULT_VISIBILITY_SECONDS,
     IndexTask,
-    LocalQueue,
     NatsQueue,
     TaskQueue,
 )
@@ -90,41 +84,6 @@ class LogTask:
         }
 
 
-class LogQueue(LocalQueue):
-    """``log_tasks``, claimed by exactly the mechanism ``index_tasks`` is.
-
-    Everything inherited is deliberate. In particular ``publish``'s
-    ``ON CONFLICT ... WHERE status='done'`` re-arm behaves correctly here for a
-    different reason than it does upstream: a batch id is content-addressed on
-    the span ids it carries, so a republished batch is the *same* batch, and
-    re-arming a completed one simply re-applies an insert that
-    ``ON CONFLICT (id) DO NOTHING`` will absorb.
-    """
-
-    TABLE = "log_tasks"
-    EXTRA_COLUMNS: tuple[str, ...] = ()
-
-    #: Set from config by :func:`log_queue_from_config`. A class default so a
-    #: queue built directly in a test still has one.
-    max_attempts: int = DEFAULT_LOG_MAX_ATTEMPTS
-
-    def _extra_values(self, task: Any) -> tuple[Any, ...]:
-        return ()
-
-    def _build_task(self, row: Any) -> LogTask:
-        return LogTask(
-            id=str(row["id"]),
-            payload=json.loads(row["payload"] or "{}"),
-            attempts=int(row["attempts"]),
-            max_attempts=int(row["max_attempts"]),
-        )
-
-    def publish_batch(self, task_id: str, payload: dict[str, Any]) -> LogTask:
-        """What :class:`~pheasant.telemetry.interactions.QueueSink` calls."""
-
-        return self.publish(LogTask(id=task_id, payload=payload, max_attempts=self.max_attempts))
-
-
 class NatsLogQueue(NatsQueue):
     """JetStream for the log tier.
 
@@ -135,9 +94,7 @@ class NatsLogQueue(NatsQueue):
     honest rather than clever, and it keeps the requeue path (which also
     reconstructs a task from a message) working unchanged.
 
-    :func:`handle_batch` reads only ``.payload``, so it does not care whether a
-    task arrived as a :class:`LogTask` from the local queue or an ``IndexTask``
-    from here.
+    :func:`handle_batch` reads only ``.payload``.
     """
 
     def __init__(self, *args: Any, max_attempts: int = DEFAULT_LOG_MAX_ATTEMPTS, **kwargs: Any):
@@ -172,24 +129,24 @@ def log_queue_from_config(config: Any, state: Any) -> TaskQueue | None:
         return None
 
     attempts = int(getattr(queue_settings, "max_attempts", DEFAULT_LOG_MAX_ATTEMPTS))
-    backend = str(getattr(queue_settings, "backend", "local") or "local").lower()
-    if backend == "nats":
-        # Its own stream, subject and durable, so the two tiers cannot consume
-        # each other's work even when they share one NATS cluster. The server
-        # list is shared with the index queue deliberately: it says where the
-        # cluster is, not what it carries.
-        return NatsLogQueue(
-            servers=list(getattr(config.sync.queue, "nats_servers", []) or []),
-            stream=str(getattr(queue_settings, "nats_stream", "PHEASANT_LOGS")),
-            subject=str(getattr(queue_settings, "nats_subject", "pheasant.logs.batches")),
-            durable=str(getattr(queue_settings, "nats_durable", "pheasant-loggers")),
-            max_attempts=attempts,
+    backend = str(getattr(queue_settings, "backend", "nats") or "nats").lower()
+    if backend != "nats":
+        raise ValueError(
+            f"observability.interactions.queue.backend is {backend!r}; the log queue "
+            "is NATS JetStream (`nats`). The database-backed `local` queue was removed in 2.0."
         )
-    if backend not in ("local", ""):
-        logger.warning("Unknown log queue backend %r; falling back to 'local'.", backend)
-    queue = LogQueue(state)
-    queue.max_attempts = attempts
-    return queue
+    del state
+    # Its own stream, subject and durable, so the two tiers cannot consume each
+    # other's work even when they share one NATS cluster. The server list is
+    # shared with the index queue deliberately: it says where the cluster is,
+    # not what it carries.
+    return NatsLogQueue(
+        servers=list(getattr(config.sync.queue, "nats_servers", []) or []),
+        stream=str(getattr(queue_settings, "nats_stream", "PHEASANT_LOGS")),
+        subject=str(getattr(queue_settings, "nats_subject", "pheasant.logs.batches")),
+        durable=str(getattr(queue_settings, "nats_durable", "pheasant-loggers")),
+        max_attempts=attempts,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -479,34 +436,6 @@ def publish_depth(queue: TaskQueue | None) -> None:
     REGISTRY.set("pheasant_log_dead_letters", float(depth.get("dead", 0)))
 
 
-#: How long a written batch's ``log_tasks`` row outlives it. Its only use
-#: afterwards is deduplicating a republish of the same batch, and the event
-#: insert is ``ON CONFLICT (id) DO NOTHING`` anyway, so a day is generous.
-COMPLETED_BATCH_RETENTION_SECONDS = 86_400.0
-
-
-def _purge_completed_batches(state: Any, config: Any) -> int:
-    """Delete ``log_tasks`` rows for batches already written.
-
-    Every batch id is content-addressed over its events, so unlike an index
-    task (one id per source, re-armed) no id repeats: each observation batch
-    was a new row, and each row keeps its whole payload after it is done.
-    `LocalQueue.purge_completed` existed for this and nothing called it, so
-    the table grew with request traffic and stored every observation a
-    second time. JetStream needs nothing here: the broker removes an acked
-    message itself.
-    """
-
-    try:
-        queue = log_queue_from_config(config, state)
-        if not isinstance(queue, LogQueue):
-            return 0
-        return queue.purge_completed(COMPLETED_BATCH_RETENTION_SECONDS)
-    except Exception:  # noqa: BLE001 - the beat's contract: never raise
-        logger.warning("Could not purge completed log batches", exc_info=True)
-        return 0
-
-
 def run_log_maintenance(
     state: Any,
     config: Any,
@@ -530,9 +459,6 @@ def run_log_maintenance(
     if spool:
         report["spooled"] = ingest_spool(state, Path(spool))
 
-    purged = _purge_completed_batches(state, config)
-    if purged:
-        report["purged_batches"] = purged
     exports_path = getattr(config.pheasant, "exports_path", None) or Path("exports")
     report.update(roll(state, settings, exports_path=exports_path, now=now))
     dropped = drop_expired_partitions(exports_path, settings, now=now)
@@ -546,7 +472,6 @@ __all__ = [
     "DEFAULT_LOG_MAX_ATTEMPTS",
     "DEFAULT_LOG_VISIBILITY_SECONDS",
     "DEFAULT_VISIBILITY_SECONDS",
-    "LogQueue",
     "LogTask",
     "cold_partition_dir",
     "drop_expired_partitions",

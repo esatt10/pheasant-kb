@@ -70,8 +70,6 @@ def _database(context: ServiceContext, elapsed: float) -> dict[str, Any]:
             context.state.rows("SELECT 1 AS ok", ())
     except Exception as exc:  # noqa: BLE001 - any failure is "not answering"
         return {**part, **_not_answering(elapsed, f"not accepting connections yet ({exc})")}
-    if not getattr(getattr(context.state, "dialect", None), "is_postgres", False):
-        return {**part, "state": "ready", "detail": "answering"}
     try:
         with activate(time.monotonic() + CHECK_SECONDS):
             row = context.state.rows(

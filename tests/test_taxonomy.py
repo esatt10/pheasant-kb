@@ -15,6 +15,7 @@ so a regression is visible as "the dormant thing went dormant again".
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ from pheasant.ingestion.taxonomy import (
     taxonomy_tree,
 )
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 # A contract shaped the way real ones are: an ALL-CAPS title, a bare ARTICLE
@@ -89,7 +90,14 @@ An ordinary paragraph that runs on for a while and is not a heading at all.
 """
 
 
-def _engine(tmp_path: Path, text: str, *, taxonomy: dict | None = None, name: str = "docs"):
+def _engine(
+    tmp_path: Path,
+    text: str,
+    *,
+    taxonomy: dict | None = None,
+    name: str = "docs",
+    dsn_env: str | None = None,
+):
     workspace = tmp_path / "workspace" / "docs"
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "doc.md").write_text(text, encoding="utf-8")
@@ -111,6 +119,7 @@ def _engine(tmp_path: Path, text: str, *, taxonomy: dict | None = None, name: st
                     "exports_path": str(tmp_path / "exports"),
                 },
                 "sources": [source],
+                **({"storage": {"dsn_env": dsn_env}} if dsn_env else {}),
             }
         )
     )
@@ -388,13 +397,15 @@ def test_oversized_section_is_still_split_by_max_chars(tmp_path: Path) -> None:
     assert {c["heading_path"] for c in big_chunks} == {"Big Section"}
 
 
-def test_split_on_sections_can_be_turned_off(tmp_path: Path) -> None:
+def test_split_on_sections_can_be_turned_off(
+    tmp_path: Path, database_variable: Callable[[], str]
+) -> None:
     """Labelling without re-cutting: the original boundaries are preserved."""
     labelled = _engine(
         tmp_path / "a", LEGAL, taxonomy={"enabled": True, "split_on_sections": False}
     )
     labelled.sync_source("docs", mode="full")
-    plain = _engine(tmp_path / "b", LEGAL)
+    plain = _engine(tmp_path / "b", LEGAL, dsn_env=database_variable())
     plain.sync_source("docs", mode="full")
 
     labelled_chunks = _chunks(labelled)
@@ -1283,7 +1294,7 @@ def test_omitting_the_section_is_unchanged(tmp_path: Path) -> None:
 
 
 def test_section_matching_is_substring_and_case_insensitive() -> None:
-    from pheasant.search.sqlite_store import section_matches, section_needle
+    from pheasant.search.text_store import section_matches, section_needle
 
     path = "MASTER SERVICES AGREEMENT > Article IV Term and Termination > § 12.3 Governing Law"
     assert section_matches(path, "§ 12.3")

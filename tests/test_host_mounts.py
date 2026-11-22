@@ -23,7 +23,6 @@ import yaml
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
-from pheasant.cli import main
 from pheasant.deployment.mounts import (
     Mount,
     host_to_container,
@@ -243,69 +242,6 @@ def test_a_malformed_override_is_rejected_rather_than_silently_replaced() -> Non
 
 
 # ------------------------------------------------------------------ the CLI
-
-
-def test_cli_mount_writes_the_override_and_allowlists_the_path(tmp_path: Path) -> None:
-    config = tmp_path / "pheasant.yaml"
-    config.write_text("pheasant:\n  name: kb\n", encoding="utf-8")
-    override = tmp_path / "docker-compose.override.yml"
-    host = tmp_path / "notes"
-    host.mkdir()
-
-    assert main(["mount", str(host), "-c", str(config), "-o", str(override)]) == 0
-
-    volumes = yaml.safe_load(override.read_text())["services"]["pheasant"]["volumes"]
-    assert volumes == [f"{host}:/data/notes:ro"]
-    roots = yaml.safe_load(config.read_text())["security"]["allow_workspace_roots"]
-    assert "/data/notes" in roots
-    # The defaults survive — replacing them with one entry would lock the user
-    # out of /workspace.
-    assert "/workspace" in roots
-
-
-def test_cli_mount_is_idempotent(tmp_path: Path) -> None:
-    config = tmp_path / "pheasant.yaml"
-    config.write_text("pheasant:\n  name: kb\n", encoding="utf-8")
-    override = tmp_path / "docker-compose.override.yml"
-    host = tmp_path / "notes"
-    host.mkdir()
-    args = ["mount", str(host), "-c", str(config), "-o", str(override)]
-
-    assert main(args) == 0
-    first_override = override.read_text()
-    first_config = config.read_text()
-    assert main(args) == 0
-
-    assert override.read_text() == first_override
-    assert config.read_text() == first_config
-
-
-def test_cli_mount_print_only_changes_nothing(tmp_path: Path) -> None:
-    config = tmp_path / "pheasant.yaml"
-    config.write_text("pheasant:\n  name: kb\n", encoding="utf-8")
-    override = tmp_path / "docker-compose.override.yml"
-    host = tmp_path / "notes"
-    host.mkdir()
-
-    assert main(["mount", str(host), "-c", str(config), "-o", str(override), "--print-only"]) == 0
-    assert not override.exists()
-    assert "allow_workspace_roots" not in config.read_text()
-
-
-def test_cli_mount_accepts_an_explicit_container_path(tmp_path: Path) -> None:
-    config = tmp_path / "pheasant.yaml"
-    config.write_text("pheasant:\n  name: kb\n", encoding="utf-8")
-    override = tmp_path / "docker-compose.override.yml"
-    host = tmp_path / "notes"
-    host.mkdir()
-
-    main(["mount", str(host), "--at", "/mnt/custom", "-c", str(config), "-o", str(override)])
-
-    volumes = yaml.safe_load(override.read_text())["services"]["pheasant"]["volumes"]
-    assert volumes == [f"{host}:/mnt/custom:ro"]
-
-
-# ------------------------------------------------------------------ the API
 
 
 def test_host_path_route_reports_a_native_path(loaded_config, monkeypatch, tmp_path) -> None:

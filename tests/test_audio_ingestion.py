@@ -20,7 +20,7 @@ import pytest
 from pheasant.config.schema import PheasantConfig
 from pheasant.ingestion.transcriber import StubTranscriber, build_transcriber
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 FIXTURE_AUDIO = Path(__file__).parent / "fixtures" / "sample_workspace" / "audio" / "briefing.wav"

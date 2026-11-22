@@ -44,13 +44,15 @@ from pheasant.assistant.retrieval import LARGE_FILE_BYTES, PheasantRetriever, _i
 from pheasant.assistant.workflows import BUILTIN_WORKFLOWS, WorkflowRequest, list_workflows
 from pheasant.assistant.workflows.simple import SimpleWorkflow
 from pheasant.persistence.state_store import StateStore
+from tests.conftest import seed_source
 
 # --------------------------------------------------------------- a real index
 
 
 def _store(tmp_path):
-    store = StateStore(tmp_path / "state.db")
+    store = StateStore()
     store.migrate()
+    seed_source(store)
     return store
 
 
@@ -798,17 +800,17 @@ def test_a_question_does_not_rescan_the_corpus_vocabulary(tmp_path, monkeypatch)
     """The vocabulary was a 5.6 s `ts_stat` on the lab, cached against the
     chunk count -- so every question during a sync re-ran it. It is held per
     database now: a new signature re-derives the cheap aggregates, not it."""
-    from pheasant.search import corpus_shape, sqlite_store
+    from pheasant.search import corpus_shape, text_store
 
     corpus_shape.forget()
     scans: list[int] = []
-    real = sqlite_store.corpus_vocabulary
+    real = text_store.corpus_vocabulary
 
     def counting(state, limit=64):
         scans.append(limit)
         return real(state, limit)
 
-    monkeypatch.setattr(sqlite_store, "corpus_vocabulary", counting)
+    monkeypatch.setattr(text_store, "corpus_vocabulary", counting)
     store = _store(tmp_path)
     _add_file(store, "file:demo:a.md", "a.md", [("", "checkpointing durable workflows")])
     store.conn.commit()
@@ -827,7 +829,7 @@ def test_a_question_does_not_rescan_the_corpus_vocabulary(tmp_path, monkeypatch)
 def test_a_stale_vocabulary_is_served_while_one_thread_refreshes_it(tmp_path, monkeypatch) -> None:
     import threading
 
-    from pheasant.search import corpus_shape, sqlite_store
+    from pheasant.search import corpus_shape, text_store
 
     corpus_shape.forget()
     store = _store(tmp_path)
@@ -842,7 +844,7 @@ def test_a_stale_vocabulary_is_served_while_one_thread_refreshes_it(tmp_path, mo
             return [("fresh", 1)]
         return [("held", 1)]
 
-    monkeypatch.setattr(sqlite_store, "corpus_vocabulary", slow)
+    monkeypatch.setattr(text_store, "corpus_vocabulary", slow)
     assert corpus_shape.vocabulary(store, 24) == [("held", 1)]
     monkeypatch.setattr(corpus_shape, "VOCABULARY_SECONDS", 0.0)
 
@@ -916,12 +918,6 @@ def test_directory_rollup_uses_postgres_string_functions() -> None:
         (),
         {"dialect": type("Dialect", (), {"is_postgres": True})()},
     )()
-    sqlite_state = type(
-        "State",
-        (),
-        {"dialect": type("Dialect", (), {"is_postgres": False})()},
-    )()
 
     assert "strpos(" in _top_directories_sql(postgres_state)
     assert "instr(" not in _top_directories_sql(postgres_state)
-    assert "instr(" in _top_directories_sql(sqlite_state)

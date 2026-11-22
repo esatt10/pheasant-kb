@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -80,12 +81,10 @@ def test_progress_is_readable_from_another_process(seeded: Any, tmp_path: Path) 
     process, this would see nothing.
     """
 
-    from pheasant.persistence.paths import StatePaths
     from pheasant.persistence.state_store import StateStore
 
     outcome = evaluation.run(seeded)
-    paths = StatePaths.from_config(seeded.config)
-    other = StateStore.from_config(seeded.config, paths.sqlite)
+    other = StateStore.from_config(seeded.config)
     try:
         seen = evaluation.progress(other, "kb")
         assert seen["run_id"] == outcome.run_id
@@ -302,7 +301,7 @@ def test_checkpoints_are_cleared_only_once_the_report_is_committed(
 
 
 def test_a_resumed_run_computes_the_same_numbers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fresh_database: Callable[[], str]
 ) -> None:
     """Reproducibility cannot depend on whether the container restarted.
 
@@ -317,7 +316,11 @@ def test_a_resumed_run_computes_the_same_numbers(
     finally:
         straight.close()
 
-    interrupted = _engine(tmp_path / "b")
+    # A region of its own: a run id addresses the state it measures, so on one
+    # database the second region would resume the first one's finished run.
+    with pytest.MonkeyPatch.context() as scoped:
+        scoped.setenv("PHEASANT_DATABASE_URL", fresh_database())
+        interrupted = _engine(tmp_path / "b")
     _seed(interrupted)
     try:
         _interrupt_after(monkeypatch, replays=5)

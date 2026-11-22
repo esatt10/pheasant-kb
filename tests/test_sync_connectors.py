@@ -145,7 +145,7 @@ def test_misclassified_github_tree_url_has_actionable_error(tmp_path: Path) -> N
 
 def _artifact_rows(engine: SyncEngine, source_id: str) -> list[tuple]:
     return [
-        tuple(row)
+        (row["id"], row["sha256"], row["last_indexed_at"])
         for row in engine.state.rows(
             "SELECT id, sha256, last_indexed_at FROM artifacts "
             "WHERE source_id=? ORDER BY relative_path",

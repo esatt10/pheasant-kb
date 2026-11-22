@@ -43,6 +43,8 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.sync import log_queue as lq
 from pheasant.sync.queue import drain
 
+pytestmark = pytest.mark.module_database
+
 #: Phase timings, printed at the end so CI has a number to report.
 TIMINGS: dict[str, float] = {}
 
@@ -84,6 +86,9 @@ def region(tmp_path_factory: Any) -> Any:
     for name in ("state", "exports", "memory"):
         (root / name).mkdir(parents=True, exist_ok=True)
 
+    from tests.conftest import make_nats_queue_settings
+
+    _index_queue = make_nats_queue_settings()
     raw = {
         "pheasant": {
             "name": "roundtrip",
@@ -98,9 +103,18 @@ def region(tmp_path_factory: Any) -> Any:
                 "flush_batch_size": 1,
                 "hot_retention_days": 0,
                 "cold_enabled": True,
-                "queue": {"enabled": True, "backend": "local"},
+                "queue": {
+                    "enabled": True,
+                    "backend": "nats",
+                    "nats_stream": f"TEST_LOGS_{_index_queue['nats_stream'][-10:]}",
+                    "nats_subject": f"test.{_index_queue['nats_stream'][-10:]}.logs",
+                    "nats_durable": f"test-loggers-{_index_queue['nats_stream'][-10:]}",
+                },
             }
         },
+        # The log queue reads its broker from `sync.queue`; the index queue
+        # itself stays off.
+        "sync": {"queue": dict(_index_queue, enabled=False)},
         "memory": {"formation": {"enabled": True, "min_observations": 2, "min_sessions": 2}},
         "sources": [
             {
@@ -183,8 +197,6 @@ def test_the_whole_loop_from_a_search_to_a_memory_a_search_finds(region: Any) ->
         assert log_q is not None
         depth = log_q.depth()
         assert depth["pending"] >= 1, "nothing reached the log queue"
-        # Its *own* table. An indexer draining index_tasks must never see these.
-        assert state.rows("SELECT COUNT(*) AS c FROM index_tasks", ())[0]["c"] == 0
 
         # -- 3. drained by a worker, exactly as `--role logger` would ------------
         with _Phase("drain"):

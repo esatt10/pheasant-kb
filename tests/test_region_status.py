@@ -51,7 +51,12 @@ def _config(tmp_path: Path) -> PheasantConfig:
 def _settled(status: dict[str, Any]) -> dict[str, Any]:
     """The status without the clock, which moves between two calls."""
 
-    return {key: value for key, value in status.items() if key != "elapsed_seconds"}
+    settled = {key: value for key, value in status.items() if key != "elapsed_seconds"}
+    settled["components"] = [
+        {key: value for key, value in part.items() if key != "up_seconds"}
+        for part in status.get("components") or []
+    ]
+    return settled
 
 
 def test_an_awake_region_has_nothing_to_show_on_either_surface(tmp_path: Path) -> None:
@@ -127,7 +132,7 @@ def test_the_cache_check_reads_a_real_postgres(tmp_path: Path) -> None:
 
     config = _config(tmp_path)
     config.storage.backend = "postgres"
-    config.storage.dsn_env = "PHEASANT_TEST_POSTGRES_DSN"
+    config.storage.dsn_env = "PHEASANT_DATABASE_URL"
     engine = SyncEngine(config)
     try:
         status = region.region_status(

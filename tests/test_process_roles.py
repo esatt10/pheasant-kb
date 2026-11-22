@@ -26,7 +26,48 @@ from pheasant.deployment.roles import (
     resolve_role,
     validate_role,
 )
-from pheasant.sync.queue import DONE, PENDING, LocalQueue
+from pheasant.sync.queue import DONE, PENDING, queue_from_config
+from tests.conftest import make_nats_log_queue_settings, make_nats_queue_settings
+
+#: One test's NATS stream, shared by every config that test builds: an api
+#: replica and the indexer draining it must name the same queue.
+_QUEUES: dict[str, dict[str, Any]] = {}
+
+
+@pytest.fixture(autouse=True)
+def _one_stream_per_test():
+    _QUEUES.clear()
+    yield
+    _QUEUES.clear()
+
+
+def _queue_settings() -> dict[str, Any]:
+    if "index" not in _QUEUES:
+        _QUEUES["index"] = make_nats_queue_settings()
+        _QUEUES["logs"] = make_nats_log_queue_settings(_QUEUES["index"])
+    return _QUEUES["index"]
+
+
+def _queue() -> Any:
+    """The test's index queue, as an indexer in another process would open it."""
+
+    from pheasant.sync.queue import NatsQueue
+
+    settings = _queue_settings()
+    return NatsQueue(
+        settings["nats_servers"],
+        stream=settings["nats_stream"],
+        subject=settings["nats_subject"],
+        durable=settings["nats_durable"],
+    )
+
+
+def _depth() -> dict[str, int]:
+    queue = _queue()
+    try:
+        return queue.depth()
+    finally:
+        queue.close()
 
 
 def _config(
@@ -66,10 +107,12 @@ def _config(
         "sync": {"concurrency": {"lock_timeout_seconds": 5}},
         "sources": entries,
     }
-    if queue:
-        payload["sync"]["queue"] = {"enabled": True}
+    if queue or observability:
+        payload["sync"]["queue"] = dict(_queue_settings(), enabled=bool(queue))
     if observability:
-        payload["observability"] = {"interactions": {"enabled": True, "queue": {"enabled": True}}}
+        payload["observability"] = {
+            "interactions": {"enabled": True, "queue": dict(_QUEUES["logs"])}
+        }
     # Loopback, because that is what an in-process test actually is. A role
     # other than `all` refuses an unauthenticated bind other machines can
     # reach (see the exposure tests below); saying 0.0.0.0 here would be
@@ -172,8 +215,7 @@ def test_indexer_orchestration_has_one_leader_and_fails_over(tmp_path: Path) -> 
         def stop(self) -> None:
             self.running = False
 
-    path = tmp_path / "leadership.db"
-    stores = [StateStore(path), StateStore(path)]
+    stores = [StateStore(), StateStore()]
     for store in stores:
         store.migrate()
     service_sets = [[Service(), Service(), Service()] for _ in stores]
@@ -216,7 +258,10 @@ def test_indexer_orchestration_has_one_leader_and_fails_over(tmp_path: Path) -> 
         leader.stop()
         wait_until(lambda: standby.leader)
         wait_until(lambda: sum(promotions) == 2)
-        assert all(service.running for service in service_sets[supervisors.index(standby)])
+        # A promotion starts its reconcile thread (which counts it) before the
+        # services, on purpose, so the services are waited for, not asserted.
+        services = service_sets[supervisors.index(standby)]
+        wait_until(lambda: all(service.running for service in services))
     finally:
         for supervisor in supervisors:
             supervisor.stop()
@@ -248,11 +293,13 @@ def test_the_api_role_starts_with_a_queue(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("role", ["all", "indexer", "graph", "worker"])
-def test_other_roles_need_no_queue(tmp_path: Path, role: str) -> None:
+def test_other_roles_need_no_queue(tmp_path: Path, role: str, monkeypatch: Any) -> None:
     """Only `api` depends on a queue: the rest can index or do nothing."""
 
-    # No sources for the worker: it is the one role that refuses to hold a
-    # source list at all, which the allow-list tests below cover directly.
+    # No sources and no state credential for the worker: it is the one role
+    # that refuses to hold either, which the allow-list tests below cover.
+    if role == "worker":
+        monkeypatch.delenv("PHEASANT_DATABASE_URL", raising=False)
     config = _config(
         tmp_path,
         state_name=f"noqueue-{role}",
@@ -349,8 +396,9 @@ def test_the_api_role_publishes_a_sync_instead_of_running_it(tmp_path: Path) -> 
     assert client.get(f"/jobs/{body['queued_tasks'][0]}").status_code == 404
 
     engine = client.app.state.engine
-    queue = LocalQueue(engine.state)
+    queue = queue_from_config(config, engine.state)
     assert queue.depth()[PENDING] == 1
+    queue.close()
     # Nothing was indexed here: the artifacts table is still empty.
     rows = engine.state.rows("SELECT COUNT(*) AS c FROM artifacts", ())
     assert int(rows[0]["c"]) == 0
@@ -453,7 +501,11 @@ def test_the_api_role_defers_repository_clone_to_the_indexer(
     assert body["queued_tasks"]
 
 
-def test_the_api_role_deduplicates_a_double_click(tmp_path: Path) -> None:
+def test_a_double_click_publishes_one_logical_task(tmp_path: Path) -> None:
+    """The two clicks name one task. JetStream dedups only retries of one
+    publish, so both may sit on the stream; the source lease is what keeps
+    them from indexing one source twice at once."""
+
     config = _config(tmp_path, state_name="api-dedup", role="api", queue=True)
     client = TestClient(create_app(config, role="api"))
 
@@ -461,11 +513,9 @@ def test_the_api_role_deduplicates_a_double_click(tmp_path: Path) -> None:
     second = client.post("/sync/src0", json={"mode": "full", "wait": False}).json()
 
     # Compared on `queued_tasks`, not `job_id`: on this role `job_id` is None
-    # for both calls, so the original assertion held whether or not the two
-    # clicks deduplicated.
+    # for both calls.
     assert first["queued_tasks"], "nothing was published"
     assert first["queued_tasks"] == second["queued_tasks"]
-    assert LocalQueue(client.app.state.engine.state).depth()[PENDING] == 1
 
 
 def test_api_source_removal_is_an_ordered_writer_task(tmp_path: Path) -> None:
@@ -483,10 +533,13 @@ def test_api_source_removal_is_an_ordered_writer_task(tmp_path: Path) -> None:
     assert int(row["enabled"]) == 0
     assert client.app.state.state.source_removed("src0")
     assert not any(source["name"] == "src0" for source in client.get("/sources").json())
-    queue = LocalQueue(client.app.state.state)
-    task = queue.claim("test-control-writer")
-    assert task is not None
-    assert task.payload["operation"] == "delete_source"
+    queue = _queue()
+    try:
+        task = queue.claim("test-control-writer")
+        assert task is not None
+        assert task.payload["operation"] == "delete_source"
+    finally:
+        queue.close()
 
 
 def test_sync_all_includes_a_source_registered_only_in_state(tmp_path: Path) -> None:
@@ -522,7 +575,7 @@ def test_sync_all_includes_a_source_registered_only_in_state(tmp_path: Path) -> 
 
     assert response.status_code == 200
     assert response.json()["sources"] == ["runtime-docs"]
-    assert LocalQueue(client.app.state.engine.state).depth()[PENDING] == 1
+    assert _depth()[PENDING] == 1
 
 
 def test_the_api_role_refuses_a_blocking_sync_with_a_usable_message(tmp_path: Path) -> None:
@@ -547,9 +600,7 @@ def test_the_all_role_still_indexes_in_process(tmp_path: Path) -> None:
     response = client.post("/sync/src0", json={"mode": "full", "wait": True})
     assert response.status_code == 200
     assert response.json()["indexed_artifacts"] == 1
-
-    rows = client.app.state.engine.state.rows("SELECT COUNT(*) AS c FROM index_tasks", ())
-    assert int(rows[0]["c"]) == 0, "the default role published instead of indexing"
+    assert response.json().get("status") != "queued", "the default role published"
 
 
 # --------------------------------------------------------------------------
@@ -571,6 +622,12 @@ def _write_config_file(config: PheasantConfig, path: Path, *, role: str) -> Path
         "sync:",
         "  queue:",
         "    enabled: true",
+        "    backend: nats",
+        "    nats_servers:",
+        f"      - {_queue_settings()['nats_servers'][0]}",
+        f"    nats_stream: {_queue_settings()['nats_stream']}",
+        f"    nats_subject: {_queue_settings()['nats_subject']}",
+        f"    nats_durable: {_queue_settings()['nats_durable']}",
         "sources:",
     ]
     for source in config.sources:
@@ -601,7 +658,7 @@ def test_the_indexer_drains_what_an_api_replica_published(tmp_path: Path) -> Non
     api = TestClient(create_app(config, role="api"))
     api.post("/sync/src0", json={"mode": "full", "wait": False})
     api.post("/sync/src1", json={"mode": "full", "wait": False})
-    assert LocalQueue(api.app.state.engine.state).depth()[PENDING] == 2
+    assert _depth()[PENDING] == 2
 
     from pheasant.config.loader import load_config
 
@@ -611,14 +668,14 @@ def test_the_indexer_drains_what_an_api_replica_published(tmp_path: Path) -> Non
     try:
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
-            depth = LocalQueue(api.app.state.engine.state).depth()
+            depth = _depth()
             if depth[DONE] == 2:
                 break
             time.sleep(0.5)
     finally:
         drainer.stop()
 
-    depth = LocalQueue(api.app.state.engine.state).depth()
+    depth = _depth()
     assert depth[DONE] == 2, f"indexer did not drain the backlog: {depth}"
     rows = api.app.state.engine.state.rows(
         "SELECT source_id, COUNT(*) AS c FROM artifacts GROUP BY source_id ORDER BY source_id"
@@ -643,19 +700,19 @@ def test_the_drainer_does_not_claim_while_a_sync_coordinator_owns_the_lock(
     drainer.start()
     try:
         time.sleep(1.0)
-        assert LocalQueue(api.app.state.engine.state).depth()[PENDING] == 1
+        assert _depth()[PENDING] == 1
     finally:
         sync_lock.release()
 
     try:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if LocalQueue(api.app.state.engine.state).depth()[DONE] == 1:
+            if _depth()[DONE] == 1:
                 break
             time.sleep(0.25)
     finally:
         drainer.stop()
-    assert LocalQueue(api.app.state.engine.state).depth()[DONE] == 1
+    assert _depth()[DONE] == 1
 
 
 def test_a_drainer_stops_promptly(tmp_path: Path) -> None:
@@ -892,7 +949,10 @@ def test_background_services_start_only_for_their_roles(tmp_path: Path, monkeypa
     assert sorted(run_for("api")) == ["refresher", "ui"]
     assert sorted(run_for("indexer")) == ["drainer", "scheduler", "watcher"]
     assert sorted(run_for("graph")) == ["refresher"]
-    assert sorted(run_for("worker")) == []
+    # A worker is `pheasant worker --transport grpc`: the HTTP app would open
+    # the state database, which a worker holds no credential for.
+    with pytest.raises(RoleConfigurationError, match="pheasant worker"):
+        run_for("worker")
     # The log tier runs one thing and nothing else -- no watcher, no
     # scheduler, no index drainer, no UI. That isolation *is* the tier.
     assert sorted(run_for("logger")) == ["log-drainer"]
@@ -1117,16 +1177,11 @@ def test_a_worker_refuses_every_credential_it_can_never_use(
     assert fragment in str(refusal.value)
 
 
-def test_a_worker_refuses_a_state_backend_and_a_source_list(tmp_path: Path) -> None:
-    """Both mean the same thing: this process is running the indexer's config."""
+@pytest.mark.usefixtures("no_state_database")
+def test_a_worker_refuses_a_source_list(tmp_path: Path) -> None:
+    """A source list means this process is running the indexer's config."""
 
     config = _fleet_config(tmp_path, server={"host": "127.0.0.1", "role": "worker"})
-    config.storage.backend = "postgres"
-    with pytest.raises(RoleConfigurationError) as refusal:
-        validate_role(resolve_role(config, "worker"), config)
-    assert "storage.backend" in str(refusal.value)
-
-    config.storage.backend = "sqlite"
     config.sources = [
         SourceConfig(name="notes", type=SourceType.markdown_folder, path=tmp_path / "notes")
     ]
@@ -1135,6 +1190,7 @@ def test_a_worker_refuses_a_state_backend_and_a_source_list(tmp_path: Path) -> N
     assert "source" in str(refusal.value)
 
 
+@pytest.mark.usefixtures("no_state_database")
 def test_a_worker_may_hold_its_own_front_door_key(tmp_path: Path, monkeypatch: Any) -> None:
     """The forbidden list is credentials to *elsewhere*, not this process's own.
 
@@ -1148,6 +1204,7 @@ def test_a_worker_may_hold_its_own_front_door_key(tmp_path: Path, monkeypatch: A
     validate_role(resolve_role(config, "worker"), config)
 
 
+@pytest.mark.usefixtures("no_state_database")
 def test_a_grpc_worker_needs_no_token_for_an_api_it_does_not_serve(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

@@ -30,7 +30,7 @@ def _apply_record(engine: Any, task: dict) -> str | None:
     path = (root / payload["path"]).resolve()
     path.relative_to(root)  # a payload never names a file outside its source
     with engine._source_write_lock(source.name), engine.state.conn:
-        suffix = " FOR UPDATE" if engine.state.dialect.is_postgres else ""
+        suffix = " FOR UPDATE"
         current = engine.state.rows(
             "SELECT revision FROM artifact_outbox WHERE kb_id=? AND folder=?" + suffix,
             (engine.config.knowledge_base_id, task["folder"]),
@@ -69,7 +69,7 @@ def apply(engine: Any) -> tuple[int, bool, list[dict], list[str]]:
                 completed += 1
                 continue
             with engine._source_write_lock("artifacts"), engine.state.conn:
-                suffix = " FOR UPDATE" if engine.state.dialect.is_postgres else ""
+                suffix = " FOR UPDATE"
                 current = engine.state.rows(
                     "SELECT revision FROM artifact_outbox WHERE kb_id=? AND folder=?" + suffix,
                     (kb, task["folder"]),

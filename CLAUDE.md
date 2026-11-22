@@ -146,7 +146,7 @@ pheasant-kb/
 │   │                            media_links (documents -> images they show),
 │   │                            okf (OKF bundle detection + its graph),
 │   │                            figures (what an answer can show)
-│   ├── search/                ← sqlite_store (FTS5/tsvector + BM25),
+│   ├── search/                ← text_store (FTS5/tsvector + BM25),
 │   │                            pg_textsearch (the BM25-extension lexical
 │   │                            query), graph_search, hybrid, fusion (the one RRF
 │   │                            loop, two entry points), explain (the stage
@@ -258,7 +258,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 231 pytest modules, offline by design
+└── tests/                     ← 228 pytest modules, on PostgreSQL, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -385,14 +385,13 @@ sync, and its job reads `succeeded` before anything is indexed.
 10. **Verify against the real thing.** Postgres, NATS, wasmtime and a real
     container have each caught bugs a mock could not. When a change touches a
     backend, run that backend. When it touches the image, build the image.
-    CI does the Postgres half for you on **every** PR (`ci.yml`'s
-    `backend-parity` job, deliberately unfiltered, on `deploy/postgres`
-    -- built in the job by `.github/actions/pheasant-postgres` -- with
-    `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`);
-    locally it is `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a
-    Postgres 17 that preloads pg_textsearch, which turns on the parity suite
-    and the lease/queue differential. Neither replaces running the thing you
-    changed. The same holds for the `agent` extra the image ships: CI's 3.12
+    The suite itself runs on PostgreSQL: every CI test job starts
+    `deploy/postgres` (built by `.github/actions/pheasant-postgres`) with
+    `PHEASANT_REQUIRE_PG_TEXTSEARCH=1`, and `tests/conftest.py` clones a
+    migrated template database per test. Locally it is
+    `PHEASANT_TEST_POSTGRES_DSN=… pytest -q` against a Postgres 17 that
+    preloads pg_textsearch (the conftest exits with the `docker run` line if
+    the variable is unset). Neither replaces running the thing you changed. The same holds for the `agent` extra the image ships: CI's 3.12
     leg installs it with `PHEASANT_REQUIRE_AGENT=1` (a skipped agentic test is
     a failure there) and the 3.11 leg does not, so both sides of
     `workflow: auto` run on every PR — `tests/test_workflow_coverage.py` holds

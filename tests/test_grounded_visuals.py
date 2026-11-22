@@ -29,6 +29,8 @@ from pheasant.config.schema import PheasantConfig
 from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services.errors import ServiceError
 
+pytestmark = pytest.mark.module_database
+
 CITATIONS = [{"index": i, "node_id": f"file:n{i}", "title": f"n{i}"} for i in (1, 2, 3)]
 
 

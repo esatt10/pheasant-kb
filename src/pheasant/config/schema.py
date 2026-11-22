@@ -345,10 +345,9 @@ class StorageSettings(ModelMixin):
       that work away. 0 disables checkpointing (end-of-sync save only).
     """
 
-    #: Where the published knowledge graph lives: ``rows`` (default) or
-    #: ``node_link_json``.
+    #: Where the published knowledge graph lives: ``rows``, the only value.
     #:
-    #: ``rows`` puts it in ``graph_nodes``/``graph_edges`` in the state
+    #: It is in ``graph_nodes``/``graph_edges`` in the state
     #: database, beside the artifacts it describes. A commit then writes only
     #: what changed and a serving replica holds nothing: measured on this
     #: repo's own benchmark at 100k files, the commit after a one-file change
@@ -358,10 +357,9 @@ class StorageSettings(ModelMixin):
     #: compressed file they replace — which is stated in
     #: ``pheasant.capacity`` and reported by ``pheasant scan``.
     #:
-    #: ``node_link_json`` is the pre-35.10 single zstd file. Kept selectable,
-    #: and kept working, so a region that hits trouble reverts with one line
-    #: rather than a downgrade. A region switched to ``rows`` imports its
-    #: existing file once at boot and keeps it as ``*.migrated``.
+    #: The whole-file ``node_link_json`` backend was removed in 2.0. A region
+    #: still holding its file imports it once at boot and keeps it as
+    #: ``*.migrated``.
     graph_format: str = "rows"
     graph_snapshots: bool = True
     graph_snapshot_interval_seconds: int = 900
@@ -378,7 +376,6 @@ class StorageSettings(ModelMixin):
     #: recoverable; an unbounded interval on a very large graph is not.
     graph_checkpoint_max_seconds: int = 1_800
     compression: str = "zstd"
-    sqlite_path: Path | None = None
     graph_path: Path | None = None
     manifest_path: Path | None = None
     max_state_size_gb: float = 10
@@ -389,13 +386,11 @@ class StorageSettings(ModelMixin):
     #: Not ``max_state_size_gb``, which bounds snapshot history by eviction.
     knowledge_base_limit_gb: float | None = None
 
-    # -- Phase 35.2: where state actually lives -------------------------------
-    #: ``sqlite`` (default) or ``postgres``. SQLite is a file and permits one
-    #: writer process per knowledge base, which is pheasant's hard scaling
-    #: ceiling; Postgres is what lets 35.4 give each *source* its own lease so
-    #: several indexers can commit at once. Leaving this alone keeps a region
-    #: byte-identical to pre-35.2 and needing no infrastructure at all.
-    backend: str = "sqlite"
+    # -- where state lives ---------------------------------------------------
+    #: Always ``postgres``: the state store is PostgreSQL 17 with pg_textsearch
+    #: preloaded (``deploy/postgres``). Kept so existing configs that name it
+    #: still load; anything else is refused when the store is opened.
+    backend: str = "postgres"
     #: Name of the environment variable holding the libpq DSN. A DSN carries a
     #: password, so — like every other credential in pheasant — only the
     #: variable *name* is ever written to YAML. There is deliberately no field
@@ -501,7 +496,7 @@ class VectorStoreSettings(ModelMixin):
 class SearchRankingSettings(ModelMixin):
     """The numbers ranking reads. Every default is the shipped constant.
 
-    These were module constants in ``pheasant.search.sqlite_store`` and
+    These were module constants in ``pheasant.search.text_store`` and
     ``pheasant.search.hybrid`` until the tuning plane needed to address them:
     a parameter no surface can name is a parameter no experiment can change.
     Leaving this whole block unset reproduces the 2026-08-03 retrieval
@@ -824,21 +819,18 @@ class SyncConcurrencySettings(ModelMixin):
 class SyncQueueSettings(ModelMixin):
     """The durable index work queue (Phase 35.5).
 
-    Off by default, and that is a design decision rather than caution: with
-    it off, ``sync_all`` keeps its remaining sources in a Python list exactly
-    as it always has, so a single container indexing a folder needs no queue
-    to do it. Turning it on buys three things a list cannot give: a backlog
-    that survives a restart, a depth other processes can read (and a
-    scheduler can scale on), and a source that keeps failing being
-    dead-lettered instead of retried forever.
+    Off in the standalone table: ``sync_all`` then indexes in-process. On
+    (pheasant-kb), it buys three things a list cannot give: a backlog that
+    survives a restart, a depth other processes can read (and a scheduler can
+    scale on), and a source that keeps failing being dead-lettered instead of
+    retried forever. An ``api`` role requires it.
 
-    ``local`` is the state store itself — no broker to run, and it works on
-    both SQLite and Postgres. ``nats`` is for a fleet that has outgrown one
-    database; it does not buy correctness the local queue lacks.
+    ``backend`` is ``nats`` (JetStream), the only queue. The database-backed
+    ``local`` queue was removed in 2.0.
     """
 
     enabled: bool = False
-    backend: str = "local"
+    backend: str = "nats"
     #: Seconds a claimed task stays invisible to other workers. Heartbeats
     #: extend it, so this bounds *silence* from a claimer, not work.
     visibility_seconds: int = 300
@@ -1320,7 +1312,7 @@ class LogQueueSettings(ModelMixin):
     #: Off, batches are written by whoever produced them, if `/state` is
     #: writable. On, they are published and a ``--role logger`` drains them.
     enabled: bool = False
-    backend: str = "local"  # local | nats
+    backend: str = "nats"  # NATS JetStream, the only log queue
     visibility_seconds: int = 120
     #: Lower than the index queue's 3. A log batch is best-effort by
     #: construction, and retrying a poisoned one three times costs more than
@@ -2031,7 +2023,6 @@ class PheasantConfig(ModelMixin):
                 )
             )
         state = cfg.pheasant.state_path
-        cfg.storage.sqlite_path = cfg.storage.sqlite_path or state / "pheasant.db"
         cfg.storage.graph_path = cfg.storage.graph_path or state / "graphs"
         cfg.storage.manifest_path = cfg.storage.manifest_path or state / "manifests"
         cfg.pheasant.defaults = table

@@ -8,9 +8,9 @@ name: Evaluation
 #
 # Three jobs, and each answers a question the others cannot:
 #
-#   suites       — the plane on both storage backends. A declared FK, a
-#                  discarded rowcount and one SQLite-only INSERT have each
-#                  passed the offline suite and failed on a real PostgreSQL.
+#   suites       — the plane on a real PostgreSQL. A declared FK, a
+#                  discarded rowcount and one SQLite-only INSERT each passed
+#                  an offline suite before 2.0 and failed on a real server.
 #
 #   durability   — a real container, stopped mid-replay. "The process went
 #                  away" is not a state a mock reproduces honestly, and the
@@ -37,7 +37,7 @@ on:
       - "src/pheasant/capacity.py"
       - "src/pheasant/persistence/**"
       - "src/pheasant/search/hybrid.py"
-      - "src/pheasant/memory/steering.py"
+      - "src/pheasant/artifacts/steering.py"
       - "src/pheasant/sync/scheduler.py"
       - "src/pheasant/api/app.py"
       - "src/pheasant/mcp_server/**"
@@ -64,7 +64,6 @@ jobs:
       fail-fast: false
       matrix:
         backend:
-          - sqlite
           - postgres
 
     steps:
@@ -74,10 +73,13 @@ jobs:
       # PostgreSQL 17 with pg_textsearch preloaded, built from deploy/postgres
       # (the image every shipped Postgres runs).
       - name: Start PostgreSQL
-        if: matrix.backend == 'postgres'
         uses: ./.github/actions/pheasant-postgres
         with:
           database: pheasant_evaluation
+
+      # The work queues are NATS JetStream; queue tests run against a broker.
+      - name: Start NATS JetStream
+        run: docker run -d --name pheasant-nats -p 127.0.0.1:14222:4222 nats:2.10-alpine -js
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -88,13 +90,11 @@ jobs:
       - name: Install pheasant and the extras the plane crosses
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,mcp,postgres]"
+          python -m pip install -e ".[dev,mcp]"
 
       - name: Run the evaluation suites
         env:
-          # Only the postgres leg points at the service; the sqlite leg must
-          # stay on SQLite, which is the default every user gets.
-          PHEASANT_TEST_POSTGRES_DSN: ${{ matrix.backend == 'postgres' && 'postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_evaluation' || '' }}
+          PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_evaluation
           # Defence in depth: no replay, no metric and no formation rule may
           # ever reach a model. If one tries, it fails here rather than quietly
           # becoming a metered test.
@@ -203,11 +203,20 @@ jobs:
   capacity:
     name: Sizing model versus the machine
     runs-on: ubuntu-latest
+    env:
+      PHEASANT_TEST_POSTGRES_DSN: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_capacity
+      PHEASANT_DATABASE_URL: postgresql://pheasant:pheasant@127.0.0.1:5432/pheasant_capacity
     timeout-minutes: 25
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # The state store is PostgreSQL: deploy/postgres, pg_textsearch preloaded.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/pheasant-postgres
+        with:
+          database: pheasant_capacity
 
       - name: Set up Python
         uses: actions/setup-python@v5

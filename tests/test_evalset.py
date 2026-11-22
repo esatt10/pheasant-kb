@@ -10,17 +10,19 @@ assertions here are about what does **not** leave.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from pheasant.evalset import EVALSET_FORMAT_VERSION, bootstrap, build_cases, write_cases
+from pheasant.persistence.backends import PostgresBackend
 from pheasant.persistence.state_store import StateStore
 from pheasant.sync.log_queue import write_events
 from pheasant.telemetry.interactions import InteractionEvent
 
 
-def _state(tmp_path: Path) -> StateStore:
-    store = StateStore(tmp_path / "p.db")
+def _state(tmp_path: Path, dsn: str | None = None) -> StateStore:
+    store = StateStore(backend=PostgresBackend(dsn)) if dsn else StateStore()
     store.migrate()
     return store
 
@@ -88,7 +90,9 @@ def test_identity_leaves_as_a_pseudonym_never_as_itself(tmp_path: Path) -> None:
     assert len(case.principal) == 16
 
 
-def test_two_exports_cannot_be_joined_to_re_identify_anyone(tmp_path: Path) -> None:
+def test_two_exports_cannot_be_joined_to_re_identify_anyone(
+    tmp_path: Path, fresh_database: Callable[[], str]
+) -> None:
     """The salt is per-export and random, so intersecting two files gives an
     attacker nothing -- which is the difference between a pseudonym and a
     stable identifier wearing a hash."""
@@ -102,7 +106,7 @@ def test_two_exports_cannot_be_joined_to_re_identify_anyone(tmp_path: Path) -> N
     assert first.principal != second.principal
     assert first.session != second.session
     # But stable *within* one export, which is the property an eval needs.
-    state2 = _state(tmp_path / "two")
+    state2 = _state(tmp_path / "two", fresh_database())
     _ask(state2, "one", index=1, session="s", principal="p")
     _ask(state2, "two", index=2, session="s", principal="p")
     one, two = build_cases(state2, salt="fixed")

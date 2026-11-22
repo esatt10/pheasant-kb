@@ -43,7 +43,7 @@ from pheasant.ingestion.extractor import (
 from pheasant.ingestion.pipeline import parse_file, read_text, read_text_bytes
 from pheasant.ingestion.transcriber import source_includes_audio
 from pheasant.search.hybrid import HybridSearch
-from pheasant.search.sqlite_store import SearchStore
+from pheasant.search.text_store import SearchStore
 from pheasant.sync.engine import SyncEngine
 
 DOCS = Path(__file__).parent / "fixtures" / "sample_workspace" / "documents"

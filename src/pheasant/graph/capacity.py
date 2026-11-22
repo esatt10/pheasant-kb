@@ -136,9 +136,8 @@ def measure_rows(files: int, root: Path, graph: SimpleMultiDiGraph) -> dict[str,
     from pheasant.persistence.graph_rows import GraphRowStore
     from pheasant.persistence.state_store import StateStore
 
-    database = root / f"rows-{files}.db"
-    database.unlink(missing_ok=True)
-    state = StateStore(database)
+    # The database PHEASANT_DATABASE_URL names: give the benchmark its own.
+    state = StateStore()
     state.migrate()
     rows = GraphRowStore(state)
     kb = "capacity"
@@ -198,7 +197,12 @@ def measure_rows(files: int, root: Path, graph: SimpleMultiDiGraph) -> dict[str,
         neighbors(served, hub, depth=3, max_nodes=100)
     hub_walk_seconds = (time.perf_counter() - started) / 10
 
-    stored = sum(path.stat().st_size for path in root.glob(f"rows-{files}.db*") if path.exists())
+    stored = int(
+        state.rows(
+            "SELECT pg_total_relation_size('graph_nodes') + pg_total_relation_size('graph_edges')"
+            " AS n"
+        )[0]["n"]
+    )
     state.close()
     return {
         "initial_load_seconds": round(initial_seconds, 4),

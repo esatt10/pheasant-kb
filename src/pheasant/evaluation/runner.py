@@ -1155,7 +1155,7 @@ def _replay_searcher(engine: Any, ranking: Any = None) -> Any:
 
     from pheasant.search.hybrid import HybridSearch
     from pheasant.search.ranking import resolver_for
-    from pheasant.search.sqlite_store import SearchStore
+    from pheasant.search.text_store import SearchStore
 
     config = engine.config
     return HybridSearch(

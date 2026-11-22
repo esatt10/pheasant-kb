@@ -107,7 +107,7 @@ def test_contributor_cannot_change_security_or_infrastructure(region):
             "/config/section/security",
             {"values": {"api_auth": {"token_env": "OTHER"}}, "persist": False},
         ),
-        ("/config/section/storage", {"values": {"backend": "postgres"}, "persist": False}),
+        ("/config/section/storage", {"values": {"pool_size": 20}, "persist": False}),
     ]:
         result = client.patch(path, headers=headers("Contributor"), json=body)
         assert result.status_code == 403, result.text

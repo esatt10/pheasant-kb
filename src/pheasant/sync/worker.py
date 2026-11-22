@@ -12,9 +12,9 @@ supervised ``sync.writer`` process across tasks, retaining its graph working
 set; standalone keeps the one-shot ``python -m pheasant sync`` path. Both
 report progress and results while the parent keeps serving.
 
-Nothing about correctness changes: the child takes the same single-writer
-lease (:class:`~pheasant.sync.locks.EngineLease`) the in-process path took, so
-two writers still cannot overlap. ``SyncEngine.sync_source`` remains the
+Nothing about correctness changes: the child takes the same per-source lease
+(:class:`~pheasant.sync.locks.SourceLease`) the in-process path takes, so two
+writers of one source still cannot overlap. ``SyncEngine.sync_source`` remains the
 in-process path, used by the CLI, the tests, and anyone embedding pheasant.
 """
 
@@ -409,8 +409,8 @@ class WorkerBackedEngine:
                 from pheasant.config.loader import load_config
                 from pheasant.persistence.paths import StatePaths
 
-                on_disk = StatePaths.from_config(load_config(path)).sqlite
-                decision = Path(on_disk).resolve() == Path(self._engine.paths.sqlite).resolve()
+                on_disk = StatePaths.from_config(load_config(path)).state
+                decision = Path(on_disk).resolve() == Path(self._engine.paths.state).resolve()
                 if not decision:
                     logger.info(
                         "Config at %s describes a different state directory; "

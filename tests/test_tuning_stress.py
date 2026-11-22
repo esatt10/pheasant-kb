@@ -187,14 +187,13 @@ def test_a_cancel_from_another_state_handle_reaches_the_batch(tmp_path: Path) ->
     would do nothing here, and nothing in a fleet.
     """
 
-    from pheasant.persistence.paths import StatePaths
     from pheasant.persistence.state_store import StateStore
 
     engine = _engine(tmp_path)
     _seed(engine)
     try:
         started = threading.Event()
-        other = StateStore.from_config(engine.config, StatePaths.from_config(engine.config).sqlite)
+        other = StateStore.from_config(engine.config)
         other.migrate()
 
         def cancel_soon() -> None:

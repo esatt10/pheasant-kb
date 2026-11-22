@@ -1124,7 +1124,7 @@ def test_shadow_rules_go_through_the_real_search_call(tmp_path: Path) -> None:
         assert shadow and shadow[0]["kind"] == "exclusion"
 
         from pheasant.search.hybrid import HybridSearch
-        from pheasant.search.sqlite_store import SearchStore
+        from pheasant.search.text_store import SearchStore
 
         searcher = HybridSearch(SearchStore(engine.state), steering_enabled=True)
         with_rule = searcher.search_context(
