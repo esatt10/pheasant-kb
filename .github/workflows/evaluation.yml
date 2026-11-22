@@ -8,9 +8,9 @@ name: Evaluation
 #
 # Three jobs, and each answers a question the others cannot:
 #
-#   suites       — the plane on both storage backends. A declared FK, a
-#                  discarded rowcount and one SQLite-only INSERT have each
-#                  passed the offline suite and failed on a real PostgreSQL.
+#   suites       — the plane on a real PostgreSQL. A declared FK, a
+#                  discarded rowcount and one SQLite-only INSERT each passed
+#                  an offline suite before 2.0 and failed on a real server.
 #
 #   durability   — a real container, stopped mid-replay. "The process went
 #                  away" is not a state a mock reproduces honestly, and the
@@ -37,7 +37,7 @@ on:
       - "src/pheasant/capacity.py"
       - "src/pheasant/persistence/**"
       - "src/pheasant/search/hybrid.py"
-      - "src/pheasant/memory/steering.py"
+      - "src/pheasant/artifacts/steering.py"
       - "src/pheasant/sync/scheduler.py"
       - "src/pheasant/api/app.py"
       - "src/pheasant/mcp_server/**"

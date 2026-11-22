@@ -71,13 +71,12 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 from pheasant.config.loader import load_config  # noqa: E402
-from pheasant.persistence.paths import StatePaths  # noqa: E402
 from pheasant.persistence.state_store import StateStore  # noqa: E402
 from pheasant.tuning import store as tuning_store  # noqa: E402
 from pheasant.tuning.contracts import TuningBundle  # noqa: E402
 
 config = load_config(Path(sys.argv[1]))
-state = StateStore.from_config(config, StatePaths.from_config(config).sqlite)
+state = StateStore.from_config(config)
 state.migrate()
 existing = tuning_store.list_bundles(state, config.knowledge_base_id)
 if existing:

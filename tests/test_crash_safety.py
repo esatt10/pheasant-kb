@@ -1,7 +1,7 @@
-"""Crash-safety acceptance tests (Synapse step 21.2).
+"""Crash-safety acceptance tests.
 
-Covers: WAL + pragmas on every StateStore connection, kill -9 mid-sync
-recovery without repair mode, the single-writer engine lease (fail-fast,
+Covers: kill -9 mid-sync recovery without repair mode (the state store is
+PostgreSQL, read from outside the killed process), the single-writer engine lease (fail-fast,
 heartbeat, stale takeover), the one-shot legacy-manifest migration, and
 durable graph saves. Everything is offline and bounded — lease timings are
 constructor-injected, never slept out.
@@ -14,7 +14,6 @@ import logging
 import os
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import time
@@ -56,7 +55,9 @@ print("SYNC_COMPLETE", flush=True)
 """
 
 
-def _render_config(tmp_path: Path, name: str, workspace: Path) -> Path:
+def _render_config(tmp_path: Path, name: str, workspace: Path, dsn_env: str | None = None) -> Path:
+    """Render the test config; ``dsn_env`` gives the region a database of its own."""
+
     base = tmp_path / name
     for sub in ("state", "vault", "exports"):
         (base / sub).mkdir(parents=True)
@@ -65,6 +66,8 @@ def _render_config(tmp_path: Path, name: str, workspace: Path) -> Path:
         state_path=(base / "state").as_posix(),
         exports_path=(base / "exports").as_posix(),
     )
+    if dsn_env:
+        rendered += f"\nstorage:\n  dsn_env: {dsn_env}\n"
     config_file = base / "pheasant.yaml"
     config_file.write_text(rendered, encoding="utf-8")
     return config_file
@@ -74,17 +77,16 @@ def _state_dir(config_file: Path) -> Path:
     return config_file.parent / "state"
 
 
-def _artifact_count(db_path: Path) -> int:
-    if not db_path.exists():
-        return 0
+def _artifact_count(dsn: str) -> int:
+    """Rows the driver has committed so far, read from outside its process."""
+
+    from pheasant.persistence import pg_driver
+
+    connection = pg_driver.connect(dsn, autocommit=True)
     try:
-        conn = sqlite3.connect(db_path, timeout=1)
-        try:
-            return int(conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0])
-        finally:
-            conn.close()
-    except sqlite3.OperationalError:
-        return 0
+        return int(connection.execute("SELECT COUNT(*) FROM artifacts").rows[0][0])
+    finally:
+        connection.close()
 
 
 def _manifest_sha_map(engine: SyncEngine, source: str = "pheasant-repo") -> dict[str, str]:
@@ -109,10 +111,12 @@ def _dead_pid() -> int:
 def test_kill9_mid_sync_then_restart_recovers_without_repair(
     tmp_path: Path,
     workspace_copy: Path,
+    _state_database: str,
+    database_variable,
 ) -> None:
     crashed_cfg = _render_config(tmp_path, "crashed", workspace_copy)
-    control_cfg = _render_config(tmp_path, "control", workspace_copy)
-    db_path = _state_dir(crashed_cfg) / "pheasant.db"
+    # The uninterrupted run needs a state store of its own to compare against.
+    control_cfg = _render_config(tmp_path, "control", workspace_copy, database_variable())
 
     env = {**os.environ, "PHEASANT_TEST_SLOW_SYNC_MS": "500"}
     proc = subprocess.Popen(
@@ -127,7 +131,7 @@ def test_kill9_mid_sync_then_restart_recovers_without_repair(
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             break
-        if _artifact_count(db_path) >= 1:
+        if _artifact_count(_state_database) >= 1:
             proc.kill()  # SIGKILL mid-sync, between per-artifact writes
             killed = True
             break
@@ -137,11 +141,12 @@ def test_kill9_mid_sync_then_restart_recovers_without_repair(
     assert proc.returncode == -signal.SIGKILL
     assert "SYNC_COMPLETE" not in stdout, "driver finished before it was killed"
 
-    # Restart on the same state dir: starts cleanly, no corruption, and an
-    # incremental resync converges to the uninterrupted-run state.
+    # Restart on the same database: starts cleanly, the killed run's committed
+    # rows are readable, and an incremental resync converges to the
+    # uninterrupted-run state.
     engine = SyncEngine(load_config(crashed_cfg))
     try:
-        assert engine.state.rows("PRAGMA integrity_check")[0][0] == "ok"
+        assert _artifact_count(_state_database) >= 1
         result = engine.sync_source("pheasant-repo", "incremental")
         assert result.status == "healthy"
 
