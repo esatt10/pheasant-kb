@@ -108,6 +108,9 @@ LAYERS: dict[str, int] = {
     # Stdlib-only request deadlines and stage timings. Persistence, search and
     # the graph client read the active budget, so it sits with them.
     "request_budget": 1,
+    # Stdlib-only: the stop signal a running sync carries into the code that
+    # waits inside one item (`sync/`, `ingestion/`). Below them, like the budget.
+    "cancel_scope": 1,
     # Stdlib-only: which URLs are an Azure AI Foundry resource and how a
     # request to one is signed. Read by every model-calling client.
     "foundry": 1,

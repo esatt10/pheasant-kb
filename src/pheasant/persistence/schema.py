@@ -471,6 +471,28 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   cancel_requested_by TEXT,
   cancel_reason TEXT
 );
+-- One row per sync a process *asked for* through the index queue
+-- (`sync/request_ledger.py`). JetStream can count its backlog but cannot list it or
+-- take one message back, so this is where a queued sync is visible, where a
+-- cancel reaches it before any indexer claims it, and what a redelivered task
+-- is checked against -- a sync cancelled, or already finished, is acked rather
+-- than run a second time. Opened by the publish, closed by the run.
+CREATE TABLE IF NOT EXISTS sync_requests (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  state TEXT NOT NULL,
+  requested_at TEXT NOT NULL,
+  claimed_at TEXT,
+  claimed_by TEXT,
+  finished_at TEXT,
+  outcome TEXT,
+  cancel_requested_at TEXT,
+  cancel_requested_by TEXT,
+  cancel_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sync_requests_source ON sync_requests(source_id, state);
 CREATE TABLE IF NOT EXISTS sync_fingerprints (
   scope TEXT PRIMARY KEY,
   fingerprint TEXT NOT NULL,

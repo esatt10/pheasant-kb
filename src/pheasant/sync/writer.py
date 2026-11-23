@@ -17,10 +17,12 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from pheasant.sync.cancellation import SUPERVISOR_ENV
 from pheasant.telemetry.sync_trace import CHILD_ENV
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ def run(
     depth: int | None = None,
     on_progress: Any = None,
     task_payload: dict | None = None,
+    cancel_watch: Any = None,
 ) -> dict:
     key = str(Path(config_path).resolve())
     with _gate:
@@ -52,6 +55,7 @@ def run(
         },
         timeout,
         on_progress,
+        cancel_watch,
     )
 
 
@@ -73,6 +77,7 @@ class Session:
         self.process: subprocess.Popen | None = None
         self.events: queue.Queue = queue.Queue()
         self.stamp: bytes | None = None
+        self.token = uuid.uuid4().hex
 
     def start(self) -> None:
         stamp = Path(self.path).read_bytes()
@@ -81,6 +86,7 @@ class Session:
         self.stop()
         self.stamp = stamp
         self.events = queue.Queue()
+        self.token = uuid.uuid4().hex
         self.process = subprocess.Popen(
             [sys.executable, "-u", "-m", "pheasant.sync.writer", self.path],
             stdin=subprocess.PIPE,
@@ -89,7 +95,9 @@ class Session:
             text=True,
             encoding="utf-8",
             bufsize=1,
-            env={**os.environ, CHILD_ENV: "1"},
+            # The supervisor token names this interpreter's runs for every
+            # request it serves (`sync/cancellation.CancelWatch`).
+            env={**os.environ, CHILD_ENV: "1", SUPERVISOR_ENV: self.token},
         )
 
         def read(stream: Any, kind: str, events: queue.Queue) -> None:
@@ -124,7 +132,18 @@ class Session:
             process.kill()
             process.wait(timeout=5)
 
-    def run(self, request: dict, timeout: float, on_progress: Any) -> dict:
+    def end(self) -> None:
+        """End the interpreter now. The next request starts a fresh one."""
+
+        from pheasant.sync.worker import end_child
+
+        process, self.process = self.process, None
+        if process is not None:
+            end_child(process)
+
+    def run(
+        self, request: dict, timeout: float, on_progress: Any, cancel_watch: Any = None
+    ) -> dict:
         from pheasant.sync.worker import DEFAULT_INACTIVITY_TIMEOUT_S, PROGRESS_MARKER
 
         with self.lock:
@@ -134,10 +153,26 @@ class Session:
             try:
                 self.start()
                 assert self.process is not None and self.process.stdin is not None
+                if cancel_watch is not None:
+                    cancel_watch.token = self.token
                 self.process.stdin.write(json.dumps(request) + "\n")
                 self.process.stdin.flush()
                 while True:
                     now = time.monotonic()
+                    if cancel_watch is not None and cancel_watch.overdue():
+                        # Cancelled and still running past its grace period.
+                        # The interpreter is discarded like any failed one:
+                        # the next request starts a fresh one against
+                        # committed state.
+                        self.end()
+                        from pheasant.sync.supervision import SyncForcedStop
+
+                        return {
+                            "status": "cancelled",
+                            "forced": True,
+                            "error": str(SyncForcedStop(cancel_watch)),
+                            "results": [],
+                        }
                     if now - started >= timeout or now - last >= DEFAULT_INACTIVITY_TIMEOUT_S:
                         raise TimeoutError("writer exceeded its total or inactivity deadline")
                     try:
@@ -161,6 +196,8 @@ class Session:
                         continue
                     if event.get("marker") == PROGRESS_MARKER:
                         last = time.monotonic()
+                        if cancel_watch is not None:
+                            cancel_watch.note_phase(event.get("phase"))
                         if on_progress is not None:
                             try:
                                 on_progress(event)

@@ -1866,6 +1866,8 @@ export type QueueTaskState =
 
 export interface QueueTask {
   task_id: string;
+  /** The sync request's ledger row, when the queue is listed from the ledger. */
+  request_id?: string | null;
   source: string;
   mode: string;
   state: QueueTaskState;
@@ -1880,15 +1882,43 @@ export interface QueueTask {
   position: number | null;
 }
 
-/** `GET /queue`. `listing: "unavailable"` means "cannot list", never "empty". */
+/**
+ * `GET /queue`. `listing: "unavailable"` means "cannot list", never "empty";
+ * `"ledger"` lists the syncs this region asked for (a JetStream queue cannot
+ * list its messages), while `depth` still counts the broker's messages.
+ */
 export interface IndexQueueStatus {
   knowledge_base: string;
   enabled: boolean;
   backend: string | null;
-  listing: "complete" | "unavailable" | "not_applicable";
+  listing: "complete" | "ledger" | "unavailable" | "not_applicable";
   depth: Record<string, number> | null;
   tasks: QueueTask[];
   counts: Record<QueueTaskState, number>;
+}
+
+/**
+ * `POST /sources/{name}/cancel`. `stage: "running"` stops the live sync at
+ * its next item (or inside a long one); `"queued"` means it never starts.
+ * Either way everything already indexed is kept.
+ */
+export interface CancelSyncResult {
+  knowledge_base: string;
+  source_name: string;
+  status: "cancel_requested";
+  stage: "running" | "queued";
+  first_request: boolean;
+  requested_by: string | null;
+  requested_at: string | null;
+  reason: string | null;
+  run: { run_id: string; owner: string; started_at: string } | null;
+  queued: {
+    request_id: string;
+    task_id: string;
+    mode: string;
+    requested_at: string;
+    state: "cancelled" | "claimed";
+  }[];
 }
 
 /**

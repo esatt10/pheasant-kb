@@ -522,14 +522,48 @@ export function ChatPanel({
               </button>
             </span>
           ) : scopedSources ? (
-            <span className="pill pill--accent" title="Answered from every selected source">
+            <span
+              className="pill pill--accent scope-pill"
+              title={`Answered from every selected source: ${scopedSources.join(", ")}`}
+            >
               scoped to {scopedSources.length} sources: {scopedSources.join(", ")}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "filter-source", source: null })}
+                aria-label="Stop scoping to these sources"
+                title="Search every source again"
+              >
+                ✕
+              </button>
             </span>
           ) : sourceFilter ? (
-            <span className="pill pill--accent">scoped to {sourceFilter}</span>
+            <span className="pill pill--accent scope-pill" title={`Answered only from ${sourceFilter}`}>
+              scoped to {sourceFilter}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "filter-source", source: null })}
+                aria-label={`Stop scoping to ${sourceFilter}`}
+                title="Search every source again"
+              >
+                ✕
+              </button>
+            </span>
           ) : null}
           {sourceTypeFilter ? (
-            <span className="pill pill--accent">only {sourceTypeFilter}</span>
+            <span className="pill pill--accent scope-pill" title={`Answered only from ${sourceTypeFilter} sources`}>
+              only {sourceTypeFilter}
+              <button
+                type="button"
+                className="scope-pill__clear"
+                onClick={() => dispatch({ type: "filter-source-type", sourceType: null })}
+                aria-label={`Stop limiting answers to ${sourceTypeFilter} sources`}
+                title="Search every kind of source again"
+              >
+                ✕
+              </button>
+            </span>
           ) : null}
           {omitted.length ? (
             <span className="pill scope-pill" title={`Left out of every answer:\n${omitted.join("\n")}`}>

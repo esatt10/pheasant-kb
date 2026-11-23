@@ -8,6 +8,7 @@ import type {
   MemoryListResponse,
   MemoryWriteResponse,
   AssistantStatus,
+  CancelSyncResult,
   VoiceSession,
   VoiceStatus,
   AnswerDepth,
@@ -658,6 +659,13 @@ export const api = {
       `/sync/${encodeURIComponent(name)}`,
       { method: "POST", body: JSON.stringify({ mode, wait }) },
     ),
+  /** Stop a source's sync, running or still queued; what it indexed is kept.
+   * 409 `SYNC_NOT_RUNNING` when there is nothing to stop. */
+  cancelSync: (name: string, reason?: string) =>
+    request<CancelSyncResult>(`/sources/${encodeURIComponent(name)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? null, requested_by: "web UI" }),
+    }),
   syncAll: (mode = "incremental", wait = false) =>
     request<{ results: SyncResult[] } | { status: string; sources: string[] }>("/sync", {
       method: "POST",

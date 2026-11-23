@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pheasant.persistence.heartbeat import WARN_EVERY
+from pheasant.sync import request_ledger as requests
 from pheasant.telemetry.interactions import inject_traceparent
 from pheasant.telemetry.spans import instrument
 
@@ -202,6 +203,7 @@ class NatsQueue(TaskQueue):
         subject: str = "pheasant.index.tasks",
         durable: str = "pheasant-indexers",
         connect_timeout: float = 5.0,
+        state: Any = None,
     ) -> None:
         try:
             import nats  # noqa: F401
@@ -216,6 +218,11 @@ class NatsQueue(TaskQueue):
         self.durable = durable
         self.dead_durable = f"{durable}-dead"
         self.connect_timeout = float(connect_timeout)
+        #: The request ledger's state store (`sync/request_ledger.py`), set only for
+        #: the index queue: the log tier's batches are not syncs anyone asked
+        #: for, and a ledger row per batch would be the unbounded growth that
+        #: `log_tasks` was.
+        self.state = state
         self._loop: Any = None
         self._thread: threading.Thread | None = None
         self._client: Any = None
@@ -342,6 +349,9 @@ class NatsQueue(TaskQueue):
     )
     def publish(self, task: IndexTask) -> IndexTask:
         js = self._connect()
+        # The ledger row first, so the id is in the body the broker keeps; a
+        # publish that fails takes its row back with it.
+        request_id = requests.record(self.state, task)
         propagated = inject_traceparent({})
         if propagated:
             task.payload["traceparent"] = propagated["traceparent"]
@@ -356,7 +366,11 @@ class NatsQueue(TaskQueue):
                 self.subject, body, headers=inject_traceparent({"Nats-Msg-Id": task.publish_id})
             )
 
-        self._run(send())
+        try:
+            self._run(send())
+        except BaseException:
+            requests.discard(self.state, request_id)
+            raise
         return task
 
     def _subscribe(self) -> None:
@@ -437,6 +451,7 @@ class NatsQueue(TaskQueue):
     def ack(self, task: IndexTask) -> None:
         if task.handle is not None:
             self._run(task.handle.ack())
+            requests.close(self.state, requests.request_id_of(task), requests.FINISHED)
 
     def nack(self, task: IndexTask, error: str, *, retry_in_seconds: float = 30.0) -> None:
         if task.handle is None:
@@ -476,14 +491,47 @@ class NatsQueue(TaskQueue):
             # record, leave the main task eligible for recovery.
             self._run(publish_dead())
             self._run(task.handle.term())
+            requests.release(self.state, requests.request_id_of(task), dead=True)
             return
         self._run(task.handle.nak(delay=max(0.0, retry_in_seconds)))
+        requests.release(self.state, requests.request_id_of(task), dead=False)
 
     def heartbeat(
         self, task: IndexTask, *, visibility_seconds: float = DEFAULT_VISIBILITY_SECONDS
     ) -> None:
         if task.handle is not None:
             self._run(task.handle.in_progress())
+
+    #: What :meth:`outstanding` lists: the request ledger's open syncs, not
+    #: the broker's messages (which JetStream cannot enumerate). A cancelled
+    #: sync leaves this list at once while its message still counts in
+    #: :meth:`depth` until an indexer acknowledges it.
+    listing = "ledger"
+
+    def outstanding(self, limit: int = 50) -> list[dict[str, Any]] | None:
+        if self.state is None:
+            return None
+        try:
+            rows = requests.open_requests(self.state, limit=limit)
+        except Exception:  # noqa: BLE001 - unknown, never "empty"
+            logger.debug("could not list the request ledger", exc_info=True)
+            return None
+        return [
+            {
+                "id": row["task_id"],
+                "request_id": row["id"],
+                "source_id": row["source_id"],
+                "mode": row["mode"],
+                "status": INFLIGHT if row["state"] == requests.CLAIMED else PENDING,
+                "enqueued_at": row["requested_at"],
+                "visible_at": None,
+                "owner": row["claimed_by"],
+                "attempts": 0,
+                "max_attempts": 0,
+                "last_error": None,
+            }
+            for row in rows
+        ]
 
     def depth(self) -> dict[str, int]:
         """Unprocessed work, from the *consumer* rather than the stream.
@@ -618,9 +666,10 @@ def queue_from_config(config: Any, state: Any) -> TaskQueue | None:
     ``None`` is the default and means ``sync_all`` indexes in-process, checked
     in one place so no caller has to remember it. ``state`` is unused, kept so
     every caller's signature stays the one the log queue's factory shares.
+    ``state`` is the request ledger's store (`sync/request_ledger.py`): every sync
+    published here gets a row a cancel can reach before an indexer claims it.
     """
 
-    del state
     settings = getattr(config.sync, "queue", None)
     if settings is None or not getattr(settings, "enabled", False):
         return None
@@ -635,6 +684,7 @@ def queue_from_config(config: Any, state: Any) -> TaskQueue | None:
         stream=settings.nats_stream,
         subject=settings.nats_subject,
         durable=settings.nats_durable,
+        state=state,
     )
 
 

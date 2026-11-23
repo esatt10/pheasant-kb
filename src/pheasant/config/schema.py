@@ -813,6 +813,14 @@ class SyncConcurrencySettings(ModelMixin):
     #: indexed text is identical either way: see ``sync/pdf_split.py``.
     remote_worker_pdf_pages_per_task: int = 500
     lock_timeout_seconds: int = 120
+    #: Seconds a cancelled sync is given to stop by itself before the process
+    #: supervising its worker ends the worker (`sync/cancellation.py`). A sync
+    #: stops between items within a second, and inside a long one (a paced
+    #: page, a PDF page range) within a few; this is for one that cannot -- a
+    #: hung socket, a native call over one enormous page. Committed items are
+    #: kept either way; the next sync of the source repairs what an ended
+    #: worker leaves. ``0`` never ends a worker.
+    cancel_grace_seconds: float = 60.0
 
 
 @dataclass

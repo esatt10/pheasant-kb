@@ -29,6 +29,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from pheasant import cancel_scope
+
 logger = logging.getLogger(__name__)
 
 #: A paced host's share of one run: ~55 minutes of its delay.
@@ -85,7 +87,7 @@ class HostPacer:
         *,
         known: dict[str, Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
         wall: Callable[[], float] = time.time,
     ) -> None:
         sync = source.sync
@@ -94,7 +96,9 @@ class HostPacer:
         self.max_items = getattr(sync, "max_items_per_run", None)
         self._fetch_robots = fetch_robots
         self._clock = clock
-        self._sleep = sleep
+        # A pacing slot can be a minute long (a robots.txt `Crawl-delay`), so
+        # it is waited out on the sync's stop signal, not on the clock.
+        self._sleep = sleep if sleep is not None else cancel_scope.sleep
         self._lock = threading.Lock()
         self._delays: dict[str, float] = {}
         self._next: dict[str, float] = {}

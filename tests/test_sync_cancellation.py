@@ -305,6 +305,40 @@ def test_both_surfaces_reach_a_running_sync(region: dict) -> None:
             run.checkpoint()
 
 
+def test_both_surfaces_reach_a_queued_sync_in_the_same_shape(region: dict) -> None:
+    """A sync waiting for an indexer: ``stage: queued``, and it never starts."""
+
+    from types import SimpleNamespace
+
+    from pheasant.sync import request_ledger
+
+    tools = region["tools"]
+
+    def queued(task_id: str) -> SimpleNamespace:
+        task = SimpleNamespace(source_id="docs", id=task_id, mode="incremental", payload={})
+        assert request_ledger.record(tools.state, task)
+        return task
+
+    first = queued("idx-a")
+    over_mcp = tools.cancel_sync(region["kb"], "docs", requested_by="agent")
+    second = queued("idx-b")
+    over_http = region["client"].post("/sources/docs/cancel", json={"requested_by": "agent"})
+    assert over_http.status_code == 200, over_http.text
+
+    def shape(answer: dict) -> dict:
+        return {
+            **{k: v for k, v in answer.items() if k not in {"requested_at", "queued"}},
+            "queued": [{"state": q["state"], "mode": q["mode"]} for q in answer["queued"]],
+        }
+
+    assert shape(over_mcp) == shape(over_http.json())
+    assert over_mcp["stage"] == "queued" and over_mcp["run"] is None
+    assert [q["task_id"] for q in over_mcp["queued"]] == ["idx-a"]
+    assert [q["task_id"] for q in over_http.json()["queued"]] == ["idx-b"]
+    for task in (first, second):
+        assert request_ledger.admit(tools.state, task, "indexer").verdict == "cancelled"
+
+
 def test_the_service_refuses_a_knowledge_base_this_region_does_not_hold(region: dict) -> None:
     tools = region["tools"]
     context = ServiceContext(config=tools.config, state=tools.state, searcher=None)

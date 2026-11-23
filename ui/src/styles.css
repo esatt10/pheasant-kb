@@ -2789,6 +2789,14 @@ select.text-input {
   color: var(--text);
 }
 
+/* Cancel on a running or queued sync: small, and pushed to the row's end. */
+.job__cancel {
+  margin-left: auto;
+  padding: 0 calc(6px * var(--sp));
+  font-size: calc(11px * var(--fs));
+  line-height: 1.6;
+}
+
 .job {
   display: flex;
   flex-direction: column;

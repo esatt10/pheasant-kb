@@ -816,6 +816,7 @@ standing behavior of a scheduled one.
 | `concurrency.worker_transport` | string | `http` | `http` (stdlib, no extra) or `grpc` (needs the `[grpc]` extra). Changes only the wire format: retry, failover, breakers, deadlines and idempotency are transport-independent. |
 | `concurrency.remote_worker_pdf_pages_per_task` | integer | `500` | A PDF longer than this many pages is read by the worker fleet in ranges of this size, several workers at once, with tidying, taxonomy and chunking left on the indexer. Needs `file_executor: remote`; works over both `worker_transport` values; `0` turns it off. On in every shipped fleet profile. The indexed text is identical either way. See [Speed up indexing](how-to/indexing-performance.md#one-large-pdf). |
 | `concurrency.lock_timeout_seconds` | integer | `120` | How long an in-process sync waits for an already-active lock on the same source. The interactive engine lease remains fail-fast; server-owned subprocess workers use their existing explicit lease wait. |
+| `concurrency.cancel_grace_seconds` | number | `60` | How long a cancelled sync may keep running before the process supervising its worker ends the worker. A sync stops by itself between items within a second and inside a long one (a paced page, a PDF page range) within a few; this is for one that cannot. Committed items are kept, and the next sync of the source repairs what an ended worker leaves (the node index, vectors not yet written). `0` never ends a worker. Only single-source workers are ended. |
 
 ### Worker durability
 

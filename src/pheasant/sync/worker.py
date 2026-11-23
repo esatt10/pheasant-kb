@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from pheasant.sync.supervision import SyncForcedStop
 from pheasant.telemetry.sync_trace import CHILD_ENV, SyncTrace
 from pheasant.telemetry.sync_trace import emit as emit_spans
 
@@ -59,6 +60,35 @@ class SyncWorkerStalled(RuntimeError):
     """A child stayed alive but emitted no progress for the stall budget."""
 
 
+def end_child(process: subprocess.Popen, *, grace_s: float = 5.0) -> None:
+    """End a sync child: asked first, then made to.
+
+    ``terminate`` is SIGTERM on POSIX, which a Python child dies of at once
+    unless it is inside a native call that holds the signal off; ``kill``
+    covers that case. Either way nothing past the child's last commit was
+    durable, which is what every caller of this already assumes.
+    """
+
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        # A virtual environment's `python.exe` is a launcher, and the
+        # interpreter doing the sync is *its* child: end the whole tree.
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+        )
+    try:
+        process.terminate()
+        process.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=grace_s)
+    except OSError:
+        pass  # already gone
+
+
 def run_sync(
     config_path: str | Path,
     source_name: str | None = None,
@@ -69,6 +99,7 @@ def run_sync(
     depth: int | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
     task_payload: dict[str, Any] | None = None,
+    cancel_watch: Any = None,
 ) -> dict[str, Any]:
     """Index in a child process and return its report.
 
@@ -80,7 +111,18 @@ def run_sync(
     **streamed** rather than buffered, so the parent sees each NDJSON progress
     line as it is written. Without it, nothing changes: the child is not asked
     for progress and the output is simply collected.
+
+    With ``cancel_watch`` (a :class:`~pheasant.sync.cancellation.CancelWatch`)
+    the child is streamed too, and ended when it was cancelled and did not
+    stop within the watch's grace period: the report is then ``cancelled``
+    with ``forced: true``, and the caller records what the child could not.
     """
+
+    if cancel_watch is not None and on_progress is None:
+        # Watching needs the streamed path, and the streamed path's stall
+        # budget needs progress lines: ask for them and discard them.
+        def on_progress(_event: dict[str, Any]) -> None:
+            return None
 
     command = [
         sys.executable,
@@ -124,7 +166,15 @@ def run_sync(
     logger.info("Starting sync worker: %s", " ".join(command[3:]))
     failed_run = SyncTrace(source_name or "all", mode)
     try:
-        returncode, stdout, stderr = _run_streaming(command, timeout, on_progress)
+        returncode, stdout, stderr = _run_streaming(command, timeout, on_progress, cancel_watch)
+    except SyncForcedStop as exc:
+        return {
+            "status": "cancelled",
+            "forced": True,
+            "source_id": source_name,
+            "error": str(exc),
+            "results": [],
+        }
     except SyncWorkerStalled as exc:
         logger.error("Sync worker stalled: %s", exc)
         return {
@@ -209,6 +259,7 @@ def _run_streaming(
     command: list[str],
     timeout: float,
     on_progress: Callable[[dict[str, Any]], None] | None,
+    cancel_watch: Any = None,
 ) -> tuple[int, str, str]:
     """Run the child, forwarding progress lines as they arrive.
 
@@ -220,7 +271,7 @@ def _run_streaming(
     """
     # The child's stdout is its report, so it hands its trace back in it
     # rather than writing spans to a log nobody reads (`telemetry.sync_trace`).
-    env = {**os.environ, CHILD_ENV: "1"}
+    env = {**os.environ, CHILD_ENV: "1", **(cancel_watch.child_env() if cancel_watch else {})}
     if on_progress is None:
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout, check=False, env=env
@@ -243,6 +294,7 @@ def _run_streaming(
             timeout,
             on_progress,
             PROGRESS_MARKER,
+            cancel_watch,
         )
 
 
@@ -252,6 +304,7 @@ def _monitor_streaming_process(
     timeout: float,
     on_progress: Callable[[dict[str, Any]], None],
     progress_marker: str,
+    cancel_watch: Any = None,
 ) -> tuple[int, str, str]:
     """Drain both pipes while enforcing total and no-progress deadlines.
 
@@ -305,6 +358,9 @@ def _monitor_streaming_process(
             process.kill()
             process.wait(timeout=5)
             raise subprocess.TimeoutExpired(command, timeout)
+        if cancel_watch is not None and cancel_watch.overdue():
+            end_child(process)
+            raise SyncForcedStop(cancel_watch)
         silent_for = now - last_progress
         if silent_for >= stall_budget:
             process.kill()
@@ -337,6 +393,8 @@ def _monitor_streaming_process(
             except _json.JSONDecodeError:
                 payload = None
         if isinstance(payload, dict) and payload.get("marker") == progress_marker:
+            if cancel_watch is not None:
+                cancel_watch.note_phase(payload.get("phase"))
             try:
                 on_progress(payload)
             except Exception:  # pragma: no cover - never fail a sync for this
@@ -372,6 +430,53 @@ class WorkerBackedEngine:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)
+
+    def _cancel_watch(self, source_name: str, request_id: str | None = None) -> Any:
+        """The supervisor's watch over one source's child (`sync/cancellation.py`).
+
+        Only a single-source child is ever ended: a sync-all child holds every
+        source's pass, and ending it for one cancel would stop the rest.
+        """
+
+        from pheasant.sync.supervision import DEFAULT_CANCEL_GRACE_SECONDS, CancelWatch
+
+        config = getattr(self._engine, "config", None)
+        concurrency = getattr(getattr(config, "sync", None), "concurrency", None)
+        grace = getattr(concurrency, "cancel_grace_seconds", DEFAULT_CANCEL_GRACE_SECONDS)
+        return CancelWatch(
+            getattr(self._engine, "state", None),
+            source_name,
+            request_id,
+            grace_s=float(DEFAULT_CANCEL_GRACE_SECONDS if grace is None else grace),
+        )
+
+    def _forced(self, watch: Any, report: dict[str, Any], mode: str, started_at: str) -> Any:
+        """The result of a child that was ended after a cancel, written down."""
+
+        from pheasant.sync.engine import SyncEngine, SyncResult
+        from pheasant.sync.supervision import record_forced_stop
+
+        outcome = record_forced_stop(
+            self._engine.state,
+            watch,
+            mode=mode,
+            started_at=started_at,
+            dirty_scope=SyncEngine._ENRICH_DIRTY_SCOPE,
+        )
+        try:
+            # Whatever the child committed before it was ended is published.
+            self._engine.reload_graph()
+        except Exception as exc:  # pragma: no cover - reload is best effort
+            logger.warning("Could not reload the graph after ending a sync worker: %s", exc)
+        return SyncResult(
+            source_id=watch.source_id,
+            indexed_artifacts=0,
+            skipped_artifacts=0,
+            graph_nodes=0,
+            graph_edges=0,
+            status="cancelled",
+            details={"cancelled": outcome, "error": report.get("error")},
+        )
 
     def _run(self, *args: Any, **kwargs: Any) -> dict:
         # Role-split fleets reuse a supervised interpreter across all of this
@@ -444,6 +549,10 @@ class WorkerBackedEngine:
                 full_scan=full_scan,
                 on_progress=_as_engine_hook(on_progress),
             )
+        from pheasant.ingestion.pipeline import utc_now
+
+        watch = self._cancel_watch(source_name)
+        started_at = utc_now()
         report = self._run(
             self._config_path,
             source_name,
@@ -451,7 +560,10 @@ class WorkerBackedEngine:
             depth=max_depth,
             full_scan=full_scan,
             on_progress=on_progress,
+            cancel_watch=watch,
         )
+        if report.get("forced"):
+            return self._forced(watch, report, mode, started_at)
         results = self._adopt(report)
         return results[0] if results else self._empty(source_name, report)
 
@@ -463,6 +575,16 @@ class WorkerBackedEngine:
                 task,
                 on_progress=_as_engine_hook(on_progress),
             )
+        from pheasant.ingestion.pipeline import utc_now
+        from pheasant.sync import request_ledger
+
+        # Control tasks (prune, replace, delete) are not syncs anyone cancels.
+        watch = (
+            self._cancel_watch(str(task.source_id), request_ledger.request_id_of(task))
+            if request_ledger.tracked(task)
+            else None
+        )
+        started_at = utc_now()
         report = self._run(
             self._config_path,
             str(task.source_id),
@@ -474,7 +596,10 @@ class WorkerBackedEngine:
                 **dict(task.payload or {}),
                 "_delivery_attempt": int(getattr(task, "attempts", 0) or 0),
             },
+            cancel_watch=watch,
         )
+        if report.get("forced") and watch is not None:
+            return self._forced(watch, report, str(task.mode), started_at)
         results = self._adopt(report)
         return results[0] if results else self._empty(str(task.source_id), report)
 

@@ -346,3 +346,33 @@ def test_the_taxonomy_reads_a_source_once_per_version(
         assert good["quality"]["flags"][0]["code"] == "stale"
     finally:
         engine.close()
+
+
+def test_a_file_committed_after_the_snapshot_does_not_fail_the_listing(
+    tmp_path: Path, site: _Site, monkeypatch
+) -> None:
+    """The snapshot is a version; the rows are now. A sync that commits in
+    between used to make every poll of the Syncs page that hit it a 500."""
+
+    from pheasant.services import quality as quality_service
+
+    site.pages = {n: (LONG, "text/plain") for n in ("good", "late")}
+    engine = _engine(tmp_path, site, ["good", "late"])
+    context = _context(engine)
+    try:
+        engine.sync_source("site", "incremental")
+        source = engine.state.get_source("site")
+        real = quality_service._build_snapshot
+
+        def taken_before_late_committed(context: Any, source: Any) -> Any:
+            snapshot = real(context, source)
+            late = next(k for k, f in snapshot.by_id.items() if f["path"].endswith("late.txt"))
+            del snapshot.by_id[late]
+            return snapshot
+
+        monkeypatch.setattr(quality_service, "_build_snapshot", taken_before_late_committed)
+        quality_service._caches(engine.state)[0].clear()
+        files = quality_service.source_files(context, source)
+        assert [f["path"].rsplit("/", 1)[-1] for f in files] == ["good.txt"]
+    finally:
+        engine.close()

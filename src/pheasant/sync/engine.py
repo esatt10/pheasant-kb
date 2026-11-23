@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from pheasant import cancel_scope
 from pheasant.capacity import GRAPH_SHARE_OF_RSS, RSS_BYTES_PER_NODE
 from pheasant.capacity import project as project_capacity
 from pheasant.config.schema import FILESYSTEM_SOURCE_TYPES, PheasantConfig, SourceConfig
@@ -52,10 +53,14 @@ from pheasant.search.vector_store import (
 from pheasant.security import corpus_policy
 from pheasant.sync import archived, limits
 from pheasant.sync import health as read_health
+from pheasant.sync import request_ledger as sync_requests
 from pheasant.sync.cancellation import (
     SyncCancelled,
     SyncRun,
+    admit_index_task,
+    bound_request,
     cancellable,
+    cancelled_before_reading,
     finish_cancelled,
     skip_disabled,
 )
@@ -745,6 +750,13 @@ class SyncEngine:
         self.vectors.flush()
         return embedded
 
+    def heal_vectors(self, source_name: str) -> int:
+        """Embed this source's chunks the vector store lacks (`sync/supervision.py`)."""
+
+        from pheasant.sync.supervision import heal_vectors
+
+        return heal_vectors(self, source_name)
+
     def _graph_gap(self, source_name: str) -> bool:
         """True when SQLite has artifacts the loaded graph does not know about."""
 
@@ -947,13 +959,18 @@ class SyncEngine:
         log("Queued %d of %d source(s) for indexing", published, len(sources))
 
         def run(task: Any) -> SyncResult:
-            return self.sync_source(
-                task.source_id,
-                task.mode,  # type: ignore[arg-type]
-                max_depth=task.max_depth,
-                full_scan=task.full_scan,
-                on_progress=progress_for(task.source_id),
-            )
+            # The same ledger check every delivery gets (`_admit_index_task`):
+            # a source cancelled while this pass was queuing is acknowledged.
+            if (declined := self._admit_index_task(task)) is not None:
+                return declined
+            with bound_request(sync_requests.request_id_of(task)):
+                return self.sync_source(
+                    task.source_id,
+                    task.mode,  # type: ignore[arg-type]
+                    max_depth=task.max_depth,
+                    full_scan=task.full_scan,
+                    on_progress=progress_for(task.source_id),
+                )
 
         visibility = float(settings.visibility_seconds or 300)
         if workers <= 1:
@@ -1063,6 +1080,10 @@ class SyncEngine:
             # The connector cannot read *anything* (an experimental type not
             # enabled, a scheme it refuses): a fact about the source, not this
             # item, so the sync fails as it always did.
+            raise
+        except cancel_scope.Stopped:
+            # Not unreadable: stopped. Recorded as a read failure, the item
+            # would be named in the sync's "could not read" list.
             raise
         except Exception as exc:  # noqa: BLE001 - one unreadable item is not the source
             return _PreparedItem(
@@ -1259,6 +1280,9 @@ class SyncEngine:
             try:
                 parsed_results = pool.prepare_batch(tasks, deadline=time.monotonic() + timeout)
             except (AllWorkersFailed, TaskRejected) as exc:
+                # The fleet gave up because the sync was stopped: parsing the
+                # batch here instead is exactly the work somebody cancelled.
+                cancel_scope.check()
                 logger.warning(
                     "Preparing %d file(s) of source %s locally: %s",
                     len(pending),
@@ -1805,6 +1829,22 @@ class SyncEngine:
             if not isinstance(payload, dict):
                 raise ValueError("replace_source task is missing its source configuration")
             return self.replace_source(payload, on_progress=on_progress)
+        if (declined := self._admit_index_task(task)) is not None:
+            # Acknowledged by the caller like any finished task, so the broker
+            # forgets it.
+            return declined
+        with bound_request(sync_requests.request_id_of(task)):
+            return self._apply_sync_task(task, on_progress=on_progress)
+
+    def _admit_index_task(self, task: Any) -> SyncResult | None:
+        return admit_index_task(self, task)
+
+    def _cancelled_before_reading(
+        self, source_name: str, cancelled: Any, mode: str, stage: str
+    ) -> SyncResult:
+        return cancelled_before_reading(self, source_name, cancelled, mode, stage)
+
+    def _apply_sync_task(self, task: Any, *, on_progress: ProgressHook | None = None) -> SyncResult:
         # Sync the source as registered now: an api replica may have changed it.
         SourceRegistry(self.config, self.state).adopt(str(task.source_id))
         if (skipped := skip_disabled(self, str(task.source_id))) is not None:
@@ -2009,6 +2049,15 @@ class SyncEngine:
                     raise
             if run.predecessor_died:  # its pending node-index delta died with it
                 self.reconcile_node_index(source.name, missing=True)
+                # And chunks it committed before their vectors: a killed run
+                # never reached its flush, and no incremental sync re-reads a
+                # file whose checksum it already holds. Before the cancel
+                # check below, because this run's clean exit removes the row
+                # that says a predecessor died.
+                self.heal_vectors(source.name)
+            # Asked to stop while it waited for the lock or fetched the remote.
+            if (early := run.poll(force=True)) is not None:
+                return self._cancelled_before_reading(source.name, early, mode, "starting")
             connector = connector_for_source(source, self.state)
             if mode == "validate_only":
                 health = connector.validate()
@@ -2073,6 +2122,16 @@ class SyncEngine:
                         "scan": exc.report.as_dict(),
                     },
                 )
+            except Exception:
+                # A listing interrupted by the stop (a paced crawl, a paged
+                # API backing off) ends as a cancel, not as a failed sync.
+                if (early := run.poll(force=True)) is not None:
+                    return self._cancelled_before_reading(source.name, early, mode, "listing")
+                raise
+            # Checked before a full sync clears the source: stopping a full
+            # sync during its listing must not leave the source empty.
+            if (early := run.poll(force=True)) is not None:
+                return self._cancelled_before_reading(source.name, early, mode, "listing")
             # A full sync empties the source here, so every artifact written
             # below is known to be absent. That matters more than it sounds:
             # `chunks_fts.artifact_id` is UNINDEXED, so the per-artifact
@@ -2312,6 +2371,12 @@ class SyncEngine:
                 # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
+            if not stopped and (late := run.poll(force=True)) is not None:
+                # Asked after the last item: everything is committed, so this
+                # costs nothing, and it spares the prune and whole-graph
+                # enrichment somebody asked not to wait for. Both run on the
+                # next pass, as after any cancel.
+                stopped.append(late)
             if stopped:
                 return finish_cancelled(
                     self,

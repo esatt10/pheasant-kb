@@ -78,7 +78,33 @@ def test_a_region_with_no_queue_says_so_rather_than_reporting_an_empty_backlog(
     assert status["tasks"] == []
 
 
-def test_a_backend_that_cannot_list_reports_unknown_not_empty(queued: PheasantTools) -> None:
+def test_a_jetstream_queue_is_listed_from_the_request_ledger(queued: PheasantTools) -> None:
+    """JetStream counts its messages but cannot list them; the ledger can.
+
+    Every sync published through the index queue has a row
+    (`sync/request_ledger.py`), so the waiting syncs are named even though
+    the broker cannot enumerate them, and the broker's depth still counts.
+    """
+
+    status = index_queue_service.queue_status(_context(queued), None)
+
+    assert status["listing"] == "ledger"
+    assert [task["source"] for task in status["tasks"]] == ["one", "two", "three"]
+    assert {task["state"] for task in status["tasks"]} == {"awaiting_claim"}
+    assert [task["position"] for task in status["tasks"]] == [1, 2, 3]
+    assert all(task["request_id"] for task in status["tasks"])
+    assert status["depth"]["pending"] == 3
+
+
+def test_a_queue_whose_ledger_cannot_be_read_reports_unknown_not_empty(
+    queued: PheasantTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pheasant.sync import request_ledger
+
+    def unreadable(*_args: Any, **_kwargs: Any) -> list:
+        raise RuntimeError("ledger unreachable")
+
+    monkeypatch.setattr(request_ledger, "open_requests", unreadable)
     status = index_queue_service.queue_status(_context(queued), None)
 
     assert status["listing"] == "unavailable"

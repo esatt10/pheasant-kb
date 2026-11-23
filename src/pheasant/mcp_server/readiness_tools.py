@@ -342,10 +342,12 @@ def register_readiness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         published, not run. Each task here is ``awaiting_claim`` (no indexer
         has taken it yet; watch ``waiting_seconds``), ``retry_scheduled``,
         ``claimed``, ``claim_lapsed`` (its indexer stopped heartbeating) or
-        ``dead``. ``listing: "unavailable"`` means the backend can count its
-        backlog but not list it, so an empty ``tasks`` there is not "nothing
-        waiting". With the queue off, syncs run where they are asked and this
-        reports ``enabled: false``.
+        ``dead``. On NATS ``listing`` is ``"ledger"``: the waiting syncs come
+        from the region's request ledger (cancel_sync reaches them), and
+        ``depth`` counts the broker's messages. ``listing: "unavailable"``
+        means they cannot be listed, so an empty ``tasks`` there is not
+        "nothing waiting". With the queue off, syncs run where they are asked
+        and this reports ``enabled: false``.
         """
 
         return tools.get_index_queue(knowledge_base, limit)

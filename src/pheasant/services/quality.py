@@ -185,7 +185,11 @@ def source_files(
     snapshot = _snapshot(context, source)
     prefix = _prefix(folder)
     rows = folder_rows(context, source, principal, principal_groups, folder=folder)
-    files = [snapshot.by_id[str(row["id"])] for row in rows]
+    # A file committed after the snapshot was taken -- a sync running while
+    # the Syncs page polls -- is in the rows and not yet in the snapshot. It
+    # joins at the next version; looking it up raised KeyError, a 500 about
+    # once in a hundred polls of a running sync.
+    files = [snapshot.by_id[key] for row in rows if (key := str(row["id"])) in snapshot.by_id]
     # Listed and never read: the source's own URL or path and the error. The
     # index holds nothing for them, so there is no ACL to judge them by, and
     # the source's listing already shows its URLs to the same callers.

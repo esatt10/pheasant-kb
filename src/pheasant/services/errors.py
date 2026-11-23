@@ -509,12 +509,13 @@ class NotReinstatable(InvalidRequest):
 
 
 class SyncNotRunning(ServiceError):
-    """A cancel for a source with no sync running.
+    """A cancel for a source with no sync running or waiting.
 
     Refused rather than remembered: a request held until the next sync started
     would stop work somebody asked for later, which is the opposite of what
-    the first caller wanted. Not retryable as it stands -- a caller that wants
-    to stop a sync still waiting in the queue asks again once it has started.
+    the first caller wanted. A sync still waiting in the index queue *is*
+    reached (`sync/request_ledger.py`), so this answer means there is truly
+    nothing to stop.
     """
 
     status = 409
@@ -522,8 +523,8 @@ class SyncNotRunning(ServiceError):
 
     def __init__(self, source: str) -> None:
         super().__init__(
-            f"{source} has no sync running, so there is nothing to cancel. A sync "
-            "still waiting in the index queue can be cancelled once an indexer starts it."
+            f"{source} has no sync running or waiting in the index queue, so there is "
+            "nothing to cancel."
         )
         self.source = source
 
