@@ -253,7 +253,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 227 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 228 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -1395,6 +1395,21 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   floating in the table was clipped, and ran off a phone). Not the corpus
   export: `/exports` stays off HTTP because it flattens ACLs; this one is
   built per caller. `tests/test_source_export.py`.
+- **An excerpted document is searched for the question inside itself**
+  (`assistant/document_assembly.question_anchors`, `PheasantRetriever.documents(question=)`).
+  Search cites one chunk per file, ranked corpus-wide, so on a page whose every
+  chunk matches the question's common words it cites whichever chunk the page's
+  vocabulary favours. Found on production: a HubSpot page on keywords (356 KB of
+  HTML, so read as an excerpt) was cited by its keyword-difficulty chunk, the
+  reader took that chunk's neighbourhood, and the answer said the page did not
+  cover search intent -- three chunks before, under its own heading. When a file
+  will be excerpted, term counts over its own chunks (SQL, no text transferred)
+  rank them with the file as the collection: a term every chunk holds drops out,
+  adjacent content words count as a phrase ("search intent"), and up to
+  `QUESTION_ANCHORS` (2) chunks join the excerpt after the head and the cited
+  chunks, before any neighbour. No question, or a file read whole, is byte-
+  identical; the `read` step says how many passages the question found. Every
+  hydration path passes it, the visual's included. `tests/test_question_anchors.py`.
 - **Long answers are outlined, then written section by section** from only
   each section's passages under their *original* numbers (so `verify_node`
   still works), in parallel under a deadline; a failed or late section is

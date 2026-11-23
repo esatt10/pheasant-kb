@@ -66,6 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
+from pheasant.assistant.document_assembly import read_detail, reading_question
 from pheasant.assistant.markup import outside_code
 from pheasant.assistant.providers import OPENAI_WIRE, ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
@@ -847,7 +848,9 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
         }
 
     try:
-        documents = hydrate_citations(ctx["retriever"], citations, options)
+        documents = hydrate_citations(
+            ctx["retriever"], citations, options, question=reading_question(state)
+        )
         facts = ctx["retriever"].facts(
             [item["node_id"] for item in citations if item.get("node_id")],
             int(options["max_facts"]),
@@ -1019,18 +1022,14 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             "answer_mode": "extractive",
         }
     read_started = time.perf_counter()
-    documents = hydrate_citations(retriever, citations, options)
+    documents = hydrate_citations(retriever, citations, options, question=reading_question(state))
     read_seconds = time.perf_counter() - read_started
     steps = [*state.get("steps", []), *draft.steps]
     if documents:
-        whole = sum(1 for doc in documents.values() if not doc.truncated)
         steps.append(
             WorkflowStep(
                 name="read",
-                detail=f"read {len(documents)} file(s) in full from their chunks"
-                if whole == len(documents)
-                else f"read {len(documents)} file(s) from their chunks "
-                f"({len(documents) - whole} excerpted)",
+                detail=read_detail(documents),
                 passages=len(documents),
                 duration_seconds=read_seconds,
             )

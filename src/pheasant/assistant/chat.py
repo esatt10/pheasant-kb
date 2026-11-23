@@ -25,6 +25,8 @@ import logging
 import re
 from typing import Any
 
+# Re-exported: the file-level content pass lives with the reassembly it drives.
+from pheasant.assistant.document_assembly import CONTENT_DEFAULTS, hydrate_citations  # noqa: F401
 from pheasant.assistant.providers import PROVIDERS
 from pheasant.graph.okf_index import prompt_note
 from pheasant.graph.provenance import PROVENANCE_EDGE_TYPES
@@ -686,92 +688,6 @@ def short_reason(error: str) -> str:
     """One clause of a provider error, for the user-facing degraded answer."""
     first = error.strip().splitlines()[0]
     return first if len(first) <= 120 else first[:117].rstrip() + "…"
-
-
-#: Defaults for the file-level content pass, shared by every workflow so
-#: switching workflows does not silently change how much the model can see.
-CONTENT_DEFAULTS: dict[str, Any] = {
-    "include_full_content": True,
-    # Prose allowance per document.
-    "passage_chars": 6000,
-    # Code and config are never excerpted (see retrieval._is_code); this is
-    # only a ceiling against a vendored bundle, not a policy for real files.
-    "code_passage_chars": 24_000,
-    # Original file size above which a prose document is excerpted to the
-    # matched neighbourhood rather than read whole.
-    "large_file_bytes": 40_000,
-    # Ceiling across every passage in one answer.
-    "context_budget_chars": 60_000,
-}
-
-
-def hydrate_citations(retriever: Any, citations: list[dict], options: dict | None = None) -> dict:
-    """Pull the full indexed file behind each citation, keyed by index.
-
-    Search returns *chunks*, and a chunk preview is capped at 500 characters
-    in the SQL layer. Answering "what does this repository do" or "how do I
-    use this" from 500-character windows is why an answer can name exactly
-    the right files and still say nothing about them: the retrieval was
-    correct and the evidence was starved. This re-reads those files whole —
-    reassembled from their chunks with line spans, headings and artifact
-    metadata (see :meth:`retrieval.PheasantRetriever.documents`).
-
-    Best-effort by construction: any failure returns ``{}`` and the caller
-    falls back to snippets, because a missing state store must degrade the
-    answer, not fail the question.
-
-    Only the *first* citation of a given file is hydrated. Two chunks of one
-    document produce two citations, and both matched chunks are already
-    anchored into the single reassembly, so hydrating the second would repeat
-    the same file inside the same prompt.
-    """
-    settings = {**CONTENT_DEFAULTS, **(options or {})}
-    if not settings.get("include_full_content") or retriever is None or not citations:
-        return {}
-
-    node_ids: list[str] = []
-    anchors: dict[str, list[str]] = {}
-    first_citation: dict[str, int] = {}
-    for citation in citations:
-        node_id = citation.get("node_id")
-        if not node_id:
-            continue
-        if node_id not in first_citation:
-            first_citation[node_id] = citation["index"]
-            node_ids.append(node_id)
-        if citation.get("chunk_id"):
-            anchors.setdefault(node_id, []).append(str(citation["chunk_id"]))
-
-    if not node_ids:
-        return {}
-    # A document the window gave many passages is read further: its allowance
-    # grows with how many of its chunks were cited, so thirty passages of a
-    # long PDF are thirty passages read rather than `passage_chars` of them.
-    allowances: dict[str, int] = {}
-    if settings.get("scale_document_chars"):
-        base = int(settings["passage_chars"])
-        per_passage = int(settings.get("chars_per_passage") or 4000)
-        allowances = {
-            node_id: max(base, len(anchors.get(node_id, ())) * per_passage) for node_id in node_ids
-        }
-    try:
-        documents = retriever.documents(
-            node_ids,
-            anchors=anchors,
-            max_chars=int(settings["passage_chars"]),
-            code_max_chars=int(settings["code_passage_chars"]),
-            large_file_bytes=int(settings["large_file_bytes"]),
-            budget_chars=int(settings["context_budget_chars"]),
-            **({"allowances": allowances} if allowances else {}),
-        )
-    except Exception:  # pragma: no cover - degrade to snippets, never fail
-        logger.debug("could not hydrate citation content", exc_info=True)
-        return {}
-    return {
-        first_citation[node_id]: document
-        for node_id, document in documents.items()
-        if node_id in first_citation
-    }
 
 
 def build_prompt(

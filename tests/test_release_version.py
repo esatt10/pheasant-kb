@@ -206,6 +206,9 @@ def test_a_later_major_is_not_demoted_by_an_older_patch(monkeypatch, tmp_path) -
     cases right by accident. Only "strongest wins" gets both.
     """
 
+    # Pinned like the test above: unpinned, the base was the repository's own
+    # version, and the expectation broke the day it reached 2.0.0.
+    monkeypatch.setattr(release_version, "project_version", lambda: "1.2.0")
     _fake_github(
         monkeypatch,
         commits={"head": 53, "older": 52},

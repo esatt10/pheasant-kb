@@ -1,13 +1,20 @@
 """How a cited file is read back from its chunks: whole, excerpted, or cut.
 
 Split out of ``assistant.retrieval`` so the retriever stays reviewable as a
-unit; ``retrieval`` imports every name here and ``PheasantRetriever.documents``
-is the one caller. The rules themselves are documented on that method.
+unit; the selection rules are documented on ``PheasantRetriever.documents``.
+Also here: the question's own ranking inside an excerpted file
+(``question_anchors``), and the content pass every workflow runs over its
+citations (``hydrate_citations``, re-exported by ``assistant.chat``).
 """
 
 from __future__ import annotations
 
+import logging
+import math
+import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Extensions whose files are read whole or not at all. Source and config
 # files are *structurally* meaningful: an excerpt of a Python module with the
@@ -68,6 +75,117 @@ LARGE_FILE_BYTES = 40_000
 
 #: Chunks kept either side of a match when excerpting a large document.
 ADJACENT_CHUNKS = 1
+
+#: How many of an excerpted document's own chunks the *question* may add to
+#: the excerpt, beside the chunks search cited (``question_anchors``).
+QUESTION_ANCHORS = 2
+
+#: A second question chunk is kept only when it scores at least this share of
+#: the best one: a weak runner-up is dilution, not evidence.
+QUESTION_ANCHOR_RATIO = 0.5
+
+#: Most terms (words and adjacent word pairs) read from one question.
+MAX_QUESTION_TERMS = 12
+
+#: Words that frame a question *about a document* rather than name what is
+#: asked: "what does the article say about X" asks about X. Inside one
+#: document they are worse than noise, because a chunk that happens to say
+#: "in this article" would outrank the one about X.
+DOCUMENT_FRAMING = frozenset(
+    """
+    say says said article articles page pages post posts blog guide guides
+    section sections chapter chapters cover covers covered discuss discusses
+    discussed mention mentions mentioned talk talks write writes written
+    according regarding summary summarize summarise
+    """.split()
+)
+
+#: Words that never take part in a phrase. Narrower than the search
+#: stopwords on purpose: those also drop framing verbs ("find", "search",
+#: "show"), which is right for one word and wrong inside a phrase — "search
+#: intent" is the subject of a question, not an instruction to search.
+FUNCTION_WORDS = frozenset(
+    """
+    a an the this that these those there here it its
+    i we you me my our your us they them their
+    is are was were be been being am do does did doing done
+    have has had having can could should would will shall may might must
+    of to in on at by for from with without into onto about across over under
+    and or not but if then than as so such via per
+    what which who whom whose when where why how
+    """.split()
+)
+
+
+def question_terms(question: str | None, stopwords: frozenset[str]) -> list[str]:
+    """The words of ``question`` worth looking for inside one document.
+
+    Content words (no stopwords, no ``DOCUMENT_FRAMING``), then each pair of
+    content words adjacent in the question as a phrase: "search intent" is
+    what the question asks about, where "search" and "intent" alone each
+    match far more of a page about keywords.
+    """
+    words = re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", (question or "").lower())
+    content = {word for word in words if len(word) > 1 and word not in stopwords} - DOCUMENT_FRAMING
+    phrasal = {
+        word for word in words if len(word) > 1 and word not in FUNCTION_WORDS
+    } - DOCUMENT_FRAMING
+    terms = list(dict.fromkeys(word for word in words if word in content))
+    pairs = [
+        f"{first} {second}"
+        for first, second in zip(words, words[1:], strict=False)
+        if first in phrasal and second in phrasal and (first in content or second in content)
+    ]
+    # Phrases first: when the cap bites, the pairs are the stronger evidence.
+    return list(dict.fromkeys([*pairs, *terms]))[:MAX_QUESTION_TERMS]
+
+
+def question_anchors(
+    counts: list[list[int]],
+    lengths: list[int],
+    exclude: set[int],
+    *,
+    limit: int = QUESTION_ANCHORS,
+) -> list[int]:
+    """Positions of the chunks that best answer the question, within one file.
+
+    ``counts[i][j]`` is how often term ``j`` occurs in chunk ``i``. Scored as
+    BM25 with the *document's own* chunks as the collection, which is the
+    point: corpus-wide, every chunk of a page about keywords matches
+    "keywords", and search cites whichever chunk the page's vocabulary
+    happens to favour. Within the page, a term every chunk holds says nothing
+    (it is dropped), and the rare one the question is about decides.
+
+    Deterministic, no model, and only positions come back; ``exclude`` holds
+    the chunks already anchored.
+    """
+    total = len(counts)
+    if total < 2 or not counts or not counts[0]:
+        return []
+    average = (sum(lengths) / total) or 1.0
+    frequency = [sum(1 for row in counts if row[j] > 0) for j in range(len(counts[0]))]
+    scores: list[tuple[float, int]] = []
+    for index, (row, length) in enumerate(zip(counts, lengths, strict=True)):
+        norm = 1.2 * (0.25 + 0.75 * (length or average) / average)
+        score = 0.0
+        for j, tf in enumerate(row):
+            if tf <= 0 or frequency[j] >= total:  # in every chunk: no signal
+                continue
+            idf = math.log(1 + (total - frequency[j] + 0.5) / (frequency[j] + 0.5))
+            score += idf * tf * 2.2 / (tf + norm)
+        if score > 0:
+            scores.append((score, index))
+    scores.sort(key=lambda item: (-item[0], item[1]))
+    if not scores:
+        return []
+    best = scores[0][0]
+    chosen: list[int] = []
+    for score, index in scores:
+        if len(chosen) >= limit or score < best * QUESTION_ANCHOR_RATIO:
+            break
+        if index not in exclude:
+            chosen.append(index)
+    return chosen
 
 
 def _is_code(relative_path: str | None, language: str | None) -> bool:
@@ -174,16 +292,41 @@ def _chunk_label(row: Any) -> str:
 
 
 def _descriptor_selection(
-    rows: list[Any], anchor_ids: set[str], allowance: int, *, focused: bool
+    rows: list[Any],
+    anchor_ids: set[str],
+    allowance: int,
+    *,
+    focused: bool,
+    question_positions: list[int] | None = None,
 ) -> tuple[list[int], bool, bool]:
     """Choose chunk positions from metadata without transferring their text.
 
     Returns ``(positions, truncated, all_fit)`` with the same priority and
     character accounting as :func:`_reassemble`.
+
+    ``question_positions`` are chunks the question itself matched inside this
+    file (:func:`question_anchors`). They rank after the head and the cited
+    chunks and before any neighbour, so a tight allowance drops a neighbour
+    before it drops the passage that answers the question. They bring no
+    neighbours of their own: the caller funds exactly their length, so room
+    for their neighbours would be taken from the cited chunk's. With none,
+    the selection is exactly what it was.
     """
     lengths = [len(_chunk_label(row)) + int(row["text_length"] or 0) for row in rows]
     anchors = [i for i, row in enumerate(rows) if str(row["id"]) in anchor_ids]
-    if focused:
+    extra = [i for i in (question_positions or []) if 0 <= i < len(rows) and i not in anchors]
+    if extra:
+        if not focused and sum(length + 2 for length in lengths) <= allowance:
+            return list(range(len(rows))), False, True
+        order = [0, *anchors, *extra]
+        offsets = range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1) if focused else (1, -1, 2, -2)
+        for position in anchors:
+            for offset in offsets:
+                if 0 <= position + offset < len(rows):
+                    order.append(position + offset)
+        if not focused:
+            order.extend(range(len(rows)))
+    elif focused:
         wanted = {0}
         for anchor in anchors:
             for offset in range(-ADJACENT_CHUNKS, ADJACENT_CHUNKS + 1):
@@ -279,3 +422,117 @@ def _reassemble_selected(
     if previous < len(rows) - 1:
         parts.append(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---")
     return "\n\n".join(parts), len(selected), truncated
+
+
+#: Defaults for the file-level content pass, shared by every workflow so
+#: switching workflows does not silently change how much the model can see.
+CONTENT_DEFAULTS: dict[str, Any] = {
+    "include_full_content": True,
+    # Prose allowance per document.
+    "passage_chars": 6000,
+    # Code and config are never excerpted (see retrieval._is_code); this is
+    # only a ceiling against a vendored bundle, not a policy for real files.
+    "code_passage_chars": 24_000,
+    # Original file size above which a prose document is excerpted to the
+    # matched neighbourhood rather than read whole.
+    "large_file_bytes": 40_000,
+    # Ceiling across every passage in one answer.
+    "context_budget_chars": 60_000,
+}
+
+
+def hydrate_citations(
+    retriever: Any,
+    citations: list[dict],
+    options: dict | None = None,
+    *,
+    question: str | None = None,
+) -> dict:
+    """Pull the full indexed file behind each citation, keyed by index.
+
+    Search returns *chunks*, and a chunk preview is capped at 500 characters
+    in the SQL layer. Answering "what does this repository do" or "how do I
+    use this" from 500-character windows is why an answer can name exactly
+    the right files and still say nothing about them: the retrieval was
+    correct and the evidence was starved. This re-reads those files whole —
+    reassembled from their chunks with line spans, headings and artifact
+    metadata (see :meth:`retrieval.PheasantRetriever.documents`).
+
+    Best-effort by construction: any failure returns ``{}`` and the caller
+    falls back to snippets, because a missing state store must degrade the
+    answer, not fail the question.
+
+    Only the *first* citation of a given file is hydrated. Two chunks of one
+    document produce two citations, and both matched chunks are already
+    anchored into the single reassembly, so hydrating the second would repeat
+    the same file inside the same prompt.
+
+    ``question`` is what the reader is answering. A file that will only be
+    excerpted is then also searched for it inside itself, so the excerpt
+    holds the part that answers it and not only the chunk search cited.
+    """
+    settings = {**CONTENT_DEFAULTS, **(options or {})}
+    if not settings.get("include_full_content") or retriever is None or not citations:
+        return {}
+
+    node_ids: list[str] = []
+    anchors: dict[str, list[str]] = {}
+    first_citation: dict[str, int] = {}
+    for citation in citations:
+        node_id = citation.get("node_id")
+        if not node_id:
+            continue
+        if node_id not in first_citation:
+            first_citation[node_id] = citation["index"]
+            node_ids.append(node_id)
+        if citation.get("chunk_id"):
+            anchors.setdefault(node_id, []).append(str(citation["chunk_id"]))
+
+    if not node_ids:
+        return {}
+    # A document the window gave many passages is read further: its allowance
+    # grows with how many of its chunks were cited, so thirty passages of a
+    # long PDF are thirty passages read rather than `passage_chars` of them.
+    allowances: dict[str, int] = {}
+    if settings.get("scale_document_chars"):
+        base = int(settings["passage_chars"])
+        per_passage = int(settings.get("chars_per_passage") or 4000)
+        allowances = {
+            node_id: max(base, len(anchors.get(node_id, ())) * per_passage) for node_id in node_ids
+        }
+    try:
+        documents = retriever.documents(
+            node_ids,
+            anchors=anchors,
+            max_chars=int(settings["passage_chars"]),
+            code_max_chars=int(settings["code_passage_chars"]),
+            large_file_bytes=int(settings["large_file_bytes"]),
+            budget_chars=int(settings["context_budget_chars"]),
+            **({"allowances": allowances} if allowances else {}),
+            **({"question": question} if question else {}),
+        )
+    except Exception:  # pragma: no cover - degrade to snippets, never fail
+        logger.debug("could not hydrate citation content", exc_info=True)
+        return {}
+    return {
+        first_citation[node_id]: document
+        for node_id, document in documents.items()
+        if node_id in first_citation
+    }
+
+
+def reading_question(state: Any) -> str:
+    """What a workflow's reader looks for inside an excerpted file: the
+    standalone question when a follow-up was rewritten, else the question."""
+    return str(state.get("search_question") or state.get("question") or "")
+
+
+def read_detail(documents: dict) -> str:
+    """The ``read`` step's line: how much of each file the answer saw."""
+    whole = sum(1 for doc in documents.values() if not doc.truncated)
+    if whole == len(documents):
+        return f"read {len(documents)} file(s) in full from their chunks"
+    found = sum(getattr(doc, "question_chunks", 0) for doc in documents.values())
+    also = f"; {found} passage(s) found by the question inside them" if found else ""
+    excerpted = len(documents) - whole
+    return f"read {len(documents)} file(s) from their chunks ({excerpted} excerpted{also})"

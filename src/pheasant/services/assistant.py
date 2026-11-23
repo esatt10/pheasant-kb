@@ -460,6 +460,7 @@ def visualize(
                 knowledge_base=kb_id,
                 graph=context.graph,
                 config=context.config,
+                question=text,
             )
             if llm is not None
             else None,
@@ -599,6 +600,7 @@ def render_visual(
             knowledge_base=kb_id,
             graph=context.graph,
             config=context.config,
+            question=payload.get("search_question") or payload.get("question"),
         )
         if llm is not None
         else None,
