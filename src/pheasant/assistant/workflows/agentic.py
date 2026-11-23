@@ -66,6 +66,7 @@ from pheasant.assistant.chat import (
     short_reason,
     system_prompt_for,
 )
+from pheasant.assistant.document_assembly import read_detail, reading_question
 from pheasant.assistant.markup import outside_code
 from pheasant.assistant.providers import OPENAI_WIRE, ProviderError, collect_token_usage
 from pheasant.assistant.replies import json_object
@@ -848,7 +849,7 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
 
     try:
         documents = hydrate_citations(
-            ctx["retriever"], citations, options, question=_read_question(state)
+            ctx["retriever"], citations, options, question=reading_question(state)
         )
         facts = ctx["retriever"].facts(
             [item["node_id"] for item in citations if item.get("node_id")],
@@ -990,12 +991,6 @@ def combined_grade_and_answer_node(state: AgentState, ctx: dict) -> dict:
         }
 
 
-def _read_question(state: AgentState) -> str:
-    """What the reader looks for inside an excerpted file: the standalone
-    question when a follow-up was rewritten, else the question as asked."""
-    return str(state.get("search_question") or state.get("question") or "")
-
-
 def synthesize_node(state: AgentState, ctx: dict) -> dict:
     """Write the grounded answer over the accumulated evidence.
 
@@ -1027,21 +1022,14 @@ def synthesize_node(state: AgentState, ctx: dict) -> dict:
             "answer_mode": "extractive",
         }
     read_started = time.perf_counter()
-    documents = hydrate_citations(retriever, citations, options, question=_read_question(state))
+    documents = hydrate_citations(retriever, citations, options, question=reading_question(state))
     read_seconds = time.perf_counter() - read_started
     steps = [*state.get("steps", []), *draft.steps]
     if documents:
-        whole = sum(1 for doc in documents.values() if not doc.truncated)
-        found = sum(getattr(doc, "question_chunks", 0) for doc in documents.values())
         steps.append(
             WorkflowStep(
                 name="read",
-                detail=f"read {len(documents)} file(s) in full from their chunks"
-                if whole == len(documents)
-                else f"read {len(documents)} file(s) from their chunks "
-                f"({len(documents) - whole} excerpted"
-                + (f"; {found} passage(s) found by the question inside them" if found else "")
-                + ")",
+                detail=read_detail(documents),
                 passages=len(documents),
                 duration_seconds=read_seconds,
             )

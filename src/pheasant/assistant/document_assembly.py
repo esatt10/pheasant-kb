@@ -1,15 +1,20 @@
 """How a cited file is read back from its chunks: whole, excerpted, or cut.
 
 Split out of ``assistant.retrieval`` so the retriever stays reviewable as a
-unit; ``retrieval`` imports every name here and ``PheasantRetriever.documents``
-is the one caller. The rules themselves are documented on that method.
+unit; the selection rules are documented on ``PheasantRetriever.documents``.
+Also here: the question's own ranking inside an excerpted file
+(``question_anchors``), and the content pass every workflow runs over its
+citations (``hydrate_citations``, re-exported by ``assistant.chat``).
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Extensions whose files are read whole or not at all. Source and config
 # files are *structurally* meaningful: an excerpt of a Python module with the
@@ -417,3 +422,117 @@ def _reassemble_selected(
     if previous < len(rows) - 1:
         parts.append(f"--- … {len(rows) - 1 - previous} chunk(s) omitted … ---")
     return "\n\n".join(parts), len(selected), truncated
+
+
+#: Defaults for the file-level content pass, shared by every workflow so
+#: switching workflows does not silently change how much the model can see.
+CONTENT_DEFAULTS: dict[str, Any] = {
+    "include_full_content": True,
+    # Prose allowance per document.
+    "passage_chars": 6000,
+    # Code and config are never excerpted (see retrieval._is_code); this is
+    # only a ceiling against a vendored bundle, not a policy for real files.
+    "code_passage_chars": 24_000,
+    # Original file size above which a prose document is excerpted to the
+    # matched neighbourhood rather than read whole.
+    "large_file_bytes": 40_000,
+    # Ceiling across every passage in one answer.
+    "context_budget_chars": 60_000,
+}
+
+
+def hydrate_citations(
+    retriever: Any,
+    citations: list[dict],
+    options: dict | None = None,
+    *,
+    question: str | None = None,
+) -> dict:
+    """Pull the full indexed file behind each citation, keyed by index.
+
+    Search returns *chunks*, and a chunk preview is capped at 500 characters
+    in the SQL layer. Answering "what does this repository do" or "how do I
+    use this" from 500-character windows is why an answer can name exactly
+    the right files and still say nothing about them: the retrieval was
+    correct and the evidence was starved. This re-reads those files whole —
+    reassembled from their chunks with line spans, headings and artifact
+    metadata (see :meth:`retrieval.PheasantRetriever.documents`).
+
+    Best-effort by construction: any failure returns ``{}`` and the caller
+    falls back to snippets, because a missing state store must degrade the
+    answer, not fail the question.
+
+    Only the *first* citation of a given file is hydrated. Two chunks of one
+    document produce two citations, and both matched chunks are already
+    anchored into the single reassembly, so hydrating the second would repeat
+    the same file inside the same prompt.
+
+    ``question`` is what the reader is answering. A file that will only be
+    excerpted is then also searched for it inside itself, so the excerpt
+    holds the part that answers it and not only the chunk search cited.
+    """
+    settings = {**CONTENT_DEFAULTS, **(options or {})}
+    if not settings.get("include_full_content") or retriever is None or not citations:
+        return {}
+
+    node_ids: list[str] = []
+    anchors: dict[str, list[str]] = {}
+    first_citation: dict[str, int] = {}
+    for citation in citations:
+        node_id = citation.get("node_id")
+        if not node_id:
+            continue
+        if node_id not in first_citation:
+            first_citation[node_id] = citation["index"]
+            node_ids.append(node_id)
+        if citation.get("chunk_id"):
+            anchors.setdefault(node_id, []).append(str(citation["chunk_id"]))
+
+    if not node_ids:
+        return {}
+    # A document the window gave many passages is read further: its allowance
+    # grows with how many of its chunks were cited, so thirty passages of a
+    # long PDF are thirty passages read rather than `passage_chars` of them.
+    allowances: dict[str, int] = {}
+    if settings.get("scale_document_chars"):
+        base = int(settings["passage_chars"])
+        per_passage = int(settings.get("chars_per_passage") or 4000)
+        allowances = {
+            node_id: max(base, len(anchors.get(node_id, ())) * per_passage) for node_id in node_ids
+        }
+    try:
+        documents = retriever.documents(
+            node_ids,
+            anchors=anchors,
+            max_chars=int(settings["passage_chars"]),
+            code_max_chars=int(settings["code_passage_chars"]),
+            large_file_bytes=int(settings["large_file_bytes"]),
+            budget_chars=int(settings["context_budget_chars"]),
+            **({"allowances": allowances} if allowances else {}),
+            **({"question": question} if question else {}),
+        )
+    except Exception:  # pragma: no cover - degrade to snippets, never fail
+        logger.debug("could not hydrate citation content", exc_info=True)
+        return {}
+    return {
+        first_citation[node_id]: document
+        for node_id, document in documents.items()
+        if node_id in first_citation
+    }
+
+
+def reading_question(state: Any) -> str:
+    """What a workflow's reader looks for inside an excerpted file: the
+    standalone question when a follow-up was rewritten, else the question."""
+    return str(state.get("search_question") or state.get("question") or "")
+
+
+def read_detail(documents: dict) -> str:
+    """The ``read`` step's line: how much of each file the answer saw."""
+    whole = sum(1 for doc in documents.values() if not doc.truncated)
+    if whole == len(documents):
+        return f"read {len(documents)} file(s) in full from their chunks"
+    found = sum(getattr(doc, "question_chunks", 0) for doc in documents.values())
+    also = f"; {found} passage(s) found by the question inside them" if found else ""
+    excerpted = len(documents) - whole
+    return f"read {len(documents)} file(s) from their chunks ({excerpted} excerpted{also})"
