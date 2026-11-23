@@ -18,6 +18,7 @@ redelivery, a real child process for the supervisor:
 
 from __future__ import annotations
 
+import importlib.util
 import threading
 import time
 from dataclasses import dataclass, field
@@ -39,6 +40,11 @@ from pheasant.sync.queue import IndexTask, queue_from_config
 from pheasant.sync.worker import WorkerBackedEngine
 
 FILES = 8
+
+# The vector store is the `vector` extra, which CI's 3.11 leg does not install.
+# Without it every cancel test still runs; only the vector checks skip.
+HAS_VECTORS = importlib.util.find_spec("lancedb") is not None
+needs_vectors = pytest.mark.skipif(not HAS_VECTORS, reason="needs the vector extra (lancedb)")
 
 from pheasant.sync import engine as _engine_module  # noqa: E402
 
@@ -73,9 +79,10 @@ def _payload(root: Path, corpus: Path, *, queue: dict[str, Any] | None = None) -
             "exports_path": str(root / "exports"),
         },
         "storage": {"graph_snapshots": False},
-        # Vectors on (the offline stub, into LanceDB under the state path), so
-        # every test also sees what a stop does to the embeddings.
-        "search": {"embeddings": {"enabled": True, "provider": "stub"}},
+        # Vectors on where the extra is installed (the offline stub, into
+        # LanceDB under the state path), so every test also sees what a stop
+        # does to the embeddings.
+        "search": {"embeddings": {"enabled": HAS_VECTORS, "provider": "stub"}},
         "sync": {"concurrency": {"max_parallel_files": 1, "lock_timeout_seconds": 5}},
         "sources": [
             {
@@ -629,6 +636,8 @@ def _ended_and_healed(engine: SyncEngine, result: Any, monkeypatch: pytest.Monke
     monkeypatch.delenv("PHEASANT_TEST_SLOW_SYNC_MS")
     healed = engine.sync_source("docs")
     assert healed.status == "healthy" and _artifacts(engine) == FILES
+    if not HAS_VECTORS:
+        return
     # Every committed chunk has its vector, whatever the ended worker had queued.
     assert engine.vectors is not None
     ids = [r["id"] for r in engine.state.rows("SELECT id FROM chunks WHERE source_id='docs'")]
@@ -749,6 +758,7 @@ def test_a_child_waiting_for_another_runs_lock_is_not_ended_for_its_cancel(
 # --------------------------------------------------------------------------
 
 
+@needs_vectors
 def test_chunks_committed_without_vectors_are_embedded_by_the_next_run(tmp_path: Path) -> None:
     engine = SyncEngine(_config(tmp_path, _corpus(tmp_path)))
     try:
