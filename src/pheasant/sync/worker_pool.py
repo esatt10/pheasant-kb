@@ -54,6 +54,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from pheasant import cancel_scope
 from pheasant.sync.remote_worker import (
     IncompatibleResult,
     ParsedArtifact,
@@ -236,14 +237,16 @@ class WorkerPool:
         timeout: float = 120.0,
         transport: Any | None = None,
         transport_name: str = "http",
-        sleep: Any = time.sleep,
+        sleep: Any = None,
         clock: Any = time.monotonic,
     ) -> None:
         self._endpoints = [_Endpoint(url=url.rstrip("/")) for url in endpoints if url]
         self._token = token
         self._timeout = float(timeout)
         self._lock = threading.Lock()
-        self._sleep = sleep
+        # Backoff waits on the sync's stop signal (`cancel_scope`), so a
+        # cancelled sync is not held by a rolling deploy's Retry-After.
+        self._sleep = sleep if sleep is not None else cancel_scope.sleep
         self._clock = clock
         self._cursor = 0
         self._transport = transport if transport is not None else build_transport(transport_name)
@@ -458,6 +461,7 @@ class WorkerPool:
                     raise AllWorkersFailed(reasons)
                 attempt += 1
                 progressed = True
+                cancel_scope.check()
                 try:
                     with self._probe(endpoint):
                         results = call(endpoint, remaining)

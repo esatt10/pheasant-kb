@@ -110,6 +110,24 @@ class SchedulerService:
         except Exception:  # noqa: BLE001 - telemetry must never break the beat
             logger.debug("Observation-ledger upkeep failed", exc_info=True)
 
+    def _request_ledger_upkeep(self) -> None:
+        """Expire sync requests nobody closed and drop old closed ones.
+
+        Outside ``sync_lock`` like the other upkeep, and cheap: two bounded
+        statements over a table holding one row per requested sync. Every
+        process with a beat may run it; the statements are idempotent, so two
+        replicas pruning at once agree. Without this caller the ledger would be
+        the unbounded growth `log_tasks` once was (CLAUDE.md, "a cleanup method
+        with no caller").
+        """
+
+        try:
+            from pheasant.sync.request_ledger import prune
+
+            prune(self.engine.state)
+        except Exception:  # noqa: BLE001 - upkeep must never break the beat
+            logger.debug("Sync request ledger upkeep failed", exc_info=True)
+
     def _evaluation_upkeep(self) -> None:
         """Run an effectiveness batch when the region has materially changed.
 
@@ -282,6 +300,7 @@ class SchedulerService:
             # `max_rows_per_pass` on top, so a backlog costs several beats
             # rather than one long one. No-ops fast when observation is off.
             self._log_upkeep()
+            self._request_ledger_upkeep()
             for task in list(self.upkeep):
                 try:
                     task()

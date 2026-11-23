@@ -239,9 +239,9 @@ class SourceProgress:
         self._phase_started = now
         self.status = status
         self.finished_at = utc_now()
-        if self.total:
-            # A source that succeeded with its counter at 812/1000 (because the
-            # last files were skipped, not indexed) reads as "stopped early".
+        if self.total and status == "succeeded":
+            # At 812/1000 (the last files skipped) a success reads as "stopped
+            # early"; a cancel or failure did stop early, and keeps its counter.
             self.current = self.total
 
     @property
@@ -530,7 +530,7 @@ class JobRegistry:
                     record.finish(status, now)
             job.progress.phase = status
             job.recompute(now)
-            if job.progress.total:
+            if job.progress.total and status == "succeeded":
                 job.progress.current = job.progress.total
             snapshot = job
         self._publish(snapshot)

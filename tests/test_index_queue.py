@@ -400,7 +400,7 @@ def test_a_large_task_payload_reaches_the_child_by_file(
     payload = {"operation": "replace_source", "blob": "x" * 300_000}
     seen: dict[str, Any] = {}
 
-    def fake_run(command, timeout, on_progress):
+    def fake_run(command, timeout, on_progress, cancel_watch=None):
         path = command[command.index("--task-payload-file") + 1]
         seen["longest"] = max(len(part) for part in command)
         seen["path"] = Path(path)

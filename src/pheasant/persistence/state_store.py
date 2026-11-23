@@ -272,6 +272,7 @@ class StateStore:
                 # A table added after the marker: absent, it must force the DDL.
                 "archived_documents": "acl",
                 "sync_runs": "cancel_reason",
+                "sync_requests": "cancel_reason",
                 "auth_tokens": "last_used_at",
                 "oauth_clients": "data_json",
                 "answer_streams": "updated_at",

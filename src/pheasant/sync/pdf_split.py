@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from pheasant import cancel_scope
 from pheasant.ingestion.extractor import math_enabled
 from pheasant.ingestion.pdf_pages import pdf_page_count, pdf_page_texts
 from pheasant.sync.preparation import _remote_inflight_batches
@@ -111,9 +112,11 @@ class RemotePdfPages:
             max_workers=inflight,
             thread_name_prefix="pheasant-pdf-pages",
         ) as executor:
-            parts = list(
-                executor.map(lambda span: self._read(pool, content, relative_path, *span), ranges)
+            # Bound to the sync's stop signal: pool threads do not inherit it.
+            read = cancel_scope.propagate(
+                lambda span: self._read(pool, content, relative_path, *span)
             )
+            parts = list(executor.map(read, ranges))
         logger.info(
             "Read %d pages of %s in %d ranges on the worker fleet in %.1fs",
             total,
@@ -124,12 +127,17 @@ class RemotePdfPages:
         return [page for part in parts for page in part]
 
     def _read(self, pool: Any, content: bytes, relative_path: str, first: int, stop: int):
+        # A range not yet started when the sync was cancelled is never sent.
+        cancel_scope.check()
         try:
             deadline = time.monotonic() + self.timeout
             if self.math:
                 return pool.extract_pages(content, first, stop, deadline=deadline, math=True)
             return pool.extract_pages(content, first, stop, deadline=deadline)
         except Exception as exc:  # noqa: BLE001 - the fleet is an optimization
+            # Never fall back to reading the range here for a stopped sync:
+            # that is the very work the cancel was for.
+            cancel_scope.check()
             logger.warning(
                 "Reading pages %d-%d of %s locally: %s", first + 1, stop, relative_path, exc
             )

@@ -23,12 +23,13 @@ class CancelSyncRequest(BaseModel):
 def register_sync_control_routes(app: FastAPI, *, services: Any) -> None:
     @app.post("/sources/{source_name}/cancel")
     def cancel_sync(source_name: str, req: CancelSyncRequest | None = None) -> dict:
-        """Stop the source's running sync at its next item, keeping what it indexed.
+        """Stop the source's sync, running or queued, keeping what it indexed.
 
-        ``status: cancel_requested``: the sync stops a moment later, in
-        whichever process is running it, and ``GET /jobs`` and ``GET /sources``
-        show it as cancelled once it has. 409 ``SYNC_NOT_RUNNING`` when no sync
-        of the source is running."""
+        ``status: cancel_requested``, ``stage`` ``running`` or ``queued``: a
+        running sync stops a moment later, in whichever process is running it,
+        and ``GET /jobs`` and ``GET /sources`` show it as cancelled once it
+        has; a queued one never starts. 409 ``SYNC_NOT_RUNNING`` when nothing
+        of the source is running or waiting."""
 
         req = req or CancelSyncRequest()
         return sync_control.cancel_sync(

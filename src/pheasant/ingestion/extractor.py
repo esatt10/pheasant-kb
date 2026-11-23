@@ -82,6 +82,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
+from pheasant import cancel_scope
 from pheasant.ingestion._modal import sidecar_text as _sidecar_text
 from pheasant.ingestion.html_text import (  # noqa: F401 - re-exported
     HTML_CHROME_VERSION,
@@ -551,6 +552,10 @@ class NativeExtractor:
             else:
                 pages = self.pdf_pages(content, relative_path)
             return paged_text(list(pages))
+        except cancel_scope.Stopped:
+            # Stopped, not unreadable: the builtin fallback would read the
+            # whole PDF again for a sync nobody is waiting on any more.
+            raise
         except Exception as exc:
             # A corrupt/encrypted PDF must not abort a sync: fall back to the
             # builtin, which may still recover the uncompressed streams.
@@ -642,6 +647,8 @@ class AutoExtractor:
         self.calls += 1
         try:
             text = self._native.extract(content, relative_path)
+        except cancel_scope.Stopped:
+            raise
         except Exception as exc:
             logger.warning("native extraction failed on %s: %s", relative_path, exc)
             text = ""

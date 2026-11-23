@@ -289,7 +289,7 @@ def test_server_worker_waits_for_an_existing_index_writer(monkeypatch) -> None:
 
     seen: list[str] = []
 
-    def fake_run(command, timeout, on_progress):
+    def fake_run(command, timeout, on_progress, cancel_watch=None):
         seen.extend(command)
         return 0, json.dumps({"status": "ok", "results": []}), ""
 

@@ -251,6 +251,8 @@ sync:
     # thread. The indexed text is identical. 0 turns it off.
     remote_worker_pdf_pages_per_task: 500
     lock_timeout_seconds: 120
+    # Seconds a cancelled sync may keep running before its worker is ended.
+    cancel_grace_seconds: 60
 
   # The durable index work queue. OFF by default: with it off, a sync holds
   # its remaining sources in a Python list, which is fine for one container

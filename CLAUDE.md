@@ -72,6 +72,7 @@ pheasant-kb/
 │   ├── setup_wizard.py        ← `pheasant setup`, defaults read off the schema
 │   ├── capacity.py            ← the one home for sizing coefficients
 │   ├── request_budget.py      ← monotonic end-to-end deadlines for answers
+│   ├── cancel_scope.py        ← the stop signal a sync carries into one item
 │   ├── analytics.py           ← Parquet exports + the DuckDB query surface
 │   ├── evalset.py             ← de-identified eval cases from the ledger
 │   ├── evaluation/            ← the evaluation plane: contracts, snapshots,
@@ -98,7 +99,12 @@ pheasant-kb/
 │   │                            leave on any sync), archived (removed
 │   │                            documents are never read), web_connector (listed
 │   │                            URLs, per-page revalidation), cancellation
-│   │                            (stop a running sync from any process),
+│   │                            (stop a sync from any process: between
+│   │                            items, inside one, or by ending its worker),
+│   │                            request_ledger (a queued sync as a row: what
+│   │                            a cancel and a redelivery are checked against),
+│   │                            supervision (ending a sync child that will not
+│   │                            stop, and healing what that leaves),
 │   │                            graph_history (the interval-gated
 │   │                            snapshot), watcher,
 │   │                            scheduler, background_jobs (startup
@@ -253,7 +259,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 228 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 229 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -664,6 +670,31 @@ pruning, no `healthy` — so the next incremental finishes it and equals a full
 sync. A connector keeps its checkpoint only if it can build one true of a
 partial pass (`partial_checkpoint_from_items`; the web connector does, for the
 pages it finished and never for ones it merely read ahead).
+
+**Ending a sync is layered, because no one layer survives every failure**
+(`sync/cancellation.py`'s docstring; `tests/test_sync_cancel_fault_tolerance.py`).
+*Queued:* JetStream can count a message but neither list it nor take it back,
+so every published sync is a `sync_requests` row (`sync/request_ledger.py`,
+opened by `NatsQueue.publish`, closed by `ack`/`nack`), and every delivery is
+admitted against it (`SyncEngine._admit_index_task`): a cancelled request is
+acknowledged unread -- on the redelivery after an indexer died too -- and a
+finished one whose ack was lost is not run twice. The ledger is also how
+`/queue` lists a NATS queue (`listing: "ledger"`). *Inside an item:* the run's
+watch thread (the heartbeat's own connection, every second) sets a
+`cancel_scope.StopSignal`; pacing slots, the worker pool's backoff, PDF page
+ranges and PDFium's page loop wait on it, and no fallback re-reads what was
+stopped. Whatever an item computed after the signal is never committed,
+because the commit loop reads the same signal first -- the invariant, not the
+item's own code, is what keeps a broad `except` from committing a stopped
+item. *Stuck:* the supervisor of a single-source child (`writer.Session`,
+`worker.run_sync`) holds a `supervision.CancelWatch` and ends the child
+`cancel_grace_seconds` (60) after it first sees the request, unless the child
+reported `cancelling`/`saving`; it finds the run by a token in the child's
+environment, not a pid (a Windows venv's `python.exe` is a launcher), and
+`record_forced_stop` expires the run's heartbeat but keeps its row, so the
+next run's `predecessor_died` reconciles the node index and re-embeds chunks
+committed without vectors (`supervision.heal_vectors`). A sync-all child is
+never ended for one source's cancel.
 
 **A sync's end can be waited for, and a partial one says so**
 (`services/sync_wait.py`; MCP `wait_for_sync`, `GET /sources/{name}/wait`).

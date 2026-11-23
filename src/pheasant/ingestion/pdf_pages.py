@@ -33,6 +33,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from pheasant import cancel_scope
+
 #: PDFium is not re-entrant across documents; one call at a time per process.
 _PDFIUM_LOCK = threading.Lock()
 
@@ -158,6 +160,9 @@ def pdf_page_math_texts(content: bytes, first: int = 0, stop: int | None = None)
 
 
 def _with_page(document: Any, number: int, read: Callable[[Any, Any], str]) -> str:
+    # One page at a time is the finest grain a long PDF can be stopped at: a
+    # cancelled sync abandons an 8,000-page read here rather than at its end.
+    cancel_scope.check()
     page = document[number]
     try:
         textpage = page.get_textpage()

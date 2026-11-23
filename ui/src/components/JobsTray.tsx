@@ -10,6 +10,7 @@ import {
   unlistedWaiting,
   useIndexQueue,
 } from "../hooks/useRegion";
+import { CancelSyncButton } from "./CancelSyncButton";
 import { ProgressBar, formatDuration, formatRate, progressCaption } from "./SyncProgress";
 
 /**
@@ -204,6 +205,14 @@ function JobRow({ job, onClear }: { job: JobRecord; onClear: () => void }) {
       <div className="job__head">
         <span className="job__label">{job.label}</span>
         <span className="job__status">{job.active ? job.progress.phase : job.status}</span>
+        {job.kind === "sync" && job.active && sources.length === 1 ? (
+          <CancelSyncButton
+            key={job.id}
+            source={sources[0].source}
+            className="btn btn--small job__cancel"
+            label="Cancel"
+          />
+        ) : null}
         {!job.active ? (
           <button
             className="job__clear"
@@ -254,7 +263,7 @@ function JobRow({ job, onClear }: { job: JobRecord; onClear: () => void }) {
       {perSource ? (
         <div className="job__sources">
           {sources.map((row) => (
-            <SourceRow key={row.source} row={row} />
+            <SourceRow key={row.source} row={row} cancellable={job.kind === "sync"} />
           ))}
         </div>
       ) : null}
@@ -292,6 +301,15 @@ function QueueRow({ task }: { task: QueueTask }) {
         <span className="job__status mono" title={task.task_id}>
           {waited}
         </span>
+        {/* A claimed task's own job row carries its Cancel; a dead one is not waiting. */}
+        {task.state !== "dead" && task.state !== "claimed" ? (
+          <CancelSyncButton
+            key={task.request_id ?? task.task_id}
+            source={task.source}
+            className="btn btn--small job__cancel"
+            label="Cancel"
+          />
+        ) : null}
       </div>
       {task.state === "awaiting_claim" || task.state === "claim_lapsed" ? (
         <div className="queue-task__bar" />
@@ -301,11 +319,14 @@ function QueueRow({ task }: { task: QueueTask }) {
   );
 }
 
-function SourceRow({ row }: { row: SourceProgress }) {
+function SourceRow({ row, cancellable = false }: { row: SourceProgress; cancellable?: boolean }) {
   return (
     <div className={`job-source${row.stalled ? " job-source--stalled" : ""}`}>
       <div className="job-source__head">
         <span className="job-source__name">{row.source}</span>
+        {cancellable && row.active ? (
+          <CancelSyncButton source={row.source} className="btn btn--small job__cancel" label="Cancel" />
+        ) : null}
         <span className="job-source__phase muted small">
           {row.active ? row.phase : row.status}
           {row.total ? ` ${row.current}/${row.total}` : null}

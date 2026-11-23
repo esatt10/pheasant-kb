@@ -89,7 +89,9 @@ def queue_status(
         "knowledge_base": kb_id,
         "enabled": True,
         "backend": backend,
-        "listing": "unavailable" if rows is None else "complete",
+        # ``ledger``: the syncs requested through this region's ledger
+        # (`sync/request_ledger.py`), which is how a JetStream queue is listed.
+        "listing": "unavailable" if rows is None else getattr(queue, "listing", "complete"),
         "depth": depth,
         "tasks": tasks,
         "counts": counts,
@@ -112,6 +114,7 @@ def _task(row: dict[str, Any], now: datetime) -> dict[str, Any]:
     owner = row.get("owner")
     return {
         "task_id": str(row.get("id")),
+        "request_id": row.get("request_id"),
         "source": str(row.get("source_id") or ""),
         "mode": str(row.get("mode") or ""),
         "state": state,

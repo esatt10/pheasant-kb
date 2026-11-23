@@ -33,6 +33,31 @@ What a cancelled sync keeps is the engine's business (``SyncEngine.sync_source``
 every item it committed stays committed, and nothing that claims the pass was
 complete -- the source fingerprint, deletion of vanished files, the "healthy"
 status -- is recorded.
+
+**Ending a sync is layered, because no one layer survives every failure:**
+
+1. *Between items* -- :meth:`SyncRun.checkpoint`, above. Exact, and it keeps
+   every committed item.
+2. *Inside an item* -- the run carries a :class:`~pheasant.cancel_scope.StopSignal`
+   that its watch thread sets within :data:`WATCH_INTERVAL_SECONDS` of the
+   request, on the heartbeat's own connection, and the code that waits inside
+   one item (a pacing slot, a backoff, the next PDF page range or page) stops
+   on it. Whatever an item computed after the signal was set is never
+   committed: the commit loop reads the same signal first.
+3. *Past a stuck item* -- the process that supervises a sync child
+   (`sync/writer.py`, `sync/worker.py`) watches the request too
+   (`sync/supervision.py`) and, when the child has not answered within
+   ``sync.concurrency.cancel_grace_seconds``, ends it. Commits are
+   transactions, so a killed child loses only the item it was in; the parent
+   records what the child could not, and the next
+   run of the source, finding the row of a run that never exited, heals what
+   a kill can leave behind: the node index's pending delta, and chunks
+   committed before their vectors.
+4. *Past a dead process* -- a queued sync is a row in `sync/request_ledger.py`, and a
+   cancel marks it. A broker redelivers the task of an indexer that died; the
+   next claim finds the cancel and acknowledges the task instead of running it
+   again from the start. The same row is how a sync still waiting for an
+   indexer is cancelled at all.
 """
 
 from __future__ import annotations
@@ -43,10 +68,13 @@ import socket
 import time
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pheasant import cancel_scope
 from pheasant.persistence.heartbeat import Heartbeat, HeartbeatWriter
+from pheasant.sync import request_ledger as requests
 from pheasant.sync.locks import SOURCE_HEARTBEAT_SECONDS, SOURCE_STALE_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -57,15 +85,53 @@ logger = logging.getLogger(__name__)
 #: them in a minute. A second is well inside what a person waits for.
 CHECK_INTERVAL_SECONDS = 1.0
 
+#: How often the run's watch thread reads the request, on its own connection,
+#: and sets the stop signal the code inside an item waits on. Independent of
+#: the commit loop's throttle above, which tests set to zero.
+WATCH_INTERVAL_SECONDS = 1.0
 
-class SyncCancelled(RuntimeError):  # noqa: N818 - named for the event, like Cancelled
-    """Somebody asked this sync to stop. Raised between items, never inside one."""
+#: Older than any staleness window. Written over the heartbeat of a run whose
+#: process was ended: the row stays, because the next run must learn that its
+#: predecessor died, but nothing reads it as running any more.
+EXPIRED_HEARTBEAT = "1970-01-01T00:00:00+00:00"
 
-    def __init__(self, requested_by: str, reason: str = "") -> None:
-        self.requested_by = requested_by or "a caller"
-        self.reason = reason or ""
-        message = f"cancelled by {self.requested_by}"
-        super().__init__(f"{message}: {self.reason}" if self.reason else message)
+#: Set by a supervising process in a sync child's environment; the child's
+#: runs prefix their run id with it, which is how the supervisor finds the run
+#: of *its* child (`sync/supervision.py`).
+SUPERVISOR_ENV = "PHEASANT_SYNC_SUPERVISOR"
+
+
+class SyncCancelled(cancel_scope.Stopped):
+    """Somebody asked this sync to stop.
+
+    Raised between items by :meth:`SyncRun.checkpoint`. Its base,
+    :class:`~pheasant.cancel_scope.Stopped`, is what code inside an item
+    raises once the run's stop signal is set.
+    """
+
+
+#: The ledger request (`sync/request_ledger.py`) the sync running in this context
+#: answers, bound by ``SyncEngine.apply_index_task`` around one queued task.
+_REQUEST: ContextVar[str | None] = ContextVar("pheasant_sync_request", default=None)
+
+
+def current_request() -> str | None:
+    return _REQUEST.get()
+
+
+class bound_request:  # noqa: N801 - a context manager, named like contextlib's
+    """Run the body as the sync of ledger request ``request_id``."""
+
+    def __init__(self, request_id: str | None) -> None:
+        self.request_id = request_id
+        self._token: Any = None
+
+    def __enter__(self) -> str | None:
+        self._token = _REQUEST.set(self.request_id)
+        return self.request_id
+
+    def __exit__(self, *_exc: Any) -> None:
+        _REQUEST.reset(self._token)
 
 
 def _now() -> str:
@@ -93,10 +159,23 @@ class SyncRun:
         *,
         heartbeat_interval_s: float = SOURCE_HEARTBEAT_SECONDS,
         check_interval_s: float | None = None,
+        watch_interval_s: float | None = None,
+        request_id: str | None = None,
     ) -> None:
         self.state = state
         self.source_id = source_id
-        self.run_id = uuid.uuid4().hex
+        #: The ledger request this run answers, when it came off the queue: a
+        #: cancel can land there before this run has a row of its own.
+        self.request_id = request_id if request_id is not None else current_request()
+        self.watch_interval_s = (
+            WATCH_INTERVAL_SECONDS if watch_interval_s is None else watch_interval_s
+        )
+        #: Set once, by the watch thread or a checkpoint, when a cancel is seen.
+        self.signal = cancel_scope.StopSignal()
+        self._scope: Any = None
+        self._next_beat = 0.0
+        supervisor = os.environ.get(SUPERVISOR_ENV)
+        self.run_id = f"{supervisor}.{uuid.uuid4().hex}" if supervisor else uuid.uuid4().hex
         self.owner = f"{socket.gethostname()}:{os.getpid()}"
         self.heartbeat_interval_s = heartbeat_interval_s
         self.check_interval_s = (
@@ -134,16 +213,28 @@ class SyncRun:
             logger.warning("could not register the sync of %s as running", self.source_id)
             logger.debug("sync_runs registration failed", exc_info=True)
             return self
+        # Code inside an item reads the signal through the context; the
+        # engine's executors copy the context into their threads.
+        self._scope = cancel_scope.bound(self.signal)
+        self._scope.__enter__()
         # Its own thread and its own connection (`persistence.heartbeat`): a
         # beat that shared the sync's pool stopped at 00:41 on the Azure fleet
         # while the sync committed for another hour, so every reader called it
-        # dead.
+        # dead. The same thread watches for a cancel every `watch_interval_s`
+        # and writes the heartbeat every `heartbeat_interval_s`.
+        self._next_beat = time.monotonic() + self.heartbeat_interval_s
         self._heartbeat = Heartbeat(
-            self.state, f"sync-run-{self.source_id}", self._beat, self.heartbeat_interval_s
+            self.state,
+            f"sync-run-{self.source_id}",
+            self._beat,
+            max(0.05, min(self.watch_interval_s, self.heartbeat_interval_s)),
         ).start()
         return self
 
     def __exit__(self, *_exc: Any) -> None:
+        if self._scope is not None:
+            self._scope.__exit__(None, None, None)
+            self._scope = None
         if self._heartbeat is not None:
             self._heartbeat.stop()
             self._heartbeat = None
@@ -159,11 +250,77 @@ class SyncRun:
         except Exception:  # noqa: BLE001 - shutdown must not raise
             logger.debug("could not clear the sync_runs row for %s", self.source_id, exc_info=True)
 
+    _CANCEL_COLUMNS = "cancel_requested_at, cancel_requested_by, cancel_reason"
+
     def _beat(self, writer: HeartbeatWriter) -> None:
-        writer.execute(
-            "UPDATE sync_runs SET heartbeat_at=? WHERE source_id=? AND run_id=?",
-            (_now(), self.source_id, self.run_id),
+        now = time.monotonic()
+        if now >= self._next_beat:
+            self._next_beat = now + self.heartbeat_interval_s
+            rows = writer.execute(
+                "UPDATE sync_runs SET heartbeat_at=? WHERE source_id=? AND run_id=? "
+                f"RETURNING {self._CANCEL_COLUMNS}",
+                (_now(), self.source_id, self.run_id),
+            )
+        elif self.signal.is_set():
+            return  # seen already; only the heartbeat is still owed
+        else:
+            rows = writer.execute(
+                f"SELECT {self._CANCEL_COLUMNS} FROM sync_runs WHERE source_id=? AND run_id=?",
+                (self.source_id, self.run_id),
+            )
+        if self._observe(rows) or self.signal.is_set() or not self.request_id:
+            return
+        self._observe(
+            writer.execute(
+                f"SELECT {self._CANCEL_COLUMNS} FROM sync_requests "
+                "WHERE id=? AND cancel_requested_at IS NOT NULL",
+                (self.request_id,),
+            )
         )
+
+    def _observe(self, rows: list[Any]) -> bool:
+        """Set the signal from a row carrying a cancel. Whether one did."""
+
+        if rows and rows[0]["cancel_requested_at"]:
+            self.signal.set(
+                str(rows[0]["cancel_requested_by"] or ""), str(rows[0]["cancel_reason"] or "")
+            )
+            return True
+        return False
+
+    def _cancelled(self) -> SyncCancelled:
+        return SyncCancelled(self.signal.requested_by, self.signal.reason)
+
+    def poll(self, *, force: bool = False) -> SyncCancelled | None:
+        """The cancel this run was asked for, or ``None``. Never raises.
+
+        The signal first, unthrottled: once anything has seen a cancel, no
+        further item may be committed. Then, at most once per
+        ``check_interval_s`` (at once with ``force``), the rows themselves --
+        the run's and its ledger request's -- through the state store's pool,
+        for a run whose watch thread is behind or could not connect.
+        """
+
+        if not self._registered:
+            return None
+        if self.signal.is_set():
+            return self._cancelled()
+        now = time.monotonic()
+        if not force and now < self._next_check:
+            return None
+        self._next_check = now + self.check_interval_s
+        try:
+            rows = self.state.rows(
+                f"SELECT {self._CANCEL_COLUMNS} FROM sync_runs WHERE source_id=? AND run_id=?",
+                (self.source_id, self.run_id),
+            )
+            if not self._observe(rows) and self.request_id:
+                ledger = requests.cancel_of(self.state, self.request_id)
+                self._observe([ledger] if ledger else [])
+        except Exception:  # noqa: BLE001 - a failed check must not stop work
+            logger.debug("sync_runs cancel check failed for %s", self.source_id, exc_info=True)
+            return None
+        return self._cancelled() if self.signal.is_set() else None
 
     def checkpoint(self) -> None:
         """Raise :class:`SyncCancelled` if this run was asked to stop.
@@ -172,25 +329,9 @@ class SyncRun:
         checkpoint, so a caller cannot forget to look at the answer.
         """
 
-        if not self._registered:
-            return
-        now = time.monotonic()
-        if now < self._next_check:
-            return
-        self._next_check = now + self.check_interval_s
-        try:
-            rows = self.state.rows(
-                "SELECT cancel_requested_at, cancel_requested_by, cancel_reason "
-                "FROM sync_runs WHERE source_id=? AND run_id=?",
-                (self.source_id, self.run_id),
-            )
-        except Exception:  # noqa: BLE001 - a failed check must not stop work
-            logger.debug("sync_runs cancel check failed for %s", self.source_id, exc_info=True)
-            return
-        if rows and rows[0]["cancel_requested_at"]:
-            raise SyncCancelled(
-                str(rows[0]["cancel_requested_by"] or ""), str(rows[0]["cancel_reason"] or "")
-            )
+        cancelled = self.poll()
+        if cancelled is not None:
+            raise cancelled
 
 
 def request_cancel(
@@ -242,6 +383,118 @@ def running(
     return dict(rows[0]) if rows else None
 
 
+def cancel_source(
+    state: Any,
+    source_id: str,
+    *,
+    requested_by: str,
+    reason: str = "",
+) -> dict[str, Any] | None:
+    """Ask every sync of ``source_id`` that is running or waiting to stop.
+
+    ``{"run": <the live run, or None>, "requests": [<ledger rows reached>]}``,
+    or ``None`` when there is neither -- the only answer that means "nothing
+    to stop". The run's row first: a run that registers between the two
+    statements still sees the ledger request, because its checks read both.
+    The ledger is best-effort, as everywhere: a failure there must not refuse
+    the cancel of a sync that is visibly running.
+    """
+
+    run = request_cancel(state, source_id, requested_by=requested_by, reason=reason)
+    # One time for the whole request, so every row it reached says the same.
+    stamp = str((run or {}).get("cancel_requested_at") or _now())
+    try:
+        reached = requests.request_cancel(
+            state, source_id, requested_by=requested_by, reason=reason, now=stamp
+        )
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("could not record the cancel of %s's queued syncs", source_id, exc_info=True)
+        reached = []
+    if run is None and not reached:
+        return None
+    first = bool(run and run.get("first_request")) or any(
+        row.get("cancel_requested_at") == stamp for row in reached
+    )
+    return {"run": run, "requests": reached, "first_request": first}
+
+
+def record_cancelled_before_reading(
+    state: Any,
+    source_id: str,
+    cancelled: cancel_scope.Stopped,
+    *,
+    mode: str,
+    stage: str,
+    started_at: str | None = None,
+) -> dict[str, Any]:
+    """The event for a sync stopped before it read anything: queued, or listing.
+
+    The source's status is left as it was. Nothing in the index changed, so
+    whatever the last sync that ran said about it is still true; "cancelled"
+    is for a source a stopped pass left partly indexed.
+    """
+
+    now = _now()
+    outcome = {
+        "requested_by": cancelled.requested_by,
+        "reason": cancelled.reason or None,
+        "stage": stage,
+        "processed_items": 0,
+    }
+    try:
+        state.append_sync_event(
+            state.new_sync_event_id(),
+            source_id,
+            "sync.cancelled",
+            "cancelled",
+            started_at or now,
+            now,
+            {"mode": mode, "cancelled": outcome},
+        )
+    except Exception:  # noqa: BLE001 - the stop itself already happened
+        logger.warning("could not record the cancel of %s", source_id, exc_info=True)
+    return outcome
+
+
+def admit_index_task(engine: Any, task: Any) -> Any:
+    """The result for a queued sync that must not run on this delivery, or ``None``.
+
+    ``SyncEngine.apply_index_task`` asks this of every delivery: checked
+    against its ledger row (`sync/request_ledger.py`), a sync cancelled while
+    it waited, or one whose indexer died after a cancel, is acknowledged
+    instead of run; one that already ran to the end -- only its
+    acknowledgement was lost -- is not run twice.
+    """
+
+    from pheasant.sync.engine import SyncResult
+
+    admission = requests.admit(engine.state, task, f"{socket.gethostname()}:{os.getpid()}")
+    if admission.runs:
+        return None
+    source_id = str(task.source_id)
+    if admission.verdict == "finished":
+        logger.info("%s: sync request already finished; not running it again", source_id)
+        nodes, edges = engine._graph_counts()
+        return SyncResult(source_id, 0, 0, nodes, edges, "skipped", {"reason": "already finished"})
+    cancelled = SyncCancelled(admission.requested_by or "", admission.reason or "")
+    logger.info("%s: sync %s before it started", source_id, cancelled)
+    return cancelled_before_reading(engine, source_id, cancelled, str(task.mode), "queued")
+
+
+def cancelled_before_reading(
+    engine: Any, source_name: str, cancelled: Any, mode: str, stage: str
+) -> Any:
+    """A sync stopped before it read anything: nothing to keep, one event to write."""
+
+    from pheasant.sync.engine import SyncResult
+
+    outcome = record_cancelled_before_reading(
+        engine.state, source_name, cancelled, mode=str(mode), stage=stage
+    )
+    nodes, edges = engine._graph_counts()
+    return SyncResult(source_name, 0, 0, nodes, edges, "cancelled", {"cancelled": outcome})
+
+
 def cancellable(
     prepared_items: Any,
     run: SyncRun,
@@ -265,11 +518,24 @@ def cancellable(
     nobody will commit.
     """
 
+    iterator = iter(prepared_items)
     try:
-        for prepared in prepared_items:
+        while True:
             try:
-                run.checkpoint()
-            except SyncCancelled as cancelled:
+                prepared = next(iterator)
+            except StopIteration:
+                return
+            except Exception:
+                # Preparing an item failed. Once the run was asked to stop,
+                # that failure *is* the stop -- a page range abandoned, a
+                # backoff interrupted, whatever the code in between made of
+                # the `Stopped` it was handed -- so the pass ends as a cancel,
+                # not as a failed sync. Before that, it is a real failure.
+                if (cancelled := run.poll(force=True)) is not None:
+                    stopped.append(cancelled)
+                    return
+                raise
+            if (cancelled := run.poll()) is not None:
                 stopped.append(cancelled)
                 return
             yield prepared

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { CancelSyncButton } from "../components/CancelSyncButton";
 import { OPEN_JOBS_EVENT } from "../hooks/useRegion";
 import type {
   LedgerDocument,
@@ -209,11 +210,21 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
   // looked untouched -- so it was pressed again (two syncs, 3 s apart, found
   // on the Azure fleet). It stays "Queued…" until the run shows, or a while.
   const [requestedAt, setRequestedAt] = useState<number | null>(null);
+  // When Cancel was answered. The button stays until a poll made *after* that
+  // shows nothing left to stop: a cancel can land before this page has seen
+  // the run start, and dropping the button on the strength of that older
+  // poll remounted it, losing its "Stopping…".
+  const [cancelAskedAt, setCancelAskedAt] = useState<number | null>(null);
   const detail = useQuery({
     queryKey: ["pipeline", name],
     queryFn: () => api.pipeline(name),
-    refetchInterval: (query) => (query.state.data?.running || requestedAt !== null ? 3000 : 20000),
+    refetchInterval: (query) =>
+      query.state.data?.running || requestedAt !== null || cancelAskedAt !== null ? 3000 : 20000,
   });
+  useEffect(() => {
+    if (cancelAskedAt === null || detail.dataUpdatedAt <= cancelAskedAt) return;
+    if (!detail.data?.running && !detail.data?.queued.length) setCancelAskedAt(null);
+  }, [cancelAskedAt, detail.dataUpdatedAt, detail.data]);
   const started = !!detail.data?.running;
   useEffect(() => {
     if (requestedAt === null) return;
@@ -280,6 +291,21 @@ function Inspector({ name, onOpenDocuments }: { name: string; onOpenDocuments: (
               >
                 {d.running ? "Running…" : run.isPending ? "Starting…" : requestedAt !== null ? "Queued…" : "Run now"}
               </button>
+              {d.running || d.queued.length > 0 || requestedAt !== null || cancelAskedAt !== null ? (
+                // Keyed by the pipeline alone. It unmounts once nothing is left
+                // to cancel, which is what resets it for the next run; a key
+                // that followed the run remounted it when a queued sync
+                // started, between the click and the next poll, and lost its
+                // "Stopping…".
+                <CancelSyncButton
+                  key={d.name}
+                  source={d.name}
+                  onCancelled={() => {
+                    setRequestedAt(null);
+                    setCancelAskedAt(Date.now());
+                  }}
+                />
+              ) : null}
               {d.state === "scheduled" ? (
                 <button data-permission="sources.manage" type="button" className="btn btn--small" onClick={() => configure.mutate({ paused: true })}>
                   Pause

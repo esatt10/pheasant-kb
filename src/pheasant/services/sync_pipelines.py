@@ -307,7 +307,10 @@ def _row(context: ServiceContext, source: dict[str, Any], queue: dict[str, Any])
         "type": kind,
         "description": (json.loads(source.get("config_json") or "{}") or {}).get("description"),
         "state": state,
-        "documents": (health or {}).get("readable"),
+        # What the index holds. A cancelled or failed last pass has no health
+        # score (it says nothing about what reads), and reporting no count
+        # there showed "0 documents" for a source that still holds them all.
+        "documents": ((health or {}).get("readable") if health else _held_documents(context, name)),
         "schedule": _schedule(context, config, kind),
         "settings": _settings(config),
         "last_run": _run(events[0]) if events else None,
@@ -332,6 +335,11 @@ def _row(context: ServiceContext, source: dict[str, Any], queue: dict[str, Any])
         "quality": source_quality(context, source),
         "pacing": _pacing(context, config, kind, watermark),
     }
+
+
+def _held_documents(context: ServiceContext, name: str) -> int:
+    rows = context.state.rows("SELECT COUNT(*) AS n FROM artifacts WHERE source_id=?", (name,))
+    return int(rows[0]["n"]) if rows else 0
 
 
 def _schedule(context: ServiceContext, config: Any, kind: str) -> dict[str, Any]:

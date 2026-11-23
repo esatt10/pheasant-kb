@@ -115,9 +115,12 @@ def test_a_published_task_is_queued_and_the_wait_is_bounded(tmp_path: Path) -> N
         engine.close()
     assert answer["state"] == "queued"
     assert answer["timed_out"] is True
-    # JetStream counts its backlog but cannot list it: the depth, not the ids.
-    assert answer["queued_tasks"] == []
-    assert answer["queue_depth"] >= 1
+    # JetStream cannot list its backlog, the request ledger can: the task is
+    # named, so no region-wide depth stands in for it.
+    assert [(t["task_id"], t["state"]) for t in answer["queued_tasks"]] == [
+        ("idx-notes", "awaiting_claim")
+    ]
+    assert answer["queue_depth"] is None
     assert clock.now == pytest.approx(MAX_WAIT_SECONDS), "a wait longer than its cap"
 
 

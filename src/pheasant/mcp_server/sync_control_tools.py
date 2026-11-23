@@ -71,18 +71,21 @@ def register_sync_control_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         reason: str | None = None,
         requested_by: str | None = None,
     ) -> dict:
-        """Stop the sync of one source that is running now.
+        """Stop the sync of one source, running now or still waiting in the index queue.
 
-        The sync stops at its next item, which is usually within a second or
-        two, so this answers ``status: "cancel_requested"``; get_sync_status
-        and list_jobs show it as cancelled once it has stopped. It works
-        whichever process is running the sync, including an indexer that
-        claimed a queued task. Everything indexed before the stop is kept, and
-        the next incremental sync (sync_source) carries on from there. Refused
-        with SYNC_NOT_RUNNING when no sync of the source is running, including
-        one still waiting in the index queue (get_index_queue): cancel it once
-        it has started. ``reason`` and ``requested_by`` are recorded with the
-        cancel.
+        A running sync stops at its next item, or inside a long one (a paced
+        web page, a long PDF's next page range), usually within a few seconds,
+        so this answers ``status: "cancel_requested"`` with ``stage:
+        "running"``; get_sync_status and list_jobs show it as cancelled once
+        it has stopped. A sync still waiting for an indexer (get_index_queue)
+        answers ``stage: "queued"`` and never starts, even if the indexer that
+        claimed it dies and the queue delivers it again. It works whichever
+        process is running the sync. A worker that cannot stop is ended after
+        ``sync.concurrency.cancel_grace_seconds`` (60). Everything indexed
+        before the stop is kept, and the next incremental sync (sync_source)
+        carries on from there. Refused with SYNC_NOT_RUNNING when nothing of
+        the source is running or waiting. ``reason`` and ``requested_by`` are
+        recorded with the cancel.
         """
 
         return tools.cancel_sync(knowledge_base, source_name, reason, requested_by)
