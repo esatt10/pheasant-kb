@@ -982,13 +982,19 @@ def create_app(
         usage_tracking=config.memory.usage_tracking,
         stage_sample_rate=config.observability.interactions.stage_sample_rate,
     )
+    if role_policy.role is Role.API:
+        # The database's search tables and one canned search, at boot and on
+        # a beat (`search/keep_warm.py`); with or without a vector arm.
+        try:
+            from pheasant.search.keep_warm import start as keep_warm
+
+            keep_warm(search, config.knowledge_base_id)
+        except Exception:
+            logger.warning("Could not start the keep-warm thread", exc_info=True)
     if role_policy.role is Role.API and search.vector is not None:
         warm_vector_store = getattr(getattr(search.vector, "store", None), "warm", None)
         if callable(warm_vector_store):
             try:
-                from pheasant.search.keep_warm import start as keep_warm
-
-                keep_warm(search, config.knowledge_base_id)
                 if warm_vector_store():
                     logger.info("Warmed the small vector index before serving queries")
             except Exception:
@@ -1372,6 +1378,9 @@ def create_app(
                 event.status = "ok" if response.status_code < 400 else "error"
                 event.attributes["http_status"] = response.status_code
                 event.attributes["method"] = request.method
+                from pheasant.telemetry.interactions import name_route
+
+                name_route(getattr(request.scope.get("route"), "path", None))
                 cap_answer(event, max_chars=int(getattr(settings, "max_answer_chars", 4000)))
                 redact(event, enabled=bool(getattr(settings, "redact_text", False)))
                 return response

@@ -218,6 +218,50 @@ def test_a_recycled_address_does_not_inherit_access(region, tenant):
     assert _role(client, _token(tenant, "robert@example.com", 1)) == "Reader"
 
 
+def test_a_guest_signed_in_with_another_account_finds_the_grant_to_their_invited_address(
+    region, tenant, caplog
+):
+    """Production: invited as one address, redeemed with a Microsoft account.
+
+    The token's ``preferred_username`` is the account they signed in with and
+    the invited address is only its ``email`` claim, so a grant made by that
+    address never matched and every sign-in was a bare 401.
+    """
+
+    _, client = region
+    client.post(
+        "/access/grants",
+        json={"email": "guest@gmail.example", "role": "Contributor"},
+        headers=_operator(tenant),
+    )
+    guest = _token(tenant, "guest@outlook.example", 61, email="Guest@Gmail.example")
+    assert _role(client, guest) == "Contributor"
+    # Bound to the object id now, so the account keeps it whichever name it shows.
+    assert _role(client, _token(tenant, "guest@outlook.example", 61)) == "Contributor"
+    # A different person carrying the invited address as `email` is still refused.
+    other = _token(tenant, "someone@outlook.example", 62, email="guest@gmail.example")
+    assert client.get("/auth/me", headers=other).status_code == 401
+
+
+def test_a_refused_sign_in_says_why_in_the_log(region, tenant, caplog):
+    import logging
+
+    _, client = region
+    login = client.get("/auth/login", params={"next": "/"})
+    query = parse_qs(urlsplit(login.headers["location"]).query)
+    tenant.next_id_token = tenant.sign(
+        tenant.claims(
+            nonce=query["nonce"][0], oid=_oid(63), preferred_username="nobody@example.com", roles=[]
+        )
+    )
+    with caplog.at_level(logging.WARNING):
+        refused = client.get("/auth/callback", params={"code": "c", "state": query["state"][0]})
+    assert refused.status_code == 401
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "sign-in refused" in logged and _oid(63) in logged and "nobody@example.com" in logged
+    assert "sign-in did not complete" in logged and "not been granted access" in logged
+
+
 def test_a_customer_organization_signs_in_only_once_connected(region, tenant):
     _, client = region
     admin = _operator(tenant)

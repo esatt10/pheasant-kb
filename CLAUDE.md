@@ -174,7 +174,9 @@ pheasant-kb/
 │   │                            region), graph_codec (rows to
 │   │                            attributes, and the XOR generation fold),
 │   │                            receipts (what happened to what a caller
-│   │                            submitted), manifest, migrate, paths
+│   │                            submitted), prewarm (the search path's
+│   │                            tables read into cache at wake), manifest,
+│   │                            migrate, paths
 │   ├── services/              ← the application layer: one implementation per
 │   │                            operation, two transports. errors (refusals
 │   │                            both surfaces spell the same, with a stable
@@ -259,7 +261,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 229 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 230 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3600,6 +3602,20 @@ they stay for the lesson, not as a description of the code.
   without the extension fails on the first. `restore.sh` restores through a
   filtered TOC list, and the `COMMENT - EXTENSION` spelling is what the first
   filter missed.
+- **A slow first answer is not the arm you suspect until a span says so.**
+  The Azure region's first search after a wake took 11.9 s and was taken for
+  the vector arm warming up. The vector matrix was resident in 1.7 s, before
+  the api accepted a request; a vector-only search was 0.2-0.5 s. The cost
+  was one graph-service statement, the graph arm's candidate fetch (up to
+  2,000 `graph_nodes` rows, each its own page), at 3-7 s for every *new*
+  query and ~100 ms once its pages were cached: Postgres on NFS-backed Azure
+  Files with the default 128 MB `shared_buffers`, which is all `autoprewarm`
+  restores after a wake. Locally, on a fast disk, the same statement was
+  15-210 ms first and repeat alike, which is why the suite could not see it.
+  The api now reads the search path's tables into cache at boot
+  (`persistence/prewarm.py`, from `search/keep_warm.py`), and its first canned
+  search runs at once rather than after a 30 s beat. Found by timing each arm
+  alone on prod and reading the spans per `OperationId`.
 
 ---
 

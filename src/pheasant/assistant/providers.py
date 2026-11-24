@@ -47,6 +47,7 @@ from pheasant.assistant.catalog import (
 from pheasant.assistant.catalog import (
     resolve_auto_provider as catalog_resolve_auto_provider,
 )
+from pheasant.telemetry.spans import instrument
 from pheasant.telemetry.usage import METER
 
 DEFAULT_TIMEOUT = 90.0
@@ -316,6 +317,7 @@ class _TransientConnection(Exception):
     """A connection that failed before the provider answered; worth retrying."""
 
 
+@instrument("http.model", attributes={"server.service": "model"}, require_parent=True)
 def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: float) -> dict:
     request = urllib.request.Request(
         url,
@@ -341,6 +343,7 @@ def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: float)
         raise ProviderError("provider returned a response that is not JSON") from exc
 
 
+@instrument("http.model.stream", attributes={"server.service": "model"}, require_parent=True)
 def _http_chat_stream(
     url: str,
     payload: dict,

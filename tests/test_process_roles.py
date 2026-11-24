@@ -1231,3 +1231,33 @@ def test_a_grpc_worker_needs_no_token_for_an_api_it_does_not_serve(
     with pytest.raises(RoleConfigurationError) as refusal:
         validate_role(resolve_role(config, "worker"), config, serves_http=False)
     assert "PHEASANT_DATABASE_URL" in str(refusal.value)
+
+
+def test_a_served_process_logs_one_line_per_record_whatever_the_mcp_sdk_asks_for() -> None:
+    """The MCP SDK's server constructor installs Rich's log handler, which
+    with no terminal wraps at 80 columns: on Container Apps each record was
+    several console-log rows. `serve` configures plain logging first."""
+
+    import subprocess
+    import sys
+
+    pytest.importorskip("rich")
+    script = (
+        "import logging\n"
+        "from pheasant import cli\n"
+        "from pheasant.config.schema import PheasantConfig\n"
+        "cli._configure_service_logging(PheasantConfig.model_validate("
+        "{'pheasant': {'name': 'logs', 'defaults': 'standalone', 'log_level': 'INFO'}}))\n"
+        "from mcp.server.mcpserver.utilities.logging import configure_logging\n"
+        "configure_logging('INFO')\n"
+        "logging.getLogger('pheasant.api.auth').info('GET /auth/me 200 ' + 'x' * 160)\n"
+        "logging.getLogger('pheasant.api.auth').debug('not at INFO')\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    lines = [line for line in done.stderr.splitlines() if line.strip()]
+    assert len(lines) == 1, lines
+    assert " INFO pheasant.api.auth: GET /auth/me 200 " in lines[0]
+    assert lines[0].endswith("x" * 160)

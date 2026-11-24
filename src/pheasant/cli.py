@@ -185,12 +185,37 @@ def _report_ui(app_obj, cfg) -> None:
         )
 
 
+#: One record, one line: what a log collector (Container Apps' console logs,
+#: `docker logs`) can search and count.
+SERVICE_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def _configure_service_logging(cfg) -> None:
+    """Plain one-line logging at ``pheasant.log_level``, before anything else picks.
+
+    Left unset, the first to configure the root logger wins, and that was the
+    MCP SDK: its server constructor calls ``logging.basicConfig`` with Rich's
+    handler, which with no terminal wraps at 80 columns -- so on Container Apps
+    every record arrived as several console-log rows (the level, the message
+    and ``auth.py:119`` on different rows), and no query could match a whole
+    one. Configured here first, the SDK's ``basicConfig`` is a no-op.
+    """
+
+    import logging
+
+    if logging.getLogger().handlers:
+        return  # a host embedding pheasant (or a test) already chose
+    level = getattr(logging, str(cfg.pheasant.log_level).upper(), logging.INFO)
+    logging.basicConfig(level=level, format=SERVICE_LOG_FORMAT)
+
+
 def _serve_app(cfg, config_path: str, *, report_ui: bool = True, role: str | None = None) -> None:
     import uvicorn
 
     from pheasant.api.app import create_app
     from pheasant.deployment.roles import resolve_role
 
+    _configure_service_logging(cfg)
     policy = resolve_role(cfg, role)
     os.environ["PHEASANT_ROLE"] = policy.name  # telemetry.sync_trace.ROLE_ENV: spans' role
     app_obj = create_app(cfg, config_path=config_path, role=policy.name)

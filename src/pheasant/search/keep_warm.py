@@ -10,7 +10,10 @@ judged three text passages insufficient, and it replanned into a second
 retrieval.
 
 So a serving replica keeps the path warm instead of paying for it on a
-person's first question. Every :data:`INTERVAL_SECONDS` it
+person's first question. At boot it reads the database's search tables into
+cache (`persistence/prewarm.py`: after a wake from zero the graph arm's
+candidate fetch was 3-7 s per new query on NFS-backed storage, and the
+first search 11.9 s), and then, at once and every :data:`INTERVAL_SECONDS`, it
 
 * asks the embedding provider for its model list (``ping``) -- a token-free
   request that keeps a kept-alive connection open in the shared pool any
@@ -65,30 +68,42 @@ def start(
 
     quiet = quiet_copy(search)
     embedder = getattr(getattr(search, "vector", None), "embedder", None)
+    state = getattr(getattr(search, "store", None), "state", None)
 
     def vocabulary() -> None:
-        state = getattr(getattr(search, "store", None), "state", None)
         if state is not None:
             try:
                 corpus_shape.vocabulary(state, corpus_shape.PLAN_VOCABULARY)
             except Exception:  # noqa: BLE001 - as below
                 logger.debug("keep-warm: corpus vocabulary failed", exc_info=True)
 
+    def warm_path() -> None:
+        ping = getattr(embedder, "ping", None)
+        if callable(ping):
+            try:
+                ping()
+            except Exception:  # noqa: BLE001 - a missed beat costs one window
+                logger.debug("keep-warm: provider ping failed", exc_info=True)
+        try:
+            quiet.search_context(knowledge_base, WARM_QUERY, mode="hybrid", max_results=5)
+        except Exception:  # noqa: BLE001 - as above
+            logger.debug("keep-warm: canned search failed", exc_info=True)
+
     def beat() -> None:
+        # At boot, before anyone's question: the database's search tables
+        # (`persistence/prewarm.py`), then one canned search through every arm
+        # and connection. The first beat used to wait a whole interval, so the
+        # first person after a wake paid for all of it.
+        if state is not None:
+            from pheasant.persistence.prewarm import warm_search_relations
+
+            warm_search_relations(state)
         vocabulary()
+        warm_path()
         while True:
             time.sleep(interval)
             vocabulary()
-            ping = getattr(embedder, "ping", None)
-            if callable(ping):
-                try:
-                    ping()
-                except Exception:  # noqa: BLE001 - a missed beat costs one window
-                    logger.debug("keep-warm: provider ping failed", exc_info=True)
-            try:
-                quiet.search_context(knowledge_base, WARM_QUERY, mode="hybrid", max_results=5)
-            except Exception:  # noqa: BLE001 - as above
-                logger.debug("keep-warm: canned search failed", exc_info=True)
+            warm_path()
 
     thread = threading.Thread(target=beat, name="pheasant-keep-warm", daemon=True)
     thread.start()

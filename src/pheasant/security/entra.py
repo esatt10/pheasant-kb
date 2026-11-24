@@ -238,6 +238,23 @@ def principal_of(claims: dict[str, Any]) -> str:
     return str(claims.get("oid") or claims.get("sub") or "")
 
 
+def names_of(claims: dict[str, Any]) -> tuple[str, ...]:
+    """Every sign-in name a token carries, lowercased, :func:`principal_of`'s first.
+
+    One person can carry several: a guest who redeemed an invitation sent to
+    one address with a Microsoft account of another has the second as
+    ``preferred_username`` and the first as ``email``, and a grant made by
+    either address must find them.
+    """
+
+    names = []
+    for key in ("preferred_username", "upn", "email", "unique_name"):
+        value = str(claims.get(key) or "").strip().lower()
+        if value and value not in names:
+            names.append(value)
+    return tuple(names)
+
+
 def roles_of(claims: dict[str, Any]) -> list[str]:
     roles = claims.get("roles") or []
     return sorted(str(r) for r in roles) if isinstance(roles, list) else []
