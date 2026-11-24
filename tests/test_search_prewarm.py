@@ -133,6 +133,46 @@ def test_keep_warm_warms_the_tables_and_searches_before_its_first_interval(
         prewarm, "warm_search_relations", lambda state: order.append("prewarm") or {}
     )
     monkeypatch.setattr(keep_warm.corpus_shape, "vocabulary", lambda *a, **k: None)
-    keep_warm.start(Search(), "kb", interval=3600.0)
+    stop = threading.Event()
+    thread = keep_warm.start(Search(), "kb", interval=3600.0, stop=stop)
     assert searched.wait(5), "the canned search waited for the first interval"
     assert order[:2] == ["prewarm", "search"]
+    stop.set()
+    thread.join(5)
+    assert not thread.is_alive(), "the keep-warm thread outlived its stop"
+
+
+def test_building_an_api_app_runs_no_search_it_was_not_asked_for(
+    tmp_path: Path, monkeypatch: Any, nats_queue_settings: dict[str, Any]
+) -> None:
+    """Keep-warm starts with the served lifespan, not in `create_app`: CI
+    caught its canned search racing a test that records every search."""
+
+    from fastapi.testclient import TestClient
+
+    from pheasant.api.app import create_app
+
+    started: list[str] = []
+    monkeypatch.setattr(keep_warm, "start", lambda *a, **k: started.append("start"))
+    monkeypatch.setenv("PHEASANT_API_TOKEN", "t")
+    config = PheasantConfig.model_validate(
+        {
+            "pheasant": {
+                "name": "warm-app",
+                "defaults": "standalone",
+                "state_path": str(tmp_path / "state"),
+                "workspace_root": str(tmp_path),
+                "exports_path": str(tmp_path / "exports"),
+            },
+            "security": {"api_auth": {"enabled": True, "token_env": "PHEASANT_API_TOKEN"}},
+            # An api publishes syncs, so it refuses to start without a queue.
+            "sync": {"queue": nats_queue_settings},
+        }
+    )
+    app = create_app(config, role="api")
+    try:
+        assert started == [], "create_app started keep-warm"
+        with TestClient(app):
+            assert started == ["start"], "a served api did not start keep-warm"
+    finally:
+        app.state.engine.close()

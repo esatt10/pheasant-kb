@@ -35,7 +35,6 @@ from __future__ import annotations
 import copy
 import logging
 import threading
-import time
 from typing import Any
 
 from pheasant.search import corpus_shape
@@ -62,9 +61,18 @@ def quiet_copy(search: Any) -> Any:
 
 
 def start(
-    search: Any, knowledge_base: str, *, interval: float = INTERVAL_SECONDS
+    search: Any,
+    knowledge_base: str,
+    *,
+    interval: float = INTERVAL_SECONDS,
+    stop: threading.Event | None = None,
 ) -> threading.Thread:
-    """Begin warming ``search``'s path for ``knowledge_base`` in the background."""
+    """Begin warming ``search``'s path for ``knowledge_base`` in the background.
+
+    Runs until ``stop`` is set (the api's lifespan sets it on shutdown).
+    """
+
+    stop = stop or threading.Event()
 
     quiet = quiet_copy(search)
     embedder = getattr(getattr(search, "vector", None), "embedder", None)
@@ -98,10 +106,11 @@ def start(
             from pheasant.persistence.prewarm import warm_search_relations
 
             warm_search_relations(state)
+        if stop.is_set():
+            return
         vocabulary()
         warm_path()
-        while True:
-            time.sleep(interval)
+        while not stop.wait(interval):
             vocabulary()
             warm_path()
 
