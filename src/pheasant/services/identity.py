@@ -316,7 +316,7 @@ class IdentityService(DelegatedAccess):
                 tenant_id=str(claims.get("tid") or ""),
                 expires_at=float(claims["exp"]) + entra.CLOCK_SKEW_SECONDS,
             )
-            self._bind_grant(identity)
+            self._bind_grant(identity, entra.names_of(claims))
             return identity
         return None
 
@@ -430,10 +430,19 @@ class IdentityService(DelegatedAccess):
             roles=tuple(roles),
             tenant_id=str(claims.get("tid") or ""),
         )
-        self._bind_grant(identity)
-        identity = self._current_grant(identity)
-        if identity is None:
+        self._bind_grant(identity, entra.names_of(claims))
+        granted = self._current_grant(identity)
+        if granted is None:
+            # Said in the log, or a refused sign-in is a bare 401 an operator
+            # cannot tell from an expired code: the names a grant could match.
+            logger.warning(
+                "sign-in refused: no grant or role for subject=%s tenant=%s names=%s",
+                identity.subject,
+                identity.tenant_id,
+                ",".join(entra.names_of(claims)) or "-",
+            )
             raise SignInFailed("this account has not been granted access to this region")
+        identity = granted
         logger.info("sign-in: principal=%s flow=%s", identity.principal, data.get("flow"))
         return LoginResult(identity=identity, flow=str(data.pop("flow", "ui")), data=data)
 

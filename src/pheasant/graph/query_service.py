@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pheasant.security.service_auth import outbound_token
 from pheasant.telemetry.interactions import inject_traceparent
+from pheasant.telemetry.spans import instrument
 
 
 def _timed_graph_query(fn):
@@ -85,6 +86,9 @@ class GraphQueryClient:
         # name in Host.
         self._local = threading.local()
 
+    # A dependency span: a request's wait for the graph service (cold, or
+    # waking from zero) was otherwise a gap between the api's own spans.
+    @instrument("http.graph_service", attributes={"server.service": "graph"}, require_parent=True)
     def _post(
         self, target: str, body: bytes, headers: dict[str, str], timeout: float
     ) -> tuple[int, str, bytes]:

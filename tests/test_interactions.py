@@ -726,6 +726,41 @@ def _app_with_corpus(tmp_path: Path, **interactions: Any) -> Any:
     return app
 
 
+def test_an_http_span_is_named_by_its_route_and_the_ledger_keeps_the_segment(
+    tmp_path: Path, otel_spans: Any
+) -> None:
+    """Production's App Insights named every chat, stream and status request
+    ``/assistant``: the span took the ledger's first-segment ``operation``.
+    A route template is as bounded, and it is the name a trace needs."""
+
+    from fastapi.testclient import TestClient
+
+    from pheasant.telemetry import interactions as module
+
+    tracer = module.TRACING.tracer
+    app = _app_with_corpus(tmp_path)
+    # The app configured tracing from its own config, which names no endpoint
+    # and so turned it off; the fixture's in-memory tracer goes back on.
+    module.TRACING.tracer, module.TRACING.enabled = tracer, True
+    with TestClient(app) as client:
+        assert client.get("/sources/docs/overview").status_code == 200
+        app.state.interaction_buffer.flush()
+    names = {
+        span.name: dict(span.attributes or {})
+        for span in otel_spans.get_finished_spans()
+        if (span.attributes or {}).get("http.request.method")
+    }
+    assert "GET /sources/{source_name}/overview" in names, sorted(names)
+    span = names["GET /sources/{source_name}/overview"]
+    assert span["http.route"] == "/sources/{source_name}/overview"
+    assert span["pheasant.operation"] == "/sources"
+    operations = {
+        row["operation"]
+        for row in app.state.state.rows("SELECT operation FROM interaction_events", ())
+    }
+    assert "/sources" in operations and "/sources/{source_name}/overview" not in operations
+
+
 def test_a_ui_search_records_the_question_and_what_came_back(tmp_path: Path) -> None:
     """The gap this closes: the middleware cannot read a request body without
     consuming the stream, so before handlers enriched the event every UI
@@ -1012,3 +1047,37 @@ def test_the_mcp_mount_is_unobserved_at_the_http_layer() -> None:
     from pheasant.api.app import UNOBSERVED_PATHS
 
     assert "/mcp" in UNOBSERVED_PATHS
+
+
+def test_an_outbound_model_call_is_a_dependency_span_of_the_request(
+    otel_spans: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production traces showed Postgres and NATS but no model, embedding or
+    graph-service call, so a request's wait on one was a gap in the trace."""
+
+    import io
+
+    from pheasant.assistant import providers
+
+    class Reply(io.BytesIO):
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        providers.urllib.request, "urlopen", lambda request, timeout: Reply(b'{"ok": true}')
+    )
+    buffer = InteractionBuffer(NullSink(), capacity=10, batch_size=99, interval_seconds=99)
+    with observe(buffer, InteractionContext.create(Modality.UI), kb_id="kb", operation="/x"):
+        assert providers._post_json("https://model.example/v1", {}, {}, 5.0) == {"ok": True}
+    providers._post_json("https://model.example/v1", {}, {}, 5.0)  # no request: no span
+
+    spans = otel_spans.get_finished_spans()
+    calls = [span for span in spans if span.name == "http.model"]
+    assert len(calls) == 1, [span.name for span in spans]
+    server = next(span for span in spans if span.name == "/x")
+    assert calls[0].parent is not None
+    assert calls[0].parent.span_id == server.get_span_context().span_id
+    assert calls[0].attributes["server.service"] == "model"

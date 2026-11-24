@@ -37,6 +37,7 @@ import numpy as np
 
 from pheasant import foundry
 from pheasant.connections import secret
+from pheasant.telemetry.spans import instrument
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,7 @@ def _checkin(key: tuple, connection: http.client.HTTPConnection) -> None:
     connection.close()
 
 
+@instrument("http.embeddings", attributes={"server.service": "embeddings"}, require_parent=True)
 def _transport(request: Request, timeout: float) -> bytes:
     """Send ``request`` on a kept-alive connection; the response body.
 

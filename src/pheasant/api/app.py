@@ -986,9 +986,6 @@ def create_app(
         warm_vector_store = getattr(getattr(search.vector, "store", None), "warm", None)
         if callable(warm_vector_store):
             try:
-                from pheasant.search.keep_warm import start as keep_warm
-
-                keep_warm(search, config.knowledge_base_id)
                 if warm_vector_store():
                     logger.info("Warmed the small vector index before serving queries")
             except Exception:
@@ -1142,6 +1139,19 @@ def create_app(
 
         if role_policy.serves_ui:
             threading.Thread(target=_warm_workflows, name="pheasant-warm", daemon=True).start()
+        # The database's search tables and one canned search, at boot and on
+        # a beat (`search/keep_warm.py`), with or without a vector arm. Here
+        # rather than in `create_app`: a process that serves warms, one that
+        # only builds the app (a test, an introspection) runs no searches it
+        # did not ask for. Stopped with the lifespan.
+        keep_warm_stop = threading.Event()
+        if role_policy.role is Role.API:
+            try:
+                from pheasant.search.keep_warm import start as keep_warm
+
+                keep_warm(search, config.knowledge_base_id, stop=keep_warm_stop)
+            except Exception:
+                logger.warning("Could not start the keep-warm thread", exc_info=True)
         try:
             if mcp_asgi_app is None:
                 yield
@@ -1149,6 +1159,7 @@ def create_app(
                 async with mcp_asgi_app.router.lifespan_context(app):
                     yield
         finally:
+            keep_warm_stop.set()
             buffer = getattr(app.state, "interaction_buffer", None)
             if buffer is not None:
                 app.state.interaction_buffer = None
@@ -1372,6 +1383,9 @@ def create_app(
                 event.status = "ok" if response.status_code < 400 else "error"
                 event.attributes["http_status"] = response.status_code
                 event.attributes["method"] = request.method
+                from pheasant.telemetry.interactions import name_route
+
+                name_route(getattr(request.scope.get("route"), "path", None))
                 cap_answer(event, max_chars=int(getattr(settings, "max_answer_chars", 4000)))
                 redact(event, enabled=bool(getattr(settings, "redact_text", False)))
                 return response

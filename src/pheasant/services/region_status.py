@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from pheasant.persistence.prewarm import MARKER as PREWARM_MARKER
 from pheasant.services import ServiceContext
 
 #: A part that does not answer this soon after the process started is waking,
@@ -75,8 +76,9 @@ def _database(context: ServiceContext, elapsed: float) -> dict[str, Any]:
             row = context.state.rows(
                 "SELECT EXTRACT(EPOCH FROM now() - pg_postmaster_start_time()) AS up,"
                 " (SELECT count(*) FROM pg_stat_activity"
-                "  WHERE backend_type = 'autoprewarm worker') AS prewarming",
-                (),
+                "  WHERE pid <> pg_backend_pid() AND (backend_type = 'autoprewarm worker'"
+                "   OR (state = 'active' AND query LIKE ?))) AS prewarming",
+                (f"%{PREWARM_MARKER}%",),
             )[0]
     except Exception:  # noqa: BLE001 - the cache's state is a nicety, not a check
         return {**part, "state": "ready", "detail": "answering"}

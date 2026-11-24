@@ -83,12 +83,22 @@ class DelegatedAccess:
                 return "Admin"
         return None
 
-    def _bind_grant(self, identity: Identity) -> None:
-        """Pin a grant made by sign-in name to the object id that just proved it."""
+    def _bind_grant(self, identity: Identity, names: tuple[str, ...] = ()) -> None:
+        """Pin a grant made by sign-in name to the object id that just proved it.
+
+        ``names`` are the token's other sign-in names (`entra.names_of`): a
+        grant to the address a guest was invited at must find them when they
+        signed in with another account, which is then their principal.
+        """
 
         if not self.delegated or not identity.subject:
             return
-        grant = self.grants().user(identity.tenant_id, identity.subject, identity.principal)
+        grants = self.grants()
+        grant = None
+        for name in (identity.principal, *names):
+            grant = grants.user(identity.tenant_id, identity.subject, name)
+            if grant is not None:
+                break
         if grant is None or grant.get("subject"):
             return
         try:

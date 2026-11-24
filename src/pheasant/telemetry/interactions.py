@@ -238,6 +238,23 @@ _CURRENT_FLAGS: contextvars.ContextVar[int] = contextvars.ContextVar(
     "pheasant_trace_flags", default=1
 )
 
+#: The route template the request matched (``/sources/{name}/cancel``), for
+#: the exported span's name only. ``operation`` stays the first segment,
+#: because the ledger, the usage drill-down and the metrics key on it; a
+#: template is as bounded, and it is what tells ``POST /assistant/chat/stream``
+#: from ``GET /assistant/status`` in a trace -- which a span named
+#: ``/assistant`` for both could not.
+_CURRENT_ROUTE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "pheasant_route", default=None
+)
+
+
+def name_route(route: str | None) -> None:
+    """Say which route template the current request matched (HTTP only)."""
+
+    if route:
+        _CURRENT_ROUTE.set(str(route))
+
 
 def current_trace_flags() -> int:
     if TRACING.enabled:
@@ -945,6 +962,7 @@ def observe(
     token = _CURRENT_TRACE.set((event.trace_id, event.span_id))
     flags_token = _CURRENT_FLAGS.set(context.trace_flags)
     event_token = _CURRENT_EVENT.set(event)
+    route_token = _CURRENT_ROUTE.set(None)
     span_cm = None
     if TRACING.enabled and TRACING.tracer is not None:
         from opentelemetry.trace import SpanKind
@@ -989,6 +1007,7 @@ def observe(
         _CURRENT_TRACE.reset(token)
         _CURRENT_EVENT.reset(event_token)
         _CURRENT_FLAGS.reset(flags_token)
+        _CURRENT_ROUTE.reset(route_token)
         # Handed to the buffer from here on: a worker thread that copied this
         # context (a streamed answer) must not mutate it -- see `child_event`.
         event.handed_over = True
@@ -1037,8 +1056,10 @@ def _annotate_span(event: InteractionEvent) -> None:
     if "http_status" in event.attributes:
         span.set_attribute("http.response.status_code", event.attributes["http_status"])
     if "method" in event.attributes:
+        route = _CURRENT_ROUTE.get() or event.operation
         span.set_attribute("http.request.method", event.attributes["method"])
-        span.set_attribute("http.route", event.operation)
+        span.set_attribute("http.route", route)
+        span.update_name(f"{event.attributes['method']} {route}")
     if event.result_count is not None:
         span.set_attribute("pheasant.result_count", int(event.result_count))
     # Which models answered: what the usage drill-down's KQL filters on. A

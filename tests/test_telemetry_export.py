@@ -315,7 +315,8 @@ def test_http_tracing_independent_of_ledger_and_ui_ingestion(
             spans = flattened(traces)
             assert any(s.name == "list_sources" and s.trace_id.hex() == mcp_trace for s in spans)
 
-            assert any(s.name == "/sources" and s.kind == 2 for s in spans)
+            # Named by method and route template; the ledger keeps the segment.
+            assert any(s.name == "GET /sources" and s.kind == 2 for s in spans)
             assert (
                 any(
                     s.name == "ui.ask"

@@ -309,12 +309,16 @@ def build_router(service: IdentityService) -> APIRouter:
             return _message_page("Organization not approved", reason, status=400)
         if error or not code or not state:
             reason = error_description or error or "the sign-in returned no code"
+            logger.warning("sign-in did not complete: %s", reason)
             return _message_page("Sign-in did not complete", reason, status=400)
         try:
             result = service.complete_login(
                 code=code, state=state, base_url=_base_url(request, service)
             )
         except ServiceError as exc:
+            # The page tells the person; this tells the operator, who
+            # otherwise saw only a 401 on /auth/callback.
+            logger.warning("sign-in did not complete: %s", exc)
             return _message_page("Sign-in did not complete", str(exc), status=exc.status)
         if result.flow == "mcp":
             consent = service.begin_consent(result.identity, result.data)
