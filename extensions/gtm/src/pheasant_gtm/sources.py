@@ -479,6 +479,8 @@ def topic(target: str, label: str = "") -> str | None:
     ):
         if any(re.search(r"\b" + word, path) for word in words):
             return kind
+    if re.search(r"/(?:app|apps|docs|documentation)(?:/|$)", urlsplit(target).path, re.I):
+        return "official"
     if technical_link(urlsplit(target).path, label):
         return "official"
     return None

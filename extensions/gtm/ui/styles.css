@@ -107,4 +107,3 @@
   .gtm-workspace--split { display: flex; flex-direction: column-reverse; }
   .gtm-firmographics, .gtm-tech-groups, .gtm-sales-signals { grid-template-columns: 1fr; }
 }
-

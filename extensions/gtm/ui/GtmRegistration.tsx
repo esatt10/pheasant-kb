@@ -40,6 +40,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
   const [discover, setDiscover] = useState(Boolean(gtmTarget.search ?? false));
   const initialDepth = gtmTarget.depth === "deep" ? "deep" : "standard";
   const [depth, setDepth] = useState<"standard" | "deep">(editing ? initialDepth : "deep");
+  const [productBudget, setProductBudget] = useState(Number(gtmTarget.product_page_limit ?? 0));
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -50,6 +51,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
         ...gtmTarget,
         ...(depth !== initialDepth ? { page_limit: undefined, job_limit: undefined } : {}),
         depth,
+        product_page_limit: productBudget,
         company: company.trim() || null,
         website: website.trim() || null,
         naics_code: naicsCode.trim() || null,
@@ -139,6 +141,11 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
             <label className="checkbox">
               <input type="checkbox" checked={depth === "deep"} onChange={(e) => setDepth(e.target.checked ? "deep" : "standard")} />
               Deep research
+            </label>
+            <label className="field">
+              <span>Additional product and service page attempts</span>
+              <input className="text-input" type="number" min={0} max={60} value={productBudget}
+                onChange={(e) => setProductBudget(Math.max(0, Math.min(60, Math.trunc(Number(e.target.value)))))} />
             </label>
             <label className="checkbox">
               <input type="checkbox" checked={discover} onChange={(e) => setDiscover(e.target.checked)} />

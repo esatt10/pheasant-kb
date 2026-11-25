@@ -19,7 +19,7 @@ from typing import Any
 MAX_REQUEST = 6_200_000
 MAX_RESPONSE = 1_900_000
 _PROTOCOL = 1
-_PARSER_REVISION = 5
+_PARSER_REVISION = 6
 _IMAGE = "pheasant-gtm-sandbox:local"
 _SLOTS = BoundedSemaphore(2)
 _TIMEOUT = 18

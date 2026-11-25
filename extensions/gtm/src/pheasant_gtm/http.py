@@ -85,8 +85,12 @@ def register_gtm_routes(app: FastAPI, *, services: Any) -> None:
         )
 
     @app.post("/gtm/catalogs/{source_name}/companies/{company_id}/sync")
-    def refresh_company(source_name: str, company_id: str, deep: bool = False) -> dict:
-        return gtm_catalog.refresh(services, source_name, company_id, deep=deep)
+    def refresh_company(
+        source_name: str, company_id: str, deep: bool = False, product_page_limit: int | None = None
+    ) -> dict:
+        return gtm_catalog.refresh(
+            services, source_name, company_id, deep=deep, product_page_limit=product_page_limit
+        )
 
     @app.post("/gtm/runs", status_code=201)
     def create(request: Request) -> dict:

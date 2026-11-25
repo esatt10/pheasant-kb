@@ -17,7 +17,7 @@ from pheasant.assistant.llm import LLM, at_effort
 from pheasant.assistant.providers import ProviderError, collect_token_usage
 from pheasant.request_budget import DeadlineExceeded
 from pheasant.telemetry.spend import SpendLimitReached
-from pheasant_gtm import runbook
+from pheasant_gtm import offerings, runbook
 from pheasant_gtm.catalog import (
     CRM_ONLY,
     Acquisition,
@@ -61,7 +61,7 @@ from pheasant_gtm.sources import (
 )
 from pheasant_gtm.technology import technical_link
 
-CHECKPOINT_VERSION = 2
+CHECKPOINT_VERSION = 3
 MAX_STEP_DELAY = 120
 IDENTITY_ROLES = {"anchor", "candidate", "identity_fallback"}
 
@@ -78,10 +78,10 @@ def _queue(
     with contextlib.suppress(ValueError):
         target = url(target, base)
         limit = 680 if run["request"].get("depth") == "deep" else 340
-        if len(run["tasks"]) >= limit:
-            return
         existing = next((item for item in run["tasks"] if item["url"] == target), None)
         if existing is None:
+            if len(run["tasks"]) >= limit:
+                return
             task = {"url": target, "role": role, "priority": priority, "attempts": 0}
             if operator_board:
                 task["operator_board"] = operator_board
@@ -142,6 +142,8 @@ def _next_identity_fallback(run: dict, request: Request, now: float) -> dict | N
 def initialize(request: Request) -> dict:
     _operator_boards(request.acquisition)
     _identity_fallbacks(request)
+    for address in request.product_urls:
+        url(address)
     run = {
         "version": CHECKPOINT_VERSION,
         "request": request.model_dump(mode="json"),
@@ -507,6 +509,8 @@ def _page(run: dict, task: dict, request: Request, reader: Callable, now: float)
     operator_board = task.get("operator_board")
     try:
         target, content_type, content = reader(target, run["robots"])
+        if role == "offering" and not same_site(target, run["website"]):
+            raise FetchError("offering redirected outside the verified company site")
         if role == "board_summary":
             for address in parse_in_sandbox(
                 "board_summary", target=target, body=content, limit=request.job_limit
@@ -627,7 +631,7 @@ def _pending_pages(run: dict, request: Request) -> list[dict]:
         task
         for task in run["tasks"]
         if not task.get("done")
-        and task["role"] not in IDENTITY_ROLES
+        and task["role"] not in IDENTITY_ROLES | {"offering"}
         and (not task.get("operator_board") or task["operator_board"] in configured_boards)
     ]
     if not request.acquisition.site_adapters:
@@ -977,6 +981,73 @@ def _schedule_review(run: dict, fields: list[FieldSpec], llm: LLM | None) -> Non
     run["phase"] = "review" if run["review_batches"] else "complete"
 
 
+def start_offerings(run: dict, request: Request, *, archive_only: bool = False) -> bool:
+    if not request.product_page_limit or not run.get("website") or run.get("offering_research"):
+        return False
+    prior, _ = offerings.inventory(docs(run), run["website"], run["company"])
+    run["offering_research"] = {
+        "budget": request.product_page_limit,
+        "before": len(prior),
+        "archive_only": archive_only,
+        "missing_facets": sorted(
+            {
+                "offerings" if not prior else "",
+                *(
+                    field
+                    for field in ("capabilities", "buyers", "delivery", "support")
+                    if not any(row["facets"].get(field) for row in prior)
+                ),
+            }
+            - {""}
+        ),
+    }
+    for address in request.product_urls:
+        if same_site(url(address), run["website"]):
+            _queue(run, address, "offering", 140)
+        else:
+            _error(run, "offerings", address, "seed is outside the verified company site")
+    run["phase"] = "offerings"
+    return True
+
+
+def _offering_step(run: dict, request: Request, reader: Callable, now: float) -> None:
+    research = run["offering_research"]
+    if request.acquisition.follow_links:
+        visited = {doc["url"] for doc in run["documents"].values() if doc["text"]}
+        addresses = {task["url"] for task in run["tasks"] if not task.get("done")}
+        for doc in run["documents"].values():
+            if doc["attributed"] and not doc["quarantined"] and doc["kind"] == "official":
+                addresses.update(link for link, _ in doc["links"])
+        for address in sorted(addresses - visited):
+            rank = offerings.priority(address)
+            if rank and same_site(address, run["website"]):
+                route = offerings.route(address)
+                if route and route[0] == "support" and "support" in research["missing_facets"]:
+                    rank += 10
+                _queue(run, address, "offering", rank)
+    tasks = [task for task in run["tasks"] if task["role"] == "offering"]
+    attempts = sum(task["attempts"] for task in tasks)
+    archived = run["documents"]
+    remaining = [
+        t for t in tasks if not t.get("done") and not archived.get(t["url"], {}).get("text")
+    ]
+    available = _available(run, remaining, now) if attempts < research["budget"] else []
+    if available:
+        task = min(available, key=lambda t: (-t["priority"], t["url"]))
+        _page(run, task, request, reader, now)
+        return
+    if run.get("next_step_at") and attempts < research["budget"]:
+        return
+    after, _ = offerings.inventory(docs(run), run["website"], run["company"])
+    research.update(
+        attempts=attempts,
+        after=len(after),
+        remaining=len(remaining),
+        outcome="budget reached" if remaining else "frontier exhausted",
+    )
+    run["phase"] = "complete" if research["archive_only"] else "extract"
+
+
 def _extract_fields(run: dict, fields: list[FieldSpec], *, deep: bool) -> list[dict]:
     def observations(doc: Document) -> list[dict]:
         return extract(doc, run["website"], run["company"], run["as_of"]) + labeled_fields(
@@ -1079,7 +1150,9 @@ def advance(
         planned = _pending_pages(run, request)
         queries = [q for q in run["queries"] if q["kind"] != "identity" and not q.get("done")]
         fetched = sum(
-            task["attempts"] for task in run["tasks"] if task["role"] not in IDENTITY_ROLES
+            task["attempts"]
+            for task in run["tasks"]
+            if task["role"] not in IDENTITY_ROLES | {"offering"}
         )
         limit = request.page_limit
         if request.depth == "deep" and not run.get("supplement_started"):
@@ -1105,12 +1178,16 @@ def advance(
             run["phase"] = "research"
         else:
             run["review_passages"] = selections(run, fields)
-            _schedule_review(run, fields, llm)
+            if not start_offerings(run, request):
+                _schedule_review(run, fields, llm)
     elif phase == "research":
         if _deep_research(run, request, fields, search_key):
             run["phase"] = "collect"
         else:
-            _schedule_review(run, fields, llm)
+            if not start_offerings(run, request):
+                _schedule_review(run, fields, llm)
+    elif phase == "offerings":
+        _offering_step(run, request, reader, now)
     elif phase == "review":
         if llm is None:
             _error(run, "review", "", "Pheasant's shared chat model is unavailable")
@@ -1212,6 +1289,7 @@ def profile(run: dict) -> dict:
             for doc in docs(run)
         ],
         "exceptions": run["errors"],
+        **({"offering_research": run["offering_research"]} if "offering_research" in run else {}),
         **(
             {"research": run["research"], "related_passages": run["review_passages"]}
             if "research" in run

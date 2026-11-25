@@ -34,6 +34,8 @@ SEED_SOURCE = "acme-input"
 def test_catalog_indexes_company_folders_and_queries_published_provenance(
     monkeypatch, loaded_config
 ):
+    # The test drives sync directly. The API scheduler would start a second writer.
+    monkeypatch.setattr(loaded_config.sync.scheduler, "enabled", False)
     parser_calls(monkeypatch)
     today = datetime.now(UTC).date().isoformat()
     bravo_primary = "https://bravo.example/"

@@ -423,7 +423,7 @@ def extract(doc: Document, website: str, name: str | None, as_of: str) -> list[C
                 candidate("technology_stack", technology, doc, passage, "pattern", relation)
             )
         normalized = f" {words(passage)} "
-        if first_party:
+        if first_party and business_activity_statement(passage, name):
             for activity, phrases in _ACTIVITIES.items():
                 if any(f" {phrase} " in normalized for phrase in phrases):
                     found.append(
@@ -454,6 +454,20 @@ def extract(doc: Document, website: str, name: str | None, as_of: str) -> list[C
                         )
                     )
     return found
+
+
+def business_activity_statement(text: str, company: str | None) -> bool:
+    """A topic or referenced product is insufficient evidence of an offering."""
+    if "?" in text or not subject(text, company):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:offers?|provides?|builds?|develops?|delivers?|operates?|conducts?|"
+            r"our (?:products?|services?|platform|software))\b",
+            text,
+            re.I,
+        )
+    )
 
 
 def title_segments(title: str) -> list[str]:

@@ -60,11 +60,20 @@ def register_gtm_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
     @mcp.tool()
     @anticipated
     def sync_gtm_company(
-        knowledge_base: str, source_name: str, company_id: str, deep: bool = False
+        knowledge_base: str,
+        source_name: str,
+        company_id: str,
+        deep: bool = False,
+        product_page_limit: int | None = None,
     ) -> dict:
         """Mark one catalog company due and queue the catalog's normal source sync."""
         return gtm_catalog.refresh(
-            tools.services, source_name, company_id, knowledge_base, deep=deep
+            tools.services,
+            source_name,
+            company_id,
+            knowledge_base,
+            deep=deep,
+            product_page_limit=product_page_limit,
         )
 
     @mcp.tool()

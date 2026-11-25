@@ -199,6 +199,7 @@ def company(
         profile["fields"] = {field: selected}
         profile.pop("technology", None)
         profile.pop("hubspot", None)
+        profile.pop("offerings", None)
         profile["evidence"] = [
             entry for entry in profile["evidence"] if entry["id"] in selected["evidence_ids"]
         ]
@@ -256,6 +257,11 @@ def evidence(
         },
         "field": field,
         "research": saved.get("field_results", {}).get(field),
+        **(
+            {"offering_traces": saved.get("offering_traces", {})}
+            if field in {"products_services", "support_services", "customer_segments"}
+            else {}
+        ),
     }
 
 
@@ -290,9 +296,14 @@ def refresh(
     knowledge_base: str | None = None,
     *,
     deep: bool = False,
+    product_page_limit: int | None = None,
 ) -> dict:
     require_permission("sources.manage")
     _assert_catalog(context, source, knowledge_base)
-    if not gtm_catalog.request_refresh(context.state, source, company_id, deep=deep):
+    if product_page_limit is not None and (deep or not 1 <= product_page_limit <= 60):
+        raise InvalidRequest("Choose a product-only budget of 1 to 60 or a deep refresh")
+    if not gtm_catalog.request_refresh(
+        context.state, source, company_id, deep=deep, product_page_limit=product_page_limit
+    ):
         raise SourceNotFound(f"{source}/{company_id}")
     return {**gtm_collections.refresh(context, source, knowledge_base), "company_id": company_id}

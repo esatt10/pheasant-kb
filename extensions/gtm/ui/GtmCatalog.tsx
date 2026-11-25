@@ -51,7 +51,8 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
     refetchInterval: 8000,
   });
   const refresh = useMutation({
-    mutationFn: ({ company, deep }: { company: string; deep?: boolean }) => gtmApi.syncGtmCompany(source, company, deep),
+    mutationFn: ({ company, deep, productPageLimit }: { company: string; deep?: boolean; productPageLimit?: number }) =>
+      gtmApi.syncGtmCompany(source, company, deep, productPageLimit),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       queryClient.invalidateQueries({ queryKey: ["index-queue"] });
@@ -167,6 +168,8 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
           <div className="button-row gtm-profile__actions">
             <button className="btn btn--small" onClick={() => openGraph(data.artifact_id)}>Show in graph</button>
             <button className="btn btn--small" data-permission="sources.manage" disabled={refresh.isPending} onClick={() => refresh.mutate({ company: data.company_id })}>Refresh company</button>
+            <button className="btn btn--small" data-permission="sources.manage" disabled={refresh.isPending}
+              onClick={() => refresh.mutate({ company: data.company_id, productPageLimit: 48 })}>Research offerings</button>
             {!data.research ? <button className="btn btn--small" data-permission="sources.manage" disabled={refresh.isPending} onClick={() => refresh.mutate({ company: data.company_id, deep: true })}>Enable deep research and refresh</button> : null}
             {refresh.isSuccess ? <span role="status">Refresh requested</span> : null}
           </div>

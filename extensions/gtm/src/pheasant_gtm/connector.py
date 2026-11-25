@@ -17,7 +17,7 @@ from pheasant.sync.connectors import (
 )
 from pheasant_gtm import catalog_store as gtm_catalog
 from pheasant_gtm import collection_store as gtm_collections
-from pheasant_gtm import field_report, presentation, runbook, web_archive, workflow
+from pheasant_gtm import field_report, offerings, presentation, runbook, web_archive, workflow
 from pheasant_gtm.catalog import Request, ordered_fields
 from pheasant_gtm.context import curated, field_results, markdown
 from pheasant_gtm.plugin import SOURCE_TYPE
@@ -25,6 +25,16 @@ from pheasant_gtm.runtime import IsolationUnavailable, reuse_parsed
 from pheasant_gtm.sources import FetchError, fetch
 
 DOCUMENT = gtm_catalog.DOCUMENT
+
+
+def _target_key(target: Request, *, broad_only: bool = False) -> str:
+    # A disabled offering crawl hashes exactly like a pre-upgrade target.
+    exclude = {
+        key
+        for key in ("product_page_limit", "product_urls")
+        if broad_only or not getattr(target, key)
+    }
+    return sha256(target.model_dump_json(exclude=exclude).encode()).hexdigest()
 
 
 def effective_target(state, settings: dict, seeds: list[str]) -> Request:
@@ -96,10 +106,7 @@ class GTMConnector(SourceConnector):
                 except ValueError:
                     continue
                 snapshot = json.loads(row["state_json"])["snapshot"]
-                if (
-                    snapshot.get("target_key")
-                    != sha256(target.model_dump_json().encode()).hexdigest()
-                ):
+                if snapshot.get("target_key") != _target_key(target):
                     continue
                 self._publish(row, settings, target, snapshot)
                 republished.append(row["company_id"])
@@ -115,7 +122,12 @@ class GTMConnector(SourceConnector):
             settings = json.loads(row["settings_json"])
             try:
                 target = effective_target(self.state, settings, settings["urls"])
-                snapshot = self._collect(target, row=row, catalog_progress=(index - 1, len(due)))
+                snapshot = self._collect(
+                    target,
+                    row=row,
+                    catalog_progress=(index - 1, len(due)),
+                    product_refresh=bool(row["requested_at"] and settings.get("product_refresh")),
+                )
             except (ValueError, ConnectorUnavailable) as exc:
                 if isinstance(exc.__cause__, IsolationUnavailable):
                     raise
@@ -155,8 +167,9 @@ class GTMConnector(SourceConnector):
     def _publish(self, row: dict, settings: dict, target: Request, snapshot: dict) -> None:
         fields = ordered_fields(target)
         report, pages = snapshot["profile"], snapshot["web_pages"]
+        documents = web_archive.research_documents(report, pages, snapshot.get("parsed"))
         if not report.get("related_passages"):
-            index = runbook.PassageIndex(web_archive.research_documents(report, pages))
+            index = runbook.PassageIndex(documents)
             passages = workflow.retrieve_field_passages(
                 index, fields, report["fields"], report["as_of"]
             )
@@ -164,7 +177,10 @@ class GTMConnector(SourceConnector):
                 **report,
                 "related_passages": {key: rows for key, rows in passages.items() if rows},
             }
-        profile = curated(fields, report, target.company, pages)
+        inventory, offering_traces = offerings.inventory(
+            documents, report["website"], report.get("company") or target.company
+        )
+        profile = curated(fields, report, target.company, pages, inventory)
         if segment := settings.get("segment"):
             profile["segment"] = segment
         evidence_ids = {ref["id"] for ref in profile["evidence"]}
@@ -179,6 +195,7 @@ class GTMConnector(SourceConnector):
                 self._page_items(pages, row["company_id"]), profile["evidence"]
             ),
             "field_results": field_results(report["fields"], report.get("related_passages")),
+            "offering_traces": offering_traces,
         }
         digest = sha256(json.dumps([profile, evidence], sort_keys=True).encode()).hexdigest()
         content = markdown(fields, report, target.company, profile)
@@ -192,9 +209,11 @@ class GTMConnector(SourceConnector):
         *,
         row: dict | None = None,
         catalog_progress: tuple[int, int] | None = None,
+        product_refresh: bool = False,
     ) -> dict:
         name = self.source.name
-        key = sha256(target.model_dump_json().encode()).hexdigest()
+        key = _target_key(target)
+        broad_key = _target_key(target, broad_only=True)
         record = json.loads(row["state_json"]) if row else gtm_collections.load(self.state, name)
         save = (
             partial(gtm_catalog.checkpoint, self.state, name, row)
@@ -207,6 +226,7 @@ class GTMConnector(SourceConnector):
         if (
             pending.get("key") != key
             or pending.get("mode") != mode
+            or bool(pending.get("product_refresh")) != product_refresh
             or pending.get("run", {}).get("version") != workflow.CHECKPOINT_VERSION
         ):
             run = workflow.initialize(target)
@@ -219,7 +239,28 @@ class GTMConnector(SourceConnector):
                 "run": run,
                 "parsed": {},
                 "failed_reads": [],
+                "product_refresh": product_refresh,
             }
+            if (
+                mode == "incremental"
+                and target.product_page_limit
+                and previous.get("web_pages")
+                and (product_refresh or previous.get("target_key") != key)
+                and previous.get("broad_target_key", previous.get("target_key")) == broad_key
+            ):
+                archive = previous["profile"]
+                documents = web_archive.research_documents(
+                    archive, previous["web_pages"], previous.get("parsed")
+                )
+                run.update(
+                    website=archive["website"],
+                    company=archive["company"],
+                    identity=archive["identity"],
+                    documents={doc.url: doc.dump() for doc in documents},
+                    tasks=[],
+                )
+                workflow.start_offerings(run, target, archive_only=True)
+                pending["parsed"].update(previous.get("parsed", {}))
         run = pending["run"]
         parsed = pending["parsed"]
         captures = pending.setdefault("web_captures", {})
@@ -255,11 +296,14 @@ class GTMConnector(SourceConnector):
             save({"snapshot": previous, "pending": pending})
             if self.listing_progress:
                 attempts = sum(task["attempts"] for task in run["tasks"])
+                focused = sum(t["attempts"] for t in run["tasks"] if t["role"] == "offering")
                 detail = (
                     "waiting for publisher retry window"
                     if run.get("next_step_at")
                     else "indexing company passages and checking field coverage"
                     if run["phase"] == "research"
+                    else f"researching offerings · {focused} attempts"
+                    if run["phase"] == "offerings"
                     else f"{attempts} page {'attempt' if attempts == 1 else 'attempts'} saved"
                 )
                 if catalog_progress and row:
@@ -287,6 +331,18 @@ class GTMConnector(SourceConnector):
         report = workflow.profile(run)
         fields = ordered_fields(target)
         pages = web_archive.admitted(workflow.docs(run), captures)
+        if run.get("offering_research", {}).get("archive_only"):
+            archive = previous["profile"]
+            source_data = {doc["url"]: doc for doc in archive["source_outcomes"]}
+            source_data.update({doc["url"]: doc for doc in report["source_outcomes"]})
+            report = {
+                **archive,
+                "source_outcomes": list(source_data.values()),
+                "exceptions": [*archive["exceptions"], *report["exceptions"]],
+                "offering_research": report["offering_research"],
+                "related_passages": {},
+            }
+            pages = {**pages, **previous["web_pages"]}
         if failed_reads and previous.get("target_key") == key:
             # A paced/partial refresh can keep a previously approved document
             # on a transient fetch error. A quarantine or invalid identity
@@ -295,7 +351,10 @@ class GTMConnector(SourceConnector):
                 ref = web_archive.reference(url)
                 if ref in previous.get("web_pages", {}) and url not in run["documents"]:
                     pages.setdefault(ref, previous["web_pages"][ref])
-        profile = curated(fields, report, target.company, pages)
+        inventory, _ = offerings.inventory(
+            workflow.docs(run), report["website"], report.get("company") or target.company
+        )
+        profile = curated(fields, report, target.company, pages, inventory)
         content = markdown(fields, report, target.company, profile)
         if row is None:
             self._single_inputs = web_archive.inputs(self._page_items(pages), profile["evidence"])
@@ -312,6 +371,7 @@ class GTMConnector(SourceConnector):
             "page_tasks": run["tasks"],
             "token_usage": presentation.token_usage(run),
             "target_key": key,
+            "broad_target_key": broad_key,
             "web_pages": pages,
         }
         save({"snapshot": snapshot})

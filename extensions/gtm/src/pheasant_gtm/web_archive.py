@@ -49,7 +49,12 @@ def admitted(documents: list[Document], captures: dict) -> dict[str, dict]:
     return pages
 
 
-def research_documents(profile: dict, pages: dict) -> list[Document]:
+def research_documents(profile: dict, pages: dict, parsed: dict | None = None) -> list[Document]:
+    packets = {
+        (packet["url"], packet.get("content_sha256")): packet
+        for packet in (parsed or {}).values()
+        if isinstance(packet, dict) and isinstance(packet.get("url"), str)
+    }
     documents = []
     for row in profile["source_outcomes"]:
         if not row["attributed"] or row["quarantined"]:
@@ -58,6 +63,7 @@ def research_documents(profile: dict, pages: dict) -> list[Document]:
         if not page or not plausible_prose(page["text"][:16384]):
             continue
         title = row["title"] or ""
+        packet = packets.get((row["url"], row.get("content_sha256")), {})
         documents.append(
             Document(
                 row["url"],
@@ -69,6 +75,11 @@ def research_documents(profile: dict, pages: dict) -> list[Document]:
                 active_board=row.get("active_board", False),
                 expires=row.get("expires"),
                 attributed=True,
+                origin=packet.get("origin") or row["url"],
+                content_sha256=row.get("content_sha256", ""),
+                records=packet.get("records", []),
+                links=packet.get("links", []),
+                script_shell=packet.get("script_shell", False),
             )
         )
     return documents

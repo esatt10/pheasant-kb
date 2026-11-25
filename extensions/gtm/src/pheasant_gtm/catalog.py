@@ -115,6 +115,8 @@ class Request(Model):
     depth: Literal["standard", "deep"] = "standard"
     page_limit: int = Field(default=36, ge=4, le=120)
     job_limit: int = Field(default=24, ge=0, le=60)
+    product_page_limit: int = Field(default=0, ge=0, le=60)
+    product_urls: list[Seed] = Field(default_factory=list, max_length=20)
     signal_days: int = Field(default=365, ge=1, le=3650)
     search: bool = True
     review: bool = False
@@ -149,6 +151,8 @@ class Request(Model):
             raise ValueError("model requires review")
         if self.decision_model and not (self.review and self.decisions):
             raise ValueError("decision_model requires review and decisions")
+        if self.product_urls and not self.product_page_limit:
+            raise ValueError("product_urls requires a positive product_page_limit")
         keys = [field.key for field in self.fields]
         if len(set(keys)) != len(keys):
             raise ValueError("custom field keys must be unique")

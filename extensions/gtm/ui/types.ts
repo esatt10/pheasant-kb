@@ -36,6 +36,20 @@ export interface GtmTechnologyTaxonomy {
   concepts: { id: string; label: string; broader: string[]; aliases: string[]; product_count: number }[];
 }
 
+type OfferingValue = { value: string; evidence_ids: string[] };
+
+export interface GtmOffering {
+  id: string;
+  name: string;
+  kind: "product" | "service" | "support";
+  role: "provider" | "implementation_partner";
+  evidence_ids: string[];
+  capabilities?: OfferingValue[];
+  buyers?: OfferingValue[];
+  delivery?: OfferingValue[];
+  support?: OfferingValue[];
+}
+
 export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "company" | "domain" | "segment" | "classification" | "revision"> {
   publication_pending: boolean;
   artifact_id: string;
@@ -45,6 +59,8 @@ export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "c
   indexed_at?: string;
   technology?: { name: string; category: string; category_id?: string; signals: { relationship: string; evidence_ids: string[] }[] }[];
   signal_coverage?: { jobs: number; news: number };
+  offerings?: GtmOffering[];
+  offering_research?: { before: number; after?: number; budget: number; attempts?: number; outcome?: string };
   research?: {
     documents: number;
     passages: number;
@@ -99,4 +115,3 @@ export interface GtmFieldEvidence {
     related?: GtmResearchCitation[];
   }) | null;
 }
-

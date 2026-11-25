@@ -6,7 +6,7 @@ from typing import Any
 
 from pheasant_gtm import field_report
 from pheasant_gtm.catalog import DEFAULT_FIELDS, FieldSpec, Scalar, words
-from pheasant_gtm.evidence import _ACTIVITIES, _SERVICE, _THEMES
+from pheasant_gtm.evidence import _ACTIVITIES, _SERVICE, _THEMES, business_activity_statement
 from pheasant_gtm.naics import titles as naics_titles
 from pheasant_gtm.sources import date_value, host, root
 from pheasant_gtm.tech_taxonomy import concept_id, technology_labels
@@ -132,7 +132,11 @@ def field_results(fields: dict, related: dict | None = None) -> dict:
 
 
 def curated(
-    specs: list[FieldSpec], profile: dict, company: str | None, pages: dict | None = None
+    specs: list[FieldSpec],
+    profile: dict,
+    company: str | None,
+    pages: dict | None = None,
+    inventory: list[dict] | None = None,
 ) -> dict:
     """The published, typed projection. Publisher prose stays in private evidence."""
     sources = {
@@ -170,11 +174,50 @@ def curated(
     for entries in profile["signals"].values():
         for entry in entries:
             reference(entry["url"])
+    offer_rows = []
+    for item in inventory or ():
+        if not (urls := set(item["sources"]) & sources.keys()):
+            continue
+        offer_rows.append(
+            {
+                **{key: item[key] for key in ("id", "name", "kind", "role")},
+                "evidence_ids": sorted(_reference(address) for address in urls),
+                **{
+                    key: [
+                        {
+                            "value": value,
+                            "evidence_ids": sorted(_reference(url) for url in addresses),
+                        }
+                        for value, addresses in terms.items()
+                    ]
+                    for key, terms in item["facets"].items()
+                },
+            }
+        )
+    offer_fields = {"products_services": {}, "customer_segments": {}, "support_services": {}}
+    for item in inventory or ():
+        key = "support_services" if item["kind"] == "support" else "products_services"
+        offer_fields[key].setdefault(item["name"], set()).update(item["sources"])
+        for field, facet in (("customer_segments", "buyers"), ("support_services", "support")):
+            for value, urls in item["facets"].get(facet, {}).items():
+                offer_fields[field].setdefault(value, set()).update(urls)
     for spec in specs:
         entry = profile["fields"][spec.key]
         ready = entry["status"] in {"observed", "derived", "inferred"}
         values = _fact_values(spec, entry) if ready else []
         status = entry["status"]
+        if spec.key == "business_activities" and values:
+            supported = {
+                item["value"]
+                for item in entry.get("items", ())
+                if any(
+                    business_activity_statement(cite["quote"], profile.get("company") or company)
+                    for cite in item["evidence"]
+                )
+            }
+            values = [value for value in values if value in supported]
+            if not values:
+                status = "missing"
         if spec.key == "name" and company:
             values, status = [company], "derived" if not ready else status
         if ready and spec.key in {"domain", "website"}:
@@ -236,6 +279,25 @@ def curated(
                 elif spec.key == "products_services":
                     values, status = [text for text, _ in clauses], "observed"
         if (
+            (observed := offer_fields.get(spec.key))
+            and spec == _DEFAULT_BY_KEY.get(spec.key)
+            and status in {"missing", "observed", "derived"}
+        ):
+            values = sorted(set(values) | observed.keys(), key=str.casefold)
+            status = "observed"
+            citations.update(url for urls in observed.values() for url in urls)
+            detail = {
+                **(detail or {}),
+                "items": [
+                    {
+                        "value": value,
+                        "text": "Documented in first-party offering evidence.",
+                        "evidence_ids": sorted(_reference(url) for url in urls),
+                    }
+                    for value, urls in sorted(observed.items())
+                ],
+            }
+        if (
             classification
             and classification["source"] == "reported"
             and spec.key in {"industry", "industry_group"}
@@ -248,7 +310,7 @@ def curated(
             reference(address, field=spec.key)
         detail_items = field_report.item_details(spec.key, entry, values, sources.keys())
         if detail_items:
-            detail = {**(detail or {}), "items": detail_items}
+            detail = {**(detail or {}), "items": [*(detail or {}).get("items", ()), *detail_items]}
         fields[spec.key] = {
             "definition": spec.model_dump(mode="json"),
             "status": status,
@@ -314,6 +376,12 @@ def curated(
         **({"identity_method": "official_fallback"} if fallback else {}),
         "classification": classification,
         "technology": sorted(technology, key=lambda row: (row["category"], row["name"])),
+        **({"offerings": offer_rows} if offer_rows else {}),
+        **(
+            {"offering_research": profile["offering_research"]}
+            if "offering_research" in profile
+            else {}
+        ),
         "hubspot": hubspot,
         "signal_coverage": {kind: len(items) for kind, items in profile["signals"].items()},
         **({"research": profile["research"]} if "research" in profile else {}),
@@ -374,6 +442,23 @@ def markdown(
     if categories := technology_labels(named_technology):
         lines.extend(["", "## Technology categories", ""])
         lines.extend(f"- {category}" for category in categories)
+    if offers := publication.get("offerings"):
+        lines.extend(["", "## Products and services", ""])
+        labels = {
+            "provider": "Company offering",
+            "implementation_partner": "Implementation partner",
+        }
+        for offer in offers:
+            lines.append(f"- **{offer['name']}** · {labels[offer['role']]}")
+            for key, label in (
+                ("capabilities", "Capabilities"),
+                ("buyers", "Buyers"),
+                ("delivery", "Delivery"),
+                ("support", "Support"),
+            ):
+                if entries := offer.get(key):
+                    lines.append(f"  {label}: {', '.join(row['value'] for row in entries)}")
+            lines.append(f"  Source references: {', '.join(offer['evidence_ids'])}")
     lines.extend(["", "## Coverage", ""])
     for kind, entries in profile["signals"].items():
         lines.append(f"- {kind.capitalize()} documents meeting the signal window: {len(entries)}")

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { GtmCompanyProfile } from "./types";
+import type { GtmCompanyProfile, GtmOffering } from "./types";
 
 const RELATIONSHIPS: Record<string, string> = {
   internal_use: "Internal use",
@@ -63,6 +63,26 @@ export function GtmAccountBrief({ profile, openGraph }: {
     });
   }
 
+  function offering(item: GtmOffering) {
+    const facets = [
+      ["Capabilities", item.capabilities], ["Buyers", item.buyers],
+      ["Delivery", item.delivery], ["Support", item.support],
+    ] as const;
+    return <article className="gtm-field-choice" key={item.id}>
+      <h4>{item.name}</h4>
+      <p className="muted small">{item.role === "implementation_partner" ? "Implementation partner" :
+        item.kind === "support" ? "Company-provided support" : `Company ${item.kind}`}</p>
+      <div className="gtm-evidence-list">{sourceButtons(item.evidence_ids)}</div>
+      {facets.filter(([, values]) => values?.length).map(([label, values]) => <div key={label}>
+        <strong className="small">{label}</strong>
+        <ul>{values?.map((value) => <li key={value.value}>
+          {value.value} <span className="gtm-evidence-list">{sourceButtons(value.evidence_ids)}</span>
+        </li>)}</ul>
+      </div>)}
+    </article>;
+  }
+
+  const offers = profile.offerings ?? [];
   return <>
     <section className="gtm-brief-section" aria-label="Account snapshot">
       <div className="gtm-brief-heading">
@@ -84,6 +104,21 @@ export function GtmAccountBrief({ profile, openGraph }: {
             ?? activity?.evidence_ids.slice(0, 3) ?? [])],
         )}</div>
       </div> : null}
+    </section>
+
+    <section className="gtm-brief-section" aria-label="Products and services">
+      <div className="gtm-brief-heading">
+        <h3>Products and services</h3>
+        {profile.offering_research ? <span className="muted small">
+          {profile.offering_research.attempts ?? 0} targeted page attempts
+        </span> : null}
+      </div>
+      {offers.length === 0 ? <p className="muted small">No offering met the evidence requirements.</p>
+        : offers.slice(0, 6).map(offering)}
+      {offers.length > 6 ? <details>
+        <summary>More offerings ({offers.length - 6})</summary>
+        {offers.slice(6).map(offering)}
+      </details> : null}
     </section>
 
     <section className="gtm-brief-section" aria-label="Sales signals">

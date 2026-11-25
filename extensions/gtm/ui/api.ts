@@ -34,6 +34,8 @@ export const gtmApi = {
       `/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/evidence${qs({ field, revision })}`,
       { signal, cache: "no-store" },
     ),
-  syncGtmCompany: (source: string, company: string, deep = false) =>
-    request(`/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/sync${deep ? "?deep=true" : ""}`, { method: "POST" }),
+  syncGtmCompany: (source: string, company: string, deep = false, productPageLimit?: number) => {
+    const query = productPageLimit ? `?product_page_limit=${productPageLimit}` : deep ? "?deep=true" : "";
+    return request(`/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/sync${query}`, { method: "POST" });
+  },
 };

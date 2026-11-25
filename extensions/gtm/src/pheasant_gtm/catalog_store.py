@@ -93,17 +93,35 @@ def checked(state: Any, source: str, row: dict, now: float, *, failed: bool = Fa
     )
 
 
-def request_refresh(state: Any, source: str, company: str, *, deep: bool = False) -> bool:
-    settings = ""
-    if deep:
+def request_refresh(
+    state: Any,
+    source: str,
+    company: str,
+    *,
+    deep: bool = False,
+    product_page_limit: int | None = None,
+) -> bool:
+    settings = (
+        "settings_json=CASE WHEN jsonb_exists(settings_json::jsonb,'product_refresh') "
+        "THEN (settings_json::jsonb - 'product_refresh')::text ELSE settings_json END, "
+    )
+    args: tuple = ()
+    if product_page_limit is not None:
+        settings = (
+            "settings_json=(jsonb_set(settings_json::jsonb,'{target,product_page_limit}',"
+            "to_jsonb(CAST(? AS int))) || '{\"product_refresh\":true}'::jsonb)::text, "
+        )
+        args = (product_page_limit,)
+    elif deep:
         target = "(settings_json::jsonb->'target')"
         settings = (
-            f"settings_json=CASE WHEN {target}->>'depth'='deep' THEN settings_json ELSE "
+            f"settings_json=(CASE WHEN {target}->>'depth'='deep' THEN settings_json::jsonb ELSE "
             f"jsonb_set(settings_json::jsonb,'{{target}}',{target} || "
             f"jsonb_build_object('depth','deep','page_limit',"
             f"GREATEST(CAST({target}->>'page_limit' AS integer),80),'job_limit',"
             f"CASE WHEN {target}->>'job_limit'='0' THEN 0 "
-            f"ELSE GREATEST(CAST({target}->>'job_limit' AS integer),36) END))::text END, "
+            f"ELSE GREATEST(CAST({target}->>'job_limit' AS integer),36) END)) END "
+            "- 'product_refresh')::text, "
         )
     return bool(
         state.execute_returning(
@@ -111,7 +129,7 @@ def request_refresh(state: Any, source: str, company: str, *, deep: bool = False
             + settings
             + "requested_at=EXTRACT(EPOCH FROM clock_timestamp()) "
             "WHERE source_id=? AND company_id=? RETURNING company_id",
-            (source, company),
+            (*args, source, company),
         )
     )
 
