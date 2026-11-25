@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
-from pheasant.config.schema import SourceConfig
+from pheasant.config.schema import PheasantConfig, SourceConfig
 from pheasant.ingestion.media import MediaStore
 from pheasant.ingestion.pipeline import _match_any, utc_now, within_max_depth
 from pheasant.ingestion.walk import WalkBudget, walk_source
@@ -87,6 +87,7 @@ class SourceConnector(ABC):
         self.source = source
         self.state = state
         self.media_store: MediaStore | None = None
+        self.region_config: PheasantConfig | None = None
         self.sync_mode: str | None = None
         self.listing_progress: Callable[[str, int, int | None, str], None] | None = None
         self._previous_cursor: dict[str, Any] | None = None

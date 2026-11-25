@@ -5,6 +5,8 @@ import type { SourceRecord } from "@pheasant/ui/api/types";
 import { sourceConfig } from "@pheasant/ui/sources/sourceConfig";
 import { gtmApi } from "./api";
 import { isGtmCatalog } from "./GtmCatalog";
+import { defaultEnrichment, GtmEnrichmentControls } from "./GtmEnrichmentControls";
+import type { GtmEnrichmentSettings } from "./types";
 
 interface Props {
   source?: SourceRecord;
@@ -41,6 +43,9 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
   const initialDepth = gtmTarget.depth === "deep" ? "deep" : "standard";
   const [depth, setDepth] = useState<"standard" | "deep">(editing ? initialDepth : "deep");
   const [productBudget, setProductBudget] = useState(Number(gtmTarget.product_page_limit ?? 0));
+  const [enrichment, setEnrichment] = useState({
+    ...defaultEnrichment, ...gtmTarget.enrichment as Partial<GtmEnrichmentSettings> | undefined,
+  });
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -52,6 +57,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
         ...(depth !== initialDepth ? { page_limit: undefined, job_limit: undefined } : {}),
         depth,
         product_page_limit: productBudget,
+        enrichment,
         company: company.trim() || null,
         website: website.trim() || null,
         naics_code: naicsCode.trim() || null,
@@ -151,6 +157,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
               <input type="checkbox" checked={discover} onChange={(e) => setDiscover(e.target.checked)} />
               Discover additional sources with Brave Search
             </label>
+            <GtmEnrichmentControls value={enrichment} onChange={setEnrichment} />
             <label className="checkbox">
               <input type="checkbox" checked={syncNow} onChange={(e) => setSyncNow(e.target.checked)} />
               Sync now

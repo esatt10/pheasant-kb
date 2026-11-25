@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pheasant_gtm import catalog_service as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
 from pheasant_gtm import run_service as gtm
-from pheasant_gtm.catalog import Request, ReviewRequest, RunControl
+from pheasant_gtm.catalog import Enrichment, Request, ReviewRequest, RunControl, Term
 from pheasant_gtm.collection_service import CollectionRequest
 from pheasant_gtm.naics import catalog as naics_reference
 from pheasant_gtm.tech_taxonomy import taxonomy
@@ -86,10 +86,25 @@ def register_gtm_routes(app: FastAPI, *, services: Any) -> None:
 
     @app.post("/gtm/catalogs/{source_name}/companies/{company_id}/sync")
     def refresh_company(
-        source_name: str, company_id: str, deep: bool = False, product_page_limit: int | None = None
+        source_name: str,
+        company_id: str,
+        deep: bool = False,
+        product_page_limit: int | None = None,
+        enrichment_enabled: bool | None = None,
+        enrichment_model: Term | None = None,
     ) -> dict:
+        descriptions = None
+        if enrichment_enabled is not None or enrichment_model is not None:
+            descriptions = Enrichment(
+                enabled=enrichment_enabled is not False, model=enrichment_model or "auto"
+            )
         return gtm_catalog.refresh(
-            services, source_name, company_id, deep=deep, product_page_limit=product_page_limit
+            services,
+            source_name,
+            company_id,
+            deep=deep,
+            product_page_limit=product_page_limit,
+            descriptions=descriptions,
         )
 
     @app.post("/gtm/runs", status_code=201)

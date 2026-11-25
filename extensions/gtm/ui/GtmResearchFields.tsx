@@ -133,6 +133,7 @@ export function GtmResearchFields({ source, profile, openGraph }: {
     {selected ? <section className="gtm-field-details" aria-label="Selected field">
       <div className="gtm-brief-heading"><h3>{fieldName(field)}</h3>
         <span className="pill">{selected.status.replaceAll("_", " ")}</span>
+        {selected.detail?.method === "model" ? <span className="muted small">Source-checked model description</span> : null}
       </div>
       <p className="muted small">{selected.definition.definition}</p>
       {selected.detail?.summary ? <p className="gtm-field-value">{selected.detail.summary}</p> : null}
@@ -152,7 +153,7 @@ export function GtmResearchFields({ source, profile, openGraph }: {
       {research?.derived_from ? <p className="small">Derived from <button
         className="gtm-evidence-link" onClick={() => setField(research.derived_from!)}
       >{fieldName(research.derived_from)}</button></p> : null}
-      {(research?.reason || selected.reason) && !classification && selected.value == null
+      {(research?.reason || selected.reason) && !classification && selected.value == null && !selected.detail?.summary
         ? <p className="muted small">{research?.reason ?? selected.reason}</p> : null}
       {selected.detail?.statements?.length ? <details open>
         <summary>Sources for each statement</summary>

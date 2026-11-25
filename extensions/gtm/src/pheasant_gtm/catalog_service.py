@@ -14,7 +14,8 @@ from pheasant.services.errors import InvalidRequest, SourceNotFound
 from pheasant.services.inventory import ARTIFACT_SCOPE, reader
 from pheasant_gtm import catalog_store as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
-from pheasant_gtm.catalog import Key, Model, Scalar
+from pheasant_gtm import enrichment
+from pheasant_gtm.catalog import Enrichment, Key, Model, Scalar
 from pheasant_gtm.naics import titles
 from pheasant_gtm.plugin import PROVENANCE, gtm_settings
 from pheasant_gtm.tech_taxonomy import canonical_category, category_products
@@ -257,6 +258,7 @@ def evidence(
         },
         "field": field,
         "research": saved.get("field_results", {}).get(field),
+        "enrichment_traces": saved.get("enrichment_traces", {}).get(field, []),
         **(
             {"offering_traces": saved.get("offering_traces", {})}
             if field in {"products_services", "support_services", "customer_segments"}
@@ -297,13 +299,21 @@ def refresh(
     *,
     deep: bool = False,
     product_page_limit: int | None = None,
+    descriptions: Enrichment | None = None,
 ) -> dict:
     require_permission("sources.manage")
     _assert_catalog(context, source, knowledge_base)
     if product_page_limit is not None and (deep or not 1 <= product_page_limit <= 60):
         raise InvalidRequest("Choose a product-only budget of 1 to 60 or a deep refresh")
+    if descriptions is not None:
+        enrichment.validate_model(context.config, context.state, descriptions)
     if not gtm_catalog.request_refresh(
-        context.state, source, company_id, deep=deep, product_page_limit=product_page_limit
+        context.state,
+        source,
+        company_id,
+        deep=deep,
+        product_page_limit=product_page_limit,
+        enrichment=descriptions.model_dump(mode="json") if descriptions is not None else None,
     ):
         raise SourceNotFound(f"{source}/{company_id}")
     return {**gtm_collections.refresh(context, source, knowledge_base), "company_id": company_id}

@@ -17,7 +17,15 @@ from pheasant.sync.connectors import (
 )
 from pheasant_gtm import catalog_store as gtm_catalog
 from pheasant_gtm import collection_store as gtm_collections
-from pheasant_gtm import field_report, offerings, presentation, runbook, web_archive, workflow
+from pheasant_gtm import (
+    enrichment,
+    field_report,
+    offerings,
+    presentation,
+    runbook,
+    web_archive,
+    workflow,
+)
 from pheasant_gtm.catalog import Request, ordered_fields
 from pheasant_gtm.context import curated, field_results, markdown
 from pheasant_gtm.plugin import SOURCE_TYPE
@@ -34,7 +42,15 @@ def _target_key(target: Request, *, broad_only: bool = False) -> str:
         for key in ("product_page_limit", "product_urls")
         if broad_only or not getattr(target, key)
     }
-    return sha256(target.model_dump_json(exclude=exclude).encode()).hexdigest()
+    return sha256(
+        target.model_dump_json(
+            exclude={
+                **dict.fromkeys(exclude, True),
+                "enrichment": True,
+                "fields": {"__all__": {"rich_text"}},
+            }
+        ).encode()
+    ).hexdigest()
 
 
 def effective_target(state, settings: dict, seeds: list[str]) -> Request:
@@ -122,12 +138,27 @@ class GTMConnector(SourceConnector):
             settings = json.loads(row["settings_json"])
             try:
                 target = effective_target(self.state, settings, settings["urls"])
-                snapshot = self._collect(
-                    target,
-                    row=row,
-                    catalog_progress=(index - 1, len(due)),
-                    product_refresh=bool(row["requested_at"] and settings.get("product_refresh")),
-                )
+                snapshot = None
+                if (
+                    row["requested_at"]
+                    and settings.get("enrichment_refresh")
+                    and self.sync_mode == "incremental"
+                ):
+                    previous = json.loads(row["state_json"]).get("snapshot") or {}
+                    if (
+                        previous.get("target_key") == _target_key(target)
+                        and "web_pages" in previous
+                    ):
+                        snapshot = previous
+                if snapshot is None:
+                    snapshot = self._collect(
+                        target,
+                        row=row,
+                        catalog_progress=(index - 1, len(due)),
+                        product_refresh=bool(
+                            row["requested_at"] and settings.get("product_refresh")
+                        ),
+                    )
             except (ValueError, ConnectorUnavailable) as exc:
                 if isinstance(exc.__cause__, IsolationUnavailable):
                     raise
@@ -164,7 +195,7 @@ class GTMConnector(SourceConnector):
             )
         return items
 
-    def _publish(self, row: dict, settings: dict, target: Request, snapshot: dict) -> None:
+    def _projection(self, target: Request, snapshot: dict) -> tuple[dict, dict, dict]:
         fields = ordered_fields(target)
         report, pages = snapshot["profile"], snapshot["web_pages"]
         documents = web_archive.research_documents(report, pages, snapshot.get("parsed"))
@@ -181,6 +212,28 @@ class GTMConnector(SourceConnector):
             documents, report["website"], report.get("company") or target.company
         )
         profile = curated(fields, report, target.company, pages, inventory)
+        result = enrichment.enrich(
+            self.region_config,
+            self.state,
+            target.enrichment,
+            fields,
+            report,
+            profile,
+            pages,
+            snapshot.get("enrichment_cache", {}),
+        )
+        enrichment.apply(profile, result)
+        profile["enrichment"]["settings"] = target.enrichment.model_dump(mode="json")
+        snapshot["enrichment_cache"] = result
+        return report, profile, offering_traces
+
+    def _publish(self, row: dict, settings: dict, target: Request, snapshot: dict) -> None:
+        if self.listing_progress and target.enrichment.enabled:
+            self.listing_progress(
+                "researching", 0, None, f"{row['company_id']} · preparing grounded descriptions"
+            )
+        report, profile, offering_traces = self._projection(target, snapshot)
+        pages = snapshot["web_pages"]
         if segment := settings.get("segment"):
             profile["segment"] = segment
         evidence_ids = {ref["id"] for ref in profile["evidence"]}
@@ -196,11 +249,13 @@ class GTMConnector(SourceConnector):
             ),
             "field_results": field_results(report["fields"], report.get("related_passages")),
             "offering_traces": offering_traces,
+            "enrichment_traces": snapshot["enrichment_cache"]["fields"],
         }
         digest = sha256(json.dumps([profile, evidence], sort_keys=True).encode()).hexdigest()
-        content = markdown(fields, report, target.company, profile)
+        content = markdown(ordered_fields(target), report, target.company, profile)
         content += f"\n<!-- GTM catalog metadata {digest} -->\n"
         revision = sha256(content.encode()).hexdigest()
+        gtm_catalog.checkpoint(self.state, self.source.name, row, {"snapshot": snapshot})
         gtm_catalog.prepare(self.state, self.source.name, row, revision, profile, content, evidence)
 
     def _collect(
@@ -329,7 +384,6 @@ class GTMConnector(SourceConnector):
                 "GTM refresh could not verify its target or had unresolved transient page failures"
             )
         report = workflow.profile(run)
-        fields = ordered_fields(target)
         pages = web_archive.admitted(workflow.docs(run), captures)
         if run.get("offering_research", {}).get("archive_only"):
             archive = previous["profile"]
@@ -351,20 +405,7 @@ class GTMConnector(SourceConnector):
                 ref = web_archive.reference(url)
                 if ref in previous.get("web_pages", {}) and url not in run["documents"]:
                     pages.setdefault(ref, previous["web_pages"][ref])
-        inventory, _ = offerings.inventory(
-            workflow.docs(run), report["website"], report.get("company") or target.company
-        )
-        profile = curated(fields, report, target.company, pages, inventory)
-        content = markdown(fields, report, target.company, profile)
-        if row is None:
-            self._single_inputs = web_archive.inputs(self._page_items(pages), profile["evidence"])
-            if self._single_inputs:
-                encoded = json.dumps(self._single_inputs, sort_keys=True).encode()
-                digest = sha256(encoded).hexdigest()
-                content += f"\n<!-- GTM web inputs {digest} -->\n"
         snapshot = {
-            "revision": sha256(content.encode()).hexdigest(),
-            "markdown": content,
             "parsed": parsed,
             "profile": report,
             "acquisition": presentation.acquisition(run),
@@ -373,7 +414,20 @@ class GTMConnector(SourceConnector):
             "target_key": key,
             "broad_target_key": broad_key,
             "web_pages": pages,
+            "enrichment_cache": previous.get("enrichment_cache", {}),
         }
+        if row is None:
+            report, profile, _ = self._projection(target, snapshot)
+            content = markdown(ordered_fields(target), report, target.company, profile)
+            self._single_inputs = web_archive.inputs(self._page_items(pages), profile["evidence"])
+            if self._single_inputs:
+                encoded = json.dumps(self._single_inputs, sort_keys=True).encode()
+                content += f"\n<!-- GTM web inputs {sha256(encoded).hexdigest()} -->\n"
+            snapshot.update(
+                revision=sha256(content.encode()).hexdigest(),
+                markdown=content,
+                enrichment=profile["enrichment"],
+            )
         save({"snapshot": snapshot})
         return snapshot
 

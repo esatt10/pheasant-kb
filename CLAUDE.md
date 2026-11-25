@@ -20,10 +20,11 @@ Design pillars — these are product guarantees, not preferences:
    state (content sha256 + stable IDs).
 2. **Incremental by default** — connector checkpoints and manifests skip
    unchanged artifacts. A second sync of an untouched corpus does no work.
-3. **Deterministic parsing** — no LLM calls in the indexing path; all
-   enrichment is rule-based and reproducible. The only sanctioned network calls
-   at sync time are the optional embedder, captioner and transcriber, and each
-   keeps a stub/offline path so `pytest` stays network-free.
+3. **Deterministic parsing** — the core indexer transforms source bytes
+   reproducibly. The embedder, captioner and transcriber keep stub/offline
+   paths. The optional GTM extension may prepare cited descriptions from its
+   extracted evidence before handing the indexer a source artifact. It
+   checkpoints successful descriptions and has a deterministic fallback.
 4. **Persistence split** — PostgreSQL and `/state` (operational truth: rows,
    the graph's rows, vectors, manifests, media) and `/exports` (regenerable
    payloads). Both are **user data**.
@@ -339,9 +340,11 @@ sync, and its job reads `succeeded` before anything is indexed.
 
 ## 4. Rules
 
-1. **Never put an LLM call in the indexing path.** Determinism is a product
-   guarantee. The optional embedder, captioner and transcriber must each keep a
-   stub path so the suite stays network-free.
+1. **Keep the core indexer deterministic.** Model calls that prepare optional
+   GTM descriptions belong in the extension's source preparation, which must
+   preserve the deterministic evidence and support model-free publication.
+   The optional embedder, captioner and transcriber must each keep a stub path
+   so the suite stays network-free.
 2. **Treat `/state` as user data.** Schema/layout changes ship a one-shot
    idempotent migration that preserves originals (`*.migrated` rename, never
    delete). New tables arrive via `CREATE TABLE IF NOT EXISTS` in `SCHEMA`.

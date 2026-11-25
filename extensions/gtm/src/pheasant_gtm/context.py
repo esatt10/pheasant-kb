@@ -442,6 +442,15 @@ def markdown(
     if categories := technology_labels(named_technology):
         lines.extend(["", "## Technology categories", ""])
         lines.extend(f"- {category}" for category in categories)
+    if enriched := publication.get("enrichment", {}).get("fields"):
+        lines.extend(["", "## Grounded company descriptions", ""])
+        for field in enriched:
+            label = field.replace("_", " ").capitalize()
+            lines.extend([f"### {label}", ""])
+            for item in publication["fields"][field]["detail"]["statements"]:
+                lines.append(f"- {item['text']}")
+                lines.append(f"  Source references: {', '.join(item['evidence_ids'])}")
+            lines.append("")
     if offers := publication.get("offerings"):
         lines.extend(["", "## Products and services", ""])
         labels = {

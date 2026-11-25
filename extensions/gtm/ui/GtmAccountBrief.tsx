@@ -40,7 +40,9 @@ export function GtmAccountBrief({ profile, openGraph }: {
   const industry = profile.classification;
   const activities = values(profile, "business_activities");
   const activity = profile.fields.business_activities;
-  const overviewField = activity?.detail?.summary ? activity : profile.fields.about;
+  const about = profile.fields.about;
+  const overviewField = [activity, about].find((field) => field?.detail?.method === "model")
+    ?? (activity?.detail?.summary ? activity : about);
   const overview = overviewField?.detail?.summary;
   const initiatives = values(profile, "capabilities_in_development");
   const hypotheses = values(profile, "service_need_hypotheses");
@@ -63,6 +65,14 @@ export function GtmAccountBrief({ profile, openGraph }: {
     });
   }
 
+  function descriptions(field: string) {
+    const detail = profile.fields[field]?.detail;
+    if (detail?.method !== "model" || !detail.statements?.length) return null;
+    return <ul>{detail.statements.map((item) => <li key={item.text}>
+      {item.text}<div className="gtm-evidence-list">{sourceButtons(item.evidence_ids)}</div>
+    </li>)}</ul>;
+  }
+
   function offering(item: GtmOffering) {
     const facets = [
       ["Capabilities", item.capabilities], ["Buyers", item.buyers],
@@ -83,6 +93,11 @@ export function GtmAccountBrief({ profile, openGraph }: {
   }
 
   const offers = profile.offerings ?? [];
+  const products = descriptions("products_services");
+  const buyers = descriptions("customer_segments");
+  const support = descriptions("support_services");
+  const initiativeDetails = descriptions("capabilities_in_development");
+  const hypothesisDetails = descriptions("service_need_hypotheses");
   return <>
     <section className="gtm-brief-section" aria-label="Account snapshot">
       <div className="gtm-brief-heading">
@@ -113,12 +128,15 @@ export function GtmAccountBrief({ profile, openGraph }: {
           {profile.offering_research.attempts ?? 0} targeted page attempts
         </span> : null}
       </div>
-      {offers.length === 0 ? <p className="muted small">No offering met the evidence requirements.</p>
+      {products}
+      {offers.length === 0 ? products ? null : <p className="muted small">No offering met the evidence requirements.</p>
         : offers.slice(0, 6).map(offering)}
       {offers.length > 6 ? <details>
         <summary>More offerings ({offers.length - 6})</summary>
         {offers.slice(6).map(offering)}
       </details> : null}
+      {buyers ? <><h4>Customer segments</h4>{buyers}</> : null}
+      {support ? <><h4>Customer support</h4>{support}</> : null}
     </section>
 
     <section className="gtm-brief-section" aria-label="Sales signals">
@@ -126,16 +144,16 @@ export function GtmAccountBrief({ profile, openGraph }: {
         <h3>Sales signals</h3>
         {profile.signal_coverage ? <span className="muted small">{profile.signal_coverage.jobs} hiring sources · {profile.signal_coverage.news} news sources</span> : null}
       </div>
-      {initiatives.length || hypotheses.length ? <div className="gtm-sales-signals">
-        {initiatives.length ? <div>
+      {initiatives.length || hypotheses.length || initiativeDetails || hypothesisDetails ? <div className="gtm-sales-signals">
+        {initiatives.length || initiativeDetails ? <div>
           <h4>Capabilities in development</h4>
-          <ul>{initiatives.map((item) => <li key={item}>{item}</li>)}</ul>
-          <div className="gtm-evidence-list">{sourceButtons(profile.fields.capabilities_in_development.evidence_ids.slice(0, 4))}</div>
+          {initiativeDetails ?? <><ul>{initiatives.map((item) => <li key={item}>{item}</li>)}</ul>
+            <div className="gtm-evidence-list">{sourceButtons(profile.fields.capabilities_in_development.evidence_ids.slice(0, 4))}</div></>}
         </div> : null}
-        {hypotheses.length ? <div>
+        {hypotheses.length || hypothesisDetails ? <div>
           <h4>Outreach hypotheses</h4>
-          <ul>{hypotheses.map((item) => <li key={item}>{item}</li>)}</ul>
-          <div className="gtm-evidence-list">{sourceButtons(profile.fields.service_need_hypotheses.evidence_ids.slice(0, 4))}</div>
+          {hypothesisDetails ?? <><ul>{hypotheses.map((item) => <li key={item}>{item}</li>)}</ul>
+            <div className="gtm-evidence-list">{sourceButtons(profile.fields.service_need_hypotheses.evidence_ids.slice(0, 4))}</div></>}
         </div> : null}
       </div> : <p className="muted small">No initiatives or outreach hypotheses met the evidence requirements.</p>}
     </section>
@@ -150,6 +168,7 @@ export function GtmAccountBrief({ profile, openGraph }: {
           </select>
         </label> : null}
       </div>
+      {descriptions("technology_stack")}
       {technologies.length ? <p className="muted small">{new Set(technologies.map((item) => item.name)).size} named technologies across {new Set(technologies.map((item) => item.category)).size} categories</p> :
         <p className="muted small">No categorized technology evidence is available in this revision.</p>}
       <div className="gtm-tech-groups">

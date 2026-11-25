@@ -75,6 +75,14 @@ _TERM_TRACK = {key: terms for _, keys, terms in _TRACKS for key in keys}
 _FIELD_QUERIES = {
     "about": ("company overview", "who we are", "we build", "we help", "our customers"),
     "description": ("our mission", "our purpose", "we exist to", "mission statement"),
+    "business_activities": ("we build", "we develop", "we research", "we provide", "our products"),
+    "customer_segments": (
+        "built for",
+        "designed for",
+        "small businesses",
+        "midsized companies",
+        "enterprise teams",
+    ),
     "products_services": (
         "our products",
         "our solutions",

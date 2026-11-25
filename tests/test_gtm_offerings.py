@@ -92,6 +92,7 @@ def test_catalog_targeted_refresh_reuses_archive_and_keeps_its_own_budget(
     monkeypatch, loaded_config
 ):
     monkeypatch.setattr(loaded_config.sync.scheduler, "enabled", False)
+    monkeypatch.setattr(loaded_config.sync.scheduler, "startup_sync", False)
     monkeypatch.setattr(
         runtime,
         "_parse",

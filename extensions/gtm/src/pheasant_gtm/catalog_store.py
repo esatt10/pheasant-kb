@@ -100,34 +100,38 @@ def request_refresh(
     *,
     deep: bool = False,
     product_page_limit: int | None = None,
+    enrichment: dict | None = None,
 ) -> bool:
-    settings = (
-        "settings_json=CASE WHEN jsonb_exists(settings_json::jsonb,'product_refresh') "
-        "THEN (settings_json::jsonb - 'product_refresh')::text ELSE settings_json END, "
-    )
+    settings = "(settings_json::jsonb - 'product_refresh' - 'enrichment_refresh')"
     args: tuple = ()
     if product_page_limit is not None:
         settings = (
-            "settings_json=(jsonb_set(settings_json::jsonb,'{target,product_page_limit}',"
-            "to_jsonb(CAST(? AS int))) || '{\"product_refresh\":true}'::jsonb)::text, "
+            f"(jsonb_set({settings},'{{target,product_page_limit}}',"
+            "to_jsonb(CAST(? AS int))) || '{\"product_refresh\":true}'::jsonb)"
         )
         args = (product_page_limit,)
     elif deep:
         target = "(settings_json::jsonb->'target')"
         settings = (
-            f"settings_json=(CASE WHEN {target}->>'depth'='deep' THEN settings_json::jsonb ELSE "
-            f"jsonb_set(settings_json::jsonb,'{{target}}',{target} || "
+            f"(CASE WHEN {target}->>'depth'='deep' THEN {settings} ELSE "
+            f"jsonb_set({settings},'{{target}}',{target} || "
             f"jsonb_build_object('depth','deep','page_limit',"
             f"GREATEST(CAST({target}->>'page_limit' AS integer),80),'job_limit',"
             f"CASE WHEN {target}->>'job_limit'='0' THEN 0 "
             f"ELSE GREATEST(CAST({target}->>'job_limit' AS integer),36) END)) END "
-            "- 'product_refresh')::text, "
+            ")"
         )
+    if enrichment is not None:
+        # The expression contains the earlier arguments, so bind the new value last.
+        settings = f"jsonb_set({settings},'{{target,enrichment}}',CAST(? AS jsonb))"
+        args = (*args, json.dumps(enrichment))
+        if not deep and product_page_limit is None:
+            settings = f"({settings} || '{{\"enrichment_refresh\":true}}'::jsonb)"
     return bool(
         state.execute_returning(
             "UPDATE gtm_catalog_companies SET checked_at=NULL, "
-            + settings
-            + "requested_at=EXTRACT(EPOCH FROM clock_timestamp()) "
+            f"settings_json=({settings})::text, "
+            "requested_at=EXTRACT(EPOCH FROM clock_timestamp()) "
             "WHERE source_id=? AND company_id=? RETURNING company_id",
             (*args, source, company),
         )

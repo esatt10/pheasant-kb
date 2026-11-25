@@ -65,6 +65,11 @@ class Band(Model):
     value: Term
 
 
+class Enrichment(Model):
+    enabled: bool = True
+    model: Term = "auto"
+
+
 class FieldSpec(Model):
     key: Key
     definition: str = Field(min_length=8, max_length=1200)
@@ -84,9 +89,12 @@ class FieldSpec(Model):
     multiple: bool = False
     min_origins: int = Field(default=1, ge=1, le=5)
     inference: bool = False
+    rich_text: bool | None = None
 
     @model_validator(mode="after")
     def validate_spec(self) -> FieldSpec:
+        if self.rich_text and (self.type != "text" or self.derive_from):
+            raise ValueError("rich_text requires a non-derived text field")
         if self.type == "enum" and not self.options:
             raise ValueError("enum fields need options")
         if len({words(option) for option in self.options}) != len(self.options):
@@ -123,6 +131,7 @@ class Request(Model):
     decisions: bool = False
     model: Term | None = None
     decision_model: Term | None = None
+    enrichment: Enrichment = Field(default_factory=Enrichment)
     acquisition: Acquisition = Field(default_factory=Acquisition)
 
     @model_validator(mode="after")

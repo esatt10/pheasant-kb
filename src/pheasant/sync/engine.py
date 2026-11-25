@@ -2067,6 +2067,7 @@ class SyncEngine:
                 return self._cancelled_before_reading(source.name, early, mode, "starting")
             connector = connector_for_source(source, self.state)
             connector.media_store = self.media_store
+            connector.region_config = self.config
             if mode == "validate_only":
                 health = connector.validate()
                 status = "validated" if health.ok else health.status

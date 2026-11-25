@@ -15,6 +15,7 @@ from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, ServiceError, SourceNotFound
 from pheasant_gtm import catalog_store as gtm_catalog
 from pheasant_gtm import collection_store as gtm_collections
+from pheasant_gtm import enrichment
 from pheasant_gtm.catalog import Model, Request
 from pheasant_gtm.connector import DOCUMENT, effective_target
 from pheasant_gtm.plugin import SOURCE_TYPE, gtm_settings
@@ -52,6 +53,7 @@ def register(
         raise CollectionConflict("A source with this name already has another connector type")
     if request.target.review or request.target.decisions:
         raise InvalidRequest("Managed GTM sources use deterministic extraction during sync")
+    enrichment.validate_model(context.config, context.state, request.target.enrichment)
     if request.segment is not None and request.company_id is None:
         raise InvalidRequest("A company segment requires a catalog company ID")
     try:
@@ -179,6 +181,7 @@ def describe(context: ServiceContext, name: str, knowledge_base: str | None = No
         "coverage": (checkpoint.get("high_watermark") or {}).get("gtm"),
         "acquisition": snapshot.get("acquisition"),
         "token_usage": snapshot.get("token_usage"),
+        "enrichment": snapshot.get("enrichment"),
     }
 
 
@@ -198,6 +201,7 @@ def evidence(context: ServiceContext, name: str, knowledge_base: str | None = No
         "revision": snapshot["revision"],
         "source_links": links,
         "profile": snapshot["profile"],
+        "enrichment_traces": snapshot.get("enrichment_cache", {}).get("fields", {}),
         "curated_markdown": snapshot["markdown"],
         "acquisition": snapshot.get("acquisition"),
         "page_tasks": snapshot.get("page_tasks"),

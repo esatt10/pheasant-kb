@@ -3,13 +3,30 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { gtmApi } from "./api";
 import type { SourceRecord } from "@pheasant/ui/api/types";
-import type { GtmCatalogQuery } from "./types";
+import type { GtmCatalogQuery, GtmCompanyProfile, GtmEnrichmentSettings } from "./types";
 import { useSession } from "@pheasant/ui/state/session";
 import { GtmAccountBrief } from "./GtmAccountBrief";
 import { GtmResearchFields } from "./GtmResearchFields";
+import { defaultEnrichment, GtmEnrichmentControls } from "./GtmEnrichmentControls";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["observed", "derived", "inferred", "proposed", "conflict", "missing", "blocked", "not_applicable"];
+
+function DescriptionSettings({ profile, pending, update }: {
+  profile: GtmCompanyProfile;
+  pending: boolean;
+  update: (settings: GtmEnrichmentSettings) => void;
+}) {
+  const [settings, setSettings] = useState(profile.enrichment?.settings ?? defaultEnrichment);
+  const result = profile.enrichment;
+  return <details className="gtm-brief-section" data-permission="sources.manage">
+    <summary><strong>Description settings</strong>{result?.fields.length
+      ? <span className="muted small"> · {result.fields.length} fields enriched with {result.model}</span>
+      : result?.status === "model_unavailable" ? <span className="muted small"> · Extracted profile in use</span> : null}</summary>
+    <GtmEnrichmentControls value={settings} onChange={setSettings} />
+    <button className="btn btn--small" disabled={pending} onClick={() => update(settings)}>Update descriptions</button>
+  </details>;
+}
 
 export function isGtmCatalog(source: SourceRecord): boolean {
   if (source.type !== "gtm_research" || !source.config_json) return false;
@@ -51,8 +68,8 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
     refetchInterval: 8000,
   });
   const refresh = useMutation({
-    mutationFn: ({ company, deep, productPageLimit }: { company: string; deep?: boolean; productPageLimit?: number }) =>
-      gtmApi.syncGtmCompany(source, company, deep, productPageLimit),
+    mutationFn: ({ company, deep, productPageLimit, enrichment }: { company: string; deep?: boolean; productPageLimit?: number; enrichment?: GtmEnrichmentSettings }) =>
+      gtmApi.syncGtmCompany(source, company, deep, productPageLimit, enrichment),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       queryClient.invalidateQueries({ queryKey: ["index-queue"] });
@@ -174,6 +191,8 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
             {refresh.isSuccess ? <span role="status">Refresh requested</span> : null}
           </div>
           {data.research ? <p className="muted small">Deep research · {data.research.documents} documents · {data.research.passages} indexed passages · {data.research.fields_with_passages} fields with matching passages</p> : null}
+          <DescriptionSettings key={`${data.company_id}-${data.revision}`} profile={data} pending={refresh.isPending}
+            update={(enrichment) => refresh.mutate({ company: data.company_id, enrichment })} />
           <GtmResearchFields key={`fields-${data.company_id}`} source={source} profile={data} openGraph={openGraph} />
           <GtmAccountBrief key={data.company_id} profile={data} openGraph={openGraph} />
             </> : null}

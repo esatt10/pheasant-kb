@@ -36,6 +36,7 @@ def test_catalog_indexes_company_folders_and_queries_published_provenance(
 ):
     # The test drives sync directly. The API scheduler would start a second writer.
     monkeypatch.setattr(loaded_config.sync.scheduler, "enabled", False)
+    monkeypatch.setattr(loaded_config.sync.scheduler, "startup_sync", False)
     parser_calls(monkeypatch)
     today = datetime.now(UTC).date().isoformat()
     bravo_primary = "https://bravo.example/"

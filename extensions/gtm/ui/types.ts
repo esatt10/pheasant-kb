@@ -38,6 +38,11 @@ export interface GtmTechnologyTaxonomy {
 
 type OfferingValue = { value: string; evidence_ids: string[] };
 
+export interface GtmEnrichmentSettings {
+  enabled: boolean;
+  model: string;
+}
+
 export interface GtmOffering {
   id: string;
   name: string;
@@ -61,6 +66,7 @@ export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "c
   signal_coverage?: { jobs: number; news: number };
   offerings?: GtmOffering[];
   offering_research?: { before: number; after?: number; budget: number; attempts?: number; outcome?: string };
+  enrichment?: { status: string; model?: string; fields: string[]; settings: GtmEnrichmentSettings };
   research?: {
     documents: number;
     passages: number;
@@ -78,6 +84,7 @@ export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "c
     evidence_ids: string[];
     reason?: string;
     detail?: {
+      method?: "model";
       summary?: string;
       statements?: { text: string; evidence_ids: string[] }[];
       items?: { value: unknown; text: string; category?: string; evidence_ids: string[] }[];

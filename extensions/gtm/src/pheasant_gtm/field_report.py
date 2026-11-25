@@ -11,7 +11,7 @@ from pheasant_gtm.evidence import subject
 from pheasant_gtm.sources import host, plausible_prose, same_site
 from pheasant_gtm.technology import TECHNOLOGY_CATEGORY
 
-VERSION = 4
+VERSION = 5
 
 # These phrases describe what the company itself does. Technical keywords in a
 # job, a customer case study or a third-party product mention cannot match.

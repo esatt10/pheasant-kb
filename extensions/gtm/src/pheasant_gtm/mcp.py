@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pheasant_gtm import catalog_service as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
 from pheasant_gtm import run_service as gtm
-from pheasant_gtm.catalog import Request, RunControl
+from pheasant_gtm.catalog import Enrichment, Request, RunControl
 from pheasant_gtm.collection_service import CollectionRequest
 from pheasant_gtm.tech_taxonomy import taxonomy
 
@@ -65,8 +65,9 @@ def register_gtm_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         company_id: str,
         deep: bool = False,
         product_page_limit: int | None = None,
+        enrichment: Enrichment | None = None,
     ) -> dict:
-        """Mark one catalog company due and queue the catalog's normal source sync."""
+        """Refresh a company. Set enrichment alone to reprocess descriptions from saved evidence."""
         return gtm_catalog.refresh(
             tools.services,
             source_name,
@@ -74,6 +75,7 @@ def register_gtm_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             knowledge_base,
             deep=deep,
             product_page_limit=product_page_limit,
+            descriptions=enrichment,
         )
 
     @mcp.tool()
