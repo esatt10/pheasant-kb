@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+declare module "virtual:pheasant-extensions" {
+  const extensions: readonly import("./extensions").UiExtension[];
+  export default extensions;
+}
+
 declare module "react-cytoscapejs" {
   import type { Core } from "cytoscape";
   import type { CSSProperties } from "react";

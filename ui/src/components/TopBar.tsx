@@ -13,19 +13,17 @@ import { HealthBadge } from "./HealthBadge";
 import { McpDialog } from "./McpDialog";
 import { useTheme } from "../hooks/useTheme";
 import { PheasantMark } from "./PheasantMark";
+import { useUiExtensions } from "../extensions";
 
 export function TopBar() {
+  const extensions = useUiExtensions();
   const [theme, toggleTheme] = useTheme();
   const [showMcp, setShowMcp] = useState(false);
   const [showApiAuth, setShowApiAuth] = useState(false);
   const [apiToken, setApiTokenState] = useState(getApiToken);
   const [identity, setIdentity] = useState<AuthIdentity | null>(null);
   const queryClient = useQueryClient();
-  // Below 860px the nav and the actions do not fit beside the brand -- seven
-  // links and three buttons laid the page out 1,075px wide on a 390px phone,
-  // and the browser zoomed the whole app out to fit. They fold into a menu
-  // there (CSS decides when; on a wide window the wrapper is `display:
-  // contents` and this state does nothing).
+  // The navigation folds into a menu when it no longer fits beside the brand.
   const [menuOpen, setMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
   const location = useLocation();
@@ -114,6 +112,11 @@ export function TopBar() {
         <NavLink to="/graph" className={({ isActive }) => (isActive ? "navlink active" : "navlink")}>
           Graph
         </NavLink>
+        {extensions.flatMap((extension) => extension.routes.map(({ path, label }) => (
+          <NavLink key={path} to={path} className={({ isActive }) => (isActive ? "navlink active" : "navlink")}>
+            {label}
+          </NavLink>
+        )))}
         <NavLink
           to="/artifacts"
           className={({ isActive }) => (isActive ? "navlink active" : "navlink")}

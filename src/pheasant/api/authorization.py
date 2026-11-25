@@ -8,11 +8,14 @@ from typing import Any
 from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
 
+from pheasant.extensions import extension_permissions
 from pheasant.security.authorization import PermissionDenied, require_permission
 from pheasant.security.permissions import HTTP_PERMISSIONS
 
 
 def install_authorization(app: Any) -> None:
+    permissions = extension_permissions("http", HTTP_PERMISSIONS)
+
     async def denied(_request, exc):
         return JSONResponse({"detail": str(exc), **exc.as_dict()}, status_code=403)
 
@@ -27,7 +30,7 @@ def install_authorization(app: Any) -> None:
             @wraps(handler)
             async def guarded(scope, receive, send):
                 if not template.startswith(("/internal/", "/auth/")) and template != "/mcp":
-                    permission = HTTP_PERMISSIONS.get((scope["method"], template), "unclassified")
+                    permission = permissions.get((scope["method"], template), "unclassified")
                     try:
                         require_permission(permission)
                     except PermissionDenied as exc:

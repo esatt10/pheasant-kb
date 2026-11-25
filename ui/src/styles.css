@@ -1288,89 +1288,6 @@ select.text-input {
   opacity: 0.55;
 }
 
-.fact-list {
-  display: flex;
-  flex-direction: column;
-  gap: calc(6px * var(--sp));
-}
-
-.fact {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
-  column-gap: calc(8px * var(--sp));
-  row-gap: calc(2px * var(--sp));
-  padding: calc(8px * var(--sp)) calc(11px * var(--sp));
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg);
-  font-size: calc(12.5px * var(--fs));
-  line-height: 1.45;
-}
-
-.fact .source-dot {
-  align-self: center;
-  grid-row: 1 / span 2;
-}
-
-/* The object is the fact; the subject is provenance for it, so the object
-   leads and the source sits underneath in a quieter register. */
-.fact__object {
-  grid-column: 2;
-  font-size: calc(13px * var(--fs));
-  justify-self: start;
-  text-align: left;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fact__from {
-  grid-column: 2;
-  display: flex;
-  align-items: baseline;
-  gap: calc(5px * var(--sp));
-  min-width: 0;
-  font-size: calc(11.5px * var(--fs));
-  color: var(--muted);
-}
-
-.fact__subject {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 400;
-  color: var(--muted);
-  font-size: calc(11.5px * var(--fs));
-}
-
-.fact__subject,
-.fact__object {
-  font-weight: 550;
-  color: var(--text);
-  cursor: pointer;
-  border-bottom: 1px dashed var(--border-strong);
-  background: none;
-  border-left: none;
-  border-right: none;
-  border-top: none;
-  padding: 0;
-  font-size: inherit;
-  font-family: inherit;
-}
-
-.fact__subject:hover,
-.fact__object:hover {
-  color: var(--accent-text);
-  border-bottom-color: var(--accent);
-}
-
-.fact__predicate {
-  color: var(--muted);
-  font-style: italic;
-}
-
 .thinking {
   display: inline-flex;
   align-items: center;
@@ -2450,6 +2367,12 @@ select.text-input {
 
 .topbar__menu-btn {
   display: none;
+}
+
+@media (min-width: 861px) and (max-width: 1150px) {
+  .topbar { gap: calc(8px * var(--sp)); }
+  .topbar__kb { display: none; }
+  .topbar__nav .navlink { padding-inline: calc(7px * var(--sp)); }
 }
 
 @media (max-width: 860px) {
@@ -6224,7 +6147,7 @@ select.text-input {
 
 /* ------------------------------------------------- the panel: a tab group
 
-   Graph, Facts, Node and Taxonomy are tabs of one panel by default, and each
+   Artifacts, Graph, Node and Taxonomy are tabs of one panel by default, and each
    can be dragged off the tab bar into a column of its own (`pages/Notebook.tsx`,
    `state/session.tsx`). The bar is also where a tab is dropped to dock it. */
 .panel__tabs {

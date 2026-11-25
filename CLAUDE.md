@@ -65,6 +65,7 @@ pheasant-kb/
 ├── docs/                      ← GitHub-rendered Markdown; index.md is the hub,
 │                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
+├── extensions/                ← optional Pheasant packages and UI contributions (GTM)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
@@ -1384,7 +1385,7 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   before this has none until it changes or a `full` sync re-reads it;
   `tests/test_web_page_snapshot.py`. The web
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) is a tab of the
-  right-hand panel by default, beside Graph, Facts and Node. Every Notebook
+  right-hand panel by default, beside Artifacts, Graph and Node. Every Notebook
   section is a tile (`ui/src/components/Tiles.tsx`): dragged by its grip (or
   arrow keys) to any column, folded to its header anywhere, and portalled so
   a move never remounts it (a streaming answer keeps streaming). The panel

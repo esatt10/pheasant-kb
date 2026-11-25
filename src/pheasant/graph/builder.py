@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from pheasant.config.schema import PheasantConfig, SourceConfig
+from pheasant.extensions import extension_sources
 from pheasant.graph import document_structure
 from pheasant.graph.document_structure import chunk_node_id, heading_node_id  # noqa: F401
 from pheasant.graph.enrichment import (
@@ -281,6 +282,11 @@ class GraphBuilder:
             self.upsert_edge(current, following, NEXT_CHUNK, {"source_id": source.name})
         drop_stale_chunks(self.graph, artifact.id, current_chunks)
         self.add_headings(source, artifact, chunk_ids)
+        if extension := extension_sources().get(source.type.value):
+            from pheasant.graph.extension_provenance import attach
+
+            if extension.provenance is not None:
+                attach(self, artifact, extension.provenance)
         drop_embeds(self.graph, artifact.id)
         self._detached |= retract_stale_enrichment(self.graph, artifact.id, enrichment)
         self.apply_enrichment(enrichment)

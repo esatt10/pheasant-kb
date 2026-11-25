@@ -1,0 +1,39 @@
+import { request, qs } from "@pheasant/ui/api/client";
+import type {
+  GtmCatalogQuery,
+  GtmIndustry,
+  GtmCompanyProfile,
+  GtmCompanyRow,
+  GtmFieldEvidence,
+  GtmTechnologyTaxonomy,
+} from "./types";
+
+export const gtmApi = {
+  registerGtmCollection: (body: {
+    name: string;
+    company_id?: string;
+    segment?: string;
+    target: Record<string, unknown>;
+    input_source: string | null;
+    sync_now: boolean;
+  }) =>
+    request<{ status: string; source: Record<string, unknown> }>("/gtm/collections", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  queryGtmCatalog: (source: string, criteria: GtmCatalogQuery) =>
+    request<{ companies: GtmCompanyRow[]; has_more: boolean }>(`/gtm/catalogs/${encodeURIComponent(source)}/query`, {
+      method: "POST", body: JSON.stringify(criteria),
+    }),
+  gtmNaics: () => request<{ edition: number; codes: GtmIndustry[] }>("/gtm/naics"),
+  gtmTechnologyTaxonomy: () => request<GtmTechnologyTaxonomy>("/gtm/technology-taxonomy"),
+  readGtmCompany: (source: string, company: string) =>
+    request<GtmCompanyProfile>(`/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}`),
+  readGtmFieldEvidence: (source: string, company: string, field: string, revision: string, signal?: AbortSignal) =>
+    request<GtmFieldEvidence>(
+      `/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/evidence${qs({ field, revision })}`,
+      { signal, cache: "no-store" },
+    ),
+  syncGtmCompany: (source: string, company: string, deep = false) =>
+    request(`/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/sync${deep ? "?deep=true" : ""}`, { method: "POST" }),
+};

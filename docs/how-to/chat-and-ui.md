@@ -2,7 +2,7 @@
 
 The pheasant UI is a three-pane workspace: **Sources** on the left,
 **Chat** in the middle, and **Artifacts** initially open on the right. Graph,
-Facts, Node and Taxonomy remain available as tabs; saved tab preferences are
+Node and Taxonomy remain available as tabs; saved tab preferences are
 retained. Ordinary answers keep the pane you selected open.
 You ask a question in prose; pheasant answers from your own indexed content,
 cites the passages it used, and lights up the corresponding nodes on the
@@ -20,7 +20,7 @@ not come up or looks stale is in [Run the web UI](run-the-ui.md).
 
 ## The chat layer
 
-Every answer goes through the same four steps, and all four are inspectable:
+Every answer goes through the same four steps:
 
 1. **Retrieve** — the ordinary hybrid self-search (`text` + `graph`, plus
    `vector` when embeddings are on) runs against your index.
@@ -28,10 +28,9 @@ Every answer goes through the same four steps, and all four are inspectable:
    answer shows them all; the ones the answer actually used are at full
    strength, retrieved-but-unused ones are dimmed.
 3. **Surface facts** — one hop out from each cited passage into the
-   entity/symbol/document layer of the graph, rendered as
-   subject–predicate–object triples in the **Facts** tab. Facts are
-   collected round-robin across the cited sources, so a well-connected
-   document cannot crowd out the rest.
+   entity/symbol/document layer of the graph. The answer API returns these
+   subject–predicate–object triples. It collects them round-robin across the
+   cited sources.
 4. **Answer** — a chat model writes the answer using *only* those passages,
    citing `[1]`, `[2]`, … Clicking a citation chip in the prose focuses that
    node on the graph and opens it in the **Node** tab.

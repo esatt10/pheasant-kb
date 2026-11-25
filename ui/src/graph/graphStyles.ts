@@ -65,6 +65,14 @@ export const EDGE_COLORS: Record<string, string> = {
 export const ALL_EDGE_TYPES = Object.keys(EDGE_COLORS);
 export const ALL_NODE_TYPES = Object.keys(NODE_COLORS);
 
+export function registerExtensionGraphColors(colors: Readonly<Record<string, string>>) {
+  for (const [type, color] of Object.entries(colors)) {
+    if (type in NODE_COLORS) continue;
+    NODE_COLORS[type] = color;
+    ALL_NODE_TYPES.push(type);
+  }
+}
+
 /**
  * Types hidden by default.
  *

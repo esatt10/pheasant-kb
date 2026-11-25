@@ -20,14 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.decisions import Decider
+from pheasant.assistant.llm import at_effort
 from pheasant.config.assistant_decisions import REPAIR_EFFORTS
 
 #: The most rewrites one request may ask for through ``options.max_repairs``.
 MAX_REQUEST_REPAIRS = 3
-
-_EFFORT_ORDER = {"none": 0, "low": 1, None: 2}
 
 
 def window(passages: list, options: dict[str, Any]) -> list:
@@ -63,26 +61,3 @@ def repair_llm(llm: Any, decider: Decider, attempt: int) -> tuple[Any, str | Non
 
     effort = decider.repair_effort(attempt)
     return at_effort(llm, None if effort == "full" else effort)
-
-
-def at_effort(llm: Any, effort: str | None) -> tuple[Any, str | None]:
-    """``llm`` lowered to ``effort``, and the effort it now writes at.
-
-    ``None`` back means "unchanged": no effort asked for, a model other than
-    ``gpt-6-luna``, or one already configured at or below it — an effort is
-    never raised above the assistant's own.
-    """
-
-    if (
-        llm is None
-        or effort is None
-        or getattr(llm, "provider", None) not in OPENAI_WIRE
-        or getattr(llm, "model_id", None) != "gpt-6-luna"
-        or not callable(getattr(llm, "with_reasoning_effort", None))
-    ):
-        return llm, None
-    configured = getattr(llm, "reasoning_effort", None)
-    lowest = min((effort, configured), key=lambda e: _EFFORT_ORDER.get(e, 2))
-    if lowest == configured:
-        return llm, None
-    return llm.with_reasoning_effort(lowest), lowest

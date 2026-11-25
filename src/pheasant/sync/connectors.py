@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from pheasant.config.schema import SourceConfig
+from pheasant.ingestion.media import MediaStore
 from pheasant.ingestion.pipeline import _match_any, utc_now, within_max_depth
 from pheasant.ingestion.walk import WalkBudget, walk_source
 from pheasant.persistence.state_store import StateStore
@@ -56,6 +58,9 @@ class ConnectorPayload:
     sha256: str | None = None
     mtime: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # An installed connector that has already isolated and parsed a publisher's
+    # page may supply index text separately from the bytes used by the viewer.
+    normalized_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +86,9 @@ class SourceConnector(ABC):
     def __init__(self, source: SourceConfig, state: StateStore):
         self.source = source
         self.state = state
+        self.media_store: MediaStore | None = None
         self.sync_mode: str | None = None
+        self.listing_progress: Callable[[str, int, int | None, str], None] | None = None
         self._previous_cursor: dict[str, Any] | None = None
         self._previous_watermark: dict[str, Any] | None = None
 
@@ -571,6 +578,11 @@ class APIConnector(SourceConnector):
 
 
 def connector_for_source(source: SourceConfig, state: StateStore) -> SourceConnector:
+    from pheasant.extensions import extension_sources
+
+    contribution = extension_sources().get(source.type.value)
+    if contribution is not None:
+        return contribution.connector(source, state)
     if source.connector.runtime == "sandboxed":
         # Synapse Step 34.1+: opt-in per source, checked before the
         # source.type dispatch below so it takes precedence. Default

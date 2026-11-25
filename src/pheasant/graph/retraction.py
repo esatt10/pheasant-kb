@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pheasant.extensions import extension_provenance_types
 from pheasant.graph.enrichment import ArtifactEnrichment
 
 #: Edge types an artifact's own text implies, emitted by the per-artifact
@@ -192,7 +193,8 @@ def remove_vanished_artifacts(
             attrs = nodes.get(target) or {}
             kind = attrs.get("type")
             if kind in _OWNED_BY_ARTIFACT or (
-                kind == "symbol" and attrs.get("artifact_id") == artifact_id
+                attrs.get("artifact_id") == artifact_id
+                and (kind == "symbol" or kind in extension_provenance_types())
             ):
                 remove.add(target)
             elif kind in SHARED_ENRICHMENT_NODE_TYPES:

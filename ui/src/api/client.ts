@@ -366,7 +366,7 @@ function invalidJsonResponse(requestPath: string, contentType: string | null): s
   );
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { headers: initialHeaders, ...requestInit } = init ?? {};
   const fetchInit = {
     ...requestInit,
@@ -462,7 +462,7 @@ export function uploadPath(file: File): string {
   return UPLOAD_PATHS.get(file) || picked || file.name;
 }
 
-function qs(
+export function qs(
   params: Record<string, string | number | boolean | string[] | undefined>,
 ): string {
   const search = new URLSearchParams();

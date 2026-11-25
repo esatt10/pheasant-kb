@@ -1,5 +1,7 @@
 /** Only static route/action identifiers leave the browser. Never inspect DOM text or inputs. */
 export const routes = new Set(["/", "/graph", "/artifacts", "/evaluation", "/tuning", "/sources", "/syncs", "/config"]);
+let extensionRoutes = new Set<string>();
+export function setExtensionTelemetryRoutes(paths: string[]) { extensionRoutes = new Set(paths); }
 export const actions = new Set(["ask", "artifact.select", "source.select", "pane.select"]);
 type UIEvent = { trace_id: string; span_id: string; action: string; route: string; started_at: string; duration_ms: number };
 let enabled = false;
@@ -16,7 +18,7 @@ export function browserTraceparent(): string | null {
   return enabled && current && Date.now() < current.expires ? current.value : null;
 }
 export function recordUI(action: string, route: string) {
-  if (!enabled || !routes.has(route) || !(action === "navigate" || actions.has(action))) return;
+  if (!enabled || !(routes.has(route) || extensionRoutes.has(route)) || !(action === "navigate" || actions.has(action))) return;
   // OTel's trace-id ratio sampler uses the low 63 bits. Match it for UI roots.
   const trace = hex(16), id = hex(8);
   const sampled = (BigInt("0x" + trace.slice(16)) & ((1n << 63n) - 1n)) < BigInt(Math.floor(ratio * 2 ** 63));

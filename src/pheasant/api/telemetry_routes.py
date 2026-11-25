@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from pheasant.extensions import extension_ui_routes
+
+_UI_ROUTES = frozenset(
+    {"/", "/graph", "/artifacts", "/evaluation", "/tuning", "/sources", "/syncs", "/config"}
+)
 
 
 class UIEvent(BaseModel):
@@ -12,11 +18,16 @@ class UIEvent(BaseModel):
     trace_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     span_id: str = Field(pattern=r"^[0-9a-f]{16}$")
     action: Literal["navigate", "ask", "artifact.select", "source.select", "pane.select"]
-    route: Literal[
-        "/", "/graph", "/artifacts", "/evaluation", "/tuning", "/sources", "/syncs", "/config"
-    ]
+    route: str = Field(max_length=80)
     started_at: datetime
     duration_ms: float = Field(ge=0, le=60_000, allow_inf_nan=False)
+
+    @field_validator("route")
+    @classmethod
+    def known_route(cls, route: str) -> str:
+        if route not in _UI_ROUTES and route not in extension_ui_routes():
+            raise ValueError("Unknown UI route")
+        return route
 
 
 class UIBatch(BaseModel):

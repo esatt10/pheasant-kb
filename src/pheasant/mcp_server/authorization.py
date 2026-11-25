@@ -6,6 +6,7 @@ import functools
 import inspect
 from typing import Any
 
+from pheasant.extensions import extension_permissions
 from pheasant.security.authorization import allowed, require_permission, scoped_principal
 from pheasant.security.permissions import MCP_PERMISSIONS
 
@@ -13,7 +14,7 @@ from pheasant.security.permissions import MCP_PERMISSIONS
 def authorized(fn):
     signature = inspect.signature(fn)
     has_principal = "principal" in signature.parameters
-    permission = MCP_PERMISSIONS.get(fn.__name__, "unclassified")
+    permission = extension_permissions("mcp", MCP_PERMISSIONS).get(fn.__name__, "unclassified")
 
     @functools.wraps(fn)
     def invoke(*args, **kwargs):
@@ -53,12 +54,13 @@ def list_only_callable_tools(mcp: Any) -> None:
     """
 
     every_tool = mcp.list_tools
+    permissions = extension_permissions("mcp", MCP_PERMISSIONS)
 
     async def list_tools() -> list[Any]:
         return [
             tool
             for tool in await every_tool()
-            if allowed(MCP_PERMISSIONS.get(tool.name, "unclassified"))
+            if allowed(permissions.get(tool.name, "unclassified"))
         ]
 
     mcp.list_tools = list_tools

@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from pheasant.api.app import create_app
+from pheasant.extensions import extension_permissions
 from pheasant.mcp_server.server import _anticipated_failures
 from pheasant.persistence import auth_tokens
 from pheasant.security.authorization import (
@@ -59,17 +60,19 @@ def test_identity_exposes_effective_permissions(region, role):
     assert set(result.json()["permissions"]) == ROLE_PERMISSIONS[role]
     assert client.get("/sources", headers=headers(role)).status_code == 200
     assert client.post("/search", headers=headers(role), json={"query": "hello"}).status_code == 200
+    assert client.get("/extensions", headers=headers(role)).status_code == 200
     assert client.get("/sources").status_code == 401
 
 
 def test_every_forbidden_http_operation_refuses_before_body_or_side_effects(region):
     app, client, _ = region
     tested = 0
+    permissions = extension_permissions("http", HTTP_PERMISSIONS)
     for route in app.routes:
         if not isinstance(route, APIRoute):
             continue
         for method in route.methods or ():
-            permission = HTTP_PERMISSIONS.get((method, route.path))
+            permission = permissions.get((method, route.path))
             if permission is None or permission in ROLE_PERMISSIONS["Reader"]:
                 continue
             path = route.path
@@ -115,6 +118,8 @@ def test_contributor_cannot_change_security_or_infrastructure(region):
 
 def test_manifest_covers_all_http_routes_and_mcp_operations(region):
     app, _, _ = region
+    http_permissions = extension_permissions("http", HTTP_PERMISSIONS)
+    mcp_permissions = extension_permissions("mcp", MCP_PERMISSIONS)
     for route in app.routes:
         if (
             not isinstance(route, APIRoute)
@@ -123,7 +128,7 @@ def test_manifest_covers_all_http_routes_and_mcp_operations(region):
         ):
             continue
         for method in route.methods or ():
-            assert (method, route.path) in HTTP_PERMISSIONS, (method, route.path)
+            assert (method, route.path) in http_permissions, (method, route.path)
     root = Path(__file__).parents[1] / "src/pheasant/mcp_server"
     for path in root.glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -135,7 +140,7 @@ def test_manifest_covers_all_http_routes_and_mcp_operations(region):
                     and isinstance(decorator.func, ast.Attribute)
                     and decorator.func.attr in {"tool", "resource"}
                 ):
-                    assert node.name in MCP_PERMISSIONS, (path, node.name)
+                    assert node.name in mcp_permissions, (path, node.name)
 
 
 def test_mcp_direct_invocation_and_unclassified_tools_fail_closed():
@@ -433,6 +438,7 @@ def test_each_role_is_listed_the_tools_it_may_call(region):
 
     _, client, config = region
     every = {tool.name for tool in asyncio.run(create_mcp_server(config).list_tools())}
+    permissions = extension_permissions("mcp", MCP_PERMISSIONS)
     listed = {
         role: {
             tool["name"] for tool in _mcp_post(client, role, "tools/list", {})["result"]["tools"]
@@ -440,11 +446,7 @@ def test_each_role_is_listed_the_tools_it_may_call(region):
         for role in ("Admin", "Contributor", "Reader")
     }
     for role, names in listed.items():
-        expected = {
-            name
-            for name in every
-            if MCP_PERMISSIONS.get(name, "unclassified") in ROLE_PERMISSIONS[role]
-        }
+        expected = {name for name in every if permissions.get(name) in ROLE_PERMISSIONS[role]}
         assert names == expected, (role, sorted(names ^ expected))
     assert listed["Admin"] == every, "with no caller bound, and for an Admin, every tool"
     assert listed["Reader"] < listed["Contributor"] < listed["Admin"]

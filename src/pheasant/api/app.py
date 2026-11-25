@@ -23,6 +23,7 @@ from pheasant.api.assistant_routes import register_assistant_routes
 from pheasant.api.auth import install_guard, register_identity_routes
 from pheasant.api.connection_routes import register_connection_routes
 from pheasant.api.control_routes import register_control_routes
+from pheasant.api.extension_routes import register_extension_routes
 from pheasant.api.fleet_routes import register_fleet_routes
 from pheasant.api.ingestion_routes import register_ingestion_routes
 from pheasant.api.inventory_routes import register_inventory_routes
@@ -56,6 +57,7 @@ from pheasant.connections import secret as connection_secret
 from pheasant.deployment.roles import Role, RoleConfigurationError, resolve_role, validate_role
 from pheasant.deployment.roles import describe as describe_role
 from pheasant.deployment.serving import RETRY_AFTER_SECONDS, ConcurrencyLimiter, DrainState
+from pheasant.extensions import extension_ui_routes
 from pheasant.graph.exporter import cytoscape, node_link
 from pheasant.graph.query_service import graph_for_config
 from pheasant.graph.simple import SimpleMultiDiGraph
@@ -763,11 +765,12 @@ def _check_source_type(type_name: str) -> bool:
     has to as well — otherwise the same source is configurable in a file and
     rejected through the UI.
     """
+    from pheasant.extensions import extension_sources
     from pheasant.sync.connector_registry import list_connector_types
 
     if type_name in {member.value for member in SourceType}:
         return True
-    plugins = list_connector_types()
+    plugins = sorted(set(list_connector_types()) | extension_sources().keys())
     if type_name in plugins:
         return False
     raise HTTPException(
@@ -1467,7 +1470,7 @@ def create_app(
             if request.method != "GET" or not getattr(request.app.state, "ui_dist", None):
                 return False
             path = request.url.path
-            if path.rstrip("/") in UI_ROUTES and is_document_navigation(request):
+            if is_ui_route(path.rstrip("/")) and is_document_navigation(request):
                 # The shell, not the data: `_ui_navigation` answers these with
                 # index.html before any API handler runs.
                 return True
@@ -2096,6 +2099,7 @@ def create_app(
         mandatory ``path`` is real for that type or just a placeholder the
         connector never reads.
         """
+        from pheasant.extensions import extension_sources
         from pheasant.sync.connector_registry import list_connector_types
 
         types = [
@@ -2120,10 +2124,25 @@ def create_app(
             }
             for name in list_connector_types()
         )
+        types.extend(
+            {
+                "id": source.type,
+                "label": source.label,
+                "description": source.description,
+                "path_role": "unused",
+                "builtin": False,
+                "managed": True,
+            }
+            for source in extension_sources().values()
+        )
         return {"types": types, "placeholder_path": PLUGIN_PLACEHOLDER_PATH}
 
     @app.post("/sources")
     def register_source(req: RegisterSourceRequest) -> dict:
+        from pheasant.extensions import extension_sources
+
+        if contribution := extension_sources().get(req.type):
+            raise HTTPException(status_code=422, detail=contribution.registration_help)
         is_builtin = _check_source_type(req.type)
         # A connector that reads from a service or the web, not the
         # filesystem, gets a placeholder for the schema's mandatory path —
@@ -5070,6 +5089,7 @@ def create_app(
         app.mount("/mcp", mcp_asgi_app)
     from pheasant.api.authorization import install_authorization
 
+    register_extension_routes(app, services)
     install_authorization(app)
     _mount_ui(app, config)
     return app
@@ -5135,6 +5155,10 @@ UI_ROUTES = frozenset(  # every path App.tsx routes; `/admin` shares none with t
         "/admin",
     }
 )
+
+
+def is_ui_route(path: str) -> bool:
+    return path in UI_ROUTES or path in extension_ui_routes()
 
 
 def is_document_navigation(request: Request) -> bool:
@@ -5208,7 +5232,7 @@ def _mount_ui(app: FastAPI, config: PheasantConfig) -> None:
         """
 
         path = request.url.path.rstrip("/") or "/"
-        if request.method == "GET" and path in UI_ROUTES and is_document_navigation(request):
+        if request.method == "GET" and is_ui_route(path) and is_document_navigation(request):
             return FileResponse(index)
         return await call_next(request)
 

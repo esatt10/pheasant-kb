@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from pheasant.extensions import extension_sources
 from pheasant.services import ServiceContext
 from pheasant.services.errors import InvalidRequest, SourceNotFound
 from pheasant.sync.queue import INFLIGHT, PENDING
@@ -125,9 +126,13 @@ def last_sync(
     event = events[0]
     details = event.get("details") or {}
     unreadable = details.get("unreadable") or []
+    source = state.get_source(source_name) or {"name": source_name}
     if health is None:
-        health = source_health(state, state.get_source(source_name) or {"name": source_name})
+        health = source_health(state, source)
+    contribution = extension_sources().get(source.get("type"))
+    public = contribution.public_sync_details if contribution else ()
     return {
+        **{key: details[key] for key in public if key in details},
         "status": scored_status(event.get("status"), health),
         "health": health,
         "mode": details.get("mode"),

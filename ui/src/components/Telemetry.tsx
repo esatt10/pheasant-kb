@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { api } from "../api/client";
-import { actions, configureBrowserTelemetry, drainUIEvents, recordUI } from "../telemetry";
+import { actions, configureBrowserTelemetry, drainUIEvents, recordUI, setExtensionTelemetryRoutes } from "../telemetry";
+import { useUiExtensions } from "../extensions";
 
 export function Telemetry() {
   const { pathname } = useLocation();
+  const extensions = useUiExtensions();
   useEffect(() => {
     let active = true;
     void api.authConfig().then(config => {
@@ -24,6 +26,10 @@ export function Telemetry() {
     document.addEventListener("click", click, true);
     return () => { active = false; window.clearInterval(timer); document.removeEventListener("click", click, true); configureBrowserTelemetry(false); };
   }, []);
-  useEffect(() => recordUI("navigate", pathname), [pathname]);
+  const route = extensions.some((extension) => extension.routes.some((entry) => entry.path === pathname));
+  useEffect(() => {
+    setExtensionTelemetryRoutes(route ? [pathname] : []);
+    recordUI("navigate", pathname);
+  }, [pathname, route]);
   return null;
 }

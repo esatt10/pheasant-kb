@@ -1993,12 +1993,22 @@ def main(argv: list[str] | None = None) -> int:
         default=50,
         help="Cap the result set (0 removes the cap). Applied around your statement.",
     )
+    from pheasant.extensions import installed_extensions
+
+    commands = {}
+    for extension in installed_extensions():
+        for command in extension.commands:
+            command.configure(sub.add_parser(command.name, help=command.help))
+            commands[command.name] = command.run
+
     args = parser.parse_args(argv)
     if args.command in {None, "--help"}:
         parser.print_help()
         return 0
     if args.command == "setup":
         return _run_setup(args)
+    if args.command in commands:
+        return commands[args.command](args)
     if args.command == "start":
         from pheasant.config.loader import load_layered_config, parse_override_pairs
 

@@ -124,6 +124,7 @@ export interface SourceTypeInfo {
   /** "required" — the connector reads this path; "unused" — schema ceremony. */
   path_role: "required" | "unused";
   builtin: boolean;
+  managed?: boolean;
 }
 
 export interface SourceTypeCatalog {

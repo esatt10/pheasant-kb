@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pheasant.extensions import extension_provenance_types
+
 PUBLIC = {"allow": [], "public": True}
 
 #: Graph node types minted once per file — the id embeds the file's path — so
@@ -45,7 +47,9 @@ def acl_subject(node_id: str, node_type: Any, artifact_id: Any) -> str:
     looks the result up with ``artifact_acls`` and withholds anything the
     lookup does not return, so a node resolving to neither is denied.
     """
-    if artifact_id and node_type in FILE_OWNED_NODE_TYPES:
+    if artifact_id and (
+        node_type in FILE_OWNED_NODE_TYPES or node_type in extension_provenance_types()
+    ):
         return str(artifact_id)
     return str(node_id)
 
