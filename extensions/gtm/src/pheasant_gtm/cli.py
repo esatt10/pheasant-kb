@@ -27,6 +27,10 @@ def register(parser: argparse.ArgumentParser) -> None:
     start.add_argument("--acquisition", type=Path, help="YAML or JSON acquisition settings")
     start.add_argument("--depth", choices=("standard", "deep"), default="standard")
     start.add_argument("--page-limit", type=int)
+    start.add_argument(
+        "--excerpt-limit", type=int, help="Company-wide excerpt limit in deep research"
+    )
+    start.add_argument("--product-page-limit", type=int)
     start.add_argument("--job-limit", type=int)
     start.add_argument("--signal-days", type=int, default=365)
     start.add_argument("--no-search", action="store_false", dest="search")
@@ -116,6 +120,8 @@ def run(args: argparse.Namespace) -> int:
                                 "urls",
                                 "depth",
                                 "page_limit",
+                                "excerpt_limit",
+                                "product_page_limit",
                                 "job_limit",
                                 "signal_days",
                                 "search",

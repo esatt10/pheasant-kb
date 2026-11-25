@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { GtmResearchLimits, MAX_RESEARCH_LIMIT, validLimit } from "./GtmResearchLimits";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@pheasant/ui/api/client";
 import type { SourceRecord } from "@pheasant/ui/api/types";
@@ -42,6 +43,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
   const [discover, setDiscover] = useState(Boolean(gtmTarget.search ?? false));
   const initialDepth = gtmTarget.depth === "deep" ? "deep" : "standard";
   const [depth, setDepth] = useState<"standard" | "deep">(editing ? initialDepth : "deep");
+  const [limits, setLimits] = useState({ page: String(gtmTarget.page_limit ?? ""), excerpt: String(gtmTarget.excerpt_limit ?? "") });
   const [productBudget, setProductBudget] = useState(Number(gtmTarget.product_page_limit ?? 0));
   const [enrichment, setEnrichment] = useState({
     ...defaultEnrichment, ...gtmTarget.enrichment as Partial<GtmEnrichmentSettings> | undefined,
@@ -54,8 +56,10 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
       company_id: grouped ? folder : undefined,
       target: {
         ...gtmTarget,
-        ...(depth !== initialDepth ? { page_limit: undefined, job_limit: undefined } : {}),
+        ...(depth !== initialDepth ? { job_limit: undefined } : {}),
         depth,
+        page_limit: limits.page === "" ? undefined : Number(limits.page),
+        excerpt_limit: depth === "deep" && limits.excerpt !== "" ? Number(limits.excerpt) : undefined,
         product_page_limit: productBudget,
         enrichment,
         company: company.trim() || null,
@@ -87,6 +91,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
   const hasTarget = Boolean(website.trim() || urlsText.trim()
     || (company.trim() && (discover || inputSource)));
   const hasFallbackDetails = !fallbackUrls.trim() || Boolean(company.trim() && website.trim());
+  const limitsValid = validLimit(limits.page, 4) && (depth !== "deep" || validLimit(limits.excerpt, 1));
   return (
     <div className="modal-scrim" onClick={onClose}>
       <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
@@ -145,13 +150,18 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
               </select>
             </label>
             <label className="checkbox">
-              <input type="checkbox" checked={depth === "deep"} onChange={(e) => setDepth(e.target.checked ? "deep" : "standard")} />
+              <input type="checkbox" checked={depth === "deep"} onChange={(e) => {
+                setDepth(e.target.checked ? "deep" : "standard");
+                setLimits((current) => ({ ...current, page: "" }));
+              }} />
               Deep research
             </label>
+            <GtmResearchLimits value={limits} onChange={setLimits} deep={depth === "deep"} />
+            <p className="muted small">Blank limits use the defaults for this research depth.</p>
             <label className="field">
               <span>Additional product and service page attempts</span>
-              <input className="text-input" type="number" min={0} max={60} value={productBudget}
-                onChange={(e) => setProductBudget(Math.max(0, Math.min(60, Math.trunc(Number(e.target.value)))))} />
+              <input className="text-input" type="number" min={0} max={MAX_RESEARCH_LIMIT} value={productBudget}
+                onChange={(e) => setProductBudget(Math.max(0, Math.min(MAX_RESEARCH_LIMIT, Math.trunc(Number(e.target.value)))))} />
             </label>
             <label className="checkbox">
               <input type="checkbox" checked={discover} onChange={(e) => setDiscover(e.target.checked)} />
@@ -164,7 +174,7 @@ export function GtmRegistration({ source, catalogName, catalogOnly, onGtmRegiste
             </label>
             {error ? <p className="error" role="alert">{error}</p> : null}
             <div className="button-row">
-              <button className="btn btn--primary" disabled={!nameValid || !folderValid || !validNaics || nameTaken || !hasTarget || !hasFallbackDetails || mutation.isPending} onClick={() => mutation.mutate()}>
+              <button className="btn btn--primary" disabled={!nameValid || !folderValid || !validNaics || !limitsValid || nameTaken || !hasTarget || !hasFallbackDetails || mutation.isPending} onClick={() => mutation.mutate()}>
                 {mutation.isPending ? "Saving..." : editing ? "Save source" : grouped ? "Register company" : "Register source"}
               </button>
             </div>

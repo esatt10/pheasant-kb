@@ -168,6 +168,51 @@ def test_deep_run_indexes_company_passages_and_reserves_a_supplement():
     assert mission not in json.dumps(presentation.summary(result))
 
 
+def test_large_deep_run_honors_page_and_unique_excerpt_budgets_after_resume():
+    pages = [SITE + f"products/warehouse-platform-{index:03d}" for index in range(280)]
+    sitemap = "<urlset>" + "".join(f"<url><loc>{address}</loc></url>" for address in pages)
+    sitemap += "</urlset>"
+    calls = []
+
+    def read(address, _robots):
+        calls.append(address)
+        if address == SITE + "sitemap.xml":
+            return address, "text/xml", sitemap
+        if address == SITE:
+            return address, "text/html", html("<p>Acme Systems builds warehouse platforms.</p>")
+        name = address.rsplit("-", 1)[1]
+        text = (
+            f"Our products include warehouse platform {name} with barcode tracking. "
+            f"We provide technical support for distribution center {name}."
+        )
+        return address, "text/html", html(f"<p>{text}</p>", title=f"Warehouse platform {name}")
+
+    run = workflow.initialize(
+        Request(company="Acme Systems", website=SITE, depth="deep", page_limit=32, search=False)
+    )
+    while run["phase"] == "identity":
+        workflow.advance(run, reader=read)
+    workflow.control(run, RunControl(page_limit=250, excerpt_limit=250, paused=True))
+    before = calls.copy()
+    workflow.advance(run, reader=read)
+    assert calls == before
+    run = json.loads(json.dumps(run))
+    workflow.control(run, RunControl(paused=False))
+    for _ in range(270):
+        workflow.advance(run, reader=read)
+        if run["phase"] == "complete":
+            break
+    assert run["phase"] == "complete"
+    report = workflow.profile(run)
+    assert report["research"]["collection_attempts"] == report["research"]["page_limit"] == 250
+    assert len(calls) == 251 and len(set(calls) & set(pages)) == 249
+    selected = report["related_passages"]
+    ids = [row["id"] for rows in selected.values() for row in rows]
+    assert len(ids) == len(set(ids)) == report["research"]["excerpts"] == 250
+    assert {"description", "support_services"} <= selected.keys()
+    assert report == workflow.profile(json.loads(json.dumps(run)))
+
+
 def test_deep_hosted_review_uses_shared_low_reasoning():
     calls = []
 

@@ -117,7 +117,9 @@ def status(store: RunStore, run_id: str) -> dict:
         "collection_requests": sum(
             task["attempts"] for task in run["tasks"] if task["role"] not in {"anchor", "candidate"}
         ),
+        "budgeted_page_attempts": workflow.collection_attempts(run),
         "page_limit": run["request"]["page_limit"],
+        "excerpt_limit": run["request"].get("excerpt_limit"),
         "page_tasks_pending": sum(not task.get("done", False) for task in run["tasks"])
         if phase in {"identity", "collect"}
         else 0,

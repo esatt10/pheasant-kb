@@ -9,9 +9,41 @@ import { GtmAccountBrief } from "./GtmAccountBrief";
 import { GtmResearchFields } from "./GtmResearchFields";
 import { GtmScrollArea } from "./GtmScrollArea";
 import { defaultEnrichment, GtmEnrichmentControls } from "./GtmEnrichmentControls";
+import { GtmResearchLimits, MAX_RESEARCH_LIMIT, validLimit } from "./GtmResearchLimits";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["observed", "derived", "inferred", "proposed", "conflict", "missing", "blocked", "not_applicable"];
+
+function ResearchSettings({ profile, pending, refresh, offerings }: {
+  profile: GtmCompanyProfile;
+  pending: boolean;
+  refresh: (pageLimit?: number, excerptLimit?: number) => void;
+  offerings: (productPageLimit: number) => void;
+}) {
+  const [limits, setLimits] = useState({ page: "", excerpt: "" });
+  const [product, setProduct] = useState(String(profile.offering_research?.budget || 48));
+  const valid = validLimit(limits.page, 4) && validLimit(limits.excerpt, 1);
+  return <details className="gtm-brief-section" data-permission="sources.manage">
+    <summary><strong>Research limits</strong></summary>
+    <p className="muted small">Blank limits keep the current settings. The offering scan has a separate page budget.</p>
+    <form onSubmit={(event) => {
+      event.preventDefault();
+      if (valid && (limits.page || limits.excerpt)) {
+        refresh(limits.page ? Number(limits.page) : undefined, limits.excerpt ? Number(limits.excerpt) : undefined);
+      }
+    }}>
+      <GtmResearchLimits value={limits} onChange={setLimits} deep />
+      <button className="btn btn--small" disabled={pending || !valid || (!limits.page && !limits.excerpt)}>Apply limits and refresh</button>
+    </form>
+    <label className="field">
+      <span>Targeted offering page attempts</span>
+      <input className="text-input" type="number" min={1} max={MAX_RESEARCH_LIMIT} value={product}
+        onChange={(event) => setProduct(event.target.value)} aria-invalid={!validLimit(product, 1)} />
+    </label>
+    <button className="btn btn--small" disabled={pending || !product || !validLimit(product, 1)}
+      onClick={() => offerings(Number(product))}>Run offering scan</button>
+  </details>;
+}
 
 function DescriptionSettings({ profile, pending, update }: {
   profile: GtmCompanyProfile;
@@ -69,8 +101,8 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
     refetchInterval: 8000,
   });
   const refresh = useMutation({
-    mutationFn: ({ company, deep, productPageLimit, enrichment }: { company: string; deep?: boolean; productPageLimit?: number; enrichment?: GtmEnrichmentSettings }) =>
-      gtmApi.syncGtmCompany(source, company, deep, productPageLimit, enrichment),
+    mutationFn: ({ company, ...settings }: { company: string; deep?: boolean; productPageLimit?: number; enrichment?: GtmEnrichmentSettings; pageLimit?: number; excerptLimit?: number }) =>
+      gtmApi.syncGtmCompany(source, company, settings),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       queryClient.invalidateQueries({ queryKey: ["index-queue"] });
@@ -191,7 +223,14 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
             {!data.research ? <button className="btn btn--small" data-permission="sources.manage" disabled={refresh.isPending} onClick={() => refresh.mutate({ company: data.company_id, deep: true })}>Enable deep research and refresh</button> : null}
             {refresh.isSuccess ? <span role="status">Refresh requested</span> : null}
           </div>
-          {data.research ? <p className="muted small">Deep research · {data.research.documents} documents · {data.research.passages} indexed passages · {data.research.fields_with_passages} fields with matching passages</p> : null}
+          {data.research ? <p className="muted small">
+            Deep research · {data.research.documents} documents · {data.research.passages} indexed passages
+            {data.research.collection_attempts != null ? ` · ${data.research.collection_attempts}/${data.research.page_limit} general page attempts` : ""}
+            {data.research.excerpts != null ? ` · ${data.research.excerpts}/${data.research.excerpt_limit} excerpts saved` : ` · ${data.research.fields_with_passages} fields with matching passages`}
+          </p> : null}
+          <ResearchSettings key={`research-${data.company_id}-${data.revision}`} profile={data} pending={refresh.isPending}
+            refresh={(pageLimit, excerptLimit) => refresh.mutate({ company: data.company_id, deep: true, pageLimit, excerptLimit })}
+            offerings={(productPageLimit) => refresh.mutate({ company: data.company_id, productPageLimit })} />
           <DescriptionSettings key={`${data.company_id}-${data.revision}`} profile={data} pending={refresh.isPending}
             update={(enrichment) => refresh.mutate({ company: data.company_id, enrichment })} />
           <GtmResearchFields key={`fields-${data.company_id}`} source={source} profile={data} openGraph={openGraph} />

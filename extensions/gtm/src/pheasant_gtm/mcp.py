@@ -7,7 +7,14 @@ from typing import Any, Literal
 from pheasant_gtm import catalog_service as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
 from pheasant_gtm import run_service as gtm
-from pheasant_gtm.catalog import Enrichment, Request, RunControl
+from pheasant_gtm.catalog import (
+    Enrichment,
+    ExcerptLimit,
+    PageLimit,
+    ProductPageLimit,
+    Request,
+    RunControl,
+)
 from pheasant_gtm.collection_service import CollectionRequest
 from pheasant_gtm.tech_taxonomy import taxonomy
 
@@ -64,10 +71,16 @@ def register_gtm_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         source_name: str,
         company_id: str,
         deep: bool = False,
-        product_page_limit: int | None = None,
+        product_page_limit: ProductPageLimit | None = None,
         enrichment: Enrichment | None = None,
+        page_limit: PageLimit | None = None,
+        excerpt_limit: ExcerptLimit | None = None,
     ) -> dict:
-        """Refresh a company. Set enrichment alone to reprocess descriptions from saved evidence."""
+        """Refresh a company. Optionally set general page or company excerpt limits up to 250.
+
+        An excerpt-only change can reuse saved pages.
+        Set enrichment alone to reprocess descriptions.
+        """
         return gtm_catalog.refresh(
             tools.services,
             source_name,
@@ -75,6 +88,8 @@ def register_gtm_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
             knowledge_base,
             deep=deep,
             product_page_limit=product_page_limit,
+            page_limit=page_limit,
+            excerpt_limit=excerpt_limit,
             descriptions=enrichment,
         )
 

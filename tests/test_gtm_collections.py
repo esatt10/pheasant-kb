@@ -342,17 +342,26 @@ def test_catalog_indexes_company_folders_and_queries_published_provenance(
         )
         from pheasant_gtm import catalog_store as gtm_catalog
 
-        assert gtm_catalog.request_refresh(tools.state, source, "bravo", deep=True)
+        assert gtm_catalog.request_refresh(
+            tools.state, source, "bravo", deep=True, page_limit=250, excerpt_limit=250
+        )
         previous = client.get(prefix + "/companies/bravo").json()
         assert previous["revision"] == bravo["revision"] and previous["publication_pending"]
         assert tools.engine.sync_source(source, "incremental").indexed_artifacts == 1
         deep = client.get(prefix + "/companies/bravo").json()
         assert not deep["publication_pending"]
         assert deep["research"]["documents"] == 1
+        assert deep["research"]["page_limit"] == deep["research"]["excerpt_limit"] == 250
+        assert 0 < deep["research"]["excerpts"] <= 250
         assert deep["research"]["fields_searched"] > 0
         inventory = client.get(prefix + "/companies/bravo/research-documents")
         assert inventory.status_code == 200 and inventory.headers["cache-control"] == "no-store"
         assert inventory.json()["passage_count"] == deep["research"]["passages"]
+        assert (
+            len(inventory.json()["documents"])
+            == deep["research"]["documents"]
+            == sum(deep["research"]["documents_by_kind"].values())
+        )
         assert [item["url"] for item in inventory.json()["documents"]] == [bravo_fallback]
         assert set(inventory.json()["documents"][0]) == {"url", "title", "kind", "published"}
         assert "We use Infor WMS" not in json.dumps(deep)
@@ -362,6 +371,12 @@ def test_catalog_indexes_company_folders_and_queries_published_provenance(
         )
         assert response.status_code == 200, response.text
         assert response.json()["research"]["items"]
+        before = calls.copy()
+        assert gtm_catalog.request_refresh(tools.state, source, "bravo", excerpt_limit=1, deep=True)
+        assert tools.engine.sync_source(source, "incremental").indexed_artifacts == 1
+        assert calls == before
+        narrowed = client.get(prefix + "/companies/bravo").json()
+        assert narrowed["research"]["excerpt_limit"] == narrowed["research"]["excerpts"] == 1
         assert tools.engine.sync_source(source, "incremental").indexed_artifacts == 0
 
 

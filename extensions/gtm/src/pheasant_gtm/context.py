@@ -114,6 +114,7 @@ def field_results(fields: dict, related: dict | None = None) -> dict:
                 {
                     "related": [
                         {
+                            "id": row["id"],
                             "url": row["url"],
                             "title": row["title"],
                             "source": row["source"],

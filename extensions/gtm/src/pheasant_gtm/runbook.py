@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -204,6 +204,8 @@ class PassageIndex:
         spec: FieldSpec,
         terms: list[str],
         admissible: Callable[[FieldSpec, Document], bool],
+        *,
+        limit: int | None = None,
     ) -> list[dict]:
         # Field terms drive matching. Track phrases improve ranking among matches.
         field_terms = tuple(dict.fromkeys([*terms, *_FIELD_QUERIES.get(spec.key, ())]))
@@ -278,9 +280,34 @@ class PassageIndex:
                     "text": row.text,
                 }
             )
-            if len(selected) == (16 if profile_field else 6):
+            if len(selected) == (limit or (16 if profile_field else 6)):
                 break
         return selected
+
+
+def allocate_excerpts(ranked: dict[str, list[dict]], limit: int) -> dict[str, list[dict]]:
+    """Select each excerpt once company-wide while covering different fields."""
+    queues = {key: deque(rows) for key, rows in ranked.items() if rows}
+    preferred = [key for key in queues if key in PROFILE_FIELDS]
+    order = [*preferred, *(key for key in queues if key not in PROFILE_FIELDS), *(preferred * 2)]
+    selected: dict[str, list[dict]] = defaultdict(list)
+    seen: set[str] = set()
+    while queues:
+        for key in order:
+            queue = queues.get(key)
+            if queue is None:
+                continue
+            while queue and queue[0]["id"] in seen:
+                queue.popleft()
+            if queue:
+                row = queue.popleft()
+                selected[key].append(row)
+                seen.add(row["id"])
+                if len(seen) == limit:
+                    return dict(selected)
+            if not queue:
+                del queues[key]
+    return dict(selected)
 
 
 def gaps(results: dict, fields: list[FieldSpec]) -> list[tuple[str, tuple[str, ...]]]:

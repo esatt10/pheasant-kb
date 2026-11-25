@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from functools import partial
 from hashlib import sha256
 
@@ -47,6 +48,7 @@ def _target_key(target: Request, *, broad_only: bool = False) -> str:
             exclude={
                 **dict.fromkeys(exclude, True),
                 "enrichment": True,
+                "excerpt_limit": True,
                 "fields": {"__all__": {"rich_text"}},
             }
         ).encode()
@@ -206,11 +208,34 @@ class GTMConnector(SourceConnector):
             [
                 field
                 for field in fields
-                if not previous_passages or field.key in runbook.PROFILE_FIELDS
+                if target.excerpt_limit is not None
+                or not previous_passages
+                or field.key in runbook.PROFILE_FIELDS
             ],
             report["fields"],
             report["as_of"],
+            excerpt_limit=target.excerpt_limit,
         )
+        if target.excerpt_limit is not None:
+            previous_passages = {}
+            by_kind = Counter(
+                row["kind"]
+                for row in report["source_outcomes"]
+                if row["attributed"] and not row["quarantined"]
+            )
+            report = {
+                **report,
+                "research": {
+                    **report.get("research", {}),
+                    "documents": sum(by_kind.values()),
+                    "documents_by_kind": dict(by_kind),
+                    "passages": len(index.passages),
+                    "fields_searched": len(passages),
+                    "fields_with_passages": sum(bool(rows) for rows in passages.values()),
+                    "excerpt_limit": target.excerpt_limit,
+                    "excerpts": sum(map(len, passages.values())),
+                },
+            }
         report = {
             **report,
             "related_passages": {

@@ -15,7 +15,7 @@ from pheasant.services.inventory import ARTIFACT_SCOPE, reader
 from pheasant_gtm import catalog_store as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
 from pheasant_gtm import enrichment
-from pheasant_gtm.catalog import Enrichment, Key, Model, Scalar
+from pheasant_gtm.catalog import MAX_RESEARCH_LIMIT, Enrichment, Key, Model, Scalar
 from pheasant_gtm.naics import titles
 from pheasant_gtm.plugin import PROVENANCE, gtm_settings
 from pheasant_gtm.tech_taxonomy import canonical_category, category_products
@@ -271,10 +271,9 @@ def evidence(
 def research_documents(context: ServiceContext, source: str, company_id: str) -> dict:
     """List the admitted documents in the last completed private research snapshot."""
     require_permission("sources.manage")
-    _indexed(context, source, company_id, None)
+    _, indexed = _indexed(context, source, company_id, None)
     rows = context.state.rows(
-        "SELECT state_json::jsonb#>'{snapshot,profile,source_outcomes}' AS documents, "
-        "state_json::jsonb#>'{snapshot,profile,research,passages}' AS passage_count "
+        "SELECT state_json::jsonb#>'{snapshot,profile,source_outcomes}' AS documents "
         "FROM gtm_catalog_companies WHERE source_id=? AND company_id=?",
         (source, company_id),
     )
@@ -288,7 +287,9 @@ def research_documents(context: ServiceContext, source: str, company_id: str) ->
         "documents": sorted(
             documents, key=lambda row: (row["kind"], (row["title"] or "").casefold(), row["url"])
         ),
-        "passage_count": snapshot.get("passage_count"),
+        "passage_count": (json.loads(indexed["profile_json"]).get("research") or {}).get(
+            "passages"
+        ),
     }
 
 
@@ -300,20 +301,35 @@ def refresh(
     *,
     deep: bool = False,
     product_page_limit: int | None = None,
+    page_limit: int | None = None,
+    excerpt_limit: int | None = None,
     descriptions: Enrichment | None = None,
 ) -> dict:
     require_permission("sources.manage")
     _assert_catalog(context, source, knowledge_base)
-    if product_page_limit is not None and (deep or not 1 <= product_page_limit <= 60):
-        raise InvalidRequest("Choose a product-only budget of 1 to 60 or a deep refresh")
+    if product_page_limit is not None and (
+        deep
+        or page_limit is not None
+        or excerpt_limit is not None
+        or not 1 <= product_page_limit <= MAX_RESEARCH_LIMIT
+    ):
+        raise InvalidRequest(
+            f"Choose a product-only budget of 1 to {MAX_RESEARCH_LIMIT} or a company refresh"
+        )
+    if page_limit is not None and not 4 <= page_limit <= MAX_RESEARCH_LIMIT:
+        raise InvalidRequest(f"Page attempts must be between 4 and {MAX_RESEARCH_LIMIT}")
+    if excerpt_limit is not None and not 1 <= excerpt_limit <= MAX_RESEARCH_LIMIT:
+        raise InvalidRequest(f"Excerpts must be between 1 and {MAX_RESEARCH_LIMIT}")
     if descriptions is not None:
         enrichment.validate_model(context.config, context.state, descriptions)
     if not gtm_catalog.request_refresh(
         context.state,
         source,
         company_id,
-        deep=deep,
+        deep=deep or excerpt_limit is not None,
         product_page_limit=product_page_limit,
+        page_limit=page_limit,
+        excerpt_limit=excerpt_limit,
         enrichment=descriptions.model_dump(mode="json") if descriptions is not None else None,
     ):
         raise SourceNotFound(f"{source}/{company_id}")

@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
+from pheasant import cancel_scope
 from pheasant.assistant.decisions import Decider, DecisionUnavailable, predicate
 from pheasant.assistant.llm import LLM, at_effort
 from pheasant.assistant.providers import ProviderError, collect_token_usage
@@ -77,7 +78,9 @@ def _queue(
 ) -> None:
     with contextlib.suppress(ValueError):
         target = url(target, base)
-        limit = 680 if run["request"].get("depth") == "deep" else 340
+        request = run["request"]
+        minimum = 680 if request.get("depth") == "deep" else 340
+        limit = max(minimum, 8 * (request["page_limit"] + request.get("product_page_limit", 0)))
         existing = next((item for item in run["tasks"] if item["url"] == target), None)
         if existing is None:
             if len(run["tasks"]) >= limit:
@@ -201,6 +204,7 @@ def control(run: dict, update: RunControl) -> None:
         or update.add_urls
         or update.retry_urls
         or update.page_limit is not None
+        or update.excerpt_limit is not None
     ) and (run["phase"] not in {"identity", "collect"}):
         raise ValueError("acquisition settings can be changed during identity and collection")
     request = Request.model_validate(run["request"])
@@ -222,11 +226,7 @@ def control(run: dict, update: RunControl) -> None:
     )
     _operator_boards(updated.acquisition)
     _identity_fallbacks(updated)
-    if seeds:
-        new = initialize(updated.model_copy(update={"urls": seeds}))
-        for task in new["tasks"]:
-            if task["role"] == "seed" or run["phase"] == "identity":
-                _queue(run, task["url"], task["role"], task["priority"])
+    retry = []
     if update.retry_urls:
         by_url = {task["url"]: task for task in run["tasks"]}
         for address in dict.fromkeys(url(seed) for seed in update.retry_urls):
@@ -237,8 +237,15 @@ def control(run: dict, update: RunControl) -> None:
                 or task["attempts"] >= updated.acquisition.max_attempts
             ):
                 raise ValueError("retry_urls requires a transient failure with attempts remaining")
-            task.update(done=False, outcome="retry")
+            retry.append(task)
     run["request"] = updated.model_dump(mode="json")
+    if seeds:
+        new = initialize(updated.model_copy(update={"urls": seeds}))
+        for task in new["tasks"]:
+            if task["role"] == "seed" or run["phase"] == "identity":
+                _queue(run, task["url"], task["role"], task["priority"])
+    for task in retry:
+        task.update(done=False, outcome="retry")
     if run["phase"] == "collect" and update.acquisition is not None:
         _queue_operator_boards(run, updated.acquisition)
     if update.paused is not None:
@@ -905,22 +912,45 @@ def _batches(run: dict, fields: list[FieldSpec]) -> list[list[str]]:
 
 
 def retrieve_field_passages(
-    index: runbook.PassageIndex, fields: list[FieldSpec], resolved: dict, as_of: str
+    index: runbook.PassageIndex,
+    fields: list[FieldSpec],
+    resolved: dict,
+    as_of: str,
+    *,
+    excerpt_limit: int | None = None,
 ) -> dict:
-    return {
-        spec.key: index.retrieve(
-            spec, _field_terms(spec), lambda field, doc: _field_matches(field, doc, as_of)
+    ranked = {}
+    for spec in fields:
+        if spec.derive_from or eligible(spec, resolved):
+            continue
+        cancel_scope.check()
+        ranked[spec.key] = index.retrieve(
+            spec,
+            _field_terms(spec),
+            lambda field, doc: _field_matches(field, doc, as_of),
+            limit=excerpt_limit,
         )
-        for spec in fields
-        if not spec.derive_from and not eligible(spec, resolved)
-    }
+    if excerpt_limit is None:
+        return ranked
+    allocated = runbook.allocate_excerpts(ranked, excerpt_limit)
+    return {key: allocated.get(key, []) for key in ranked}
+
+
+def collection_attempts(run: dict) -> int:
+    return sum(
+        task["attempts"]
+        for task in run["tasks"]
+        if task["role"] not in IDENTITY_ROLES | {"offering"}
+    )
 
 
 def _deep_research(run: dict, request: Request, fields: list[FieldSpec], search_key: str) -> bool:
     index = runbook.PassageIndex(docs(run))
     run["candidates"].extend(runbook.company_statements(index, run["company"], run["website"]))
     resolved = resolve(fields, run["candidates"], run["as_of"])
-    matches = retrieve_field_passages(index, fields, resolved, run["as_of"])
+    matches = retrieve_field_passages(
+        index, fields, resolved, run["as_of"], excerpt_limit=request.excerpt_limit
+    )
     run["review_passages"] = {key: rows for key, rows in matches.items() if rows}
     attempted = run.get("research", {}).get("supplement_tracks", [])
     run["research"] = {
@@ -928,6 +958,13 @@ def _deep_research(run: dict, request: Request, fields: list[FieldSpec], search_
         "passages": len(index.passages),
         "fields_searched": len(matches),
         "fields_with_passages": sum(bool(rows) for rows in matches.values()),
+        "page_limit": request.page_limit,
+        "collection_attempts": collection_attempts(run),
+        **(
+            {"excerpt_limit": request.excerpt_limit, "excerpts": sum(map(len, matches.values()))}
+            if request.excerpt_limit is not None
+            else {}
+        ),
         "documents_by_kind": dict(Counter(doc.kind for doc in index.documents)),
         "supplement_tracks": attempted,
     }
@@ -1015,6 +1052,9 @@ def _offering_step(run: dict, request: Request, reader: Callable, now: float) ->
     research = run["offering_research"]
     if request.acquisition.follow_links:
         visited = {doc["url"] for doc in run["documents"].values() if doc["text"]}
+        visited.update(
+            task["url"] for task in run["tasks"] if task["attempts"] or task["role"] == "offering"
+        )
         addresses = {task["url"] for task in run["tasks"] if not task.get("done")}
         for doc in run["documents"].values():
             if doc["attributed"] and not doc["quarantined"] and doc["kind"] == "official":
@@ -1150,11 +1190,7 @@ def advance(
     elif phase == "collect":
         planned = _pending_pages(run, request)
         queries = [q for q in run["queries"] if q["kind"] != "identity" and not q.get("done")]
-        fetched = sum(
-            task["attempts"]
-            for task in run["tasks"]
-            if task["role"] not in IDENTITY_ROLES | {"offering"}
-        )
+        fetched = collection_attempts(run)
         limit = request.page_limit
         if request.depth == "deep" and not run.get("supplement_started"):
             limit -= min(16, limit // 4)

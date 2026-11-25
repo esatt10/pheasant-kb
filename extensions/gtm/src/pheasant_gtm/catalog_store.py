@@ -100,6 +100,8 @@ def request_refresh(
     *,
     deep: bool = False,
     product_page_limit: int | None = None,
+    page_limit: int | None = None,
+    excerpt_limit: int | None = None,
     enrichment: dict | None = None,
 ) -> bool:
     settings = "(settings_json::jsonb - 'product_refresh' - 'enrichment_refresh')"
@@ -121,12 +123,20 @@ def request_refresh(
             f"ELSE GREATEST(CAST({target}->>'job_limit' AS integer),36) END)) END "
             ")"
         )
+    for key, value in (("page_limit", page_limit), ("excerpt_limit", excerpt_limit)):
+        if value is not None:
+            settings = f"jsonb_set({settings},'{{target,{key}}}',to_jsonb(CAST(? AS int)))"
+            args = (*args, value)
     if enrichment is not None:
         # The expression contains the earlier arguments, so bind the new value last.
         settings = f"jsonb_set({settings},'{{target,enrichment}}',CAST(? AS jsonb))"
         args = (*args, json.dumps(enrichment))
-        if not deep and product_page_limit is None:
-            settings = f"({settings} || '{{\"enrichment_refresh\":true}}'::jsonb)"
+    if (
+        product_page_limit is None
+        and page_limit is None
+        and (excerpt_limit is not None or (enrichment is not None and not deep))
+    ):
+        settings = f"({settings} || '{{\"enrichment_refresh\":true}}'::jsonb)"
     return bool(
         state.execute_returning(
             "UPDATE gtm_catalog_companies SET checked_at=NULL, "

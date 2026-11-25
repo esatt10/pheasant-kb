@@ -14,6 +14,10 @@ Scalar = str | int | float | bool
 Key = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 Term = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Seed = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
+MAX_RESEARCH_LIMIT = 250
+PageLimit = Annotated[int, Field(ge=4, le=MAX_RESEARCH_LIMIT)]
+ExcerptLimit = Annotated[int, Field(ge=1, le=MAX_RESEARCH_LIMIT)]
+ProductPageLimit = Annotated[int, Field(ge=0, le=MAX_RESEARCH_LIMIT)]
 
 
 def words(text: str) -> str:
@@ -50,7 +54,8 @@ class Acquisition(Model):
 class RunControl(Model):
     paused: bool | None = None
     acquisition: Acquisition | None = None
-    page_limit: int | None = Field(default=None, ge=4, le=120)
+    page_limit: PageLimit | None = None
+    excerpt_limit: ExcerptLimit | None = None
     add_urls: list[Seed] = Field(default_factory=list, max_length=20)
     retry_urls: list[Seed] = Field(default_factory=list, max_length=20)
 
@@ -121,9 +126,10 @@ class Request(Model):
     ) = None
     fields: list[FieldSpec] = Field(default_factory=list, max_length=40)
     depth: Literal["standard", "deep"] = "standard"
-    page_limit: int = Field(default=36, ge=4, le=120)
+    page_limit: PageLimit = 36
+    excerpt_limit: ExcerptLimit | None = None
     job_limit: int = Field(default=24, ge=0, le=60)
-    product_page_limit: int = Field(default=0, ge=0, le=60)
+    product_page_limit: ProductPageLimit = 0
     product_urls: list[Seed] = Field(default_factory=list, max_length=20)
     signal_days: int = Field(default=365, ge=1, le=3650)
     search: bool = True
@@ -141,6 +147,8 @@ class Request(Model):
                 self.page_limit = 80
             if "job_limit" not in self.model_fields_set:
                 self.job_limit = 36
+        elif self.excerpt_limit is not None:
+            raise ValueError("excerpt_limit requires deep research")
         if self.naics_code is not None:
             from pheasant_gtm.naics import titles
 

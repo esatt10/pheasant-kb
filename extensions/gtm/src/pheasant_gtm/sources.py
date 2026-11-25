@@ -23,13 +23,14 @@ from xml.etree import ElementTree
 from bs4 import BeautifulSoup
 
 from pheasant.security.url_policy import _addresses, _is_public
-from pheasant_gtm.catalog import Kind, now_iso
+from pheasant_gtm.catalog import MAX_RESEARCH_LIMIT, Kind, now_iso
 from pheasant_gtm.guard import suspicious
 from pheasant_gtm.runtime import parse_in_sandbox
 from pheasant_gtm.technology import technical_link, website_markers
 
 _AGENT = "PheasantResearch"
 _LIMIT = 3_000_000
+_LINK_LIMIT = MAX_RESEARCH_LIMIT * 2
 _REDIRECTS = {301, 302, 303, 307, 308}
 _TRACKING = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 _ATS = {
@@ -696,7 +697,7 @@ def parse(
             or board(k)
             or k == root(k)
             or host(k) in {"linkedin.com", "facebook.com", "x.com", "twitter.com"}
-        ][:220],
+        ][:_LINK_LIMIT],
         expires=expires,
         content_sha256=digest,
         embedded_jobs=embedded_jobs,
@@ -742,7 +743,7 @@ def _feed(target: str, body: str, kind: Kind) -> Document:
         if len(links) >= 8000:
             break
     relevant = [[k, v] for k, v in links.items() if topic(k, v) or "sitemap" in k]
-    return Document(target, "Site feed or sitemap", kind, "", links=relevant[:220])
+    return Document(target, "Site feed or sitemap", kind, "", links=relevant[:_LINK_LIMIT])
 
 
 def board(target: str) -> str | None:

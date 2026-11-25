@@ -74,6 +74,10 @@ export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "c
   research?: {
     documents: number;
     passages: number;
+    page_limit?: number;
+    collection_attempts?: number;
+    excerpt_limit?: number;
+    excerpts?: number;
     fields_searched: number;
     fields_with_passages: number;
     documents_by_kind: Record<string, number>;

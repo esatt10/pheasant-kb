@@ -35,8 +35,13 @@ export const gtmApi = {
       `/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/evidence${qs({ field, revision })}`,
       { signal, cache: "no-store" },
     ),
-  syncGtmCompany: (source: string, company: string, deep = false, productPageLimit?: number, enrichment?: GtmEnrichmentSettings) => {
+  syncGtmCompany: (source: string, company: string, {
+    deep, productPageLimit, enrichment, pageLimit, excerptLimit,
+  }: {
+    deep?: boolean; productPageLimit?: number; enrichment?: GtmEnrichmentSettings; pageLimit?: number; excerptLimit?: number;
+  }) => {
     const query = qs({ deep: deep ? "true" : undefined, product_page_limit: productPageLimit,
+      page_limit: pageLimit, excerpt_limit: excerptLimit,
       enrichment_enabled: enrichment ? String(enrichment.enabled) : undefined, enrichment_model: enrichment?.model });
     return request(`/gtm/catalogs/${encodeURIComponent(source)}/companies/${encodeURIComponent(company)}/sync${query}`, { method: "POST" });
   },

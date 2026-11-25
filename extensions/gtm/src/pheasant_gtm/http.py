@@ -11,7 +11,16 @@ from fastapi.responses import JSONResponse, Response
 from pheasant_gtm import catalog_service as gtm_catalog
 from pheasant_gtm import collection_service as gtm_collections
 from pheasant_gtm import run_service as gtm
-from pheasant_gtm.catalog import Enrichment, Request, ReviewRequest, RunControl, Term
+from pheasant_gtm.catalog import (
+    Enrichment,
+    ExcerptLimit,
+    PageLimit,
+    ProductPageLimit,
+    Request,
+    ReviewRequest,
+    RunControl,
+    Term,
+)
 from pheasant_gtm.collection_service import CollectionRequest
 from pheasant_gtm.naics import catalog as naics_reference
 from pheasant_gtm.tech_taxonomy import taxonomy
@@ -89,7 +98,9 @@ def register_gtm_routes(app: FastAPI, *, services: Any) -> None:
         source_name: str,
         company_id: str,
         deep: bool = False,
-        product_page_limit: int | None = None,
+        product_page_limit: ProductPageLimit | None = None,
+        page_limit: PageLimit | None = None,
+        excerpt_limit: ExcerptLimit | None = None,
         enrichment_enabled: bool | None = None,
         enrichment_model: Term | None = None,
     ) -> dict:
@@ -104,6 +115,8 @@ def register_gtm_routes(app: FastAPI, *, services: Any) -> None:
             company_id,
             deep=deep,
             product_page_limit=product_page_limit,
+            page_limit=page_limit,
+            excerpt_limit=excerpt_limit,
             descriptions=descriptions,
         )
 
