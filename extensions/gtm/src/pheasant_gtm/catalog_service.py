@@ -201,6 +201,7 @@ def company(
         profile.pop("technology", None)
         profile.pop("hubspot", None)
         profile.pop("offerings", None)
+        profile.pop("sales_brief", None)
         profile["evidence"] = [
             entry for entry in profile["evidence"] if entry["id"] in selected["evidence_ids"]
         ]

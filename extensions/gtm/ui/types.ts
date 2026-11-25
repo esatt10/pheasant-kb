@@ -64,6 +64,10 @@ export interface GtmCompanyProfile extends Pick<GtmCompanyRow, "company_id" | "c
   indexed_at?: string;
   technology?: { name: string; category: string; category_id?: string; signals: { relationship: string; evidence_ids: string[] }[] }[];
   signal_coverage?: { jobs: number; news: number };
+  sales_brief?: {
+    signals: { text: string; date: string; kind: string; evidence_ids: string[] }[];
+    questions: { text: string; evidence_ids: string[] }[];
+  };
   offerings?: GtmOffering[];
   offering_research?: { before: number; after?: number; budget: number; attempts?: number; outcome?: string };
   enrichment?: { status: string; model?: string; fields: string[]; settings: GtmEnrichmentSettings };

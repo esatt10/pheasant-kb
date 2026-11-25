@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pheasant_gtm import field_report
+from pheasant_gtm import field_report, sales
 from pheasant_gtm.catalog import DEFAULT_FIELDS, FieldSpec, Scalar, words
 from pheasant_gtm.evidence import _ACTIVITIES, _SERVICE, _THEMES, business_activity_statement
 from pheasant_gtm.naics import titles as naics_titles
@@ -145,6 +145,14 @@ def curated(
         if row["attributed"] and not row["quarantined"]
     }
     overview = field_report.company_overview(profile, pages or {}, company)
+    buyers, recovered, sales_signals = sales.archived(profile, pages or {})
+    offers_by_id = {item["id"]: item for item in inventory or ()}
+    for item in recovered:
+        existing = offers_by_id.setdefault(item["id"], item)
+        existing["sources"] = sorted(set(existing["sources"]) | item["sources"])
+    inventory = list(offers_by_id.values())
+    if not overview and recovered:
+        overview = field_report.offering_overview(company or profile.get("company"), recovered)
     evidence: dict[str, dict] = {}
     fields = {}
 
@@ -174,6 +182,9 @@ def curated(
     for entries in profile["signals"].values():
         for entry in entries:
             reference(entry["url"])
+    for signal in sales_signals:
+        for address in signal["sources"]:
+            reference(address)
     offer_rows = []
     for item in inventory or ():
         if not (urls := set(item["sources"]) & sources.keys()):
@@ -194,7 +205,7 @@ def curated(
                 },
             }
         )
-    offer_fields = {"products_services": {}, "customer_segments": {}, "support_services": {}}
+    offer_fields = {"products_services": {}, "customer_segments": buyers, "support_services": {}}
     for item in inventory or ():
         key = "support_services" if item["kind"] == "support" else "products_services"
         offer_fields[key].setdefault(item["name"], set()).update(item["sources"])
@@ -291,7 +302,9 @@ def curated(
                 "items": [
                     {
                         "value": value,
-                        "text": "Documented in first-party offering evidence.",
+                        "text": "The company identifies this audience in its published material."
+                        if spec.key == "customer_segments"
+                        else "Documented in first-party offering evidence.",
                         "evidence_ids": sorted(_reference(url) for url in urls),
                     }
                     for value, urls in sorted(observed.items())
@@ -384,6 +397,7 @@ def curated(
         ),
         "hubspot": hubspot,
         "signal_coverage": {kind: len(items) for kind, items in profile["signals"].items()},
+        "sales_brief": sales.briefing(fields, offer_rows, sales_signals),
         **({"research": profile["research"]} if "research" in profile else {}),
         "fields": fields,
         "evidence": [evidence[key] for key in sorted(evidence)],
@@ -451,6 +465,15 @@ def markdown(
                 lines.append(f"- {item['text']}")
                 lines.append(f"  Source references: {', '.join(item['evidence_ids'])}")
             lines.append("")
+    brief = publication.get("sales_brief", {})
+    if brief.get("signals") or brief.get("questions"):
+        lines.extend(["", "## Sales briefing", ""])
+        for item in brief.get("signals", ()):
+            lines.append(f"- {item['date']} · {item['text']}")
+            lines.append(f"  Source references: {', '.join(item['evidence_ids'])}")
+        for item in brief.get("questions", ()):
+            lines.append(f"- Discovery question: {item['text']}")
+            lines.append(f"  Source references: {', '.join(item['evidence_ids'])}")
     if offers := publication.get("offerings"):
         lines.extend(["", "## Products and services", ""])
         labels = {

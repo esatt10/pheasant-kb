@@ -98,6 +98,9 @@ export function GtmAccountBrief({ profile, openGraph }: {
   const support = descriptions("support_services");
   const initiativeDetails = descriptions("capabilities_in_development");
   const hypothesisDetails = descriptions("service_need_hypotheses");
+  const customerSegments = profile.fields.customer_segments;
+  const audiences = customerSegments?.detail?.items ?? [];
+  const salesBrief = profile.sales_brief;
   return <>
     <section className="gtm-brief-section" aria-label="Account snapshot">
       <div className="gtm-brief-heading">
@@ -121,6 +124,21 @@ export function GtmAccountBrief({ profile, openGraph }: {
       </div> : null}
     </section>
 
+    <section className="gtm-brief-section" aria-label="Sales briefing">
+      <h3>Sales briefing</h3>
+      <h4>Who they serve</h4>
+      {buyers ?? (audiences.length ? <ul>{audiences.map((item, i) => <li key={i}>
+        {formatGtmValue(item.value)}<div className="gtm-evidence-list">{sourceButtons(item.evidence_ids)}</div>
+      </li>)}</ul> : <p className="muted small">Buyer segments are unverified for this account.</p>)}
+      {salesBrief?.signals.length ? <><h4>What changed</h4><ul>{salesBrief.signals.map((item) => <li key={`${item.date}-${item.text}`}>
+        <time dateTime={item.date}>{item.date}</time> · {item.text}
+        <div className="gtm-evidence-list">{sourceButtons(item.evidence_ids)}</div>
+      </li>)}</ul></> : null}
+      {salesBrief?.questions.length ? <><h4>First-call questions</h4><ul>{salesBrief.questions.map((item) => <li key={item.text}>
+        {item.text}<div className="gtm-evidence-list">{sourceButtons(item.evidence_ids)}</div>
+      </li>)}</ul></> : null}
+    </section>
+
     <section className="gtm-brief-section" aria-label="Products and services">
       <div className="gtm-brief-heading">
         <h3>Products and services</h3>
@@ -135,7 +153,6 @@ export function GtmAccountBrief({ profile, openGraph }: {
         <summary>More offerings ({offers.length - 6})</summary>
         {offers.slice(6).map(offering)}
       </details> : null}
-      {buyers ? <><h4>Customer segments</h4>{buyers}</> : null}
       {support ? <><h4>Customer support</h4>{support}</> : null}
     </section>
 

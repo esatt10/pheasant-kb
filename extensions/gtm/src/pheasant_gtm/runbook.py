@@ -79,6 +79,10 @@ _FIELD_QUERIES = {
     "customer_segments": (
         "built for",
         "designed for",
+        "for enterprises",
+        "for businesses",
+        "small and midsized",
+        "end users",
         "small businesses",
         "midsized companies",
         "enterprise teams",

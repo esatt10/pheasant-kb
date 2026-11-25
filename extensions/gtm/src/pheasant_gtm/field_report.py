@@ -8,10 +8,11 @@ from urllib.parse import urlsplit
 
 from pheasant_gtm.catalog import words
 from pheasant_gtm.evidence import subject
+from pheasant_gtm.guard import suspicious
 from pheasant_gtm.sources import host, plausible_prose, same_site
 from pheasant_gtm.technology import TECHNOLOGY_CATEGORY
 
-VERSION = 5
+VERSION = 6
 
 # These phrases describe what the company itself does. Technical keywords in a
 # job, a customer case study or a third-party product mention cannot match.
@@ -59,6 +60,20 @@ _OPERATIONS = {
     ),
     "provides integrated logistics across ocean, land, and air transport": (
         r"\bby connecting ocean, land, and air, we help keep supply chains moving\b",
+    ),
+    "provides transportation, e-commerce, and business services": (
+        r"\bprovides customers and businesses worldwide with a broad portfolio of transportation, "
+        r"ecommerce, and business services\b",
+    ),
+    "provides enterprise AI for private and regulated deployments": (
+        r"\b(?:our|we build|we deliver|we bring)\b.{0,70}\b(?:enterprise AI|AI platform)\b"
+        r".{0,120}\b(?:private|sovereign|regulated)\b",
+    ),
+    "provides technology consulting across design, engineering, and AI": (
+        r"\btechnology consultancy\b.{0,100}\bblending design, engineering and AI\b",
+    ),
+    "sells machinery and power systems": (
+        r"\bsells (?:the majority of )?its machinery and power systems\b",
     ),
     "develops technology for industry, infrastructure, transport, and healthcare": (
         r"\btechnology company\W+focused on industry, infrastructure, transport, and healthcare\b",
@@ -111,27 +126,40 @@ _FIELD_EVIDENCE = {
 }
 
 
+def first_party_pages(profile: dict, pages: dict, kinds=("official", "filing")):
+    """Read admitted issuer pages, including a verified site's parent domain."""
+    website = profile["website"]
+    configured = profile.get("configured_domain")
+    parent = f"https://{configured}/" if configured else website
+    issuer = parent if same_site(website, parent) else website
+    archived = {page["url"]: page for page in pages.values()}
+    for row in profile["source_outcomes"]:
+        address = row["url"]
+        if (
+            not row["attributed"]
+            or row["quarantined"]
+            or not same_site(address, issuer)
+            or (
+                row["kind"] not in kinds
+                and not (row["kind"] == "external" and "official" in kinds and issuer != website)
+            )
+        ):
+            continue
+        page = archived.get(address)
+        if page and plausible_prose(page["text"][:16384]) and not suspicious(page["text"]):
+            yield row, page
+
+
 def company_overview(profile: dict, pages: dict, name: str | None) -> dict:
     """Find separately sourced clauses in the company's own archived prose."""
     website = profile["website"]
-    admitted = {
-        row["url"]
-        for row in profile["source_outcomes"]
-        if row["attributed"] and not row["quarantined"] and row["kind"] == "official"
-    }
     supported: dict[str, dict[int, set[str]]] = {}
     products: dict[str, set[str]] = {}
     registered = _PRODUCTS.get(host(website), {})
-    for page in pages.values():
+    for source, page in first_party_pages(profile, pages):
         address = page["url"]
-        if (
-            address not in admitted
-            or not same_site(website, address)
-            or not plausible_prose(page["text"][:16384])
-        ):
-            continue
         path = urlsplit(address).path
-        if path.strip("/") and not _ABOUT.search(path):
+        if path.strip("/") and not _ABOUT.search(path) and source["kind"] != "filing":
             continue
         # The archive places the title on the first line. Headlines, navigation
         # labels and case study quotes alone cannot establish a company action.
@@ -185,6 +213,18 @@ def _join(items: list[str]) -> str:
     if len(items) <= 2:
         return " and ".join(items)
     return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+def offering_overview(company: str | None, inventory: list[dict]) -> dict:
+    products = {item["name"]: set(item["sources"]) for item in inventory}
+    clause = "offers " + _join(sorted(products))
+    name = company if company and _COMPANY_NAME.fullmatch(company) else "The company"
+    return {
+        "summary": f"{name} {clause}.",
+        "mission": None,
+        "clauses": [(clause, set().union(*products.values()))],
+        "products": products,
+    }
 
 
 def evidence_id(url: str) -> str:
