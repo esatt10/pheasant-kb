@@ -14,6 +14,7 @@ from pheasant.api.app import create_app  # noqa: E402
 from pheasant.assistant.providers import ProviderError  # noqa: E402
 from pheasant.mcp_server.tools import PheasantTools  # noqa: E402
 from pheasant.registry.source_registry import SourceRegistry  # noqa: E402
+from pheasant.request_budget import DeadlineExceeded  # noqa: E402
 
 SITE = "https://luna-fixture.example/"
 QUOTE = "We build warehouse software with barcode scanning and stock tracking."
@@ -29,6 +30,7 @@ class Chat:
         self.model_id = name
         self.live = available
         self.fail = fail
+        self.deadline = False
         self.calls = []
 
     def available(self):
@@ -44,6 +46,8 @@ class Chat:
         assert options["json_mode"] is True
         packet = json.loads(prompt)
         self.calls.append(packet)
+        if self.deadline:
+            raise DeadlineExceeded("fixture deadline")
         if self.fail:
             raise ProviderError("test provider unavailable")
         if "claims" in packet:
@@ -154,8 +158,13 @@ def test_default_grounded_descriptions_can_be_republished_without_crawling(
         assert PRODUCT not in client.get(base).json()["markdown"]
 
         chat.fail = True
-        for live, expected in ((True, "failed"), (False, "model_unavailable")):
+        for live, deadline, expected in (
+            (True, False, "failed"),
+            (True, True, "failed"),
+            (False, False, "model_unavailable"),
+        ):
             chat.live = live
+            chat.deadline = deadline
             headers = {"accept": "application/json, text/event-stream"}
             response = client.post(
                 "/mcp/",

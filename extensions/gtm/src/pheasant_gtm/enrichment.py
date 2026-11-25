@@ -14,6 +14,7 @@ from pheasant.assistant.answering import resolve_llm
 from pheasant.assistant.llm import at_effort
 from pheasant.assistant.providers import ProviderError, collect_token_usage
 from pheasant.connections import environment as connection_environment
+from pheasant.request_budget import DeadlineExceeded
 from pheasant.services import models
 from pheasant_gtm.catalog import DEFAULT_FIELDS, Enrichment, FieldSpec, Model, words
 from pheasant_gtm.field_report import evidence_id
@@ -263,7 +264,7 @@ def enrich(
             batch = {field: packet[field] for field in fields[offset : offset + 6]}
             try:
                 result["fields"].update(_batch(llm, company, batch))
-            except (ProviderError, ValueError, TypeError):
+            except (DeadlineExceeded, ProviderError, ValueError, TypeError):
                 failed = True
                 break
     return {
