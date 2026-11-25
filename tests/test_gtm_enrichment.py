@@ -21,6 +21,37 @@ QUOTE = "We build warehouse software with barcode scanning and stock tracking."
 PRODUCT = "Acme builds warehouse software with barcode scanning and stock tracking."
 
 
+def test_overviews_keep_verified_company_facts_and_drop_document_summaries():
+    baseline = "Acme provides transportation and freight forwarding."
+    publication = {
+        "fields": {
+            "about": {
+                "definition": {"multiple": False},
+                "evidence_ids": [],
+                "detail": {"summary": baseline, "statements": []},
+            }
+        },
+        "evidence": [],
+    }
+    cite = {"url": SITE, "source": "official", "published": None, "quote": QUOTE}
+    draft = {
+        "status": "enriched",
+        "fields": {
+            "about": [
+                {
+                    "text": "Acme's annual report presents information about fiscal results.",
+                    "citations": [cite],
+                },
+                {"text": PRODUCT, "citations": [cite]},
+            ]
+        },
+    }
+    enrichment.apply(publication, draft)
+    assert publication["fields"]["about"]["value"] == f"{baseline} {PRODUCT}"
+    assert len(draft["fields"]["about"]) == 1
+    assert publication["fields"]["about"]["evidence_ids"]
+
+
 class Chat:
     provider = "azure"
     base_url = "https://region.example"
