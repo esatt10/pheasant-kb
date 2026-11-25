@@ -7,6 +7,7 @@ import type { GtmCatalogQuery, GtmCompanyProfile, GtmEnrichmentSettings } from "
 import { useSession } from "@pheasant/ui/state/session";
 import { GtmAccountBrief } from "./GtmAccountBrief";
 import { GtmResearchFields } from "./GtmResearchFields";
+import { GtmScrollArea } from "./GtmScrollArea";
 import { defaultEnrichment, GtmEnrichmentControls } from "./GtmEnrichmentControls";
 
 const PAGE_SIZE = 25;
@@ -159,7 +160,7 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
           <section aria-label="Indexed companies">
             {companies.isLoading ? <p className="muted">Loading companies…</p> : null}
             {companies.data ? <h2 className="section__title" aria-live="polite">{companies.data.has_more || offset ? `Companies ${offset + 1}–${offset + rows.length}` : `${rows.length} indexed ${rows.length === 1 ? "company" : "companies"}`}</h2> : null}
-            {rows.length ? <div className="table-scroll">
+            {rows.length ? <GtmScrollArea key={offset} label="Company results" className="table-scroll">
               <table className="data-table"><thead><tr><th scope="col">Company</th><th scope="col">Industry</th>{selected ? null : <><th scope="col">Sub-industry</th><th scope="col">Domain</th></>}</tr></thead><tbody>
                 {rows.map((row) => <tr key={row.company_id} className={selected === row.company_id ? "gtm-selected" : undefined}>
                   <td><Link to={gtmLocation(source, row.company_id)} aria-current={selected === row.company_id ? "true" : undefined} onClick={() => refresh.reset()}>{row.company}</Link></td>
@@ -167,7 +168,7 @@ export function GtmCatalog({ source, selected }: { source: string; selected: str
                   {selected ? null : <><td>{row.classification?.sub_industry ?? "—"}{row.classification ? <div className="muted small">{row.classification.code}</div> : null}</td><td>{row.domain}</td></>}
                 </tr>)}
               </tbody></table>
-            </div> : null}
+            </GtmScrollArea> : null}
             {companies.data && rows.length === 0 ? <p className="muted">No indexed companies match.</p> : null}
             {offset || companies.data?.has_more ? <div className="button-row gtm-paging">
               <button className="btn btn--small" disabled={!offset} onClick={() => setCriteria({ ...criteria, offset: Math.max(0, offset - PAGE_SIZE) })}>Previous</button>

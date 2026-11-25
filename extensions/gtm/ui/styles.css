@@ -7,9 +7,14 @@
   margin-bottom: calc(18px * var(--sp));
 }
 
+.gtm-catalog-bar .field,
+.gtm-filters .field {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
 .gtm-filters .field {
   flex: 1 1 138px;
-  min-width: 0;
 }
 
 .gtm-advanced-filters { flex: 1 0 100%; color: var(--muted); }
@@ -22,8 +27,27 @@
   gap: calc(20px * var(--sp));
 }
 
-.gtm-workspace .table-scroll .data-table {
-  min-width: 0;
+.gtm-workspace--split > section { min-inline-size: 0; }
+
+.gtm-scroll-area {
+  max-block-size: min(52dvh, calc(400px * var(--sp)));
+  min-inline-size: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.gtm-scroll-area__content { display: flow-root; }
+.gtm-scroll-area:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.gtm-scroll-area.table-scroll .data-table {
+  min-inline-size: 0;
+  overflow: visible;
+}
+
+.gtm-scroll-area.table-scroll th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
 }
 
 .gtm-workspace .data-table td a {
@@ -48,7 +72,7 @@
 .gtm-profile__actions,
 .gtm-paging { margin: calc(10px * var(--sp)) 0; }
 .gtm-profile details { margin-top: calc(12px * var(--sp)); }
-.gtm-profile pre { max-height: 460px; overflow: auto; }
+.gtm-profile .gtm-scroll-area pre { overflow: visible; }
 
 .gtm-brief-header h2 { margin: 0; font-size: calc(30px * var(--fs)); line-height: 1.15; }
 .gtm-brief-header p { margin: calc(6px * var(--sp)) 0; color: var(--muted); }
@@ -90,8 +114,10 @@
 
 .gtm-taxonomy-documents {
   flex: 0 1 auto;
-  max-height: calc(100% - 94px * var(--sp));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  max-block-size: min(52dvh, 70%);
   padding: calc(10px * var(--sp));
   border-top: 1px solid var(--border);
 }
@@ -100,10 +126,12 @@
 .gtm-taxonomy-document-group h4 { margin: calc(8px * var(--sp)) 0 calc(3px * var(--sp)); font-size: calc(12px * var(--fs)); }
 .gtm-taxonomy-document-group ul { margin: 0; padding: 0; list-style: none; }
 .gtm-taxonomy-document-group li { display: flex; gap: calc(8px * var(--sp)); justify-content: space-between; font-size: calc(12px * var(--fs)); line-height: 1.45; }
-.gtm-taxonomy-document-group a { color: var(--accent-text); overflow-wrap: anywhere; }
+.gtm-taxonomy-document-group :is(a, span) { min-inline-size: 0; overflow-wrap: anywhere; }
+.gtm-taxonomy-document-group a { color: var(--accent-text); }
 .gtm-taxonomy-document-group time { flex: none; color: var(--muted); }
 
 @media (max-width: 760px) {
   .gtm-workspace--split { display: flex; flex-direction: column-reverse; }
   .gtm-firmographics, .gtm-tech-groups, .gtm-sales-signals { grid-template-columns: 1fr; }
+  .gtm-scroll-area.table-scroll :is(td, th) { padding-inline: calc(8px * var(--sp)); }
 }

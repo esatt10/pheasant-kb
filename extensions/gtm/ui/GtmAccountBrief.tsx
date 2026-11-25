@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { GtmScrollArea } from "./GtmScrollArea";
 import type { GtmCompanyProfile, GtmOffering } from "./types";
 
 const RELATIONSHIPS: Record<string, string> = {
@@ -148,10 +149,10 @@ export function GtmAccountBrief({ profile, openGraph }: {
       </div>
       {products}
       {offers.length === 0 ? products ? null : <p className="muted small">No offering met the evidence requirements.</p>
-        : offers.slice(0, 6).map(offering)}
+        : <GtmScrollArea label="Featured offerings">{offers.slice(0, 6).map(offering)}</GtmScrollArea>}
       {offers.length > 6 ? <details>
         <summary>More offerings ({offers.length - 6})</summary>
-        {offers.slice(6).map(offering)}
+        <GtmScrollArea label="Additional offerings">{offers.slice(6).map(offering)}</GtmScrollArea>
       </details> : null}
       {support ? <><h4>Customer support</h4>{support}</> : null}
     </section>
@@ -188,7 +189,7 @@ export function GtmAccountBrief({ profile, openGraph }: {
       {descriptions("technology_stack")}
       {technologies.length ? <p className="muted small">{new Set(technologies.map((item) => item.name)).size} named technologies across {new Set(technologies.map((item) => item.category)).size} categories</p> :
         <p className="muted small">No categorized technology evidence is available in this revision.</p>}
-      <div className="gtm-tech-groups">
+      <GtmScrollArea label="Technology groups"><div className="gtm-tech-groups">
         {[...groups].map(([category, items]) => <div key={category} className="gtm-tech-group">
           <h4>{category}</h4>
           {items.map((item) => <details key={item.name} className="gtm-tech-row">
@@ -202,18 +203,18 @@ export function GtmAccountBrief({ profile, openGraph }: {
             </div>)}
           </details>)}
         </div>)}
-      </div>
+      </div></GtmScrollArea>
     </section>
 
     {profile.hubspot?.length ? <details className="gtm-brief-section">
       <summary><strong>HubSpot property review</strong></summary>
-      <div className="table-scroll"><table className="data-table">
+      <GtmScrollArea label="HubSpot company properties" className="table-scroll"><table className="data-table">
         <thead><tr><th scope="col">Company property</th><th scope="col">Suggested value</th><th scope="col">Review status</th></tr></thead>
         <tbody>{profile.hubspot.map((item) => <tr key={item.field}>
           <td>{item.property}</td><td>{formatGtmValue(item.value)}</td>
           <td>{item.status === "mapping" ? "Map to HubSpot options or units" : item.status === "review" ? "Verify before import" : "Candidate value"}</td>
         </tr>)}</tbody>
-      </table></div>
+      </table></GtmScrollArea>
       {industry ? <p className="muted small">Store NAICS {industry.code} in a custom company property.</p> : null}
     </details> : null}
   </>;

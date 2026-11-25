@@ -5,6 +5,7 @@ import { onApiAuthChanged } from "@pheasant/ui/api/client";
 import type { GtmCompanyProfile, GtmResearchCitation, GtmResearchChoice } from "./types";
 import { usePermissions } from "@pheasant/ui/state/permissions";
 import { formatGtmValue } from "./GtmAccountBrief";
+import { GtmScrollArea } from "./GtmScrollArea";
 
 const FIELD_NAMES: Record<string, string> = {
   about: "About us",
@@ -105,11 +106,11 @@ export function GtmResearchFields({ source, profile, openGraph }: {
   function choices(label: string, items?: GtmResearchChoice[]) {
     return items?.length ? <details>
       <summary>{label} ({items.length})</summary>
-      {items.map((item, index) => <div className="gtm-field-choice" key={index}>
+      <GtmScrollArea label={label}>{items.map((item, index) => <div className="gtm-field-choice" key={index}>
         <strong>{formatGtmValue(item.value)}</strong>
         {item.method ? <div className="muted small">{METHODS[item.method]}</div> : null}
         {citations(item.evidence)}
-      </div>)}
+      </div>)}</GtmScrollArea>
     </details> : null;
   }
 
@@ -157,18 +158,18 @@ export function GtmResearchFields({ source, profile, openGraph }: {
         ? <p className="muted small">{research?.reason ?? selected.reason}</p> : null}
       {selected.detail?.statements?.length ? <details open>
         <summary>Sources for each statement</summary>
-        <ul>{selected.detail.statements.map((item) => <li key={item.text}>
+        <GtmScrollArea label="Statement sources"><ul>{selected.detail.statements.map((item) => <li key={item.text}>
           {item.text}
           <div className="gtm-evidence-list">{graphSources(item.evidence_ids)}</div>
-        </li>)}</ul>
+        </li>)}</ul></GtmScrollArea>
       </details> : null}
       {selected.detail?.items?.length ? <details>
         <summary>Evidence by reported value</summary>
-        {selected.detail.items.map((item, index) => <div className="gtm-field-choice" key={index}>
+        <GtmScrollArea label="Reported value evidence">{selected.detail.items.map((item, index) => <div className="gtm-field-choice" key={index}>
           <strong>{formatGtmValue(item.value)}</strong>{item.category ? <span className="muted small"> · {item.category}</span> : null}
           <p>{item.text}</p>
           <div className="gtm-evidence-list">{graphSources(item.evidence_ids)}</div>
-        </div>)}
+        </div>)}</GtmScrollArea>
       </details> : null}
       {!analyst && selected.related_passage_count ? <p className="muted small">{selected.related_passage_count} matching source passages</p> : null}
       {expanded && analyst && lookup.isLoading ? <p className="muted small">Loading source evidence…</p> : null}
@@ -176,20 +177,20 @@ export function GtmResearchFields({ source, profile, openGraph }: {
       {evidence && !research ? <p className="muted small">Detailed evidence is available after this company is refreshed.</p> : null}
       {research?.evidence.length ? <div>
         {selected.detail?.statements?.length ? <p className="muted small">Additional publisher evidence</p> : null}
-        {citations(research.evidence)}
-      </div> : references.length ? <div className="gtm-evidence-list">
+        <GtmScrollArea label="Publisher evidence">{citations(research.evidence)}</GtmScrollArea>
+      </div> : references.length ? <GtmScrollArea label="Field references"><div className="gtm-evidence-list">
         {references.map((item) => <button key={item.id} className="gtm-evidence-link" onClick={() => openGraph(item.graph_node_id)}>
           {item.publisher} · {sourceName(item.kind)}{item.published ? ` · ${item.published}` : ""}
         </button>)}
-      </div> : null}
+      </div></GtmScrollArea> : null}
       {choices("Evidence by value", research?.items)}
       {choices("Alternative values", research?.alternatives)}
       {choices("Proposed values", research?.proposals)}
       {related?.length ? <details>
         <summary>Related source passages ({related.length})</summary>
-        {citations(related)}
+        <GtmScrollArea label="Related source passages">{citations(related)}</GtmScrollArea>
       </details> : null}
-    </section> : <div className="table-scroll">
+    </section> : <GtmScrollArea label="All research fields" className="table-scroll">
       <table className="data-table"><thead><tr><th scope="col">Field</th><th scope="col">Indexed value</th><th scope="col">Status</th></tr></thead>
         <tbody>{keys.map((key) => {
           const result = profile.fields[key];
@@ -200,7 +201,9 @@ export function GtmResearchFields({ source, profile, openGraph }: {
           </tr>;
         })}</tbody>
       </table>
-    </div>}
-    <details><summary>Indexed Markdown</summary><pre className="content-block">{profile.markdown}</pre></details>
+    </GtmScrollArea>}
+    <details><summary>Indexed Markdown</summary><GtmScrollArea label="Indexed company Markdown">
+      <pre className="content-block">{profile.markdown}</pre>
+    </GtmScrollArea></details>
   </details>;
 }

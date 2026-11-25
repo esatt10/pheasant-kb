@@ -4,6 +4,7 @@ import { onApiAuthChanged, request } from "@pheasant/ui/api/client";
 import type { SourceRecord } from "@pheasant/ui/api/types";
 import { usePermissions } from "@pheasant/ui/state/permissions";
 import { isGtmCatalog } from "./GtmCatalog";
+import { GtmScrollArea } from "./GtmScrollArea";
 
 const GROUPS = {
   official: "Official website",
@@ -45,7 +46,7 @@ function Documents({ source, company }: { source: string; company: string }) {
     {inventory.isPending ? <p className="muted small" role="status">Loading research documents…</p> : null}
     {inventory.isError ? <p className="error small" role="status">{inventory.error.message}</p> : null}
     {inventory.isSuccess && !documents.length ? <p className="muted small">No documents are saved for this company.</p> : null}
-    {Object.entries(GROUPS).map(([kind, label]) => {
+    <GtmScrollArea label="Research document list">{Object.entries(GROUPS).map(([kind, label]) => {
       const rows = documents.filter((document) => document.kind === kind);
       return rows.length ? <div key={kind} className="gtm-taxonomy-document-group">
         <h4>{label} ({rows.length})</h4>
@@ -58,6 +59,6 @@ function Documents({ source, company }: { source: string; company: string }) {
           {document.published ? <time dateTime={document.published}>{document.published}</time> : null}
         </li>)}</ul>
       </div> : null;
-    })}
+    })}</GtmScrollArea>
   </section>;
 }
