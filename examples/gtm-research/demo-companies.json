@@ -1,8 +1,10 @@
 {
   "source": "gtm-20-company-demo",
   "defaults": {
-    "page_limit": 12,
-    "job_limit": 6,
+    "depth": "deep",
+    "page_limit": 64,
+    "job_limit": 24,
+    "product_page_limit": 24,
     "search": false,
     "acquisition": {
       "allow_partial": true,

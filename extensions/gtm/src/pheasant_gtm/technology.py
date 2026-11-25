@@ -407,6 +407,7 @@ _CASE_SENSITIVE = {
     "Ariba",
     "Rails",
     "Intercom",
+    "Workday",
     "Ignition SCADA",
     "Iceberg",
 }
@@ -436,7 +437,8 @@ _HIRING = re.compile(
     re.I,
 )
 _CHANGE = re.compile(
-    r"\b(?:migrat\w+|roll(?:ing)? out|adopt\w+|implement\w+|evaluat\w+|pilot\w*|moderniz\w+)\b",
+    r"\b(?:migrat\w+|roll(?:ing)? out|adopt\w+|implement\w+|evaluat\w+|pilot\w*|moderniz\w+|"
+    r"transition(?:ing)? to)\b",
     re.I,
 )
 _INTEGRATION = re.compile(

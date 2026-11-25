@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from hashlib import sha256
 from urllib.parse import urlsplit
 
+from pheasant_gtm import offerings
 from pheasant_gtm.catalog import FieldSpec, words
 from pheasant_gtm.evidence import candidate, passages, subject
 from pheasant_gtm.sources import Document, same_site
+from pheasant_gtm.technology import technical_link
 
 _TRACKS = (
     (
@@ -39,13 +41,15 @@ _TRACKS = (
     ),
     (
         "Products and customer support",
-        ("products_services", "support_services", "business_activities"),
+        ("products_services", "support_services", "business_activities", "customer_segments"),
         (
             "products and services",
             "solutions",
             "technical support",
             "service level",
             "customer support",
+            "case studies",
+            "industries",
         ),
     ),
     (
@@ -73,8 +77,34 @@ _TRACKS = (
 )
 _TERM_TRACK = {key: terms for _, keys, terms in _TRACKS for key in keys}
 _FIELD_QUERIES = {
-    "about": ("company overview", "who we are", "we build", "we help", "our customers"),
-    "description": ("our mission", "our purpose", "we exist to", "mission statement"),
+    "about": (
+        "company overview",
+        "who we are",
+        "we build",
+        "we help",
+        "our customers",
+        "our history",
+        "founded",
+        "business units",
+        "customers worldwide",
+        "industries",
+    ),
+    "description": (
+        "our mission",
+        "our purpose",
+        "we exist to",
+        "mission statement",
+        "we develop",
+        "we design",
+        "we manufacture",
+        "we operate",
+        "we provide",
+        "our services",
+        "our products",
+        "our solutions",
+        "our research",
+        "integrated platform",
+    ),
     "business_activities": ("we build", "we develop", "we research", "we provide", "our products"),
     "customer_segments": (
         "built for",
@@ -105,8 +135,20 @@ _FIELD_QUERIES = {
         "full time employees",
         "global workforce",
     ),
-    "technology_stack": ("experience with", "we use", "technology stack", "architecture"),
+    "technology_stack": (
+        "experience with",
+        "we use",
+        "technology stack",
+        "architecture",
+        "powered by",
+        "built on",
+        "migrated to",
+        "implemented",
+        "integrates with",
+        "framework",
+    ),
 }
+PROFILE_FIELDS = frozenset({"about", "description", "technology_stack"})
 _AUTHORITY = {"filing": 3, "official": 3, "jobs": 2, "news": 2, "external": 1}
 _ABOUT = re.compile(
     r"(?:^|/)(?:about(?:[-_]us)?|who-we-are|our-company|company|corporate)(?:[./_-]|$)", re.I
@@ -136,8 +178,12 @@ class PassageIndex:
         self.documents = [doc for doc in documents if doc.attributed and not doc.quarantined]
         self.passages: list[Passage] = []
         self.postings: dict[str, set[int]] = defaultdict(set)
+        self.profile_leads: set[int] = set()
         for doc in self.documents:
             title = words(doc.title)
+            profile_page = doc.kind in {"official", "filing"} and (
+                offerings.route(doc.url) or technical_link(urlsplit(doc.url).path, doc.title)
+            )
             for ordinal, text in enumerate(passages(doc)):
                 normalized = words(text)
                 if len(normalized) < 24:
@@ -148,6 +194,8 @@ class PassageIndex:
                 tokens = set(normalized.split())
                 if lead:
                     tokens.update(title.split())
+                    if profile_page and len(normalized.split()) >= 8:
+                        self.profile_leads.add(index)
                 for term in tokens:
                     self.postings[term].add(index)
 
@@ -164,6 +212,11 @@ class PassageIndex:
             for token in phrase.split():
                 matches.update(self.postings.get(token, ()))
         ranked = []
+        profile_field = spec.key in PROFILE_FIELDS
+        if profile_field:
+            # Descriptive product and developer documentation often has a concrete
+            # product name as its title and no generic field terms in the lead.
+            matches.update(self.profile_leads)
         for index in matches:
             row = self.passages[index]
             doc = row.document
@@ -173,7 +226,11 @@ class PassageIndex:
                 3 if " " in term else 2 for term in field_terms if f" {term} " in row.normalized
             )
             title_score = sum(f" {term} " in row.title for term in field_terms)
-            if not field_score and not (title_score and row.lead):
+            if (
+                not field_score
+                and not (title_score and row.lead)
+                and not (profile_field and index in self.profile_leads)
+            ):
                 continue
             track_score = sum(
                 f" {term} " in row.normalized for term in _TERM_TRACK.get(spec.key, ())
@@ -193,6 +250,16 @@ class PassageIndex:
                 )
             )
         ranked.sort(key=lambda entry: entry[0], reverse=True)
+        if profile_field:
+            # Take each URL's best passage before repeating a URL, so the packet
+            # can describe several activities even when one document ranks highly.
+            primary_urls = set()
+            primary, secondary = [], []
+            for entry in ranked:
+                address = entry[1].document.url
+                (secondary if address in primary_urls else primary).append(entry)
+                primary_urls.add(address)
+            ranked = primary + secondary
         selected, seen = [], set()
         per_url: Counter = Counter()
         for _, row in ranked:
@@ -211,7 +278,7 @@ class PassageIndex:
                     "text": row.text,
                 }
             )
-            if len(selected) == 6:
+            if len(selected) == (16 if profile_field else 6):
                 break
         return selected
 

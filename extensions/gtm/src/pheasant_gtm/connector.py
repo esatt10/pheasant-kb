@@ -166,7 +166,7 @@ class GTMConnector(SourceConnector):
                 gtm_catalog.checked(self.state, name, row, time.time(), failed=True)
                 failed.append(company)
                 continue
-            self._publish(row, settings, target, snapshot)
+            self._publish(row, settings, target, snapshot, progress=(index - 1, len(due)))
             gtm_catalog.checked(self.state, name, row, time.time())
         self.listing_details = {
             "gtm_catalog": {
@@ -199,15 +199,25 @@ class GTMConnector(SourceConnector):
         fields = ordered_fields(target)
         report, pages = snapshot["profile"], snapshot["web_pages"]
         documents = web_archive.research_documents(report, pages, snapshot.get("parsed"))
-        if not report.get("related_passages"):
-            index = runbook.PassageIndex(documents)
-            passages = workflow.retrieve_field_passages(
-                index, fields, report["fields"], report["as_of"]
-            )
-            report = {
-                **report,
-                "related_passages": {key: rows for key, rows in passages.items() if rows},
-            }
+        previous_passages = report.get("related_passages", {})
+        index = runbook.PassageIndex(documents)
+        passages = workflow.retrieve_field_passages(
+            index,
+            [
+                field
+                for field in fields
+                if not previous_passages or field.key in runbook.PROFILE_FIELDS
+            ],
+            report["fields"],
+            report["as_of"],
+        )
+        report = {
+            **report,
+            "related_passages": {
+                **{key: rows for key, rows in previous_passages.items() if key not in passages},
+                **{key: rows for key, rows in passages.items() if rows},
+            },
+        }
         inventory, offering_traces = offerings.inventory(
             documents, report["website"], report.get("company") or target.company
         )
@@ -227,10 +237,18 @@ class GTMConnector(SourceConnector):
         snapshot["enrichment_cache"] = result
         return report, profile, offering_traces
 
-    def _publish(self, row: dict, settings: dict, target: Request, snapshot: dict) -> None:
+    def _publish(
+        self,
+        row: dict,
+        settings: dict,
+        target: Request,
+        snapshot: dict,
+        *,
+        progress: tuple[int, int | None] = (0, None),
+    ) -> None:
         if self.listing_progress and target.enrichment.enabled:
             self.listing_progress(
-                "researching", 0, None, f"{row['company_id']} · preparing grounded descriptions"
+                "researching", *progress, f"{row['company_id']} · preparing grounded descriptions"
             )
         report, profile, offering_traces = self._projection(target, snapshot)
         pages = snapshot["web_pages"]

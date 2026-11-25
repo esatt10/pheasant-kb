@@ -670,7 +670,8 @@ def _field_matches(spec, doc: Document, as_of: str) -> bool:
     if doc.published and doc.published > as_of:
         return False
     if spec.max_age_days:
-        stamp = doc.published or (doc.fetched_at[:10] if doc.active_board else None)
+        observed = doc.active_board or (spec.key == "technology_stack" and doc.kind == "official")
+        stamp = doc.published or (doc.fetched_at[:10] if observed else None)
         if not stamp or date.fromisoformat(stamp) < date.fromisoformat(as_of) - timedelta(
             days=spec.max_age_days
         ):

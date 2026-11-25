@@ -9,6 +9,8 @@ pytest.importorskip("pheasant_gtm")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from pheasant_gtm import collection_service, connector, enrichment, runtime, worker  # noqa: E402
+from pheasant_gtm.catalog import DEFAULT_FIELDS  # noqa: E402
+from pheasant_gtm.field_report import evidence_id  # noqa: E402
 
 from pheasant.api.app import create_app  # noqa: E402
 from pheasant.assistant.providers import ProviderError  # noqa: E402
@@ -42,14 +44,151 @@ def test_overviews_keep_verified_company_facts_and_drop_document_summaries():
                     "text": "Acme's annual report presents information about fiscal results.",
                     "citations": [cite],
                 },
+                {"text": "Acme provides freight forwarding.", "citations": [cite]},
                 {"text": PRODUCT, "citations": [cite]},
             ]
         },
     }
     enrichment.apply(publication, draft)
     assert publication["fields"]["about"]["value"] == f"{baseline} {PRODUCT}"
-    assert len(draft["fields"]["about"]) == 1
+    assert len(draft["fields"]["about"]) == 2
+    assert publication["fields"]["about"]["detail"]["statements"][0]["text"] == PRODUCT
     assert publication["fields"]["about"]["evidence_ids"]
+
+
+def test_description_uses_distinct_verified_claims_from_a_wider_packet():
+    key = "description"
+    specs = [item for item in DEFAULT_FIELDS if item.key == key]
+    rows = [
+        {
+            "url": f"{SITE}products/{index}",
+            "source": "official",
+            "text": f"Acme builds warehouse platform {index} with live barcode scanning.",
+        }
+        for index in range(16)
+    ]
+    baseline = "Acme builds warehouse software."
+    publication = {
+        "company": "Acme",
+        "fields": {
+            key: {
+                "definition": {"multiple": False},
+                "evidence_ids": [],
+                "value": baseline,
+                "detail": {"summary": baseline, "statements": []},
+            }
+        },
+        "evidence": [],
+    }
+    report = {
+        "fields": {key: {"status": "observed", "evidence": []}},
+        "related_passages": {key: rows},
+    }
+    packet = enrichment._packet(
+        specs, report, publication, {evidence_id(row["url"]): {} for row in rows}
+    )
+
+    class Model:
+        max_output_tokens = 4096
+
+        def complete(self, system, prompt, **_options):
+            data = json.loads(prompt)
+            if "claims" in data:
+                return json.dumps({"approved": list(range(len(data["claims"])))})
+            assert "four to seven distinct claims" in system
+            assert len(data["fields"][key]["evidence"]) == 16
+            return json.dumps(
+                {
+                    key: [
+                        {
+                            "text": row["text"],
+                            "citations": [{"id": index, "quote": row["text"]}],
+                        }
+                        for index, row in enumerate(rows, 1)
+                        if index >= 10
+                    ]
+                }
+            )
+
+    fields = enrichment._batch(Model(), "Acme", packet)
+    enrichment.apply(publication, {"status": "enriched", "fields": fields})
+    assert len(publication["fields"][key]["detail"]["statements"]) == 7
+    assert publication["fields"][key]["value"].startswith(baseline)
+    assert len(publication["fields"][key]["evidence_ids"]) == 7
+
+
+def test_technology_packet_includes_citations_for_multiple_resolved_systems():
+    key = "technology_stack"
+    specs = [item for item in DEFAULT_FIELDS if item.key == key]
+    erp, monitoring = (
+        {
+            "url": SITE + "finance",
+            "source": "official",
+            "quote": "We are transitioning to SAP S/4HANA.",
+        },
+        {
+            "url": SITE + "monitoring",
+            "source": "official",
+            "quote": "We run Grafana for production monitoring.",
+        },
+    )
+    report = {
+        "fields": {
+            key: {
+                "status": "observed",
+                "evidence": [monitoring],
+                "items": [{"evidence": [monitoring]}, {"evidence": [erp]}],
+            }
+        },
+    }
+    packet = enrichment._packet(
+        specs,
+        report,
+        {"fields": {key: {"value": ["Grafana", "SAP S/4HANA"]}}},
+        {evidence_id(row["url"]): {} for row in (monitoring, erp)},
+    )
+    assert {row["text"] for row in packet[key]["evidence"].values()} == {
+        erp["quote"],
+        monitoring["quote"],
+    }
+
+
+def test_company_description_keeps_the_cited_business_activity_lead():
+    product = "Acme builds warehouse software for tracking inventory."
+    mission = "Acme's mission is to simplify logistics."
+    sample = {
+        "fields": {
+            "description": {
+                "definition": enrichment._DEFAULT_DESCRIPTION,
+                "evidence_ids": [],
+                "detail": {"summary": mission},
+            },
+            "business_activities": {
+                "detail": {
+                    "summary": product,
+                    "statements": [{"text": product, "evidence_ids": ["product"]}],
+                }
+            },
+        },
+        "evidence": [{"id": "product", "field_keys": ["business_activities"]}],
+    }
+    claims = {
+        "description": [
+            {
+                "text": mission,
+                "citations": [
+                    {"url": SITE, "source": "official", "published": None, "quote": mission}
+                ],
+            }
+        ],
+    }
+    enrichment.apply(sample, {"status": "enriched", "fields": claims})
+    description = sample["fields"]["description"]
+    assert description["value"] == f"{product} {mission}"
+    assert "product" in description["evidence_ids"]
+    assert "description" in next(
+        row["field_keys"] for row in sample["evidence"] if row["id"] == "product"
+    )
 
 
 class Chat:

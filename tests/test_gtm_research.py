@@ -17,7 +17,7 @@ pytest.importorskip("pheasant_gtm")
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
-from pheasant_gtm import presentation, runtime, sources, worker, workflow
+from pheasant_gtm import presentation, runbook, runtime, sources, worker, workflow
 from pheasant_gtm import run_service as gtm
 from pheasant_gtm.catalog import FieldSpec, Request, RunControl, ordered_fields
 from pheasant_gtm.evidence import candidate, extract, resolve
@@ -41,6 +41,66 @@ BOARD = "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"
 NEWS = SITE + "news/platform-launch"
 ABOUT = SITE + "about"
 CANDIDATE = "https://other.example/"
+
+
+def test_company_description_passages_include_distinct_product_pages():
+    spec = next(
+        field for field in ordered_fields(Request(website=SITE)) if field.key == "description"
+    )
+    documents = [
+        sources.Document(
+            ABOUT,
+            "Acme about us",
+            "official",
+            "Our mission is to improve warehouse safety and train operators.\n"
+            "Our mission is to make warehouse automation accessible.",
+            attributed=True,
+        ),
+        *(
+            sources.Document(SITE + suffix, title, "official", text, attributed=True)
+            for suffix, title, text in (
+                (
+                    "products/trace",
+                    "Trace",
+                    "Trace tracks stock and scan events across distribution centers.",
+                ),
+                (
+                    "products/crane",
+                    "Crane",
+                    "Crane helps route pallets to the correct outbound shipping dock.",
+                ),
+            )
+        ),
+        sources.Document(
+            SITE + "products/unverified",
+            "Unverified",
+            "official",
+            "An unattributed product claim should never be selected for the company profile.",
+        ),
+    ]
+    selected = runbook.PassageIndex(documents).retrieve(
+        spec, ["mission", "our purpose"], lambda _spec, _doc: True
+    )
+    assert {row["url"] for row in selected[:3]} == {doc.url for doc in documents[:3]}
+    assert all(row["url"] != documents[-1].url for row in selected)
+
+
+def test_technology_distinguishes_brand_names_from_common_words_and_reports_transition():
+    assert (
+        technologies(
+            "We help automate the most time-consuming parts of your workday.",
+            kind="official",
+            path="/digital-services",
+            first_party=True,
+        )
+        == {}
+    )
+    assert technologies(
+        "We are transitioning to SAP S/4HANA to upgrade our financial system.",
+        kind="news",
+        path="/news/finance",
+        first_party=True,
+    ) == {"SAP S/4HANA": "change_in_progress"}
 
 
 def test_deep_run_indexes_company_passages_and_reserves_a_supplement():

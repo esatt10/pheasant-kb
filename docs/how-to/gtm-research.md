@@ -162,7 +162,11 @@ Choose **Deep research** when registering a source or **Enable deep research and
 
 Deep mode gathers a bounded primary corpus, indexes normalized passages in a company-scoped lexical index, and runs field-specific searches. It applies each field's source, recency, and dependency rules. It reserves up to 16 page attempts to follow up on evidence gaps, including corporate facts, customer support, investor disclosures, and technology investment. When external search is enabled with a Brave key, it can add up to three first-party searches during this follow-up. Otherwise it prioritizes URLs already discovered on the company site. The job checkpoints the fetched documents and reports document, passage, field coverage, and search-attempt counts.
 
+The 20-company demo uses deep mode with 64 collection page attempts, up to 24 job postings, and 24 additional targeted offering-page attempts per company. These are limits. A company's crawl can finish earlier when it runs out of relevant pages, and a page attempt can end without indexable content.
+
 Deep research can collect literal company overviews and mission statements from first-party corporate pages. The field evidence panel shows additional matching source passages even when the available evidence does not resolve a value. Source managers can read those excerpts and quotations. Pheasant search and MCP continue to return the curated facts, counts, and graph references.
+
+Description, About us, and Technology use up to 16 matching passages and favor distinct pages. Description covers the core business and specific offerings. About us adds customers, footprint, and operating context when documented. Technology explains the role of named systems in products, integrations, hiring, or company operations. Model enrichment aims for four to seven distinct, cited claims per field when the evidence supports them. Sparse evidence can still yield a short value or a deterministic fallback.
 
 For an individual run, add `--review` or `review: true` to use Pheasant's configured chat model on selected evidence. Deep mode requests low reasoning where supported by the shared provider and restricts review to eight tool-free batches of at most five fields. Model observations remain proposals. Managed profiles use the separate description enrichment policy.
 
