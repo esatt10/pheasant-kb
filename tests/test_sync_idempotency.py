@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,7 @@ from pheasant.persistence.graph_store import GraphStore
 from pheasant.registry.source_registry import SourceRegistry
 from pheasant.search.hybrid import HybridSearch
 from pheasant.search.text_store import SearchStore
+from pheasant.sync import engine as sync_engine_module
 from pheasant.sync.engine import SyncEngine
 from tests.conftest import make_vector_engine, run_sync, sync_result_counts
 
@@ -37,6 +39,76 @@ def test_restarted_row_writer_keeps_unchanged_generation(loaded_config):
         )
     finally:
         restarted.close()
+
+
+def test_large_edge_checkpoint_keeps_exact_pairs_and_a_stable_generation(loaded_config):
+    loaded_config.storage.graph_snapshots = False
+    engine = SyncEngine(loaded_config)
+    try:
+        graph = engine.graph_builder.graph
+        kb_id = loaded_config.knowledge_base_id
+        graph.add_node("source-000", type="document")
+        graph.add_node("target-001-000", type="document")
+        graph.add_edge("source-000", "target-001-000", type="references")
+        engine._graph_dirty = True
+        assert engine.checkpoint_graph()
+
+        # 100 sources with 330 targets each exceeded the driver's signed
+        # parameter count when the checkpoint bound every target separately.
+        for source_index in range(100):
+            source = f"source-{source_index:03}"
+            graph.add_node(source, type="document")
+            for target_index in range(330):
+                target = f"target-{source_index:03}-{target_index:03}"
+                graph.add_node(target, type="document")
+                graph.add_edge(source, target, type="references")
+        engine._graph_dirty = True
+        assert engine.checkpoint_graph()
+
+        store = engine.graph_store.rows
+        assert store.counts(kb_id)[1] == 33_001
+        assert store.out_edges(kb_id, ["source-000"], ["target-001-000"])["source-000"]
+        generation = store.published_generation(kb_id)["generation_id"]
+        graph.touch_edge("source-000", "target-000-000")
+        engine._graph_dirty = True
+        assert engine.checkpoint_graph()
+        assert store.published_generation(kb_id)["generation_id"] == generation
+    finally:
+        engine.close()
+
+
+def test_failed_periodic_checkpoint_waits_before_retrying(loaded_config, monkeypatch):
+    loaded_config.storage.graph_checkpoint_seconds = 10
+    engine = SyncEngine(loaded_config)
+    manifest = {"artifacts": {}}
+    now = engine._last_checkpoint + 11
+    attempts = 0
+    save = engine.checkpoint_graph
+
+    def fail_once(source_name=None, manifest=None):
+        nonlocal attempts, now
+        attempts += 1
+        if attempts == 1:
+            now += 12
+            raise RuntimeError("temporary checkpoint failure")
+        return save(source_name, manifest)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(sync_engine_module, "time", SimpleNamespace(monotonic=lambda: now))
+            patch.setattr(engine, "checkpoint_graph", fail_once)
+            engine._maybe_checkpoint("docs", manifest)
+            assert engine._graph_dirty
+            now += 9
+            engine._maybe_checkpoint("docs", manifest)
+            assert attempts == 1
+            now += 1
+            engine._maybe_checkpoint("docs", manifest)
+            assert attempts == 2
+            assert not engine._graph_dirty
+            assert engine.manifests.load("docs") == manifest
+    finally:
+        engine.close()
 
 
 def test_configured_upload_source_keeps_zip_index_across_restart(tmp_path: Path) -> None:

@@ -24,6 +24,36 @@ def test_pathological_enrichment_node_ids_are_bounded_and_deterministic() -> Non
     assert first != different
 
 
+def test_inline_video_bytes_are_kept_in_chunks_but_ignored_by_enrichment(
+    workspace_copy: Path, sync_engine: object
+) -> None:
+    media = workspace_copy / "pheasant-repo" / "inline-video.md"
+    encoded = "QXastUPla1/" * 1200 + "AA=="
+    media.write_text(
+        "# Nimbus Gateway\n\n"
+        f'<video controls><source src="data:video/mp4;base64,{encoded}"></video>\n\n'
+        "Use the Compass Router and see [the guide](https://example.test/guide).\n",
+        encoding="utf-8",
+    )
+
+    run_sync(sync_engine, source_name="pheasant-repo", mode="incremental")
+    document_id = "file:pheasant-repo:inline-video.md:branch=none"
+    graph = sync_engine.graph_builder.graph
+    targets = {target for _, target, _ in graph.out_edges(document_id)}
+    entities = {
+        graph.nodes[target]["label"]
+        for target in targets
+        if graph.nodes[target]["type"] == "entity"
+    }
+    assert entities == {"Nimbus Gateway", "Compass Router"}
+    assert any(
+        graph.nodes[target].get("reference") == "https://example.test/guide" for target in targets
+    )
+    chunks = sync_engine.state.rows("SELECT text FROM chunks WHERE artifact_id=?", (document_id,))
+    assert len(chunks) > 1
+    assert any("QXastUPla1" in chunk["text"] for chunk in chunks)
+
+
 def test_full_sync_creates_enriched_graph_nodes_and_edges(
     workspace_copy: Path,
     loaded_config: object,

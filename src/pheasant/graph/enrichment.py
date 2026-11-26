@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from pheasant.config.schema import SourceConfig
 from pheasant.graph.code_analysis import analyze as analyze_code
 from pheasant.graph.code_imports import CODE_REFERENCE_TYPES, resolve_code_import
-from pheasant.graph.media_links import image_links
+from pheasant.graph.media_links import image_links, strip_inline_media_data
 from pheasant.graph.symbol_ids import unique_symbol_id
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact
@@ -274,7 +274,7 @@ class MarkdownDocumentEnrichmentPass:
         suffix = Path(artifact.relative_path).suffix.lower()
         if suffix not in {".md", ".txt", ".html", ".xml"}:
             return ArtifactEnrichment()
-        text = artifact_text(artifact)
+        text = strip_inline_media_data(artifact_text(artifact))
         enrichment = _base_concepts(kb_id, source, artifact, text)
         for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", text):
             _add_concept(enrichment, kb_id, source, artifact, _clean_inline(heading), 2.0)
