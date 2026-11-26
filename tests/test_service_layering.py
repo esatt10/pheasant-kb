@@ -77,6 +77,7 @@ LAYERS: dict[str, int] = {
     # Domain and below. Listed explicitly rather than defaulted so a new
     # package has to say where it belongs.
     "search": 1,
+    "extensions": 1,
     "graph": 1,
     "memory": 1,
     "artifacts": 1,

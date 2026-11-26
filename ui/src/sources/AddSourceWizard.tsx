@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { SourceRecord, SourceTypeInfo, SourceWritePayload } from "../api/types";
 import { DirectoryBrowser } from "./DirectoryBrowser";
 import { useConnections } from "./Connections";
+import { sourceConfig } from "./sourceConfig";
 
 const SYNC_MODES = ["incremental", "full", "validate_only", "repair"];
 
@@ -35,8 +36,8 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
   // a typed one that is taken is refused here rather than overwritten there.
   const known = useQuery({ queryKey: ["sources"], queryFn: api.sources });
   const knownNames = useMemo(() => new Set((known.data ?? []).map((s) => s.name)), [known.data]);
-  const nameTaken = !editing && knownNames.has(name.trim());
   const [type, setType] = useState(String(initial.type ?? "document_folder"));
+  const nameTaken = !editing && knownNames.has(name.trim());
   const [description, setDescription] = useState(String(initial.description ?? ""));
   const [enabled, setEnabled] = useState(Boolean(initial.enabled ?? true));
   const [maxDepth, setMaxDepth] = useState(
@@ -120,6 +121,8 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       queryClient.invalidateQueries({ queryKey: ["graph"] });
+      queryClient.invalidateQueries({ queryKey: ["index-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["taxonomy", name] });
       onClose();
     },
     onError: (err) => setError((err as Error).message),
@@ -200,6 +203,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
     }
     return payload;
   };
+
 
   return (
     <div className="modal-scrim" onClick={onClose}>
@@ -286,7 +290,7 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
               <label className="field">
                 <span>Type</span>
                 <select className="text-input" value={type} onChange={(e) => setType(e.target.value)}>
-                  {sourceTypes.map((entry) => (
+                  {sourceTypes.filter((entry) => !entry.managed).map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.label}
                       {entry.builtin ? "" : " · plugin"}
@@ -545,18 +549,6 @@ export function AddSourceWizard({ source, onClose }: AddSourceWizardProps) {
       </div>
     </div>
   );
-}
-
-function sourceConfig(source?: SourceRecord | null): Record<string, unknown> {
-  if (!source) return {};
-  if (source.config_json) {
-    try {
-      return JSON.parse(source.config_json);
-    } catch {
-      return source;
-    }
-  }
-  return source;
 }
 
 function orUndefined(value: string[]): string[] | undefined {

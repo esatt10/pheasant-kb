@@ -114,7 +114,6 @@ export function useTileHosts(): Record<TileId, HTMLElement> {
       chat: make("chat"),
       panel: make("panel"),
       graph: make("graph"),
-      facts: make("facts"),
       node: make("node"),
       artifacts: make("artifacts"),
       taxonomy: make("taxonomy"),

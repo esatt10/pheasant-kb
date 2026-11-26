@@ -1,0 +1,77 @@
+# Optional GTM extension and parser sidecar for the root pheasant-kb stack.
+# Paths are relative to the first file (-f compose.yaml).
+x-gtm-image: &gtm-image ${PHEASANT_GTM_RUNTIME_IMAGE:-pheasant:gtm-local}
+x-gtm-runtime: &gtm-runtime
+  image: *gtm-image
+  build:
+    context: .
+    args:
+      PHEASANT_BUILD_EXTENSIONS: gtm
+
+services:
+  gtm-parser:
+    image: ${PHEASANT_GTM_PARSER_IMAGE:-pheasant-gtm-sandbox:local}
+    build:
+      context: .
+      dockerfile: extensions/gtm/Dockerfile.parser
+    entrypoint: ["python", "-I", "-B", "-m", "pheasant_gtm.sidecar"]
+    command: ["--socket", "/run/pheasant-gtm/parser.sock"]
+    restart: unless-stopped
+    init: true
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 24
+    volumes:
+      - gtm-parser-socket:/run/pheasant-gtm
+    healthcheck:
+      test: ["CMD", "python", "-I", "-B", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/pheasant-gtm/parser.sock'); s.close()"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+
+  api:
+    <<: *gtm-runtime
+    environment:
+      PHEASANT_GTM_PARSER_SOCKET: /run/pheasant-gtm/parser.sock
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+    volumes:
+      - gtm-parser-socket:/run/pheasant-gtm:ro
+    depends_on:
+      gtm-parser:
+        condition: service_healthy
+
+  indexer:
+    <<: *gtm-runtime
+    environment:
+      PHEASANT_GTM_PARSER_SOCKET: /run/pheasant-gtm/parser.sock
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+    volumes:
+      - gtm-parser-socket:/run/pheasant-gtm:ro
+    depends_on:
+      gtm-parser:
+        condition: service_healthy
+
+  graph:
+    <<: *gtm-runtime
+
+  logger:
+    <<: *gtm-runtime
+
+  worker:
+    <<: *gtm-runtime
+
+  db-init:
+    image: *gtm-image
+
+  secrets-init:
+    image: *gtm-image
+
+  workspace-init:
+    image: *gtm-image
+
+volumes:
+  gtm-parser-socket:

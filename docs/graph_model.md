@@ -44,6 +44,11 @@ pheasant uses a directed multi-graph model, compatible with `networkx.MultiDiGra
 
 ## Document structure
 
+An indexed GTM catalog profile has `derived_from` edges to file-owned
+`gtm_evidence` nodes. Each node identifies the publisher domain, evidence
+kind and date, and the field keys that cite it. The company document's ACL
+applies to its evidence nodes. A new revision retracts citations it dropped.
+
 Since 2026-11-21 (`graph/provenance.py`) a document's chunks and sections are
 ordered and linked in the graph, not only in the rows:
 

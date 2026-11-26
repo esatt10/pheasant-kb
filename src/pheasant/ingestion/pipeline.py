@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pheasant.config.schema import SourceConfig
+from pheasant.extensions import extension_sources
 from pheasant.ingestion.chunk_plan import plan_chunks, strategy_of
 from pheasant.ingestion.chunking import TextChunk, chunk_text
 from pheasant.ingestion.content_types import (
@@ -82,6 +83,8 @@ class ParsedArtifact:
     #: chunks already carry their pages; the graph builder reads this for the
     #: headings' (`graph/provenance.py`).
     page_lines: list[int | None] | None = None
+    extension_provenance: list[dict[str, Any]] = field(default_factory=list)
+    extension_inputs: dict[str, list[str]] = field(default_factory=dict)
 
 
 def utc_now() -> str:
@@ -618,7 +621,10 @@ def parse_connector_payload(
         else (None, None, False)
     )
     content_hash = payload.sha256 or item.sha256 or sha256_bytes(payload.content)
-    if is_image:
+    extension_source = source.type.value in extension_sources()
+    if extension_source and payload.normalized_text is not None:
+        text = payload.normalized_text
+    elif is_image:
         text = caption_to_text(
             captioner,
             payload.content,
@@ -677,6 +683,10 @@ def parse_connector_payload(
         chunk_plan=chunk_plan,
         okf=okf,
         page_lines=page_lines,
+        extension_provenance=(
+            payload.metadata.get("extension_provenance", []) if extension_source else []
+        ),
+        extension_inputs=payload.metadata.get("extension_inputs", {}) if extension_source else {},
     )
 
 

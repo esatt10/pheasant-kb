@@ -208,6 +208,10 @@ class PheasantTools(
     ) -> dict:
         require_permission("sources.manage")
         self._require_knowledge_base(knowledge_base)
+        from pheasant.extensions import extension_sources
+
+        if contribution := extension_sources().get(source_type):
+            raise ValueError(contribution.registration_help)
         source = self._new_source(name, SourceType(source_type), path, list(urls or []))
         source.description, source.enabled = description, enabled
         source.connector.connection = self._connected(connection)

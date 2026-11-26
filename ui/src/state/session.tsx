@@ -16,7 +16,7 @@ import { NOISY_NODE_TYPES } from "../graph/graphStyles";
  *
  * Every piece of "where I am and what I was looking at" lives here, in one
  * store mounted ABOVE the router — so switching between Notebook, Sources and
- * Settings, or between the Graph/Facts/Node tabs, never unmounts it and never
+ * Settings, or between the Graph and Node tabs, never unmounts it and never
  * resets it. The reducer is the only way anything changes: navigation, mounts
  * and refetches are not actions and so cannot disturb the view. Only a
  * deliberate user action does.
@@ -26,11 +26,10 @@ import { NOISY_NODE_TYPES } from "../graph/graphStyles";
  * The tabs of the Notebook's right-hand panel. Each is docked in the panel by
  * default and can be pulled out into a tile of its own (`docked` below).
  */
-export type PanelTab = "graph" | "facts" | "node" | "artifacts" | "taxonomy";
-export const PANEL_TABS: PanelTab[] = ["graph", "facts", "node", "artifacts", "taxonomy"];
+export type PanelTab = "graph" | "node" | "artifacts" | "taxonomy";
+export const PANEL_TABS: PanelTab[] = ["graph", "node", "artifacts", "taxonomy"];
 export const PANEL_TAB_LABELS: Record<PanelTab, string> = {
   graph: "Graph",
-  facts: "Facts",
   node: "Node",
   artifacts: "Artifacts",
   taxonomy: "Taxonomy",
@@ -74,7 +73,7 @@ export interface BrowserState {
 
 /**
  * The Notebook's sections, arranged as tiles in four columns: sources, the
- * chat and the panel (a tab group: graph, facts, node, taxonomy), left to
+ * chat and the panel (a tab group), left to
  * right. A tile can be dragged to another column or to another place in its
  * own, and every tile folds to its header. A column with nothing in it takes
  * no width.
@@ -97,7 +96,7 @@ export const DEFAULT_TILE_LAYOUT: TileLayout = {
   right: ["panel"],
 };
 
-export const DEFAULT_DOCKED: PanelTab[] = ["artifacts", "graph", "facts", "node", "taxonomy"];
+export const DEFAULT_DOCKED: PanelTab[] = ["artifacts", "graph", "node", "taxonomy"];
 
 /** An opaque id for one conversation (a topic of the chat). */
 export function newConversationId(): string {
@@ -158,7 +157,7 @@ export interface SessionState {
   layout: GraphLayout;
   /** Sources rail collapsed to a spine, giving the other panes its width. */
   railCollapsed: boolean;
-  /** Graph/facts/node panel collapsed to a spine, giving the chat its width. */
+  /** Panel collapsed to a spine, giving the chat its width. */
   panelCollapsed: boolean;
   /** Nodes the last answer surfaced; non-empty means the canvas is filtered. */
   surfacedIds: string[];
@@ -206,7 +205,7 @@ export interface SessionState {
   tiles: TileLayout;
   /** The panel tabs docked in the panel, in tab order; the rest are tiles. Not persisted. */
   docked: PanelTab[];
-  /** Fold state of the graph, facts and node tabs while they are tiles of their own. */
+  /** Fold state of tabs while they are tiles of their own. */
   tabCollapsed: Partial<Record<PanelTab, boolean>>;
   /** Height of the first unfolded tile of a side column holding two, in px; not persisted. */
   stackHeights: Partial<Record<TileColumn, number>>;

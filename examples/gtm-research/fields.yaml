@@ -1,0 +1,26 @@
+- key: support_tier
+  definition: Named tier in the target company's public customer-support offering.
+  type: enum
+  options: [Standard, Enterprise, Premium]
+  labels: [Support Tier, Support Plan]
+  keywords: [support plan, support tier, SLA]
+  sources: [official]
+
+- key: enterprise_support_sla
+  definition: Published initial response-time commitment for the Enterprise support tier.
+  type: text
+  keywords: [response time, service level, SLA]
+  sources: [official]
+  applies_when:
+    - field: support_tier
+      equals: Enterprise
+
+- key: cloud_migration_services
+  definition: >
+    A potential cloud migration services need with a specific, recent trigger and a
+    clear statement of uncertainty.
+  multiple: true
+  inference: true
+  keywords: [cloud migration, migrate workloads, cloud modernization]
+  sources: [official, jobs, news]
+  max_age_days: 180

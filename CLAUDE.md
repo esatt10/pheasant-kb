@@ -20,10 +20,11 @@ Design pillars — these are product guarantees, not preferences:
    state (content sha256 + stable IDs).
 2. **Incremental by default** — connector checkpoints and manifests skip
    unchanged artifacts. A second sync of an untouched corpus does no work.
-3. **Deterministic parsing** — no LLM calls in the indexing path; all
-   enrichment is rule-based and reproducible. The only sanctioned network calls
-   at sync time are the optional embedder, captioner and transcriber, and each
-   keeps a stub/offline path so `pytest` stays network-free.
+3. **Deterministic parsing** — the core indexer transforms source bytes
+   reproducibly. The embedder, captioner and transcriber keep stub/offline
+   paths. The optional GTM extension may prepare cited descriptions from its
+   extracted evidence before handing the indexer a source artifact. It
+   checkpoints successful descriptions and has a deterministic fallback.
 4. **Persistence split** — PostgreSQL and `/state` (operational truth: rows,
    the graph's rows, vectors, manifests, media) and `/exports` (regenerable
    payloads). Both are **user data**.
@@ -65,6 +66,7 @@ pheasant-kb/
 ├── docs/                      ← GitHub-rendered Markdown; index.md is the hub,
 │                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
+├── extensions/                ← optional Pheasant packages and UI contributions (GTM)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
@@ -261,7 +263,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 230 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 237 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -338,9 +340,11 @@ sync, and its job reads `succeeded` before anything is indexed.
 
 ## 4. Rules
 
-1. **Never put an LLM call in the indexing path.** Determinism is a product
-   guarantee. The optional embedder, captioner and transcriber must each keep a
-   stub path so the suite stays network-free.
+1. **Keep the core indexer deterministic.** Model calls that prepare optional
+   GTM descriptions belong in the extension's source preparation, which must
+   preserve the deterministic evidence and support model-free publication.
+   The optional embedder, captioner and transcriber must each keep a stub path
+   so the suite stays network-free.
 2. **Treat `/state` as user data.** Schema/layout changes ship a one-shot
    idempotent migration that preserves originals (`*.migrated` rename, never
    delete). New tables arrive via `CREATE TABLE IF NOT EXISTS` in `SCHEMA`.
@@ -1384,7 +1388,7 @@ workflow must get, a plugin included. `docs/how-to/conversations-and-visuals.md`
   before this has none until it changes or a `full` sync re-reads it;
   `tests/test_web_page_snapshot.py`. The web
   UI's taxonomy view (`ui/src/browser/`, lazy-loaded) is a tab of the
-  right-hand panel by default, beside Graph, Facts and Node. Every Notebook
+  right-hand panel by default, beside Artifacts, Graph and Node. Every Notebook
   section is a tile (`ui/src/components/Tiles.tsx`): dragged by its grip (or
   arrow keys) to any column, folded to its header anywhere, and portalled so
   a move never remounts it (a streaming answer keeps streaming). The panel

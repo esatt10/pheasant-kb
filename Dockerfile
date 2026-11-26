@@ -25,11 +25,13 @@ WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 COPY ui/ ./
+COPY extensions /extensions
+ARG PHEASANT_BUILD_EXTENSIONS=
 # Empty API base: the bundle is served by pheasant itself, so the API is
 # same-origin at the root. (The sidecar image builds with "/api" instead,
 # because there nginx proxies under that prefix.)
 ENV VITE_PHEASANT_API_BASE=""
-RUN npm run build
+RUN PHEASANT_BUILD_EXTENSIONS="${PHEASANT_BUILD_EXTENSIONS}" npm run build
 
 # --------------------------------------------------------------------------
 # Stage 2 — the runtime.
@@ -69,6 +71,9 @@ COPY scripts/benchmark_job_publication.py /app/scripts/benchmark_job_publication
 # Install only Pheasant's wheel/entry point; dependencies are the cached layer
 # above and PYTHONPATH still points at the copied source tree.
 RUN pip install --no-cache-dir --no-deps .
+ARG PHEASANT_BUILD_EXTENSIONS=
+RUN --mount=type=bind,source=extensions,target=/extensions \
+    PHEASANT_BUILD_EXTENSIONS="${PHEASANT_BUILD_EXTENSIONS}" python -c "import os,re,subprocess,sys; names=[name.strip() for name in os.environ['PHEASANT_BUILD_EXTENSIONS'].split(',') if name.strip()]; assert all(re.fullmatch('[a-z][a-z0-9-]{0,39}',name) for name in names); names and subprocess.check_call([sys.executable,'-m','pip','install','--no-cache-dir','--no-deps',*['/extensions/'+name for name in names]])"
 
 COPY --from=ui /ui/dist /app/ui
 COPY pheasant.example.yaml /app/pheasant.default.yaml

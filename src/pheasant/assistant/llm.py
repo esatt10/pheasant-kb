@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pheasant.assistant.catalog import OPENAI_WIRE
 from pheasant.assistant.providers import (
     PROVIDERS,
     OutputBudgetExhausted,
@@ -49,6 +50,24 @@ REASONING_HEADROOM = 8192
 # calls. Scope by credential too: one session's bad key cannot disable another.
 _UNAVAILABLE: dict[tuple[str, str, str, str], float] = {}
 _AVAILABILITY_LOCK = threading.Lock()
+_EFFORT_ORDER = {"none": 0, "low": 1, None: 2}
+
+
+def at_effort(llm: Any, effort: str | None) -> tuple[Any, str | None]:
+    """Lower the effort where the provider supports it. Return None when unchanged."""
+    if (
+        llm is None
+        or effort is None
+        or getattr(llm, "provider", None) not in OPENAI_WIRE
+        or getattr(llm, "model_id", None) != "gpt-6-luna"
+        or not callable(getattr(llm, "with_reasoning_effort", None))
+    ):
+        return llm, None
+    configured = getattr(llm, "reasoning_effort", None)
+    lowest = min((effort, configured), key=lambda e: _EFFORT_ORDER.get(e, 2))
+    if lowest == configured:
+        return llm, None
+    return llm.with_reasoning_effort(lowest), lowest
 
 
 def reset_availability() -> None:

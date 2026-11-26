@@ -1300,6 +1300,8 @@ class SourceConfig(ModelMixin):
     connector: SourceConnectorSettings = field(default_factory=SourceConnectorSettings)
     taxonomy: TaxonomySettings = field(default_factory=TaxonomySettings)
     urls: list[str] = field(default_factory=list)
+    #: Extension-owned source settings, supplied through its registration surface.
+    extension_settings: dict[str, Any] | None = None
     #: Per-source override of ``sync.limits``. ``None`` inherits the global
     #: block; set it to widen or tighten one source without touching others.
     limits: SyncLimitsSettings | None = None
@@ -2000,6 +2002,11 @@ class PheasantConfig(ModelMixin):
                 raw["type"] = SourceType(resolve_source_type(raw.get("type", "single_file")))
             except ValueError:
                 raw["type"] = PluginSourceType(str(raw.get("type")))
+                from pheasant.extensions import extension_sources, source_settings
+
+                contribution = extension_sources().get(raw["type"])
+                if contribution is not None:
+                    raw["extension_settings"] = source_settings(raw, contribution)
             if raw.get("path") in (None, ""):
                 # Only a connector that reads the filesystem needs a real
                 # path; for the rest it is schema ceremony, and a missing one

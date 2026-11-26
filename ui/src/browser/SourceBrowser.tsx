@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { BrowseFile, BrowseFolder, BrowseResponse, FileQuality } from "../api/types";
 import { HealthPill, healthClass } from "./HealthPill";
 import { DEFAULT_TREE_WIDTH, useSession } from "../state/session";
 import { TileDock, TileFold, TileGrip } from "../components/Tiles";
+import { useUiExtensions } from "../extensions";
 import { ArchivedList } from "./ArchivedList";
 import { DragHandle } from "./DragHandle";
 import { ExportButton } from "./ExportButton";
@@ -40,6 +41,14 @@ export function SourceBrowser({
   const { browser, browserCollapsed, browserTreeWidth } = state;
   const bodyRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState("");
+  const sourceExtensions = useUiExtensions().flatMap((entry) => entry.sources ?? []);
+  const sources = useQuery({
+    queryKey: ["sources"], queryFn: api.sources,
+    enabled: browser.open && !browserCollapsed && Boolean(browser.source && browser.path)
+      && sourceExtensions.some((entry) => entry.FolderDetails !== undefined),
+  });
+  const source = sources.data?.find((entry) => entry.name === browser.source);
+  const FolderDetails = sourceExtensions.find((entry) => entry.type === source?.type)?.FolderDetails;
 
   const listing = useInfiniteQuery({
     queryKey: ["browse", browser.source, browser.path],
@@ -266,6 +275,9 @@ export function SourceBrowser({
               ) : null}
             </div>
           )}
+          {FolderDetails && source && listing.isSuccess && browser.path && !browser.file ? (
+            <FolderDetails key={`${source.name}/${browser.path}`} source={source} path={browser.path} />
+          ) : null}
         </div>
 
         <DragHandle

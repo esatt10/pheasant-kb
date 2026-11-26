@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pheasant-gtm"
+version = "1.0.0"
+description = "GTM company research extension for Pheasant"
+requires-python = ">=3.11"
+dependencies = ["pheasant-kb>=2.0,<3"]
+
+[project.entry-points."pheasant.extensions"]
+gtm = "pheasant_gtm.plugin:extension"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pheasant_gtm"]

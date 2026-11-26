@@ -2379,7 +2379,7 @@ Each source item supports:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `name` | string | none | Unique source id/name. |
-| `type` | enum \| plugin name | `single_file` | One of `repository`, `markdown_folder`, `document_folder`, `web_collection`, `single_file`, `api`, `memory` — or any installed connector plugin (`gdrive`, or your own). Retired: `obsidian_vault` loads as `markdown_folder`; `s3`, `notion`, `slack`, `confluence` and `imap` load but their sync is refused. `GET /sources/types` lists what this deployment accepts. |
+| `type` | enum \| plugin name | `single_file` | One of `repository`, `markdown_folder`, `document_folder`, `web_collection`, `single_file`, `api`, `memory`, or a source type contributed by an installed plugin. `GET /sources/types` lists the available types. |
 | `path` | absolute path | none | Filesystem path for source root (or file). |
 | `description` | string/null | null | Human-readable context for operators. |
 | `enabled` | bool | `true` | Disable without deleting config. |
@@ -2391,6 +2391,7 @@ Each source item supports:
 | `connector.*` | object | see below | Connector feature flags and provider-specific options. |
 | `connector.connection` | string/null | `null` | A connected account's name (`security.connections`): the git token a managed repository is cloned with, the Drive sign-in a `gdrive` source reads with, the bearer token an `api` or `web_collection` source sends. It wins over `connector.api_key_env` and over `GITHUB_TOKEN`. Unset, a repository on a host whose provider has exactly one connection (GitHub, GitLab, Azure DevOps) and a `gdrive` source with one Drive connection read with that one. |
 | `urls` | list[string] | `[]` | URL list (mainly for `web_collection`). |
+| `extension_settings` | object/null | `null` | Source settings owned by the installed extension. Use the extension's registration API to validate and persist them. |
 
 ### `sources[].repo`
 

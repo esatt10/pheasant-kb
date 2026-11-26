@@ -1255,7 +1255,14 @@ class SyncEngine:
             done, payload = self._remote_precheck(
                 connector, source, mode, artifacts, position, item
             )
-            if done is None and reads_locally(self.extractor, item.relative_path, payload.content):
+            # Extension payloads with isolated parse output or host graph
+            # declarations have no reason to send publisher bytes to a parser worker.
+            if done is None and (
+                payload.normalized_text is not None
+                or "extension_provenance" in payload.metadata
+                or "extension_inputs" in payload.metadata
+                or reads_locally(self.extractor, item.relative_path, payload.content)
+            ):
                 parsed = parse_connector_payload(
                     source, item, payload, git_metadata, extractor=self.extractor
                 )
@@ -2059,6 +2066,8 @@ class SyncEngine:
             if (early := run.poll(force=True)) is not None:
                 return self._cancelled_before_reading(source.name, early, mode, "starting")
             connector = connector_for_source(source, self.state)
+            connector.media_store = self.media_store
+            connector.region_config = self.config
             if mode == "validate_only":
                 health = connector.validate()
                 status = "validated" if health.ok else health.status
@@ -2106,6 +2115,7 @@ class SyncEngine:
                     },
                 )
             report("listing", 0, None, f"listing {source.name}")
+            connector.listing_progress = report
             try:
                 items = connector.list_items()
             except SyncBudgetExceeded as exc:

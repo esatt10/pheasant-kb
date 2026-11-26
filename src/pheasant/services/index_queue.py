@@ -106,7 +106,8 @@ def _task(row: dict[str, Any], now: datetime) -> dict[str, Any]:
     if status == DEAD:
         state = "dead"
     elif status == INFLIGHT:
-        state = "claim_lapsed" if visible else "claimed"
+        # JetStream's ledger records admission, but has no lease deadline.
+        state = "claim_lapsed" if visible_at is not None and visible else "claimed"
     elif status == PENDING:
         state = "awaiting_claim" if visible else "retry_scheduled"
     else:  # pragma: no cover - `outstanding` selects only the three above

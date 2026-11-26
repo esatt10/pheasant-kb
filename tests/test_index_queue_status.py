@@ -13,6 +13,7 @@ consuming, so the listing is ``unavailable`` beside a real depth.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from pheasant.mcp_server.tools import PheasantTools
 from pheasant.services import ServiceContext
 from pheasant.services import index_queue as index_queue_service
 from pheasant.services.errors import UnknownKnowledgeBase
-from pheasant.sync.queue import IndexTask, queue_from_config
+from pheasant.sync.queue import INFLIGHT, IndexTask, queue_from_config
 from tests.conftest import make_nats_queue_settings
 
 
@@ -94,6 +95,16 @@ def test_a_jetstream_queue_is_listed_from_the_request_ledger(queued: PheasantToo
     assert [task["position"] for task in status["tasks"]] == [1, 2, 3]
     assert all(task["request_id"] for task in status["tasks"])
     assert status["depth"]["pending"] == 3
+
+
+def test_a_claim_without_a_visible_at_deadline_does_not_appear_lapsed() -> None:
+    now = datetime(2026, 11, 24, tzinfo=UTC)
+    row = {"status": INFLIGHT, "owner": "indexer:1:task", "visible_at": None}
+
+    assert index_queue_service._task(row, now)["state"] == "claimed"
+    assert index_queue_service._task({**row, "visible_at": now.isoformat()}, now)["state"] == (
+        "claim_lapsed"
+    )
 
 
 def test_a_queue_whose_ledger_cannot_be_read_reports_unknown_not_empty(

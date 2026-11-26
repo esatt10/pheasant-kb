@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from pheasant.config.schema import PheasantConfig
+from pheasant.extensions import installed_extensions
 from pheasant.graph.exporter import node_link
 from pheasant.mcp_server.access_tools import register_access_tools
 from pheasant.mcp_server.archive_tools import register_archive_tools
@@ -851,6 +852,10 @@ def create_mcp_server(config: PheasantConfig, vector: Any = None) -> Any:
     register_model_tools(mcp, tools, anticipated)
     register_fleet_tools(mcp, tools, anticipated)
     register_job_tools(mcp, tools, anticipated)
+
+    for extension in installed_extensions():
+        if extension.register_mcp is not None:
+            extension.register_mcp(mcp, tools, anticipated)
 
     from pheasant.mcp_server.authorization import list_only_callable_tools
 

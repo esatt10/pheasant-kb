@@ -5,7 +5,7 @@ import { DragHandle } from "../browser/DragHandle";
 import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { GraphFact, GraphNode } from "../api/types";
+import type { GraphNode } from "../api/types";
 import { ChatPanel } from "../chat/ChatPanel";
 import { ModelDialog } from "../chat/ModelDialog";
 import { GraphCanvas } from "../graph/GraphCanvas";
@@ -53,7 +53,7 @@ type MobileTab = "chat" | "sources" | "taxonomy" | "panel" | "artifacts";
  * was one nobody found, and opening one from the chat changed a tab that was
  * not on screen.
  */
-const PHONE_PANEL_TABS: PanelTab[] = ["graph", "facts", "node"];
+const PHONE_PANEL_TABS: PanelTab[] = ["graph", "node"];
 
 /** Height of the first of two unfolded tiles stacked in a side column, before it is dragged. */
 const DEFAULT_SIDE_STACK = 360;
@@ -261,10 +261,10 @@ export function Notebook() {
       ? state.panelTab
       : (groupTabs.find((tab) => tab !== "taxonomy" || browserOpen) ?? groupTabs[0]);
   const dock = (tab: PanelTab) => (compact || isDocked(tab) ? undefined : () => dispatch({ type: "dock-tab", tab }));
-  /** A panel tab as a tile of its own: graph, facts or node. */
-  const tabSpec = (tab: "graph" | "facts" | "node" | "artifacts"): TileSpec => ({
+  /** A panel tab as a tile of its own. */
+  const tabSpec = (tab: Exclude<PanelTab, "taxonomy">): TileSpec => ({
     id: tab,
-    title: tab === "facts" && state.answer?.facts.length ? `Facts (${state.answer.facts.length})` : PANEL_TAB_LABELS[tab],
+    title: PANEL_TAB_LABELS[tab],
     visible: true,
     collapsed: compact ? false : Boolean(state.tabCollapsed[tab]),
     onToggle: () => dispatch({ type: "toggle-tab-collapsed", tab }),
@@ -322,7 +322,6 @@ export function Notebook() {
       host: hosts.panel,
     },
     graph: tabSpec("graph"),
-    facts: tabSpec("facts"),
     node: tabSpec("node"),
     artifacts: tabSpec("artifacts"),
   };
@@ -356,8 +355,8 @@ export function Notebook() {
     columns,
   };
 
-  /** What the graph, facts and node tabs show, in the panel or as tiles. */
-  const tabBody = (tab: "graph" | "facts" | "node" | "artifacts") => {
+  /** What tabs show, in the panel or as tiles. */
+  const tabBody = (tab: Exclude<PanelTab, "taxonomy">) => {
     if (tab === "artifacts")
       return (
         <div className="pane__body">
@@ -442,12 +441,6 @@ export function Notebook() {
               onToggle={(nodeType) => dispatch({ type: "toggle-type", nodeType })}
             />
         </>
-      );
-    if (tab === "facts")
-      return (
-          <div className="pane__body pane__body--pad">
-            <FactList facts={state.answer?.facts ?? []} onSelect={focusNode} />
-          </div>
       );
     return (
           <div className="pane__body">
@@ -755,7 +748,6 @@ export function Notebook() {
                         }}
                       >
                         {PANEL_TAB_LABELS[tab]}
-                        {tab === "facts" && state.answer?.facts.length ? ` (${state.answer.facts.length})` : ""}
                       </div>
                     ))}
                   </div>
@@ -779,7 +771,7 @@ export function Notebook() {
           )
         : null}
 
-      {(["graph", "facts", "node", "artifacts"] as const).map((tab) =>
+      {(["graph", "node", "artifacts"] as const).map((tab) =>
         tabShown(tab)
           ? createPortal(
               <TileScope key={tab} spec={specs[tab]}>
@@ -898,58 +890,4 @@ function SelectedNodeCard({
 function labelOf(node: GraphNode | undefined, fallback: string): string {
   const label = node?.label ?? fallback;
   return label.length > 40 ? `…${label.slice(label.length - 39)}` : label;
-}
-
-/**
- * Surfaced facts: subject–predicate–object triples read straight off the graph
- * around the passages an answer used. Both endpoints are clickable, so a fact
- * is a navigation handle rather than a static readout.
- */
-function FactList({
-  facts,
-  onSelect,
-}: {
-  facts: GraphFact[];
-  onSelect: (nodeId: string) => void;
-}) {
-  if (facts.length === 0) {
-    return (
-      <p className="muted small">
-        Ask a question and the relationships pheasant found around the cited passages
-        show up here.
-      </p>
-    );
-  }
-  return (
-    <div className="fact-list">
-      {facts.map((fact, index) => (
-        <div
-          className="fact"
-          key={`${fact.subject_id}-${fact.edge_type}-${fact.object_id}-${index}`}
-        >
-          <span
-            className="source-dot"
-            style={{ background: colorForNode(fact.object_type), borderRadius: "50%" }}
-          />
-          <button
-            className="fact__object"
-            onClick={() => onSelect(fact.object_id)}
-            title={`Show ${fact.object} on the graph`}
-          >
-            {fact.object}
-          </button>
-          <span className="fact__from">
-            <span className="fact__predicate">{fact.predicate_passive ?? fact.predicate}</span>
-            <button
-              className="fact__subject"
-              onClick={() => onSelect(fact.subject_id)}
-              title={fact.subject}
-            >
-              {fact.subject}
-            </button>
-          </span>
-        </div>
-      ))}
-    </div>
-  );
 }

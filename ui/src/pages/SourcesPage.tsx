@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import type { QueueTask, SourceRecord } from "../api/types";
 import { SourceSyncProgress, formatDuration } from "../components/SyncProgress";
 import { QUEUE_STATE_LABEL, outstanding, useIndexQueue } from "../hooks/useRegion";
 import { AddSourceWizard } from "../sources/AddSourceWizard";
+import { useUiExtensions, type SourceUi } from "../extensions";
 import { TaxonomyOutline } from "../sources/TaxonomyOutline";
 import { QuickAdd } from "../components/QuickAdd";
 import { ConnectionsPanel } from "../sources/Connections";
@@ -31,6 +32,7 @@ export function hasTaxonomy(source: SourceRecord): boolean {
 }
 
 export function SourcesPage() {
+  const sourceExtensions = useUiExtensions().flatMap((extension) => extension.sources ?? []);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { dispatch } = useSession();
@@ -46,6 +48,7 @@ export function SourcesPage() {
   const [quickAdd, setQuickAdd] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [editingSource, setEditingSource] = useState<SourceRecord | null>(null);
+  const [extensionEditor, setExtensionEditor] = useState<{ Editor: SourceUi["Editor"]; source?: SourceRecord } | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
   const [outlineFor, setOutlineFor] = useState<string | null>(null);
   const [exportFor, setExportFor] = useState<string | null>(null);
@@ -139,6 +142,11 @@ export function SourcesPage() {
           <button data-permission="sources.manage" className="btn" onClick={() => setShowWizard(true)}>
             Advanced…
           </button>
+          {sourceExtensions.map(({ type, addLabel, Editor }) => (
+            <button key={type} data-permission="sources.manage" className="btn" onClick={() => setExtensionEditor({ Editor })}>
+              {addLabel}
+            </button>
+          ))}
           <button data-permission="sources.manage" className="btn btn--primary" onClick={() => setQuickAdd(true)}>
             + Add source
           </button>
@@ -181,7 +189,10 @@ export function SourcesPage() {
           </tr>
         </thead>
         <tbody>
-          {sources.data?.map((source: SourceRecord) => (
+          {sources.data?.map((source: SourceRecord) => {
+            const extension = sourceExtensions.find((entry) => entry.type === source.type);
+            const appearance = extension?.appearance(source);
+            return (
             <Fragment key={source.id}>
             <tr className={source.enabled ? "" : "row--disabled"}>
               <td className="source-name-cell">
@@ -191,10 +202,10 @@ export function SourcesPage() {
                 ) : null}
               </td>
               <td data-label="Type">
-                <span className="pill">{source.type}</span>
+                <span className="pill">{appearance?.label ?? source.type}</span>
               </td>
-              <td className="path-cell" data-label="Path" title={source.path}>
-                {source.path}
+              <td className="path-cell" data-label="Path" title={appearance ? undefined : source.path}>
+                {appearance ? <span className="muted">{appearance.pathLabel}</span> : source.path}
               </td>
               <td className="muted small" data-label="Status">
                 {source.syncing ? (
@@ -239,18 +250,19 @@ export function SourcesPage() {
                   disabled={Boolean(source.syncing)}
                   onSync={(mode) => sync.mutate({ name: source.name, mode })}
                 />
-                <button data-permission="sources.manage" className="btn btn--small" onClick={() => setEditingSource(source)}>
-                  edit
+                <button data-permission="sources.manage" className="btn btn--small" onClick={() => extension ? setExtensionEditor({ Editor: extension.Editor, source }) : setEditingSource(source)}>
+                  {appearance?.editLabel ?? "edit"}
                 </button>
+                {appearance?.link ? <Link className="btn btn--small" to={appearance.link.to}>{appearance.link.label}</Link> : null}
                 <button
                   className="btn btn--small"
                   onClick={() => {
                     dispatch({ type: "open-browser", source: source.name, path: "" });
                     navigate("/");
                   }}
-                  title="Browse its folders and files in the workspace, beside the chat"
+                  title="Browse its folders and files in Taxonomy"
                 >
-                  browse
+                  {appearance?.browseLabel ?? "browse"}
                 </button>
                 <button
                   className="btn btn--small"
@@ -260,7 +272,7 @@ export function SourcesPage() {
                 >
                   {exportFor === source.name ? "hide export" : "export"}
                 </button>
-                {hasTaxonomy(source) ? (
+                {hasTaxonomy(source) && appearance?.outline !== false ? (
                   <button
                     className="btn btn--small"
                     onClick={() => setOutlineFor(outlineFor === source.name ? null : source.name)}
@@ -307,7 +319,8 @@ export function SourcesPage() {
               </tr>
             ) : null}
             </Fragment>
-          ))}
+            );
+          })}
           {sources.data?.length === 0 ? (
             <tr>
               <td colSpan={5} className="muted small" style={{ textAlign: "center" }}>
@@ -341,6 +354,7 @@ export function SourcesPage() {
       {editingSource && (
         <AddSourceWizard source={editingSource} onClose={() => setEditingSource(null)} />
       )}
+      {extensionEditor && <extensionEditor.Editor source={extensionEditor.source} onClose={() => setExtensionEditor(null)} />}
 
       {patch && (
         <div className="modal-scrim" onClick={() => setPatch(null)}>

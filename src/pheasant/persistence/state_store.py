@@ -45,7 +45,7 @@ def _basename(path: str | None) -> str:
 # members use the marker to avoid replaying the complete schema at startup.
 # 3: idx_sync_events_source. 4: idx_artifacts_source.
 # 6: durable jobs and immutable artifact publications/source adoption.
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "7"
 
 
 class StateStore:
@@ -245,6 +245,8 @@ class StateStore:
         advisory lock elects one migrator; the marker makes later calls cheap.
         """
 
+        from pheasant.persistence.extension_migrations import migrate_extensions
+
         with self.backend.schema_lock():
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS pheasant_schema_meta ("
@@ -298,6 +300,7 @@ class StateStore:
                 # says the *tables* are current, and a region switching
                 # `lexical_index` changes no table.
                 migrate_lexical_index(self)
+                migrate_extensions(self)
                 return
             self.backend.executescript(schema_for(self.backend.dialect))
             if "acl" not in self.backend.table_columns("artifacts"):
@@ -329,6 +332,7 @@ class StateStore:
                 ("core", SCHEMA_VERSION, datetime.now(UTC).isoformat()),
             )
             self.conn.commit()
+            migrate_extensions(self)
 
     def get_fingerprint(self, scope: str) -> str | None:
         """What this scope was last indexed with, or None if never recorded."""

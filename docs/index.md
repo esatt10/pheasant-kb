@@ -42,6 +42,8 @@ stack as its reference.
 |---|---|
 | Ask questions and browse sources in the web UI | [Ask your knowledge base](how-to/chat-and-ui.md) |
 | Get longer answers, follow-ups and diagrams | [Answers, conversations and visuals](how-to/conversations-and-visuals.md) |
+| Research a business for GTM and HubSpot | [GTM company research](how-to/gtm-research.md) |
+| Build or install an extension | [Extension protocol](extensions.md) |
 | Keep composed files, reports and threads | [Keep what pheasant generates](how-to/artifacts.md) |
 | Give a coding agent your knowledge base | [Attach to a coding agent](how-to/attach-to-coding-agent.md) · [MCP tools](mcp_tools.md) |
 | Let agents record and recall facts | [Give your agents durable records](how-to/agent-records.md) |

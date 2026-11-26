@@ -65,6 +65,7 @@ HTTP_PERMISSIONS = {
     ("GET", "/graph/neighbors"): "knowledge.use",
     ("GET", "/graph/path"): "knowledge.use",
     ("GET", "/graph/slice"): "knowledge.use",
+    ("GET", "/extensions"): "knowledge.use",
     ("GET", "/health"): "knowledge.use",
     ("GET", "/ingest/reconcile"): "knowledge.use",
     ("GET", "/ingest/status"): "knowledge.use",

@@ -16,6 +16,7 @@ truth. No secret is stored in YAML.
 | `fleet.yaml` | The generic fleet CI's smoke tests run, with `docker-compose.scale.yml`. The same topology as pheasant-kb. |
 | `worker.yaml` | The minimal trust-boundary config for the gRPC preparation workers: no source list, database DSN, model key, MCP server or UI, and `server.api.enabled: false`. |
 | `docker-compose.scale.yml` | The generic fleet's compose file (`--scale indexer=1 --scale worker=4`). |
+| `docker-compose.gtm.yml` | Optional [GTM extension and parser sidecar](../../docs/how-to/gtm-research.md#managed-gtm-collections) for the root stack. |
 | `backup.sh`, `restore.sh` | pheasant-kb's `backup` and `restore` services. |
 | `init-secrets.sh` | pheasant-kb's `secrets-init`: generates the four tokens on first start. |
 | `foundry/` | The opt-in Azure AI Foundry overlay ([Foundry](../../docs/pheasant-kb/foundry.md)). |

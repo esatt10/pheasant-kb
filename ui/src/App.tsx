@@ -6,6 +6,7 @@ import { RegionBanner } from "./components/RegionBanner";
 import { SuspendedNotice } from "./components/SuspendedNotice";
 import { Notebook } from "./pages/Notebook";
 import { GraphPage } from "./pages/GraphPage";
+import { ExtensionsProvider, bundledUiExtensions, useUiExtensions } from "./extensions";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { EvaluationPage } from "./pages/EvaluationPage";
 import { TuningPage } from "./pages/TuningPage";
@@ -29,6 +30,7 @@ export function App() {
   return (
     <SessionProvider>
       <PermissionProvider>
+      <ExtensionsProvider>
       <Telemetry />
       <div className="app">
         <TopBar />
@@ -37,6 +39,9 @@ export function App() {
           <Routes>
             <Route path="/" element={<Notebook />} />
             <Route path="/graph" element={<GraphPage />} />
+            {bundledUiExtensions.flatMap((extension) => extension.routes.map(({ path, Page }) => (
+              <Route key={path} path={path} element={<ExtensionPage id={extension.id}><Page /></ExtensionPage>} />
+            )))}
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/evaluation" element={<EvaluationPage />} />
             <Route path="/tuning" element={<PermissionPage permission="tuning.manage"><TuningPage /></PermissionPage>} />
@@ -49,7 +54,12 @@ export function App() {
         <JobsTray />
         <SuspendedNotice />
       </div>
+      </ExtensionsProvider>
       </PermissionProvider>
     </SessionProvider>
   );
+}
+
+function ExtensionPage({ id, children }: { id: string; children: React.ReactNode }) {
+  return useUiExtensions().some((extension) => extension.id === id) ? <>{children}</> : null;
 }
