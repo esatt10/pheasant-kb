@@ -273,6 +273,38 @@ def test_a_statement_is_one_round_trip_and_executemany_is_pipelined() -> None:
 
 
 @postgres
+def test_parameter_counts_follow_the_postgres_wire_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    count = 65_535
+    sql = "SELECT cardinality(ARRAY[" + ",".join(f"${i}" for i in range(1, count + 1)) + "])"
+    values = (1,) * count
+    monkeypatch.setattr(pg_driver, "PREPARE_THRESHOLD", 1)
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
+        assert conn.execute(sql, values).rows == [[count]]
+        assert len(conn._prepared) == 1
+        assert conn.execute(sql, values).rows == [[count]]
+        assert conn.executemany(sql, [values, values]) == 2
+
+
+@postgres
+def test_parameter_count_validation_leaves_the_connection_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    too_many = (None,) * 65_536
+    with pg_driver.connect(os.environ["PHEASANT_DATABASE_URL"], autocommit=True) as conn:
+        trips = _Trips(conn)
+        with pytest.raises(pg_driver.ProgrammingError, match="65,536.*65,535"):
+            conn.execute("SELECT 1", too_many)
+        with pytest.raises(pg_driver.ProgrammingError, match="65,536.*65,535"):
+            conn.executemany("SELECT 1", [too_many])
+
+        monkeypatch.setattr(pg_driver, "EXECUTEMANY_BLOCK_ROWS", 1)
+        with pytest.raises(pg_driver.ProgrammingError, match="same number of parameters"):
+            conn.executemany("SELECT $1::integer", [(1,), (2, 3)])
+        assert trips.count == 0
+        assert conn.execute("SELECT 1").rows == [[1]]
+
+
+@postgres
 def test_values_round_trip_with_their_types() -> None:
     import datetime
     import decimal

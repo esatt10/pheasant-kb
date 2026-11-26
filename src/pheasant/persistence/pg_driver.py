@@ -382,8 +382,17 @@ def _read_rest(read: Any, first: bytes, size: int) -> bytes:
 
 
 _PACK_I32 = __import__("struct").Struct("!i").pack
-_PACK_I16 = __import__("struct").Struct("!h").pack
+# Parse and Bind encode their parameter counts as unsigned 16-bit integers.
+_PACK_U16 = __import__("struct").Struct("!H").pack
+_MAX_QUERY_PARAMETERS = 65_535
 _NULL_VALUE = _PACK_I32(-1)
+
+
+def _validate_parameter_count(count: int) -> None:
+    if count > _MAX_QUERY_PARAMETERS:
+        raise ProgrammingError(
+            f"{count:,} query parameters exceed the PostgreSQL limit of {_MAX_QUERY_PARAMETERS:,}."
+        )
 
 
 def _message(code: bytes, body: bytes | bytearray) -> bytes:
@@ -397,7 +406,7 @@ _EXECUTE = _message(b"E", b"\x00" + _PACK_I32(0))
 def _parse_message(name: bytes, sql: str, oids: Sequence[int], encoding: str) -> bytes:
     body = bytearray(name)
     body += sql.encode(encoding) + b"\x00"
-    body += _PACK_I16(len(oids))
+    body += _PACK_U16(len(oids))
     for oid in oids:
         body += _PACK_I32(oid)
     return _message(b"P", body)
@@ -409,7 +418,7 @@ def _bind_message(name: bytes, encoded: Sequence[bytes | None]) -> bytes:
     body = bytearray(b"\x00")
     body += name
     body += b"\x00\x00"
-    body += _PACK_I16(len(encoded))
+    body += _PACK_U16(len(encoded))
     for value in encoded:
         if value is None:
             body += _NULL_VALUE
@@ -579,6 +588,7 @@ class Connection:
         from pg8000.core import NULL_BYTE, Context
 
         values = tuple(params)
+        _validate_parameter_count(len(values))
         oids = tuple(param_oid(value) for value in values)
         key = (sql, oids)
         prepared = self._prepared.get(key)
@@ -643,6 +653,9 @@ class Connection:
         from pg8000.core import NULL_BYTE, Context
 
         width = len(rows[0])
+        _validate_parameter_count(width)
+        if any(len(row) != width for row in rows):
+            raise ProgrammingError("All executemany rows must have the same number of parameters.")
         oids: list[int] = []
         for column in range(width):
             kinds = {param_oid(row[column]) for row in rows if row[column] is not None}
