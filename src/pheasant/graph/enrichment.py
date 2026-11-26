@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from pheasant.config.schema import SourceConfig
 from pheasant.graph.code_analysis import analyze as analyze_code
 from pheasant.graph.code_imports import CODE_REFERENCE_TYPES, resolve_code_import
-from pheasant.graph.media_links import image_links
+from pheasant.graph.media_links import image_links, strip_inline_media_data
 from pheasant.graph.symbol_ids import unique_symbol_id
 from pheasant.ingestion.content_types import ARTIFACT_TYPES
 from pheasant.ingestion.pipeline import ParsedArtifact
@@ -262,15 +262,6 @@ def _other_language(
     return enrichment
 
 
-# Chunk assembly inserts whitespace between segments of long data URIs.
-# Strip encoded media from the text scanned for graph entities and links.
-_INLINE_MEDIA_DATA = re.compile(
-    r"""\bsrc\s*=\s*(?P<quote>["'])data:(?:audio|image|video)/[\w.+-]+;base64,"""
-    r"[A-Za-z0-9+/=\s]+(?P=quote)",
-    re.ASCII | re.IGNORECASE,
-)
-
-
 class MarkdownDocumentEnrichmentPass:
     name = "markdown_document"
 
@@ -283,7 +274,7 @@ class MarkdownDocumentEnrichmentPass:
         suffix = Path(artifact.relative_path).suffix.lower()
         if suffix not in {".md", ".txt", ".html", ".xml"}:
             return ArtifactEnrichment()
-        text = _INLINE_MEDIA_DATA.sub(" ", artifact_text(artifact))
+        text = strip_inline_media_data(artifact_text(artifact))
         enrichment = _base_concepts(kb_id, source, artifact, text)
         for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", text):
             _add_concept(enrichment, kb_id, source, artifact, _clean_inline(heading), 2.0)

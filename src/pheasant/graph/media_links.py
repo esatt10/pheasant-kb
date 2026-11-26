@@ -27,7 +27,17 @@ _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+[\"'][^\"']*[\
 _WIKI_IMAGE_RE = re.compile(r"!\[\[([^\]|#]+)(?:[|#]([^\]]*))?\]\]")
 _HTML_IMAGE_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _HTML_ATTR_RE = re.compile(r"\b(src|alt)\s*=\s*[\"']([^\"']*)[\"']", re.IGNORECASE)
+_INLINE_MEDIA_DATA_RE = re.compile(
+    r"""\bsrc\s*=\s*(?P<quote>["'])data:(?:audio|image|video)/[\w.+-]+;base64,"""
+    r"[A-Za-z0-9+/=\s]+(?P=quote)",
+    re.ASCII | re.IGNORECASE,
+)
 MAX_IMAGE_LINKS = 50
+
+
+def strip_inline_media_data(text: str) -> str:
+    """Remove encoded media from enrichment text, including whitespace between chunks."""
+    return _INLINE_MEDIA_DATA_RE.sub(" ", text)
 
 
 def image_links(text: str) -> tuple[list[tuple[str, str]], str]:
