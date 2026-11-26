@@ -262,6 +262,15 @@ def _other_language(
     return enrichment
 
 
+# Chunk assembly inserts whitespace between segments of long data URIs.
+# Strip encoded media from the text scanned for graph entities and links.
+_INLINE_MEDIA_DATA = re.compile(
+    r"""\bsrc\s*=\s*(?P<quote>["'])data:(?:audio|image|video)/[\w.+-]+;base64,"""
+    r"[A-Za-z0-9+/=\s]+(?P=quote)",
+    re.ASCII | re.IGNORECASE,
+)
+
+
 class MarkdownDocumentEnrichmentPass:
     name = "markdown_document"
 
@@ -274,7 +283,7 @@ class MarkdownDocumentEnrichmentPass:
         suffix = Path(artifact.relative_path).suffix.lower()
         if suffix not in {".md", ".txt", ".html", ".xml"}:
             return ArtifactEnrichment()
-        text = artifact_text(artifact)
+        text = _INLINE_MEDIA_DATA.sub(" ", artifact_text(artifact))
         enrichment = _base_concepts(kb_id, source, artifact, text)
         for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", text):
             _add_concept(enrichment, kb_id, source, artifact, _clean_inline(heading), 2.0)

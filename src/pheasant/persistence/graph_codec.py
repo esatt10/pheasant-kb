@@ -38,19 +38,11 @@ BATCH = 1_000
 
 #: Endpoint *sources* per statement when addressing edges by exact pair.
 #:
-#: Deliberately far smaller than :data:`BATCH`. Addressing pairs needs an
-#: ``OR`` chain — ``source IN (…) AND target IN (…)`` is a cross product, which
-#: over-matches, and over-matching here would fold out digests that were never
-#: replaced and delete edges nobody touched. An ``OR`` chain nests one level
-#: per term, and SQLite refuses an expression tree deeper than 1000 outright:
-#: batching pairs at ``BATCH`` raised "Expression tree is too large" on the
-#: first real graph. Grouping the targets under each source keeps the chain
-#: proportional to *distinct sources*, and this caps that.
+#: Group the exact targets under each source and cap the number of indexable
+#: branches in one statement.
 PAIR_GROUP_BATCH = 100
 
-#: Targets listed per source inside one group. An ``IN`` list is one node in
-#: the tree however long it is, so this bounds the parameter count rather than
-#: the depth.
+#: Targets per source group. Caps the size of each bound array.
 PAIR_TARGET_BATCH = 400
 
 #: Hex digits of SHA-256 kept per row. 128 bits is far past what a collision
@@ -255,16 +247,9 @@ def _pair_clauses(kb_id: str, pairs: Iterable[tuple[str, str]]) -> Iterator[tupl
     nothing for an empty set, which is what lets both callers skip the
     statement entirely rather than build ``WHERE ... AND ()``.
 
-    **``kb_id`` is repeated inside every term, and that is the whole point.**
-    Factoring it out to ``WHERE kb_id=? AND (… OR …)`` reads better and costs
-    a full table scan: SQLite's multi-index-OR optimization needs each branch
-    to be independently indexable, and ``source=?`` alone is not a prefix of
-    ``(kb_id, source, target, type, seq)``. ``EXPLAIN QUERY PLAN`` says
-    ``SEARCH … USING INDEX idx_graph_edges_target (kb_id=?)`` for the tidy
-    form and ``MULTI-INDEX OR`` with exact primary-key lookups for this one.
-    Measured: 300ms per incremental commit at 100k files versus 2ms, and the
-    tidy form was O(total graph) — which would have made the row backend cost
-    what the file backend cost, for the same reason, one layer down.
+    Each branch carries the primary-key prefix ``(kb_id, source)`` and
+    binds that source's exact targets as one array. This keeps the parameter
+    count below the driver's limit even when every group is full.
     """
 
     grouped: dict[str, list[str]] = {}
@@ -275,25 +260,18 @@ def _pair_clauses(kb_id: str, pairs: Iterable[tuple[str, str]]) -> Iterator[tupl
         for chunk in _batched(targets, PAIR_TARGET_BATCH):
             groups.append((source, chunk))
     for batch in _batched(groups, PAIR_GROUP_BATCH):
-        clause = " OR ".join(
-            f"(kb_id=? AND source=? AND target IN ({','.join('?' for _ in targets)}))"
-            for _source, targets in batch
-        )
+        clause = " OR ".join(["(kb_id=? AND source=? AND target = ANY(?))"] * len(batch))
         params: list[Any] = []
         for source, targets in batch:
-            params.extend((kb_id, source))
-            params.extend(targets)
+            params.extend((kb_id, source, targets))
         yield clause, params
 
 
 def _endpoint_clauses(kb_id: str, node_ids: list[str]) -> Iterator[tuple[str, list[Any]]]:
     """``(sql, params)`` fragments for every edge touching one of ``node_ids``.
 
-    Two indexable branches per node rather than one ``OR`` between two ``IN``
-    lists, for the reason :func:`_pair_clauses` spells out: the out-edge branch
-    rides the primary key and the in-edge branch rides
-    ``idx_graph_edges_target``, and neither can be reached with ``kb_id``
-    hoisted out of the ``OR``.
+    Each batch has an outgoing branch on the primary key and an incoming
+    branch on ``idx_graph_edges_target``.
     """
 
     for batch in _batched(node_ids, PAIR_GROUP_BATCH):

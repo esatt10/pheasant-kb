@@ -12,6 +12,7 @@ from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
@@ -308,7 +309,7 @@ class SyncEngine:
         # were accepted and then silently produced no text. Fully offline and
         # deterministic — no model, no network on any provider.
         self.extractor = extractor_from_config(config) if initialize_indexing_components else None
-        # Mid-sync graph checkpointing (see _maybe_checkpoint_graph).
+        # Space periodic checkpoint attempts from the last attempt's end.
         self._graph_dirty = False
         self._last_checkpoint = time.monotonic()
         self._last_save_seconds = 0.0
@@ -620,13 +621,14 @@ class SyncEngine:
             return 0
         return self.rebuild_node_index()
 
-    def _maybe_checkpoint(self, source_name: str, manifest: dict) -> None:
-        """Checkpoint at most once per configured interval during a sync.
-
-        Time-based rather than every-N-artifacts: the cost of a save scales
-        with graph size, not with how many artifacts went into it, so a fixed
-        count would checkpoint far too often on a large graph.
-        """
+    def _maybe_checkpoint(
+        self,
+        source_name: str,
+        manifest: dict,
+        *,
+        on_attempt: Callable[[], None] | None = None,
+    ) -> None:
+        """Space periodic saves and retries by the configured interval."""
 
         self._graph_dirty = True
         storage = self.config.storage
@@ -641,10 +643,20 @@ class SyncEngine:
         )
         if time.monotonic() - self._last_checkpoint < interval:
             return
+        if on_attempt is not None:
+            on_attempt()
+        started = time.monotonic()
         try:
             self.checkpoint_graph(source_name, manifest)
         except Exception as exc:  # a checkpoint hiccup must not fail the sync
-            logger.warning("Checkpoint failed (continuing): %s", exc)
+            # Keep the delta dirty for the next save. Retrying on every
+            # subsequent item would put the same growing delta on the hot path.
+            self._last_checkpoint = time.monotonic()
+            logger.warning(
+                "Checkpoint failed after %.2fs (continuing): %s",
+                self._last_checkpoint - started,
+                exc,
+            )
 
     def startup(self) -> list[SyncResult]:
         """Bring a restarted container back to a serving state.
@@ -2319,6 +2331,15 @@ class SyncEngine:
                     )
                 with self._sync_mutex:
                     self._ensure_persisted_graph_loaded()
+                    report(
+                        "indexing",
+                        position,
+                        total_items,
+                        parsed.relative_path,
+                        indexed=indexed,
+                        skipped=skipped,
+                        bytes_done=indexed_bytes,
+                    )
                     self.state.replace_artifact_chunks(artifact_row, chunk_rows, fresh=cleared)
                     enrichment = self.graph_builder.add_artifact(source, parsed)
                     self.state.replace_artifact_enrichment(
@@ -2335,7 +2356,20 @@ class SyncEngine:
                         "git_commit": parsed.git_commit,
                     }
                     changed_ids.add(parsed.id)
-                    self._maybe_checkpoint(source.name, manifest)
+                    self._maybe_checkpoint(
+                        source.name,
+                        manifest,
+                        on_attempt=partial(
+                            report,
+                            "checkpointing",
+                            position,
+                            total_items,
+                            "saving indexed progress",
+                            indexed=indexed,
+                            skipped=skipped,
+                            bytes_done=indexed_bytes,
+                        ),
+                    )
                 if self.vectors is not None:
                     # Chunk ids are content-addressed (text_hash in the id),
                     # so only new/changed chunk text reaches the embedder.
@@ -2349,19 +2383,7 @@ class SyncEngine:
                         on_progress=embedding_progress,
                     )
                 indexed += 1
-                # Compatibility phase retained for existing CLI/API/MCP
-                # progress consumers; ``committing`` is the more precise new
-                # phase for callers that understand the staged pipeline.
                 indexed_bytes += int(parsed.size_bytes or 0)
-                report(
-                    "indexing",
-                    position,
-                    total_items,
-                    parsed.relative_path,
-                    indexed=indexed,
-                    skipped=skipped,
-                    bytes_done=indexed_bytes,
-                )
                 report(
                     "committing",
                     position,
@@ -2374,11 +2396,6 @@ class SyncEngine:
                 # Let anything waiting on the API get a turn before the next
                 # file. Without this a long index makes the UI unusable.
                 serve_yield()
-                # Checkpoint mid-run. Without this the graph and the manifest
-                # only reach /state when a sync *finishes*, so stopping the
-                # container an hour into a first index threw that hour away:
-                # the next start re-read every file (stale manifest) and
-                # rebuilt the whole graph.
                 if slow_sync_s:
                     time.sleep(slow_sync_s)
             if not stopped and (late := run.poll(force=True)) is not None:
