@@ -214,7 +214,7 @@ class Tracing:
         if self.provider is not None:
             self.provider.force_flush(timeout_millis=timeout_millis)
         if self.logs is not None:
-            self.logs.flush(timeout_millis)
+            self.logs.drain(timeout_millis)
 
     def shutdown(self) -> None:
         self.enabled, self.key, self.tracer = False, None, None

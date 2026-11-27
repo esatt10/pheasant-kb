@@ -111,6 +111,8 @@ import type {
 // forwards to pheasant. The single-container image explicitly builds with an
 // empty base because it serves the UI and API from the same origin.
 const API_BASE = import.meta.env.VITE_PHEASANT_API_BASE ?? "/api";
+/** The API prefix, for an extension that must send a multipart body itself. */
+export const apiBase = (): string => API_BASE;
 
 const API_TOKEN_KEY = "pheasant.api.token";
 const API_AUTH_REQUIRED_EVENT = "pheasant:api-auth-required";
@@ -216,7 +218,7 @@ function signalApiAuthRequired(): void {
   }
 }
 
-function requestHeaders(initial?: HeadersInit, json = true): Headers {
+export function requestHeaders(initial?: HeadersInit, json = true): Headers {
   const headers = new Headers(initial);
   if (json && !headers.has("accept")) headers.set("accept", "application/json");
   if (json && !headers.has("content-type")) headers.set("content-type", "application/json");
@@ -336,7 +338,7 @@ export async function collectAnswer(
 }
 
 /** Turn FastAPI's structured validation detail into text a person can act on. */
-function errorDetail(body: unknown, fallback: string): string {
+export function errorDetail(body: unknown, fallback: string): string {
   if (!body || typeof body !== "object") return fallback;
   const detail = (body as { detail?: unknown }).detail;
   if (typeof detail === "string") return detail;

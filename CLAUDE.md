@@ -66,7 +66,14 @@ pheasant-kb/
 ├── docs/                      ← GitHub-rendered Markdown; index.md is the hub,
 │                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
-├── extensions/                ← optional Pheasant packages and UI contributions (GTM)
+├── extensions/                ← optional Pheasant packages and UI contributions (GTM,
+│                                harness: the agentic runtime, extensions/harness/README.md,
+│                                started from the chat with @harness (an extension chat
+│                                keyword), its telemetry an Admin tab (an extension admin tab);
+│                                a workspace: attach files, work in a repository,
+│                                branch and folder through a connection under an
+│                                operator's action policy, keep the result as an
+│                                artifact or one commit + PR)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
@@ -263,7 +270,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 237 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 245 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →
@@ -3620,6 +3627,22 @@ they stay for the lesson, not as a description of the code.
   (`persistence/prewarm.py`, from `search/keep_warm.py`), and its first canned
   search runs at once rather than after a 30 s beat. Found by timing each arm
   alone on prod and reading the spans per `OperationId`.
+
+- **A logging handler's `flush` can run under `logging`'s own module lock.**
+  `logging.config.dictConfig` shuts every handler down holding that lock, and
+  uvicorn calls it at start. `telemetry/log_export.LogExport.flush` waited for
+  the OTLP log exporter, whose HTTP client checks a log level -- which needs
+  the same lock -- so every region with an OTLP endpoint and the SDK installed
+  hung before serving its first request. No test configured an endpoint and
+  then reconfigured logging; it was found by pointing the harness demo at a
+  local collector. `flush` never waits now, `drain` (from `Tracing.flush`)
+  does, and `test_reconfiguring_logging_with_an_exporter_attached_does_not_deadlock`
+  runs it in a child, because a hang cannot be caught in-process.
+- **PostgreSQL's `AVG` is a `numeric`, and `numeric` is not a JSON number.**
+  The harness telemetry overview returned it as it came, the payload carried a
+  string, and the Admin tab crashed calling `toFixed` on it. Every aggregate a
+  surface returns is converted where it is read
+  (`pheasant_harness.telemetry._number`), and the test asserts the types.
 
 ---
 

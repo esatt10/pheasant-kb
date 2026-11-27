@@ -63,7 +63,19 @@ class LogExport(logging.Handler):
             # Never log an export failure through this same handler.
             pass
 
-    def flush(self, timeout_millis: int = 2000) -> None:
+    def flush(self) -> None:
+        """``logging``'s flush: never wait for an export here.
+
+        ``logging.shutdown`` calls it -- and ``logging.config.dictConfig``
+        calls that while it holds ``logging``'s module lock (uvicorn does at
+        start). Waiting for the exporter there deadlocks: the export thread's
+        HTTP client checks a log level, which needs that same lock. Every
+        region with an OTLP endpoint hung before serving its first request.
+        Records are delivered by the processor's own thread, and
+        :meth:`drain` (``Tracing.flush`` / ``shutdown``) waits for them.
+        """
+
+    def drain(self, timeout_millis: int = 2000) -> None:
         if getattr(self, "provider", None) is not None:
             self.provider.force_flush(timeout_millis=timeout_millis)
 

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pheasant-harness"
+version = "1.0.0"
+description = "Agentic runtime harness for Pheasant: durable, verified, evidence-linked runs"
+requires-python = ">=3.11"
+dependencies = ["pheasant-kb>=2.0,<3", "pillow>=10"]
+
+[project.entry-points."pheasant.extensions"]
+harness = "pheasant_harness.plugin:extension"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pheasant_harness"]

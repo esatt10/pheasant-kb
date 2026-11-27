@@ -37,6 +37,7 @@ def test_compose_manifests_live_under_the_deployment_directory() -> None:
     assert not list(REPO_ROOT.glob("docker-compose*.yml"))
     assert {path.name for path in COMPOSE_CONFIG.glob("docker-compose*.yml")} == {
         "docker-compose.gtm.yml",
+        "docker-compose.harness.yml",
         "docker-compose.scale.yml",
     }
 

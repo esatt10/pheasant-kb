@@ -1,0 +1,369 @@
+export type RunState =
+  | "accepted" | "running" | "waiting" | "verifying" | "delivering" | "reconciling"
+  | "succeeded" | "partial" | "failed" | "cancelled";
+
+export interface Registration {
+  id: string;
+  uri: string;
+  resolver: "git" | "folder" | "pheasant" | "connection" | "attachment";
+  label: string;
+  operations: string[];
+  classification: string;
+  registered_by: string;
+  created_at: number;
+  revoked: boolean;
+  authorized: boolean;
+  freshness_policy: Record<string, unknown>;
+}
+
+export interface Budget {
+  limits: Record<string, number>;
+  spent: Record<string, number>;
+  reserved: Record<string, number>;
+  remaining: Record<string, number>;
+}
+
+export interface Effect {
+  operation_id: string;
+  adapter: string;
+  target: string;
+  state: string;
+  dispatch_count: number;
+  downstream_id: string | null;
+  disposition: string | null;
+}
+
+export interface RunSummary {
+  run_id: string;
+  state: RunState;
+  workload: string;
+  tenant: string;
+  actor: string;
+  question: string;
+  created_at: number;
+  updated_at: number;
+  last_seq: number;
+  result_status?: string | null;
+}
+
+export interface Handoff {
+  artifacts: Record<string, string> | null;
+  verified_criteria: string[];
+  unverified_criteria: string[];
+  coverage_gaps: string[];
+  evidence_count: number;
+  executed: { argv: string[]; purpose?: string; exit_status?: number; environment?: Record<string, unknown> }[];
+  unresolved: { step: string; action: string; outcome: string }[];
+}
+
+export interface RunResult {
+  status: string;
+  reason?: string;
+  candidates?: Record<string, string> | null;
+  receipt?: Record<string, string | null>;
+  handoff?: Handoff;
+  blocked?: { registration_id: string; reason: string; criteria?: string[] }[];
+  unverified?: Record<string, string[]>;
+  conflict?: string;
+  next_action?: string;
+  integrity?: { ok: boolean; missing: { object: string; kind: string }[] };
+}
+
+export interface RunStatus {
+  run_id: string;
+  state: RunState;
+  workload: string;
+  class: string;
+  tenant: string;
+  actor: string;
+  question: string;
+  last_seq: number;
+  fence: number;
+  lease: { owner: string | null; until: number | null; held: boolean };
+  cancel_requested: boolean;
+  workflow_version: number;
+  versions: Record<string, string | number>;
+  wait: RunWait | null;
+  result: RunResult | null;
+  steps: Record<string, number>;
+  budget: Budget;
+  effects: Effect[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface RunWait {
+  kind?: "approval" | string;
+  reason?: string;
+  input?: string[];
+  operation_id?: string;
+  payload_digest?: string;
+  connection?: string;
+  provider?: string;
+  action?: string;
+  resource?: string;
+  target?: string;
+  expected_target_version?: string | null;
+  requested_by?: string;
+  self_approval?: boolean;
+  preview?: string;
+}
+
+export interface ConnectionCall {
+  id: string;
+  run_id: string | null;
+  purpose: string;
+  actor: string;
+  connection: string;
+  provider: string;
+  action: string;
+  method: string;
+  host: string;
+  resource: string;
+  outcome: "allowed" | "cached" | "denied" | "failed";
+  status_code: number | null;
+  bytes: number;
+  reason: string | null;
+  policy_version: number | null;
+  flags: Record<string, unknown>;
+  at: number;
+}
+
+export interface ConnectionPolicy {
+  connection: string;
+  provider: string;
+  version: number;
+  actions: string[];
+  resources: string[];
+  write_resources: string[];
+  limits: Record<string, number>;
+  approval: { write: "required" | "none"; self_approval: boolean };
+  enabled: boolean;
+  updated_by: string;
+  updated_at: number;
+}
+
+export interface ConnectionInfo {
+  name: string;
+  provider: string;
+  status: string;
+  account: string | null;
+  supported: boolean;
+  offers: string[];
+  resource_grammar: string | null;
+  policy: ConnectionPolicy | null;
+}
+
+export interface ConnectionsOverview {
+  connections: ConnectionInfo[];
+  actions: Record<string, { kind: string; methods: string[]; description: string }>;
+  never: string[];
+  providers: Record<string, { actions: string[]; resource_grammar: string; download_hosts: string[] }>;
+  defaults: { limits: Record<string, number>; approval: { write: string; self_approval: boolean } };
+}
+
+export interface Step {
+  step_id: string;
+  action: string;
+  status: string;
+  required: boolean;
+  effect_class: string;
+  candidate: string | null;
+  current_attempt: string | null;
+  args: Record<string, unknown>;
+  outcome: string | null;
+  observation: Record<string, unknown>;
+  policy: { allowed?: boolean; reason?: string | null; capability?: string };
+  created_at: number;
+}
+
+export interface Evidence {
+  id: string;
+  registration_id: string | null;
+  revision: string | null;
+  locator: Record<string, unknown>;
+  method: string;
+  status: string;
+  extract: string;
+  flags: Record<string, boolean>;
+  step_id: string | null;
+}
+
+export interface Artifact {
+  digest: string;
+  kind: string;
+  name: string;
+  media_type: string;
+  parent_digest: string | null;
+  step_id: string | null;
+  provenance: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface Verification {
+  id: string;
+  criterion_id: string;
+  artifact_digest: string;
+  grader: string;
+  grader_version: string;
+  outcome: "pass" | "fail" | "skipped" | "inconclusive";
+  observed: Record<string, unknown>;
+  input_digests: string[];
+  environment: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface Sandbox {
+  generation: string;
+  profile: string;
+  state: string;
+  image_digest: string;
+  created_at: number;
+  destroyed_at: number | null;
+  disposal_ms: number | null;
+  disposal: { reason: string; confirmed: boolean; processes_killed: number[]; within_deadline: boolean } | null;
+}
+
+export interface Attempt {
+  attempt_id: string;
+  step_id: string;
+  fence: number;
+  worker: string;
+  status: string;
+  started_at: number;
+  finished_at: number | null;
+}
+
+export interface Criterion {
+  id: string;
+  type: string;
+  target: string;
+  required: boolean;
+}
+
+export interface RunDetail extends Omit<RunStatus, "steps"> {
+  request: Record<string, unknown>;
+  criteria: Criterion[];
+  steps: Step[];
+  attempts: Attempt[];
+  evidence: Evidence[];
+  artifacts: Artifact[];
+  verifications: Verification[];
+  revisions: Record<string, { revision: string; kind: string; entries: number; time_bound: boolean }>;
+  sandboxes: Sandbox[];
+  isolation: Record<string, unknown>;
+  integrity: { ok: boolean; missing: { object: string; kind: string }[] };
+  withheld_evidence?: string[];
+  connection_calls?: ConnectionCall[];
+}
+
+export interface RunEvent {
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface ArtifactContent {
+  digest: string;
+  kind: string;
+  name: string;
+  media_type: string;
+  content: string | null;
+  content_base64: string | null;
+  bytes: number;
+}
+
+export interface UsableConnection {
+  name: string;
+  provider: "github" | "google_drive" | "microsoft_365" | string;
+  account: string | null;
+  actions: string[];
+  locations: string[];
+  write_resources: string[];
+  approval: { write: string; self_approval: boolean };
+  resource_grammar: string | null;
+}
+
+export interface BrowseEntry { name: string; path: string; type: "dir" | "file"; size?: number | null }
+
+export interface BrowseResult {
+  kind: "locations" | "repository" | "folder" | "drive";
+  connection?: string;
+  provider?: string;
+  suggestions?: string[];
+  repository?: string;
+  default_branch?: string;
+  branches?: string[];
+  ref?: string;
+  path?: string;
+  entries?: BrowseEntry[];
+}
+
+export interface AttachedFile {
+  path: string;
+  size: number | null;
+  kind: string;
+  binary: boolean;
+  derived_from: string | null;
+  reason: string | null;
+  mime_type?: string | null;
+  artifact_type?: string | null;
+  indexable?: boolean | null;
+  text_from?: string | null;
+  archive?: string | null;
+  pheasant_document?: string | null;
+}
+
+export interface AttachResult {
+  registration: Registration & { created: boolean };
+  batch: string;
+  files: AttachedFile[];
+  archives?: Record<string, { folder?: string; members: number; nested_archives?: number; skipped?: Record<string, number>; unreadable?: { path: string; reason: string }[]; error?: string }>;
+  uploads: { status: string; source?: string; folder?: string; landed?: number; reason?: string; job_id?: string | null };
+}
+
+export interface TelemetryDestination {
+  id: string;
+  label: string;
+  kind: string;
+  configured: boolean;
+  where: string;
+  detail: string;
+  protocol?: string | null;
+  headers?: string[];
+  sdk_installed?: boolean;
+  exporting?: boolean;
+  last_test?: { id: string; ok: boolean; at: number; actor: string; outcome: string; message: string; endpoint?: string; via?: string; elapsed_ms?: number; status_code?: number; trace_id?: string } | null;
+}
+
+export interface TelemetryOverview {
+  window_hours: number;
+  generated_at: number;
+  runs: { total: number; finished: number; by_state: Record<string, number>; success_rate: number | null; p50_seconds: number | null; p95_seconds: number | null; budget_stops: number };
+  workloads: Record<string, { runs: number; succeeded: number; partial: number; failed: number; p50_seconds: number | null; p95_seconds: number | null }>;
+  usage: { model_calls: number; model_tokens: number; tool_calls: number; bytes_scanned: number };
+  steps: { action: string; status: string; n: number; mean_seconds: number | null }[];
+  verifications: Record<string, number>;
+  deliveries: { adapter: string; state: string; n: number }[];
+  connection_calls: { provider: string; action: string; outcome: string; n: number; bytes: number | null }[];
+  recent_denials: { connection: string; provider: string; action: string; resource: string; reason: string | null; run_id: string | null; at: number }[];
+  approvals_pending: number;
+  effects_uncertain: number;
+  traces: { emitted: number; exported: number; errors: number };
+  recent_runs: { run_id: string; workload: string; state: string; created_at: number; seconds: number; usage: Record<string, number>; result: string | null; reason: string | null; trace_id: string; spans: number | null; trace: string; exported: boolean }[];
+  destinations: TelemetryDestination[];
+  metrics: Record<string, { series: string; value: number }[]>;
+}
+
+export interface TraceSpan {
+  name: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  start_time: string;
+  end_time: string;
+  duration_ms: number;
+  status: { code: string; message?: string };
+  attributes: Record<string, unknown>;
+}

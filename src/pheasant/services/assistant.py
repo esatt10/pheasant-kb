@@ -222,7 +222,7 @@ def answer(
     from pheasant.request_budget import activate
 
     budget = request_budget or create_request_budget(context, request)
-    from pheasant.services import artifacts
+    from pheasant.services import artifacts, chat_commands
 
     source_name, source_names, exclude_sources = artifacts.scope(
         request.artifacts, request.source_name, request.source_names, None, state=context.state
@@ -294,6 +294,7 @@ def answer(
                 current_document=request.current_document,
                 current_directory=request.current_directory,
                 remove_documents=_remover(context, request),
+                run_command=chat_commands.commander(context, request),
                 source_names=source_names,
                 exclude_sources=exclude_sources,
                 intent=request.intent,

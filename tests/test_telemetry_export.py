@@ -513,3 +513,44 @@ def test_sync_subprocess_and_remote_executor_keep_context(monkeypatch, collector
     finally:
         server.stop(0).wait()
         tracing.shutdown()
+
+
+_RECONFIGURE = """
+import logging, logging.config, sys
+from pheasant.config.schema import ObservabilitySettings
+from pheasant.telemetry.tracing import Tracing
+
+tracing = Tracing()
+assert tracing.configure(ObservabilitySettings())
+logging.getLogger("pheasant.telemetry.test").warning("queued before the reconfiguration")
+# What uvicorn does at start: shut every handler down under logging's module lock.
+logging.config.dictConfig({"version": 1, "disable_existing_loggers": False})
+tracing.flush()
+tracing.shutdown()
+print("reconfigured")
+"""
+
+
+def test_reconfiguring_logging_with_an_exporter_attached_does_not_deadlock(monkeypatch, collector):
+    """`dictConfig` flushed our handler under logging's lock, which the export thread needed.
+
+    Every region with an OTLP endpoint hung before serving its first request.
+    Run in a child, because reconfiguring logging here would remove pytest's
+    own handlers, and bounded, because the failure is a hang.
+    """
+    import subprocess
+    import sys
+
+    endpoint, protocol, traces, logs = collector
+    env = {
+        **os.environ,
+        "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
+        "OTEL_EXPORTER_OTLP_PROTOCOL": protocol,
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", _RECONFIGURE], env=env, capture_output=True, text=True, timeout=60
+    )
+    assert done.returncode == 0, done.stderr
+    assert "reconfigured" in done.stdout
+    # The record queued before the reconfiguration still reached the collector.
+    assert "queued before the reconfiguration" in str(logs)
