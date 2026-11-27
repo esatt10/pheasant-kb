@@ -1,0 +1,41 @@
+# Optional agentic runtime harness for the root pheasant-kb stack.
+# Paths are relative to the first file (-f compose.yaml). Combine with the GTM
+# overlay by building with PHEASANT_BUILD_EXTENSIONS=gtm,harness.
+x-harness-image: &harness-image ${PHEASANT_HARNESS_RUNTIME_IMAGE:-pheasant:harness-local}
+x-harness-runtime: &harness-runtime
+  image: *harness-image
+  build:
+    context: .
+    args:
+      PHEASANT_BUILD_EXTENSIONS: ${PHEASANT_BUILD_EXTENSIONS:-harness}
+
+services:
+  api:
+    <<: *harness-runtime
+    environment:
+      # Sandboxes are scratch: never part of the recovery contract (spec §7.1).
+      PHEASANT_HARNESS_SANDBOX_ROOT: /harness-scratch
+      PHEASANT_HARNESS_DELIVERY_ROOT: /exports/harness
+    tmpfs:
+      - /harness-scratch:size=2g,mode=1777
+
+  indexer:
+    <<: *harness-runtime
+
+  graph:
+    <<: *harness-runtime
+
+  logger:
+    <<: *harness-runtime
+
+  worker:
+    <<: *harness-runtime
+
+  db-init:
+    image: *harness-image
+
+  secrets-init:
+    image: *harness-image
+
+  workspace-init:
+    image: *harness-image

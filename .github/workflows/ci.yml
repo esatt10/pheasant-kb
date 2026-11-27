@@ -57,6 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[${{ matrix.extras }}]"
           python -m pip install --no-deps -e ./extensions/gtm
+          python -m pip install --no-deps -e ./extensions/harness
 
       - name: Run ruff lint
         run: python -m ruff check src tests scripts extensions --no-cache
@@ -138,6 +139,10 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+          # The optional extensions' browser code is type-checked and bundled too,
+          # into a throwaway directory so the default bundle stays extension-free.
+          PHEASANT_BUILD_EXTENSIONS=gtm,harness npx tsc -b
+          PHEASANT_BUILD_EXTENSIONS=gtm,harness npx vite build --outDir "$RUNNER_TEMP/ui-extensions"
 
       - name: Start PostgreSQL
         uses: ./.github/actions/pheasant-postgres

@@ -37,3 +37,5 @@ Extension Python and browser code runs with host trust. Install from operator-co
 ## Reference implementation
 
 [GTM](../extensions/gtm) supplies each contribution. The [GTM Compose overlay](../deploy/compose/docker-compose.gtm.yml) builds the extension-enabled host image and the parser. The [GTM runbook](how-to/gtm-research.md) covers registration, sync and export.
+
+The [agentic runtime harness](../extensions/harness) is a second extension built on the same contributions (HTTP, MCP, CLI, migrations and a UI route, no source type): durable, verified runs over registered places to look. Its README maps each part of the production-readiness spec to code and to an acceptance test.

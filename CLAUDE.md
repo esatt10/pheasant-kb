@@ -66,7 +66,8 @@ pheasant-kb/
 ├── docs/                      ← GitHub-rendered Markdown; index.md is the hub,
 │                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
-├── extensions/                ← optional Pheasant packages and UI contributions (GTM)
+├── extensions/                ← optional Pheasant packages and UI contributions (GTM,
+│                                harness: the agentic runtime, extensions/harness/README.md)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
