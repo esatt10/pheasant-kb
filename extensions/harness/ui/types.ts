@@ -300,9 +300,70 @@ export interface BrowseResult {
   entries?: BrowseEntry[];
 }
 
+export interface AttachedFile {
+  path: string;
+  size: number | null;
+  kind: string;
+  binary: boolean;
+  derived_from: string | null;
+  reason: string | null;
+  mime_type?: string | null;
+  artifact_type?: string | null;
+  indexable?: boolean | null;
+  text_from?: string | null;
+  archive?: string | null;
+  pheasant_document?: string | null;
+}
+
 export interface AttachResult {
   registration: Registration & { created: boolean };
   batch: string;
-  files: { path: string; size: number | null; kind: string; binary: boolean; derived_from: string | null; reason: string | null }[];
-  uploads: { status: string; source?: string; folder?: string; landed?: number; reason?: string };
+  files: AttachedFile[];
+  archives?: Record<string, { folder?: string; members: number; nested_archives?: number; skipped?: Record<string, number>; unreadable?: { path: string; reason: string }[]; error?: string }>;
+  uploads: { status: string; source?: string; folder?: string; landed?: number; reason?: string; job_id?: string | null };
+}
+
+export interface TelemetryDestination {
+  id: string;
+  label: string;
+  kind: string;
+  configured: boolean;
+  where: string;
+  detail: string;
+  protocol?: string | null;
+  headers?: string[];
+  sdk_installed?: boolean;
+  exporting?: boolean;
+  last_test?: { id: string; ok: boolean; at: number; actor: string; outcome: string; message: string; endpoint?: string; via?: string; elapsed_ms?: number; status_code?: number; trace_id?: string } | null;
+}
+
+export interface TelemetryOverview {
+  window_hours: number;
+  generated_at: number;
+  runs: { total: number; finished: number; by_state: Record<string, number>; success_rate: number | null; p50_seconds: number | null; p95_seconds: number | null; budget_stops: number };
+  workloads: Record<string, { runs: number; succeeded: number; partial: number; failed: number; p50_seconds: number | null; p95_seconds: number | null }>;
+  usage: { model_calls: number; model_tokens: number; tool_calls: number; bytes_scanned: number };
+  steps: { action: string; status: string; n: number; mean_seconds: number | null }[];
+  verifications: Record<string, number>;
+  deliveries: { adapter: string; state: string; n: number }[];
+  connection_calls: { provider: string; action: string; outcome: string; n: number; bytes: number | null }[];
+  recent_denials: { connection: string; provider: string; action: string; resource: string; reason: string | null; run_id: string | null; at: number }[];
+  approvals_pending: number;
+  effects_uncertain: number;
+  traces: { emitted: number; exported: number; errors: number };
+  recent_runs: { run_id: string; workload: string; state: string; created_at: number; seconds: number; usage: Record<string, number>; result: string | null; reason: string | null; trace_id: string; spans: number | null; trace: string; exported: boolean }[];
+  destinations: TelemetryDestination[];
+  metrics: Record<string, { series: string; value: number }[]>;
+}
+
+export interface TraceSpan {
+  name: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  start_time: string;
+  end_time: string;
+  duration_ms: number;
+  status: { code: string; message?: string };
+  attributes: Record<string, unknown>;
 }

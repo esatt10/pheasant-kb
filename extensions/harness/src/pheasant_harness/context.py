@@ -26,12 +26,19 @@ class Harness:
         self.runs = RunStore(self.state, self.kb_id)
 
 
-_CACHE: dict[int, Harness] = {}
+_CACHE: dict[tuple[int, str], Harness] = {}
 
 
 def harness_for(services: Any) -> Harness:
-    key = id(services)
+    """One harness per state store and knowledge base.
+
+    Keyed by the store rather than the context object: a request may carry a
+    copy of the context (``services.models.effective`` lays an Admin's model
+    defaults over the config), and a harness per copy would be a runner thread
+    per question.
+    """
+    key = (id(services.state), str(services.config.knowledge_base_id))
     found = _CACHE.get(key)
-    if found is None or found.services is not services:
+    if found is None or found.state is not services.state:
         found = _CACHE[key] = Harness(services)
     return found

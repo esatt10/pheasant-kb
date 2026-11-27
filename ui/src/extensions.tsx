@@ -26,12 +26,21 @@ export interface SourceUi {
   };
 }
 
+/** A tab an extension adds to the Admin page, offered only with `permission`. */
+export interface AdminTabUi {
+  id: string;
+  label: string;
+  permission: string;
+  Panel: ComponentType;
+}
+
 export interface UiExtension {
   id: string;
   apiVersion: 1;
   routes: readonly { path: string; label: string; Page: ComponentType }[];
   sources?: readonly SourceUi[];
   graphColors?: Readonly<Record<string, string>>;
+  adminTabs?: readonly AdminTabUi[];
 }
 
 export const bundledUiExtensions = bundledExtensions;

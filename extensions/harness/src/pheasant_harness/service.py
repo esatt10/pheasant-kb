@@ -10,7 +10,13 @@ from pheasant_harness import connections as connections_mod
 from pheasant_harness import discovery as discovery_mod
 from pheasant_harness import investigate, runner
 from pheasant_harness.broker import TOOLS
-from pheasant_harness.common import POLICY_VERSION, WORKFLOW_VERSION, AccessDenied, NotFound
+from pheasant_harness.common import (
+    POLICY_VERSION,
+    WORKFLOW_VERSION,
+    AccessDenied,
+    HarnessError,
+    NotFound,
+)
 from pheasant_harness.context import harness_for
 from pheasant_harness.coordinator import Coordinator
 from pheasant_harness.delivery import ADAPTERS
@@ -491,6 +497,94 @@ def attach_files(
         sync=sync,
         keep_in_uploads=keep_in_uploads,
     )
+
+
+def attachment_documents(
+    services: Any, registration_id: str, knowledge_base: str | None = None
+) -> dict:
+    """The Pheasant document each file of an attachment became, with its metadata."""
+    import json as _json
+
+    from pheasant_harness import attachments
+
+    _kb(services, knowledge_base)
+    harness = harness_for(services)
+    registration = harness.registry.get(registration_id)
+    if registration.resolver != "attachment" or not harness.registry.authorized(
+        registration, actor()
+    ):
+        raise NotFound(f"Unknown attachment: {registration_id}")
+    batch = registration.scope.get("batch")
+    entries = _json.loads(harness.blobs.get_text(registration.scope["manifest"]))
+    landed = {row["path"]: row for row in attachments.uploads_for(harness, batch)}
+    return {
+        "registration_id": registration_id,
+        "batch": batch,
+        "files": [
+            {
+                key: entry.get(key)
+                for key in (
+                    "path",
+                    "kind",
+                    "size",
+                    "mime_type",
+                    "artifact_type",
+                    "indexable",
+                    "text_from",
+                    "archive",
+                    "derived_from",
+                    "reason",
+                )
+            }
+            | {"pheasant_document": (landed.get(entry["path"]) or {}).get("artifact_id")}
+            for entry in entries
+        ],
+        "uploads": list(landed.values()),
+    }
+
+
+# -- telemetry -----------------------------------------------------------------------
+
+
+def _require_telemetry_admin() -> None:
+    from pheasant.security.authorization import allowed
+
+    if not allowed("security.manage"):
+        raise AccessDenied("harness telemetry spans every caller's runs and needs security.manage")
+
+
+def telemetry(services: Any, window_hours: float = 168, knowledge_base: str | None = None) -> dict:
+    """Runs, spend, checks, deliveries, connection calls and where telemetry goes (operator)."""
+    from pheasant_harness import telemetry as telemetry_mod
+
+    _kb(services, knowledge_base)
+    _require_telemetry_admin()
+    if not 0 < float(window_hours) <= 24 * 90:
+        raise HarnessError("window_hours must be between 0 and 2160 (90 days)")
+    return telemetry_mod.overview(harness_for(services), window_hours=float(window_hours))
+
+
+def run_trace(services: Any, run_id: str, knowledge_base: str | None = None) -> dict:
+    """One run's trace, span by span, as it is (or will be) exported."""
+    from pheasant_harness import telemetry as telemetry_mod
+
+    _kb(services, knowledge_base)
+    coordinator = _owned(services, run_id)
+    run = coordinator.runs.get(run_id)
+    spans = telemetry_mod.run_spans(coordinator.harness, run)
+    return {"run_id": run_id, "trace_id": telemetry_mod.trace_id(run_id), "spans": spans}
+
+
+def test_telemetry(services: Any, destination: str, knowledge_base: str | None = None) -> dict:
+    """Send one test signal to a telemetry destination and say what happened (operator)."""
+    from pheasant_harness import telemetry as telemetry_mod
+
+    _kb(services, knowledge_base)
+    _require_telemetry_admin()
+    try:
+        return telemetry_mod.test_destination(harness_for(services), destination, actor())
+    except ValueError as exc:
+        raise HarnessError(str(exc)) from exc
 
 
 def advance_run(services: Any, run_id: str, knowledge_base: str | None = None) -> dict:

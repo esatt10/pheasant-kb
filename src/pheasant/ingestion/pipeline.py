@@ -624,43 +624,16 @@ def parse_connector_payload(
     extension_source = source.type.value in extension_sources()
     if extension_source and payload.normalized_text is not None:
         text = payload.normalized_text
-    elif is_image:
-        text = caption_to_text(
-            captioner,
-            payload.content,
-            item.relative_path,
-            _sidecar_for_payload(payload),
-        )
-    elif is_audio:
-        text = transcribe_to_text(
-            transcriber,
-            payload.content,
-            item.relative_path,
-            _sidecar_for_payload(payload, TRANSCRIPT_SIDECAR_SUFFIX),
-        )
-    elif suffix in DOCUMENT_EXTENSIONS or (extractor is not None and suffix in HTML_EXTENSIONS):
-        # Connector-backed documents get the same sidecar courtesy as local
-        # ones when the payload carries a filesystem path.
-        text = extract_to_text(
-            extractor,
-            payload.content,
-            item.relative_path,
-            _sidecar_for_payload(payload, EXTRACT_SIDECAR_SUFFIX),
-        )
-    elif extractor is not None and _is_html(mime_type):
-        # A page served as HTML from a URL with no extension (``/blog/post``)
-        # has a ``.txt`` relative path - the artifact id is built from it, so
-        # it stays - and the suffix alone would index its raw markup, script
-        # and style bodies included. The extractor picks its reader by
-        # suffix, so it is told the format the server declared.
-        text = extract_to_text(
-            extractor,
-            payload.content,
-            f"{item.relative_path}.html",
-            _sidecar_for_payload(payload, EXTRACT_SIDECAR_SUFFIX),
-        )
     else:
-        text = read_text_bytes(payload.content, item.relative_path, extractor)
+        text, _how = payload_text(
+            item.relative_path,
+            payload.content,
+            mime_type,
+            captioner=captioner,
+            transcriber=transcriber,
+            extractor=extractor,
+            sidecar=lambda suffix: _sidecar_for_payload(payload, suffix),
+        )
     chunks, headings, chunk_plan = _chunks_and_headings(source, text, item.relative_path)
     page_lines = _pages_of(text)
     text = str(text)
@@ -687,6 +660,83 @@ def parse_connector_payload(
             payload.metadata.get("extension_provenance", []) if extension_source else []
         ),
         extension_inputs=payload.metadata.get("extension_inputs", {}) if extension_source else {},
+    )
+
+
+#: How :func:`payload_text` read a file: what turned its bytes into text.
+TEXT_FROM = ("caption", "transcript", "extractor", "html", "notebook", "text")
+
+
+def payload_text(
+    relative_path: str,
+    content: bytes,
+    mime_type: str | None,
+    *,
+    captioner: Captioner | None = None,
+    transcriber: Transcriber | None = None,
+    extractor: DocumentExtractor | None = None,
+    sidecar: Callable[[str], bytes | None] | None = None,
+) -> tuple[Any, str]:
+    """The text indexing reads from one file's bytes, and what read it.
+
+    The single dispatch by content type every connector payload goes through
+    (:func:`parse_connector_payload`), exposed so something that holds bytes
+    outside a sync -- an extension's attachment -- reads them exactly as the
+    index would: images captioned, audio transcribed, documents and HTML
+    extracted, notebooks as their cells, everything else as text. ``sidecar``
+    returns an authored ``.caption.txt`` / ``.transcript.txt`` / extract
+    sidecar when the caller has one. Whether a file is read at all is
+    :func:`indexable`.
+    """
+
+    suffix = Path(relative_path).suffix.lower()
+    find = sidecar or (lambda _suffix: None)
+    if suffix in IMAGE_EXTENSIONS:
+        return caption_to_text(captioner, content, relative_path, find(CAPTION_SIDECAR_SUFFIX)), (
+            "caption"
+        )
+    if suffix in AUDIO_EXTENSIONS:
+        return (
+            transcribe_to_text(
+                transcriber, content, relative_path, find(TRANSCRIPT_SIDECAR_SUFFIX)
+            ),
+            "transcript",
+        )
+    if suffix in DOCUMENT_EXTENSIONS or (extractor is not None and suffix in HTML_EXTENSIONS):
+        # Connector-backed documents get the same sidecar courtesy as local
+        # ones when the payload carries a filesystem path.
+        return (
+            extract_to_text(extractor, content, relative_path, find(EXTRACT_SIDECAR_SUFFIX)),
+            "html" if suffix in HTML_EXTENSIONS else "extractor",
+        )
+    if extractor is not None and _is_html(mime_type):
+        # A page served as HTML from a URL with no extension (``/blog/post``)
+        # has a ``.txt`` relative path - the artifact id is built from it, so
+        # it stays - and the suffix alone would index its raw markup, script
+        # and style bodies included. The extractor picks its reader by
+        # suffix, so it is told the format the server declared.
+        return (
+            extract_to_text(
+                extractor, content, f"{relative_path}.html", find(EXTRACT_SIDECAR_SUFFIX)
+            ),
+            "html",
+        )
+    return (
+        read_text_bytes(content, relative_path, extractor),
+        "notebook" if suffix == ".ipynb" else "text",
+    )
+
+
+def indexable(relative_path: str, mime_type: str | None = None) -> bool:
+    """Whether indexing reads this file at all (:func:`parse_connector_payload`'s gate)."""
+
+    suffix = Path(relative_path).suffix.lower()
+    return bool(
+        is_text_file(relative_path)
+        or suffix in DOCUMENT_EXTENSIONS
+        or suffix in IMAGE_EXTENSIONS
+        or suffix in AUDIO_EXTENSIONS
+        or _is_text_like(mime_type)
     )
 
 

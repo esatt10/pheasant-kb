@@ -34,6 +34,10 @@ class GrantBody(BaseModel):
     granted: bool = True
 
 
+class TelemetryTestBody(BaseModel):
+    destination: str
+
+
 class EffectBody(BaseModel):
     disposition: Literal["applied", "not_applied"]
 
@@ -221,6 +225,22 @@ def register_harness_routes(app: FastAPI, *, services: Any) -> None:
         return await asyncio.to_thread(
             service.attach_files, services, received, label, sync, keep_in_uploads
         )
+
+    @app.get("/harness/attachments/{registration_id}")
+    def attachment_documents(registration_id: str) -> dict:
+        return service.attachment_documents(services, registration_id)
+
+    @app.get("/harness/telemetry")
+    def telemetry(window_hours: float = 168) -> dict:
+        return service.telemetry(services, window_hours)
+
+    @app.post("/harness/telemetry/test")
+    def test_telemetry(body: TelemetryTestBody) -> dict:
+        return service.test_telemetry(services, body.destination)
+
+    @app.get("/harness/runs/{run_id}/trace")
+    def run_trace(run_id: str) -> dict:
+        return service.run_trace(services, run_id)
 
     @app.get("/harness/connections/calls")
     def connection_calls(

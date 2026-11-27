@@ -4,9 +4,10 @@ import { ControlsPanel } from "../admin/ControlsPanel";
 import { FleetPanel } from "../admin/FleetPanel";
 import { ModelsPanel } from "../admin/ModelsPanel";
 import { UsagePanel } from "../admin/UsagePanel";
+import { useUiExtensions } from "../extensions";
 import { usePermissions } from "../state/permissions";
 
-type Tab = "access" | "models" | "usage" | "controls" | "fleet";
+type Tab = string;
 
 const TABS: { id: Tab; label: string; permission: string }[] = [
   // Granting is a Contributor's too; the rest is an Admin's.
@@ -26,7 +27,12 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
  */
 export function AdminPage() {
   const { can } = usePermissions();
-  const offered = TABS.filter((tab) => can(tab.permission));
+  // An installed extension's tabs follow the region's own (the Harness tab's
+  // telemetry, say), each gated on the permission its server routes ask for.
+  const extensionTabs = useUiExtensions().flatMap((extension) =>
+    (extension.adminTabs ?? []).map((tab) => ({ ...tab, id: `${extension.id}:${tab.id}` })),
+  );
+  const offered = [...TABS, ...extensionTabs].filter((tab) => can(tab.permission));
   const [tab, setTab] = useState<Tab>("access");
   const current = offered.find((entry) => entry.id === tab) ?? offered[0];
 
@@ -63,6 +69,7 @@ export function AdminPage() {
       {current.id === "usage" ? <UsagePanel /> : null}
       {current.id === "controls" ? <ControlsPanel /> : null}
       {current.id === "fleet" ? <FleetPanel /> : null}
+      {extensionTabs.map(({ id, Panel }) => (current.id === id ? <Panel key={id} /> : null))}
     </div>
   );
 }

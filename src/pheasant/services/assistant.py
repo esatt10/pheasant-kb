@@ -294,6 +294,7 @@ def answer(
                 current_document=request.current_document,
                 current_directory=request.current_directory,
                 remove_documents=_remover(context, request),
+                run_command=_commander(context, request),
                 source_names=source_names,
                 exclude_sources=exclude_sources,
                 intent=request.intent,
@@ -363,6 +364,46 @@ def _remover(context: ServiceContext, request: AnswerRequest) -> Callable[[list[
         )
 
     return remove
+
+
+def _commander(context: ServiceContext, request: AnswerRequest) -> Callable[[str, str], dict]:
+    """An extension's chat keyword (``@harness``): its operation, as the asker.
+
+    Resolved here, in the service layer, so the answering pipeline knows no
+    extension: it is handed one callable, the way ``@remove`` is handed
+    ``services.archive``. The extension runs under the identity the transport
+    bound, so its own authorization applies exactly as on its HTTP routes.
+    """
+
+    from pheasant.extensions import ChatCommandRequest, extension_chat_commands
+
+    def run(keyword: str, text: str) -> dict[str, Any]:
+        found = extension_chat_commands().get(keyword)
+        if found is None:
+            raise ValueError(f"no installed extension answers @{keyword}")
+        extension_id, command = found
+        result = dict(
+            command.run(
+                context,
+                ChatCommandRequest(
+                    text=text,
+                    keyword=keyword,
+                    principal=request.principal,
+                    principal_groups=tuple(request.principal_groups or ()),
+                    knowledge_base=request.knowledge_base,
+                    conversation_id=request.conversation_id,
+                    channel=request.channel,
+                    source_name=request.source_name,
+                    source_names=tuple(request.source_names or ()),
+                    current_document=request.current_document,
+                    current_directory=request.current_directory,
+                ),
+            )
+            or {}
+        )
+        return {"extension": extension_id, **result}
+
+    return run
 
 
 #: Passages one visual may be drawn from. A diagram of thirty sources is a

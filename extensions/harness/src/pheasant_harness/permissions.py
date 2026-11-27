@@ -38,6 +38,11 @@ HTTP = {
     ("GET", "/harness/connections/{connection}/browse"): "knowledge.use",
     ("POST", "/harness/attachments"): "knowledge.use",
     ("GET", "/harness/connections/calls"): "knowledge.use",
+    ("GET", "/harness/attachments/{registration_id}"): "knowledge.use",
+    ("GET", "/harness/runs/{run_id}/trace"): "knowledge.use",
+    # Telemetry spans every caller's runs and the deployment's export settings.
+    ("GET", "/harness/telemetry"): "security.manage",
+    ("POST", "/harness/telemetry/test"): "security.manage",
     ("PUT", "/harness/connections/{connection}/policy"): "security.manage",
     ("POST", "/harness/connections/{connection}/policy/disable"): "security.manage",
     ("GET", "/harness/connections/{connection}/policy/history"): "sources.manage",
@@ -75,4 +80,8 @@ MCP = {
     "harness_disable_connection_policy": "security.manage",
     "harness_connection_policy_history": "sources.manage",
     "harness_connection_calls": "knowledge.use",
+    "harness_attachment_documents": "knowledge.use",
+    "harness_run_trace": "knowledge.use",
+    "harness_telemetry": "security.manage",
+    "harness_test_telemetry": "security.manage",
 }

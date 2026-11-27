@@ -234,6 +234,7 @@ def answer_question(
     current_document: str | None = None,
     current_directory: str | None = None,
     remove_documents: Any = None,
+    run_command: Any = None,
     source_names: list[str] | None = None,
     intent: str | None = None,
     exclude_sources: list[str] | None = None,
@@ -398,7 +399,10 @@ def answer_question(
     asked = inventory.route(
         routed_question, mode=inventory_mode, state=state, visual=visual_route, history=turns
     )
-    if removing := directives.remove is not None:  # `@remove` is answered by `remove_answer`
+    # `@remove` is answered by `remove_answer`; an extension's keyword by the
+    # extension (`command_answer`). Neither searches, rewrites or calls a model.
+    commanding = directives.command is not None
+    if removing := directives.remove is not None or commanding:
         asked = None
     if (
         asked is None
@@ -497,7 +501,7 @@ def answer_question(
     )
 
     result = None
-    inventory_data = removal = None
+    inventory_data = removal = command = None
     if asked is not None:
         result, inventory_data = inventory_answer.answer(
             asked,
@@ -541,7 +545,17 @@ def answer_question(
             None,
             "",
         )
-    if result is None and removing:
+    if result is None and commanding:
+        from pheasant.assistant.command_answer import answer as answer_command
+
+        result, command = answer_command(
+            directives.command or "",
+            question,
+            run=run_command,
+            report=lambda step: _report(on_step, step),
+        )
+        visual_route, shape = "none", None
+    if result is None and removing and not commanding:
         result, removal = answer_removal(
             directives.remove or (),
             current_document=current_document if directives.scope == "document" else None,
@@ -685,6 +699,8 @@ def answer_question(
             payload["answer"] += "".join(f"\n\n_Note: {note}._" for note in scope.notes)
     if removal is not None:
         payload["archive"] = removal
+    if command is not None:
+        payload["extension"] = command
     if inventory_data is not None:
         payload["inventory"] = inventory_data
     elif inventory_mode != "off" and not directives.used and inventory.looks_close(question):

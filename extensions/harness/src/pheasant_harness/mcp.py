@@ -279,6 +279,35 @@ def register_harness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
 
     @mcp.tool()
     @anticipated
+    def harness_attachment_documents(knowledge_base: str, registration_id: str) -> dict:
+        """The files of an attachment with the metadata the index gives each (type, MIME,
+        what read it, the archive it came from) and the Pheasant document it became."""
+        return service.attachment_documents(services, registration_id, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_telemetry(knowledge_base: str, window_hours: float = 168) -> dict:
+        """Operator view: runs by state and workload, durations, spend, checks, deliveries,
+        connection calls, approvals waiting, trace export status and every telemetry
+        destination (Prometheus, stdout spans, OTLP, Azure Monitor) with its last test."""
+        return service.telemetry(services, window_hours, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_test_telemetry(knowledge_base: str, destination: str) -> dict:
+        """Send one test span or metric to a telemetry destination (prometheus, stdout, otlp,
+        azure_monitor) and report whether it arrived. Recorded with who ran it."""
+        return service.test_telemetry(services, destination, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_run_trace(knowledge_base: str, run_id: str) -> dict:
+        """One run's OpenTelemetry trace, span by span: phases, step attempts, connection
+        calls, effects and checks. The trace id is the one exported."""
+        return service.run_trace(services, run_id, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
     def harness_reap_sandboxes(knowledge_base: str) -> dict:
         """Dispose of abandoned sandbox generations and report disposal times."""
         return service.reap(services, knowledge_base)

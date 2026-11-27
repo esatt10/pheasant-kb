@@ -51,6 +51,44 @@ class Command:
 
 
 @dataclass(frozen=True)
+class ChatCommand:
+    """A first-word chat keyword an extension answers (``@harness …``).
+
+    The chat reads it like ``@remove``: only as the message's first word, with
+    no search, no history rewrite and no model call on Pheasant's side. ``run``
+    is called with the region's service context and a
+    :class:`ChatCommandRequest`, and returns a mapping with ``text`` (Markdown,
+    the answer shown to the reader) and anything else the extension wants the
+    caller to have, carried on the answer as ``extension``. A refusal is
+    answered, not raised: an extension raising ``ValueError`` has its message
+    shown as the answer.
+    """
+
+    name: str
+    summary: str
+    example: str
+    run: Callable[[Any, ChatCommandRequest], Mapping[str, Any]]
+    aliases: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ChatCommandRequest:
+    """What the chat knows when a command is asked: the words after it and where."""
+
+    text: str
+    keyword: str
+    principal: str | None = None
+    principal_groups: tuple[str, ...] = ()
+    knowledge_base: str | None = None
+    conversation_id: str | None = None
+    channel: str | None = None
+    source_name: str | None = None
+    source_names: tuple[str, ...] = ()
+    current_document: str | None = None
+    current_directory: str | None = None
+
+
+@dataclass(frozen=True)
 class Extension:
     id: str
     api_version: int
@@ -63,6 +101,7 @@ class Extension:
     # Each immutable tuple is one transactional migration, numbered from one.
     migrations: tuple[tuple[str, ...], ...] = ()
     ui_routes: tuple[str, ...] = ()
+    chat_commands: tuple[ChatCommand, ...] = ()
 
 
 @cache
@@ -81,11 +120,26 @@ def installed_extensions() -> tuple[Extension, ...]:
             raise RuntimeError(f"Invalid or incompatible Pheasant extension: {entry.name}")
         if any(not re.fullmatch(r"/[a-z][a-z0-9-]*", path) for path in extension.ui_routes):
             raise RuntimeError(f"Invalid UI route declared by extension {extension.id}")
+        if any(
+            not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", name)
+            for command in extension.chat_commands
+            for name in (command.name, *command.aliases)
+        ):
+            raise RuntimeError(f"Invalid chat keyword declared by extension {extension.id}")
         found.append(extension)
     _unique((extension.id for extension in found), "ID")
     _unique((source.type for extension in found for source in extension.sources), "source type")
     _unique((command.name for extension in found for command in extension.commands), "command")
     _unique((path for extension in found for path in extension.ui_routes), "UI route")
+    _unique(
+        (
+            name
+            for extension in found
+            for command in extension.chat_commands
+            for name in (command.name, *command.aliases)
+        ),
+        "chat keyword",
+    )
     return tuple(found)
 
 
@@ -108,6 +162,17 @@ def extension_sources() -> dict[str, SourceContribution]:
     if collision:
         raise RuntimeError(f"Extensions cannot replace built-in sources: {sorted(collision)}")
     return sources
+
+
+@cache
+def extension_chat_commands() -> dict[str, tuple[str, ChatCommand]]:
+    """Every extension chat keyword and alias -> (extension id, command)."""
+    return {
+        name: (extension.id, command)
+        for extension in installed_extensions()
+        for command in extension.chat_commands
+        for name in (command.name, *command.aliases)
+    }
 
 
 @cache

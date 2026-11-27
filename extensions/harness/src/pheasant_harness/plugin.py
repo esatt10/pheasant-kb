@@ -1,6 +1,6 @@
 """The harness contribution to Pheasant's versioned extension API."""
 
-from pheasant.extensions import Command, Extension
+from pheasant.extensions import ChatCommand, Command, Extension
 from pheasant_harness.permissions import HTTP, MCP
 from pheasant_harness.schema import MIGRATIONS
 
@@ -30,6 +30,12 @@ def run_command(args):
     return run(args)
 
 
+def run_chat_command(services, request):
+    from pheasant_harness.chat import run_command
+
+    return run_command(services, request)
+
+
 def extension() -> Extension:
     return Extension(
         id="harness",
@@ -48,4 +54,15 @@ def extension() -> Extension:
         ),
         migrations=MIGRATIONS,
         ui_routes=("/harness",),
+        chat_commands=(
+            ChatCommand(
+                "harness",
+                "Start a harness run from the chat: it reads what you have open (or this "
+                "chat's sources), builds what you ask for, checks it, and keeps the result "
+                "as an artifact. A code change opens the Harness page.",
+                "@harness write a one-page onboarding brief for new on-call engineers",
+                run_chat_command,
+                aliases=("agent",),
+            ),
+        ),
     )

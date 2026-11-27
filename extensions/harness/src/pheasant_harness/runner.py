@@ -100,6 +100,7 @@ class Runner:
         if now() - self._last_reap > 10:
             self._last_reap = now()
             self.harness.sandboxes.reap()
+            self._emit_traces()
         with self._lock:
             chosen = [r for r in select(runnable(self.harness)) if r["id"] not in self._busy]
             for row in chosen:
@@ -107,6 +108,15 @@ class Runner:
         for row in chosen:
             self._pool.submit(self._tick, row["id"])
         return [r["id"] for r in chosen]
+
+    def _emit_traces(self) -> None:
+        """Finished runs' traces go out from whichever replica's runner sees them first."""
+        try:
+            from pheasant_harness import telemetry
+
+            telemetry.emit_pending(self.harness)
+        except Exception:  # noqa: BLE001 - telemetry never stops the runner
+            logger.debug("harness trace emission failed", exc_info=True)
 
     def _tick(self, run_id: str) -> None:
         try:

@@ -32,6 +32,11 @@ question so a rule notices. A keyword says it directly:
   asks for — an answer, ``@search``, ``@docs``, ``@doc``, ``@links``,
   ``@taxonomy`` — and are resolved by ``services.scope`` against the
   ``current_document`` / ``current_directory`` the caller sends.
+* **Extensions**: an installed extension may answer a first-word keyword of
+  its own (``@harness`` starts an agentic harness run). Read like ``@remove``:
+  the words after it are the extension's, nothing is searched and Pheasant
+  calls no model. A built-in keyword always wins a name an extension also
+  declares, so installing one cannot change what an existing keyword does.
 * **Changing the index**: ``@remove <names>`` removes documents from the index
   and holds them out of every later sync (``services.archive``), and
   ``@current @remove`` removes the open document. A name must name one
@@ -366,6 +371,8 @@ class Directives:
     remove: tuple[str, ...] | None = None
     #: An answer shape the message pins (``@compose``), the request's ``intent``.
     intent: str | None = None
+    #: An extension's chat keyword (``harness``), its words in ``text``.
+    command: str | None = None
 
     @property
     def any(self) -> bool:
@@ -384,6 +391,7 @@ class Directives:
             **({"exclude": list(self.exclude)} if self.exclude else {}),
             **({"remove": list(self.remove)} if self.remove is not None else {}),
             **({"intent": self.intent} if self.intent else {}),
+            **({"command": self.command} if self.command else {}),
         }
 
 
@@ -402,7 +410,7 @@ def read(question: str) -> Directives:
             # Left in the text: `assistant.inventory` reads it wherever it is.
             found.setdefault("inventory", "")
             break
-        keyword = _BY_NAME.get(name) or _shape(name)
+        keyword = _BY_NAME.get(name) or _shape(name) or _extension_keyword(name)
         if keyword is None:
             unknown = f"@{name}"
             break
@@ -416,6 +424,9 @@ def read(question: str) -> Directives:
             break
         if keyword.kind == "remove":
             found["remove"] = removal_names(text)
+            break
+        if keyword.kind == "command":
+            found["command"] = keyword.name
             break
         if keyword.kind == "form":
             found["form"] = keyword.value
@@ -440,6 +451,7 @@ def read(question: str) -> Directives:
         exclude=exclude,
         remove=found.get("remove"),  # type: ignore[arg-type]
         intent=found.get("intent"),  # type: ignore[arg-type]
+        command=found.get("command"),  # type: ignore[arg-type]
     )
 
 
@@ -513,11 +525,51 @@ def form_instruction(form: str | None) -> str:
     return FORM_INSTRUCTIONS.get(str(form or ""), "")
 
 
+def extension_keywords() -> tuple[Keyword, ...]:
+    """Installed extensions' chat keywords, less any name a built-in already has."""
+
+    try:
+        from pheasant.extensions import installed_extensions
+    except Exception:  # noqa: BLE001 - no extensions is the standalone default
+        return ()
+    try:
+        extensions = installed_extensions()
+    except Exception:  # noqa: BLE001 - a broken extension never breaks the chat
+        return ()
+    found = []
+    for extension in extensions:
+        for command in extension.chat_commands:
+            if command.name in _BY_NAME or _shape(command.name):
+                continue
+            aliases = tuple(
+                alias for alias in command.aliases if alias not in _BY_NAME and not _shape(alias)
+            )
+            found.append(
+                Keyword(
+                    command.name,
+                    "command",
+                    extension.id,
+                    command.summary,
+                    command.example,
+                    aliases,
+                    group="Extensions",
+                )
+            )
+    return tuple(found)
+
+
+def _extension_keyword(name: str) -> Keyword | None:
+    for keyword in extension_keywords():
+        if name == keyword.name or name in keyword.aliases:
+            return keyword
+    return None
+
+
 def help_rows() -> list[tuple[str, list[Keyword]]]:
     """The keywords grouped for a help answer, in declaration order."""
 
     groups: dict[str, list[Keyword]] = {}
-    for keyword in KEYWORDS:
+    for keyword in (*KEYWORDS, *extension_keywords()):
         groups.setdefault(keyword.group, []).append(keyword)
     return list(groups.items())
 
@@ -535,7 +587,7 @@ def catalog() -> list[dict[str, object]]:
             "example": keyword.example,
             "anywhere": keyword.name == INVENTORY_KEYWORD or keyword.kind == "scope",
         }
-        for keyword in KEYWORDS
+        for keyword in (*KEYWORDS, *extension_keywords())
     ]
 
 

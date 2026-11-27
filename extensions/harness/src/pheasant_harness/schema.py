@@ -280,8 +280,53 @@ CREATE INDEX IF NOT EXISTS idx_harness_connection_calls_at ON harness_connection
 """
 
 
+# Migration 3: which Pheasant document an attached file became, and what the
+# harness told the telemetry pipeline (the traces it emitted, and each test of
+# an export destination an operator ran).
+_ATTACHMENTS_AND_TELEMETRY = """
+CREATE TABLE IF NOT EXISTS harness_attachment_uploads (
+  kb_id TEXT NOT NULL,
+  batch TEXT NOT NULL,
+  path TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  artifact_id TEXT,
+  submission_id TEXT,
+  idempotency_key TEXT,
+  landed_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (kb_id, batch, path)
+);
+CREATE TABLE IF NOT EXISTS harness_telemetry_traces (
+  kb_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  spans INTEGER NOT NULL,
+  duration_ms DOUBLE PRECISION,
+  exported INTEGER NOT NULL DEFAULT 0,
+  export_error TEXT,
+  emitted_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (kb_id, run_id)
+);
+CREATE TABLE IF NOT EXISTS harness_telemetry_tests (
+  kb_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY,
+  destination TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  detail_json TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_harness_telemetry_tests_at ON harness_telemetry_tests (kb_id, at)
+"""
+
+
 def _statements(text: str) -> tuple[str, ...]:
     return tuple(s.strip() for s in text.split(";") if s.strip())
 
 
-MIGRATIONS = (_statements(_TABLES), _statements(_CONNECTIONS))
+MIGRATIONS = (
+    _statements(_TABLES),
+    _statements(_CONNECTIONS),
+    _statements(_ATTACHMENTS_AND_TELEMETRY),
+)

@@ -803,6 +803,40 @@ select.text-input {
   color: var(--muted);
 }
 
+/* The composer's "+": add files. A quiet outline beside the text, the same
+   size as the send button so the row keeps one height. */
+.composer__attach {
+  width: calc(34px * var(--sp));
+  height: calc(34px * var(--sp));
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: calc(19px * var(--fs));
+  line-height: 1;
+  margin-left: calc(-8px * var(--sp));
+}
+
+.composer__attach:hover:not(:disabled),
+.composer__attach:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.composer__attach--busy {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.composer__attach:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .composer__send {
   width: calc(34px * var(--sp));
   height: calc(34px * var(--sp));

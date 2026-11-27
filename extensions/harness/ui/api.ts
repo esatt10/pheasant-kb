@@ -1,7 +1,7 @@
 import { apiBase, errorDetail, qs, request, requestHeaders, uploadPath } from "@pheasant/ui/api/client";
 import type {
   ArtifactContent, AttachResult, BrowseResult, ConnectionCall, ConnectionPolicy, ConnectionsOverview, Registration,
-  RunDetail, RunEvent, RunStatus, RunSummary, UsableConnection,
+  RunDetail, RunEvent, RunStatus, RunSummary, TelemetryDestination, TelemetryOverview, TraceSpan, UsableConnection,
 } from "./types";
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -55,6 +55,11 @@ export const harnessApi = {
     request<{ policy: ConnectionPolicy }>(`/harness/connections/${encodeURIComponent(name)}/policy/disable`, { method: "POST" }),
   connectionCalls: (params: { run_id?: string; connection?: string; limit?: number } = {}) =>
     request<{ calls: ConnectionCall[]; summary: Record<string, number> }>(`/harness/connections/calls${qs(params)}`),
+  telemetry: (windowHours = 168) => request<TelemetryOverview>(`/harness/telemetry${qs({ window_hours: windowHours })}`),
+  testTelemetry: (destination: string) =>
+    request<{ destination: string; ok: boolean; outcome: string; message: string } & Partial<NonNullable<TelemetryDestination["last_test"]>>>(
+      "/harness/telemetry/test", json({ destination })),
+  trace: (runId: string) => request<{ run_id: string; trace_id: string; spans: TraceSpan[] }>(`/harness/runs/${encodeURIComponent(runId)}/trace`),
   artifact: (runId: string, digest: string) =>
     request<ArtifactContent>(`/harness/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(digest)}`),
 };

@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@pheasant/ui/api/client";
+import { AttachButton } from "@pheasant/ui/chat/AttachButton";
+import { MicButton, useDictation } from "@pheasant/ui/chat/MicButton";
+import { dictationUnsupported, spliceAtCaret } from "@pheasant/ui/chat/dictation";
 import { harnessApi } from "./api";
-import type { AttachResult, BrowseResult, Registration, UsableConnection } from "./types";
+import { PLACE_KINDS } from "./places";
+import type { AttachedFile, AttachResult, BrowseResult, Registration, UsableConnection } from "./types";
 
 /**
  * The harness as a workspace. Describe what to build, choose where it works --
@@ -11,9 +16,30 @@ import type { AttachResult, BrowseResult, Registration, UsableConnection } from 
  */
 
 const MODES = [
-  { id: "code_change", label: "Change code", hint: "Isolated workspace, your tests, an independent check; one commit when it passes." },
   { id: "build_content", label: "Build content", hint: "A document or brief built from the sources, rendered and checked before it is kept." },
+  { id: "code_change", label: "Change code", hint: "Isolated workspace, your tests, an independent check; one commit when it passes." },
 ] as const;
+
+/** What read an attached file, in words. */
+const READ_BY: Record<string, string> = {
+  extractor: "text extracted",
+  html: "page text extracted",
+  caption: "image described",
+  transcript: "audio transcribed",
+  notebook: "notebook cells read",
+  text: "read as text",
+  archive: "archive expanded",
+};
+
+type Check = { kind: "mention" | "never"; text: string };
+
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function checksToCriteria(checks: Check[]): Record<string, unknown>[] {
+  return checks.filter((c) => c.text.trim()).map((c, index) => c.kind === "mention"
+    ? { id: `must-mention-${index + 1}`, type: "contains", text: c.text.trim() }
+    : { id: `must-not-say-${index + 1}`, type: "absent", pattern: escapeRegex(c.text.trim()) });
+}
 
 type Input =
   | { kind: "registration"; id: string; label: string; detail: string }
@@ -108,7 +134,7 @@ function AttachZone({ onAttached }: { onAttached: (result: AttachResult) => void
       <input ref={input} type="file" multiple hidden onChange={(e) => take(e.target.files)} aria-label="Attach files" />
       <p><strong>{attach.isPending ? "Attaching…" : "Drop files here"}</strong> or{" "}
         <button type="button" className="btn btn--small btn--ghost" onClick={() => input.current?.click()}>choose files</button></p>
-      <p className="muted">Any format. PDF, Word, PowerPoint, Excel, RTF and EPUB are also read as text.</p>
+      <p className="muted">Anything Pheasant's uploads take: documents (PDF, Word, PowerPoint, Excel, RTF, EPUB), web pages, notebooks, images (described), audio (transcribed), code and text, and ZIP or tar archives (expanded). Each file is read the way the index reads it.</p>
       <label className="hx-check"><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
         <span>Also keep them in Pheasant's <strong>uploads</strong> source (indexed and searchable)</span></label>
       {error ? <p className="error" role="alert">{error}</p> : null}
@@ -116,12 +142,59 @@ function AttachZone({ onAttached }: { onAttached: (result: AttachResult) => void
   );
 }
 
-export function Composer({ registrations, onStarted }: { registrations: Registration[]; onStarted: (runId: string) => void }) {
+function AttachedFiles({ result }: { result: AttachResult }) {
+  const originals = result.files.filter((f) => !f.derived_from);
+  const twins = new Map(result.files.filter((f) => f.derived_from).map((f) => [f.derived_from!, f]));
+  const describe = (file: AttachedFile) => {
+    const twin = twins.get(file.path);
+    if (file.text_from === "archive") {
+      const summary = result.archives?.[file.path];
+      return summary?.error ? `archive not readable: ${summary.error}` : `archive: ${summary?.members ?? 0} files expanded into ${summary?.folder}/`;
+    }
+    if (twin?.kind === "unreadable") return twin.reason ?? "no text could be read";
+    if (file.text_from) return READ_BY[file.text_from] ?? file.text_from;
+    return file.indexable === false ? "kept as is (not a type the index reads)" : "kept as is";
+  };
+  return (
+    <div className="hx-attached">
+      <div className="hx-attached__head">
+        <strong>📎 {result.registration.label}</strong>
+        <span className="muted small">
+          {result.uploads.status === "skipped" ? `not kept in uploads: ${result.uploads.reason}`
+            : result.uploads.folder ? `kept in uploads/${result.uploads.folder}${result.uploads.status === "syncing" ? " · indexing" : ""}` : ""}
+        </span>
+      </div>
+      <div className="table-scroll hx-scroll hx-scroll--short">
+        <table className="data-table hx-attached__table">
+          <thead><tr><th>File</th><th>Type</th><th>How it is read</th><th>In Pheasant</th></tr></thead>
+          <tbody>
+            {originals.map((file) => (
+              <tr key={file.path}>
+                <td className="mono small">{file.path}{file.archive ? <span className="muted"> (from {file.archive})</span> : null}</td>
+                <td className="small">{file.artifact_type ?? "file"}<span className="muted"> · {file.mime_type}</span></td>
+                <td className="small">{describe(file)}</td>
+                <td className="small mono">{file.pheasant_document ? "indexed as uploads document" : file.archive ? "inside the archive" : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {Object.values(result.archives ?? {}).some((a) => a.skipped && Object.keys(a.skipped).length) ? (
+        <p className="muted small">Left out of archives (types the index does not read): {Object.values(result.archives ?? {}).flatMap((a) => Object.entries(a.skipped ?? {})).map(([ext, n]) => `${n} × ${ext}`).join(", ")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+export function Composer({ registrations, onStarted, initialPrompt = "" }: { registrations: Registration[]; onStarted: (runId: string) => void; initialPrompt?: string }) {
   const client = useQueryClient();
   const usable = useQuery({ queryKey: ["harness-usable"], queryFn: harnessApi.usable });
   const connections = usable.data?.connections ?? [];
-  const [mode, setMode] = useState<string>("code_change");
-  const [prompt, setPrompt] = useState("");
+  const [mode, setMode] = useState<string>(/^(change|fix|refactor|patch|implement)\b/i.test(initialPrompt) ? "code_change" : "build_content");
+  const [prompt, setPrompt] = useState(initialPrompt);
+  const [checks, setChecks] = useState<Check[]>([{ kind: "mention", text: "" }]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const [inputs, setInputs] = useState<Input[]>([]);
   const [tab, setTab] = useState<"connection" | "registered" | "attach">("connection");
   const [deliver, setDeliver] = useState<Deliver>("artifact");
@@ -144,6 +217,40 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
   const hint = useMemo(() => MODES.find((m) => m.id === mode)?.hint, [mode]);
   const readable = registrations.filter((r) => r.authorized && !r.revoked && r.resolver !== "attachment");
   const add = (input: Input) => setInputs((now) => [...now.filter((i) => i.label !== input.label), input]);
+
+  // The task box's "+": the same attachment path as the Attach files tab.
+  const quickAttach = useMutation({
+    mutationFn: (files: File[]) => harnessApi.attach(files, { keepInUploads: true }),
+    onSuccess: (result) => { setAttachError(null); add({ kind: "attachment", id: result.registration.id, label: result.registration.label, result }); },
+    onError: (failure: Error) => setAttachError(failure.message),
+  });
+
+  // Dictation into the task box: the chat's microphone, its session and its cap.
+  const voice = useQuery({ queryKey: ["assistant-voice", "harness"], queryFn: () => api.voiceStatus(null), staleTime: 60_000 });
+  const promptValue = useRef(prompt);
+  promptValue.current = prompt;
+  const caret = useRef<number | null>(null);
+  const dictation = useDictation({
+    sessionId: null,
+    maxSeconds: voice.data?.max_seconds ?? 60,
+    onText: (text, separate) => {
+      const el = promptRef.current;
+      const value = promptValue.current;
+      const start = caret.current ?? el?.selectionStart ?? value.length;
+      const end = caret.current ?? el?.selectionEnd ?? value.length;
+      const next = spliceAtCaret(value, start, end, text, separate);
+      promptValue.current = next.value;
+      caret.current = next.caret;
+      setPrompt(next.value);
+    },
+    onLive: () => promptRef.current?.focus(),
+  });
+  useLayoutEffect(() => {
+    if (caret.current === null || !promptRef.current) return;
+    promptRef.current.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [prompt]);
+  const micUnavailable = voice.data ? (voice.data.available ? dictationUnsupported() : voice.data.reason || "not configured on the server") : "checking…";
 
   const target = (): Record<string, unknown> => {
     if (deliver === "artifact") return { adapter: "artifact", target: title };
@@ -170,7 +277,7 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
       const request: Record<string, unknown> = {
         workload: mode, question: prompt, inputs: ids, discovery: "off",
         identifiers: list(identifiers), symbols: list(symbols),
-        destination: target(), acceptance: parseJson(acceptance, []),
+        destination: target(), acceptance: [...checksToCriteria(checks), ...(parseJson(acceptance, []) as Record<string, unknown>[])],
       };
       if (mode === "code_change") {
         request.test_command = testCommand.split(/\s+/).filter(Boolean);
@@ -179,6 +286,7 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
       }
       return harnessApi.start({ request, client_key: `ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
     },
+    onMutate: () => dictation.cancel(),
     onSuccess: (status) => { client.invalidateQueries({ queryKey: ["harness-runs"] }); client.invalidateQueries({ queryKey: ["harness-registrations"] }); onStarted(status.run_id); },
     onError: (failure: Error) => setError(failure.message),
   });
@@ -193,9 +301,21 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
           ))}
           <span className="muted hx-hint">{hint}</span>
         </div>
-        <textarea className="text-input hx-prompt" rows={4} required value={prompt} onChange={(e) => setPrompt(e.target.value)}
-          placeholder={mode === "code_change" ? "Describe the change: what should be different, and how you will know it works." : "Describe what to build, for whom, and what it must contain."}
-          aria-label="Task" />
+        <div className="hx-promptbox">
+          <textarea ref={promptRef} className="text-input hx-prompt" rows={4} required value={prompt} onChange={(e) => setPrompt(e.target.value)}
+            placeholder={mode === "code_change" ? "Describe the change: what should be different, and how you will know it works." : "Describe what to build, for whom, and what it must contain."}
+            aria-label="Task" />
+          <div className="hx-promptbox__tools">
+            <AttachButton onFiles={(files) => quickAttach.mutate(files)} label="Attach files to this run" busy={quickAttach.isPending} />
+            {voice.data?.available || dictation.state !== "off" ? (
+              <MicButton control={dictation} unavailable={dictation.state === "off" ? micUnavailable : null} />
+            ) : <span className="muted small" title={micUnavailable ?? undefined}>🎙 {voice.data ? "dictation is off on this server" : ""}</span>}
+            {dictation.state === "live" ? <span className="muted small" role="status">Listening · {dictation.remaining}s left</span> : null}
+            {dictation.notice ? <span className="muted small" role="status">{dictation.notice}</span> : null}
+            {quickAttach.isPending ? <span className="muted small" role="status">Attaching…</span> : null}
+            {attachError ? <span className="error small" role="alert">{attachError}</span> : null}
+          </div>
+        </div>
         <div className="hx-chips hx-inputs-chips" aria-label="Working in">
           {inputs.map((input) => (
             <span key={input.label} className={`hx-chip hx-chip--${input.kind}`}>
@@ -203,40 +323,35 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
               <button type="button" aria-label={`Remove ${input.label}`} onClick={() => setInputs(inputs.filter((i) => i !== input))}>×</button>
             </span>
           ))}
-          {!inputs.length ? <span className="muted">Nothing chosen yet: pick a repository, a registered place or attach files.</span> : null}
+          {!inputs.length ? <span className="muted">Nothing chosen yet: pick a repository, a place below, or attach files with +.</span> : null}
         </div>
       </div>
 
       <section className="card hx-composer__where">
         <div className="tabs" role="tablist" aria-label="Work in">
-          {([["connection", "Repository or folder"], ["registered", "Registered places"], ["attach", "Attach files"]] as const).map(([id, label]) => (
+          {([["connection", "Repository or folder"], ["registered", "Places"], ["attach", "Attach files"]] as const).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} className={`tab${tab === id ? " active" : ""}`} onClick={() => setTab(id)}>{label}</button>
           ))}
         </div>
         {tab === "connection" ? <ConnectionPicker usable={connections} onAdd={add} /> : null}
         {tab === "registered" ? (
-          <div className="hx-reglist">
+          <div className="hx-pickplaces hx-scroll hx-scroll--short">
             {readable.map((reg) => (
-              <label key={reg.id} className="hx-check">
+              <label key={reg.id} className="hx-check hx-pickplace">
                 <input type="checkbox" checked={inputs.some((i) => i.kind === "registration" && i.id === reg.id)}
                   onChange={(e) => e.target.checked ? add({ kind: "registration", id: reg.id, label: reg.label, detail: reg.uri }) : setInputs(inputs.filter((i) => !(i.kind === "registration" && i.id === reg.id)))} />
-                <span><strong>{reg.label}</strong> <span className="muted mono">{reg.resolver}</span></span>
+                <span><strong>{reg.label}</strong> <span className="pill">{PLACE_KINDS[reg.resolver]?.label ?? reg.resolver}</span>
+                  <span className="muted mono small hx-pickplace__uri">{reg.uri}</span></span>
               </label>
             ))}
-            {!readable.length ? <p className="muted">No registered places yet.</p> : null}
+            {!readable.length ? <p className="muted">No places yet. Add one under <strong>Places</strong>, or pick a repository.</p> : null}
           </div>
         ) : null}
         {tab === "attach" ? (
           <>
             <AttachZone onAttached={(result) => add({ kind: "attachment", id: result.registration.id, label: result.registration.label, result })} />
             {inputs.filter((i): i is Extract<Input, { kind: "attachment" }> => i.kind === "attachment").map((a) => (
-              <div key={a.id} className="hx-attached">
-                <strong>{a.label}</strong>{" "}
-                <span className="muted">{a.result.uploads.status === "skipped" ? `not kept in uploads: ${a.result.uploads.reason}` : a.result.uploads.folder ? `kept in uploads/${a.result.uploads.folder}` : ""}</span>
-                <ul>{a.result.files.map((f) => (
-                  <li key={f.path} className="mono">{f.path}{f.derived_from ? <span className="hx-chip">text</span> : null}{f.kind === "unreadable" ? <span className="muted"> {f.reason}</span> : null}</li>
-                ))}</ul>
-              </div>
+              <AttachedFiles key={a.id} result={a.result} />
             ))}
           </>
         ) : null}
@@ -287,25 +402,58 @@ export function Composer({ registrations, onStarted }: { registrations: Registra
       </section>
 
       <details className="card hx-composer__advanced">
-        <summary>Checks and hints</summary>
-        <div className="hx-grid2">
-          <label className="field"><span>Exact identifiers to find</span>
-            <input className="text-input" value={identifiers} onChange={(e) => setIdentifiers(e.target.value)} placeholder="discount_rate, Exception" /></label>
-          <label className="field"><span>Symbols to follow</span>
-            <input className="text-input" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="badges" /></label>
-        </div>
+        <summary>
+          <strong>Help it get this right</strong>
+          <span className="muted"> — optional: what it must find, and how to tell when it is done</span>
+        </summary>
+        <fieldset className="hx-fieldset">
+          <legend>When is the result good enough?</legend>
+          <p className="muted small">Each line becomes a check the result must pass before it is kept. A failing check is shown on the run, and the run tries again or stops.</p>
+          {checks.map((check, index) => (
+            <div key={index} className="hx-checkrow">
+              <select className="text-input text-input--small" value={check.kind} aria-label="Check"
+                onChange={(e) => setChecks(checks.map((c, k) => (k === index ? { ...c, kind: e.target.value as Check["kind"] } : c)))}>
+                <option value="mention">It must mention</option>
+                <option value="never">It must never say</option>
+              </select>
+              <input className="text-input" value={check.text} aria-label="Words"
+                placeholder={check.kind === "mention" ? "the on-call manager" : "TODO"}
+                onChange={(e) => setChecks(checks.map((c, k) => (k === index ? { ...c, text: e.target.value } : c)))} />
+              <button type="button" className="btn btn--small btn--ghost" aria-label="Remove this check"
+                onClick={() => setChecks(checks.length > 1 ? checks.filter((_, k) => k !== index) : [{ kind: "mention", text: "" }])}>×</button>
+            </div>
+          ))}
+          <button type="button" className="btn btn--small" onClick={() => setChecks([...checks, { kind: "mention", text: "" }])}>Add a check</button>
+          <p className="muted small">Every result is also checked for citations that resolve to the sources and claims those sources support.</p>
+        </fieldset>
+        <fieldset className="hx-fieldset hx-grid2">
+          <legend>What it should look for</legend>
+          <label className="field"><span>Exact words or names to find</span>
+            <input className="text-input" value={identifiers} onChange={(e) => setIdentifiers(e.target.value)} placeholder="discount_rate, PaymentDeclined" />
+            <small className="muted">Comma-separated. Each is searched for exactly, and where it appears is cited.</small></label>
+          <label className="field"><span>Functions or classes to follow</span>
+            <input className="text-input" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="apply_discount" />
+            <small className="muted">Their definitions and every caller are read before anything is written.</small></label>
+        </fieldset>
         {mode === "code_change" ? (
-          <>
-            <label className="field"><span>Test command</span>
-              <input className="text-input mono" value={testCommand} onChange={(e) => setTestCommand(e.target.value)} /></label>
-            <label className="field"><span>Candidate edits (JSON, without a model)</span>
+          <fieldset className="hx-fieldset">
+            <legend>How it proves the change works</legend>
+            <label className="field"><span>Command that runs the tests</span>
+              <input className="text-input mono" value={testCommand} onChange={(e) => setTestCommand(e.target.value)} />
+              <small className="muted">Run in an isolated copy before and after the change. The change is kept only if it passes.</small></label>
+            <details className="hx-advanced-json">
+              <summary className="small">Exact edits to try first (for regions without a model)</summary>
               <textarea className="text-input mono" rows={3} value={proposals} onChange={(e) => setProposals(e.target.value)}
-                placeholder='[[{"path": "app.py", "find": "...", "replace": "..."}]]' /></label>
-          </>
+                placeholder='[[{"path": "app.py", "find": "rate = 0.1", "replace": "rate = 0.15"}]]' aria-label="Edits to try" />
+              <small className="muted">Find-and-replace sets, tried in order; the first that passes the tests is kept.</small>
+            </details>
+          </fieldset>
         ) : null}
-        <label className="field"><span>Acceptance criteria (JSON)</span>
+        <details className="hx-advanced-json">
+          <summary className="small">Write checks as JSON instead (every check type)</summary>
           <textarea className="text-input mono" rows={2} value={acceptance} onChange={(e) => setAcceptance(e.target.value)}
-            placeholder='[{"id": "mentions-owner", "type": "contains", "text": "manager"}]' /></label>
+            placeholder='[{"id": "states-owner", "type": "contains", "text": "manager"}]' aria-label="Checks as JSON" />
+        </details>
       </details>
 
       {error ? <p className="error" role="alert">{error}</p> : null}

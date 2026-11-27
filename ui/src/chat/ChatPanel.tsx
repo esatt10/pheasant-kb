@@ -26,6 +26,8 @@ import { ArtifactCard, showArtifacts } from "../artifacts/ArtifactsPanel";
 import { McpAppFrame } from "./McpAppFrame";
 import { forgetPending, newAnswerId, pendingAnswer, rememberPending } from "./pendingAnswer";
 import { MicButton, useDictation } from "./MicButton";
+import { AttachButton } from "./AttachButton";
+import { startUpload, useBackground } from "../state/background";
 import { dictationUnsupported, spliceAtCaret } from "./dictation";
 import { SourceStrip, openable } from "./SourceStrip";
 import { ModelRoutingSettings } from "./ModelRoutingSettings";
@@ -129,6 +131,22 @@ export function ChatPanel({
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  // The composer's "+": files go to the `uploads` source in the background,
+  // exactly as the Sources page's drop zone sends them (`/sources/upload`,
+  // landed, registered and synced by the server), so the chat can use them as
+  // soon as they are indexed. Progress is in the jobs tray.
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const { transfers } = useBackground();
+  const uploading = transfers.some((t) => t.source === "uploads" && t.status === "uploading");
+  const uploadFromChat = (files: File[]) => {
+    const started = startUpload(files, "uploads");
+    setUploadNote(
+      started
+        ? `Adding ${files.length} file${files.length === 1 ? "" : "s"} to uploads — they are searchable once indexed (see the jobs tray).`
+        : "Those files are already uploading.",
+    );
+    window.setTimeout(() => setUploadNote(null), 8000);
+  };
   // The @-keyword quick reference: a floating card beside the chat column.
   const reference = useKeywordReference();
   const keywords = status?.keywords ?? [];
@@ -458,6 +476,7 @@ export function ChatPanel({
           }}
         />
         <div className="composer">
+          <AttachButton onFiles={uploadFromChat} label="Add files to uploads" permission="sources.manage" busy={uploading} />
           <textarea
             ref={textareaRef}
             rows={1}
@@ -496,6 +515,9 @@ export function ChatPanel({
           </button>
         </div>
         <div className="composer__hint">
+          {uploadNote ? (
+            <span className="composer__note" role="status">{uploadNote}</span>
+          ) : null}
           {dictation.state === "live" ? (
             <span className="composer__note composer__mic-note" role="status">
               Listening — words go where the cursor is

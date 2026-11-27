@@ -89,24 +89,41 @@ coding agent's task composer works: say what to build, choose where it works,
 choose where the result goes.
 
 * **Change code** or **Build content.** The harness is an optional build layer,
-  not the way questions are answered: nothing routes a chat or a search here.
-  (`answer` and `summarize` remain in the API for the acceptance fixtures; the
-  composer does not offer them.)
+  not the way questions are answered: nothing routes a chat or a search here
+  unless someone types `@harness` (below). (`answer` and `summarize` remain in
+  the API and the chat keyword; the composer does not offer them.)
 * **Work in a repository, branch and folder.** Pick a connection, a repository
   (or Drive folder, or OneDrive drive), a branch and a directory by browsing
   them (`GET /harness/connections/{name}/browse`, `harness_browse_connection`;
   every listing is a `list` under the connection's policy, and
   `/harness/connections/usable` offers only what a policy enables). The pick is
   registered as `connection://<name>/<repo>/<folder>` pinned to that branch.
-* **Attach files** of any format (`POST /harness/attachments` multipart,
-  `harness_attach_files` with base64; `attachments.py`). They become one
-  immutable input, `attachment://<batch>`, stored by digest so any replica can
-  read them; PDF, Word, PowerPoint, Excel, RTF and EPUB also get a text twin
-  (`<name>.txt`, from Pheasant's own extractor) so they can be searched and
-  cited, while materialize copies the originals into the sandbox. The same files
-  land in Pheasant's **uploads** source under `harness/<batch>/` through the
-  ordinary submission path, and that source is synced, so an attachment is also
-  knowledge. Attaching the same files again is the same batch.
+* **Attach files** -- every type Pheasant's uploads take -- with the **+** in
+  the task box, by dropping them, or over the API (`POST /harness/attachments`
+  multipart, `harness_attach_files` with base64; `attachments.py`). They become
+  one immutable input, `attachment://<batch>`, stored by digest so any replica
+  can read them. Each file is read by **Pheasant's own ingestion**
+  (`pheasant.ingestion.pipeline.payload_text`, the dispatch every sync uses):
+  documents (PDF, Word, PowerPoint, Excel, RTF, EPUB) and HTML are extracted,
+  notebooks read as their cells, images captioned, audio transcribed, text and
+  code read as they are. What is not plain text gets a text twin beside the
+  original (`<name>.txt`, `<name>.caption.txt`, `<name>.transcript.txt`) so it
+  can be searched and cited, while materialize copies the originals into the
+  sandbox. ZIP and tar archives, nested ones included, are expanded by
+  Pheasant's archive reader into `<archive name>/…` beside the archive, and the
+  member types the index skips are counted, not dropped silently. Every entry
+  carries the metadata the index gives it (`mime_type`, `artifact_type`,
+  `indexable`, `text_from`, and `archive` for a member). The originals land in
+  Pheasant's **uploads** source under `harness/<batch>/` through the ordinary
+  submission path with that metadata in their receipts (plus the registration,
+  the label, who attached them, size and sha256), the source is synced, and
+  the Pheasant document each one became is recorded
+  (`harness_attachment_uploads`; `GET /harness/attachments/{registration}`,
+  `harness_attachment_documents`), so an attachment is also knowledge and can
+  be followed both ways. Attaching the same files again is the same batch.
+* **Speak the task.** The task box has the chat's microphone: the same
+  dictation session and cap (`assistant.voice`), shown only where the server
+  offers dictation.
 * **Where the result goes:**
   * **a Pheasant artifact** (adapter `artifact`, the default): a document as a
     report, a code change as the files it changed with its release note, filed
@@ -122,6 +139,87 @@ choose where the result goes.
     the pull request. A single document can go to one file on a branch the same
     way;
   * **a Drive folder**, or the run's own record.
+
+## From the chat: `@harness`
+
+The chat reaches the harness only when someone asks for it by name, as the
+first word: `@harness write a one-page onboarding brief` (alias `@agent`). It is
+an extension chat keyword (`pheasant.extensions.ChatCommand`; `chat.py`), so the
+core answering pipeline imports nothing of the harness: nothing is searched,
+Pheasant calls no model, and the answer is a short confirmation with a link to
+the run. The same keyword works over `POST /assistant/chat`, its stream and MCP
+`ask_knowledge_base`.
+
+* **What it reads** is where the reader is: the open folder, else the open
+  document, else the sources the chat is scoped to (each as a `pheasant://`
+  registration), else the places registered for them, newest first. With
+  nothing to read it starts nothing and says how to give it something.
+* **It cannot widen access.** A `pheasant://` place is registered for the
+  reader only when that adds nothing they could not already read: document
+  ACLs off, or the reader may manage sources. Otherwise only places they were
+  granted are used, and the answer says whom to ask.
+* **What kind of run** comes from the first word: *summarize*, *answer* or
+  *explain*, else *build content*. The result is kept as a Pheasant artifact
+  (an answer stays with the run). A code change (*change*, *fix*, *refactor*…)
+  needs a repository, branch and tests, so the answer links to the Harness page
+  with the request filled in.
+* **Quotes say what to look for.** Phrases in quotes become the run's exact
+  identifiers (searched for and cited). With no model connected the run finds
+  only what it is told, so the answer asks for quotes when there are none, and
+  a *build* request becomes a cited summary of what the sources say -- writing
+  new prose needs a model -- and the answer says that too.
+* **Once per message.** The run's client key is a digest of the conversation,
+  the words and the inputs, so a resent message is the same run.
+
+## Telemetry: the Admin page's Harness tab
+
+`telemetry.py`; `GET /harness/telemetry`, `POST /harness/telemetry/test`,
+`GET /harness/runs/{id}/trace`; MCP `harness_telemetry`,
+`harness_test_telemetry`, `harness_run_trace`. Viewing telemetry and testing a
+destination need `security.manage` (it spans every caller's runs); a run's own
+trace is its owner's.
+
+* **The overview** is computed from the harness tables over a window, so every
+  replica shows the same thing after a restart: runs by state and kind, success
+  rate, typical and slowest times, approvals waiting, unconfirmed writes, budget
+  stops, model calls and tokens, tool calls and bytes read, step attempts by
+  outcome, checks, deliveries by destination, every connection request by
+  provider and outcome with the latest refusals, recent runs with their traces,
+  and the raw `pheasant_harness_*` Prometheus series.
+* **One trace per finished run**: `pheasant.harness.run` with a child span per
+  phase, step attempt, connection call, effect and check, rebuilt from the
+  journal and emitted exactly as sync traces are -- an `otel.span` JSON line on
+  stdout (which Container Apps ships to Log Analytics) and over OTLP when a
+  collector is configured. Its id is derived from the run id, a run is claimed
+  in `harness_telemetry_traces` before it is emitted (so replicas emit it once),
+  and the runner emits finished runs every ten seconds. Spans carry the
+  workload, state, usage and the connection outcome, never the person who
+  asked (a tenant that is the asker is left out).
+* **Prometheus**: `pheasant_harness_runs_total`, `_run_seconds`,
+  `_steps_total`, `_connection_calls_total`, `_verifications_total`,
+  `_traces_emitted_total`, and gauges `_runs_live`, `_approvals_pending`,
+  `_effects_uncertain` on every process's `/metrics`.
+* **Destinations**, each listed whether or not it is configured, with its last
+  test: Prometheus and stdout spans (always on), an OpenTelemetry collector
+  (`observability.otlp_endpoint` or the standard `OTEL_EXPORTER_OTLP_*`
+  variables), and Azure Monitor / Application Insights (reached through that
+  collector; the row shows the connection string's ingestion host). **Send a
+  test** sends one span through the real exporter -- the OpenTelemetry SDK
+  when `pheasant[otel]` is installed, OTLP/JSON over HTTP otherwise -- and
+  records what happened and who ran it. With no collector configured the test
+  says `not_configured` rather than looking healthy.
+
+## The page
+
+Runs sit in their own rail that scrolls independently, with a search box and a
+filter (working, waiting for someone, succeeded, failed or partial); a run's
+journal, evidence and files scroll inside their panels. **Places** is its own
+view: a form explaining what a place is, beside a filterable grid of cards
+that say in words what each place is and what a run may do with it.
+**Help it get this right** (formerly "checks and hints") asks plain questions:
+lines of *It must mention* / *It must never say* become checks, the words and
+code to look for are explained, and the JSON forms stay available for every
+check type.
 
 ## Working through connected accounts
 
@@ -226,6 +324,7 @@ and a real MCP client session:
 | HTTP ≡ MCP | `tests/test_harness_surfaces.py` (runs, and connections: policies, approvals, audit) |
 | Connections: results and grounding | `tests/test_harness_connections.py`: cited commit/checksum, moved branch, Drive export pinning, OneDrive download without the token, truncated listing, policy-limited grep, approved delivery, crash reconciliation, teammate edit kept, conflict, Drive delivery, sandboxed code change |
 | Workspace | `tests/test_harness_workspace.py`: attachments of five formats (Markdown, PDF, Word, PNG, Python) pinned and text-extracted, landed and indexed in `uploads`, path escapes refused, a run citing an attached PDF; browsing branches, folders, Drive and OneDrive under policy; a registration pinned to a branch and folder; one commit on a new branch with a pull request, crashes before the PR, after the commit and after the receipt, a teammate's later edit kept, a forbidden path sending nothing, a moved branch never forced; documents and code changes kept as artifacts once; no credential in any of it |
+| Chat, uploads, telemetry | `tests/test_harness_chat_uploads_telemetry.py`: the keyword declared, read first-word only and listed; a built-in keyword never taken over; duplicate and malformed keywords refused at load; `@harness` over HTTP starting one run from the open folder, idempotent per message, the alias; scoped sources, the code-change hand-off, help; nothing to read starts nothing; a Reader cannot widen access by chatting under ACLs; HTTP ≡ MCP; images, audio, notebooks, HTML, nested archives read exactly as `payload_text` reads them; metadata in the uploads receipts and the document each file became, searchable after sync; expansion limits; one trace per run, emitted once, never naming the asker, counted in Prometheus; the overview against the tables; telemetry for operators only; destinations without a cloud, a real local OTLP collector through the SDK and over OTLP/JSON, Azure Monitor through it, an unreachable collector reported; telemetry HTTP ≡ MCP |
 | Connections: safety | `tests/test_harness_connection_safety.py`: no policy, resources, list-only, never-actions, unsupported providers, credentials in URIs, disable/remove/revoke mid-run, verifier and cached reads re-checked, write refused at start and at delivery, self-approval, approval cannot widen, exact payload, pinned hosts, redirects, foreign next links, echoed credential, tampered blob, quotas, item size, no URL-taking tool, poisoned content plus a compromised model, a leak scan (with a planted positive control) over every harness table, blob, file, view and log line, permissions |
 
 Fakes for GitHub, Drive and Graph (`tests/harness_connection_fakes.py`) check
