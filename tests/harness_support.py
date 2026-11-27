@@ -23,11 +23,8 @@ from pheasant.mcp_server.tools import PheasantTools  # noqa: E402
 
 
 def _yaml(state: Path, exports: Path, workspace: Path, sources: str) -> str:
-    lexical = (
-        ""
-        if os.environ.get("PHEASANT_REQUIRE_PG_TEXTSEARCH") == "1"
-        else "  lexical_index: tsvector\n"
-    )
+    # No storage override: the region runs the default lexical index, BM25 from
+    # pg_textsearch on PostgreSQL 17, exactly as every shipped Postgres and CI do.
     return (
         "pheasant:\n"
         "  name: harness-test\n"
@@ -35,8 +32,6 @@ def _yaml(state: Path, exports: Path, workspace: Path, sources: str) -> str:
         f'  state_path: "{state}"\n'
         f'  exports_path: "{exports}"\n'
         f'  workspace_root: "{workspace}"\n'
-        "storage:\n"
-        f"{lexical or '  {}'}"
         "security:\n"
         f'  allow_workspace_roots: ["{workspace}"]\n'
         "sync:\n"

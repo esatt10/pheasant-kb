@@ -16,10 +16,31 @@ from pheasant_harness import investigate  # noqa: E402
 from pheasant_harness.common import Unsupported  # noqa: E402
 
 
+def _bm25_searches(metrics) -> float:
+    return sum(
+        metrics.REGISTRY.value("pheasant_retrieval_lexical_total", index="pg_textsearch", path=path)
+        or 0.0
+        for path in ("index", "widened", "unfenced")
+    )
+
+
+def _bm25_failures(metrics) -> float:
+    return (
+        metrics.REGISTRY.value(
+            "pheasant_retrieval_lexical_total", index="tsvector", path="bm25_failed"
+        )
+        or 0.0
+    )
+
+
 def test_a01_stale_index_yields_to_the_current_revision(tmp_path, monkeypatch):
     """The index holds an old policy and a deleted API; the runtime cites what is there now."""
     sources = "\n  - name: ops-kb\n    type: markdown_folder\n    path: \"{workspace}/kb\"\n    include: ['**/*.md', '**/*.py']\n"
     r = build_region(tmp_path, monkeypatch, sources)
+    from pheasant.telemetry import metrics
+
+    metrics.register_default_metrics("test")  # the server registers these at start
+    before, failures = _bm25_searches(metrics), _bm25_failures(metrics)
     kb = write_tree(
         r.workspace / "kb",
         {
@@ -61,6 +82,15 @@ def test_a01_stale_index_yields_to_the_current_revision(tmp_path, monkeypatch):
         "claims-grounded": "pass",
         "coverage-stated": "pass",
     }
+    # Discovery ran on the region's default lexical index: BM25 from pg_textsearch
+    # on PostgreSQL 17, not a stock-Postgres fallback.
+    assert r.config.storage.lexical_index == "pg_textsearch"
+    assert _bm25_searches(metrics) > before
+    assert _bm25_failures(metrics) == failures  # never fell back to tsvector
+    indexes = r.harness.state.rows(
+        "SELECT indexdef FROM pg_indexes WHERE tablename='chunks_fts' AND indexdef ILIKE '%bm25%'"
+    )
+    assert indexes, "chunks_fts has no pg_textsearch BM25 index"
 
 
 def _coverage_tree(root):
