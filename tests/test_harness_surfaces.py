@@ -324,3 +324,81 @@ def test_connections_policies_approvals_and_the_audit_agree_over_http_and_mcp(wo
     for text in seen:
         for secret in SECRETS:
             assert secret not in text
+
+
+def test_attachments_browsing_and_usable_connections_agree_over_http_and_mcp(world):
+    import base64
+
+    import httpx2
+    from mcp import Client
+    from mcp.client.streamable_http import streamable_http_client
+
+    region = world.region
+    kb = region.config.knowledge_base_id
+    world.allow("gh", ["list", "read"], ["acme/handbook:*"])
+    app = create_app(region.config)
+    note = b"# Brief\n\nThe badge reads Exception.\n"
+    code = b"print('ok')\n"
+
+    async def scenario():
+        base = "http://localhost:8765"
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url=base
+            ) as http:
+                transport = streamable_http_client(f"{base}/mcp/", http_client=http)
+                async with Client(transport) as client:
+
+                    async def call(name, **arguments):
+                        result = await client.call_tool(name, {"knowledge_base": kb, **arguments})
+                        assert not result.is_error, result.content
+                        return result.structured_content or json.loads(result.content[0].text)
+
+                    posted = await http.post(
+                        "/harness/attachments",
+                        files=[
+                            ("files", ("brief/note.md", note, "text/markdown")),
+                            ("files", ("tools/check.py", code, "text/x-python")),
+                        ],
+                        data={"keep_in_uploads": "false"},
+                    )
+                    assert posted.status_code == 201, posted.text
+                    via_http = posted.json()
+                    via_mcp = await call(
+                        "harness_attach_files",
+                        files=[
+                            {"name": "tools/check.py", "content": code.decode()},
+                            {
+                                "name": "brief/note.md",
+                                "content": base64.b64encode(note).decode(),
+                                "encoding": "base64",
+                            },
+                        ],
+                        keep_in_uploads=False,
+                    )
+                    # One batch, whichever surface and order the files came in.
+                    assert via_http["batch"] == via_mcp["batch"]
+                    assert via_http["registration"]["id"] == via_mcp["registration"]["id"]
+                    assert via_mcp["registration"]["created"] is False
+
+                    usable = (await http.get("/harness/connections/usable")).json()
+                    assert usable == await call("harness_usable_connections")
+                    assert [c["name"] for c in usable["connections"]] == ["gh"]
+                    params = {"location": "acme/handbook", "path": "docs"}
+                    browsed = (
+                        await http.get("/harness/connections/gh/browse", params=params)
+                    ).json()
+                    assert browsed == await call(
+                        "harness_browse_connection", connection="gh", **params
+                    )
+                    assert {e["name"] for e in browsed["entries"]} == {
+                        "discounts.md",
+                        "shipping.md",
+                    }
+                    refused = await http.get(
+                        "/harness/connections/gh/browse", params={"location": "acme/erp"}
+                    )
+                    assert refused.status_code == 403
+                    assert refused.json()["code"] == "HARNESS_CONNECTION_DENIED"
+
+    asyncio.run(scenario())

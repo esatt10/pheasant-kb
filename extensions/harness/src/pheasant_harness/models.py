@@ -21,11 +21,15 @@ class BudgetLimits(BaseModel):
 
 
 class Destination(BaseModel):
-    adapter: Literal["record", "file", "test_sink", "blind_sink", "connection"] = "record"
+    adapter: Literal["record", "file", "test_sink", "blind_sink", "connection", "artifact"] = (
+        "record"
+    )
     target: str = Field(
         "",
         description="For 'connection': connection://<name>/<owner>/<repo>/<path>?branch=<b> "
-        "(GitHub) or connection://<name>/<folder id>/<file name> (Drive).",
+        "for one file, connection://<name>/<owner>/<repo>/[<folder>/]?branch=<b>[&base=<b>]"
+        "[&pr=1] to commit a code change, or connection://<name>/<folder id>/<file name> "
+        "(Drive). For 'artifact': the artifact's title (optional).",
     )
     expected_target_version: str | None = Field(
         None, description="Digest the target must still hold, or 'absent' to create only."

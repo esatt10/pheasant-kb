@@ -5,7 +5,7 @@ export type RunState =
 export interface Registration {
   id: string;
   uri: string;
-  resolver: "git" | "folder" | "pheasant" | "connection";
+  resolver: "git" | "folder" | "pheasant" | "connection" | "attachment";
   label: string;
   operations: string[];
   classification: string;
@@ -272,4 +272,37 @@ export interface ArtifactContent {
   content: string | null;
   content_base64: string | null;
   bytes: number;
+}
+
+export interface UsableConnection {
+  name: string;
+  provider: "github" | "google_drive" | "microsoft_365" | string;
+  account: string | null;
+  actions: string[];
+  locations: string[];
+  write_resources: string[];
+  approval: { write: string; self_approval: boolean };
+  resource_grammar: string | null;
+}
+
+export interface BrowseEntry { name: string; path: string; type: "dir" | "file"; size?: number | null }
+
+export interface BrowseResult {
+  kind: "locations" | "repository" | "folder" | "drive";
+  connection?: string;
+  provider?: string;
+  suggestions?: string[];
+  repository?: string;
+  default_branch?: string;
+  branches?: string[];
+  ref?: string;
+  path?: string;
+  entries?: BrowseEntry[];
+}
+
+export interface AttachResult {
+  registration: Registration & { created: boolean };
+  batch: string;
+  files: { path: string; size: number | null; kind: string; binary: boolean; derived_from: string | null; reason: string | null }[];
+  uploads: { status: string; source?: string; folder?: string; landed?: number; reason?: string };
 }

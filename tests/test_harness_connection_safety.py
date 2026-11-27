@@ -308,7 +308,7 @@ def test_the_requester_may_not_approve_their_own_write(world):
     _writer(world, approval={"self_approval": True})
     coordinator.decide_approval(run_id, op, "approve", "alice", operator=True)
     assert world.region.coordinator().drive(run_id)["state"] == "succeeded"
-    assert len(world.net.writes()) == 1
+    assert len([c for c in world.net.writes() if c.method == "PUT"]) == 1
 
 
 def test_an_approval_cannot_widen_a_policy_narrowed_while_waiting_and_a_rejection_sends_nothing(

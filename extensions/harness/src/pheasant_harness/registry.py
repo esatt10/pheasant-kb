@@ -686,6 +686,10 @@ class Registry:
         return reg
 
     def resolver(self, reg: Registration) -> Resolver:
+        if reg.resolver == "attachment":
+            from pheasant_harness.attachments import AttachmentResolver
+
+            return AttachmentResolver(self.harness, reg)
         return RESOLVERS[reg.resolver](self.harness, reg)
 
     def resolve(self, reg_id: str, actor: str, version_selector: str | None = None) -> Revision:

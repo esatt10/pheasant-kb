@@ -7,7 +7,7 @@ import base64
 import json
 from typing import Any, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -199,6 +199,28 @@ def register_harness_routes(app: FastAPI, *, services: Any) -> None:
     @app.get("/harness/connections")
     def connections() -> dict:
         return service.connections(services)
+
+    @app.get("/harness/connections/usable")
+    def usable_connections() -> dict:
+        return service.usable_connections(services)
+
+    @app.get("/harness/connections/{connection}/browse")
+    def browse_connection(
+        connection: str, location: str = "", path: str = "", ref: str | None = None
+    ) -> dict:
+        return service.browse_connection(services, connection, location, path, ref)
+
+    @app.post("/harness/attachments", status_code=201)
+    async def attach_files(
+        files: list[UploadFile] = File(...),
+        label: str | None = Form(None),
+        sync: bool = Form(True),
+        keep_in_uploads: bool = Form(True),
+    ) -> dict:
+        received = [(f.filename or "upload", await f.read()) for f in files]
+        return await asyncio.to_thread(
+            service.attach_files, services, received, label, sync, keep_in_uploads
+        )
 
     @app.get("/harness/connections/calls")
     def connection_calls(

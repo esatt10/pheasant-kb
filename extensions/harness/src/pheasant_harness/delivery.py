@@ -216,9 +216,112 @@ class ConnectionAdapter(Adapter):
         return adapter.reconcile(parsed, operation_id, payload_digest)
 
 
+class ArtifactAdapter(Adapter):
+    """A Pheasant artifact: the verified result kept as knowledge in ``artifacts``.
+
+    Saved through Pheasant's own artifact service, so it is filed by day and
+    person, searchable, browsable in the taxonomy view and removable like any
+    artifact. A document is kept as a report; a code change as the files it
+    changed (deleted files listed in its summary) with its release note as the
+    report text. The operation id is the artifact's session, which is what
+    reconciliation looks it up by: a crash after the save finds it instead of
+    saving a second copy. ``target`` is the title (default: the document's first
+    heading).
+    """
+
+    name = "artifact"
+    idempotent = True
+    observable = True
+
+    def describe(self) -> dict:
+        return {**super().describe(), "keeps": "a Pheasant artifact in the artifacts source"}
+
+    def _find(self, operation_id: str) -> str | None:
+        rows = self.state.rows(
+            "SELECT id FROM saved_artifacts WHERE kb_id=? AND session_id=? ORDER BY created_at",
+            (self.harness.kb_id, operation_id),
+        )
+        return rows[0]["id"] if rows else None
+
+    @staticmethod
+    def _content(payload: bytes) -> tuple[str, list[dict], str]:
+        text = payload.decode("utf-8", errors="replace")
+        try:
+            bundle = json.loads(text)
+        except ValueError:
+            bundle = None
+        if not isinstance(bundle, dict) or not any(
+            isinstance(v, dict) and "digest" in v for v in bundle.values()
+        ):
+            return text, [], "report"
+        files: list[dict] = []
+        notes: list[str] = []
+        deleted: list[str] = []
+        for _key, part in sorted(bundle.items()):
+            if not isinstance(part, dict):
+                continue
+            if isinstance(part.get("files"), dict):
+                for path, content in sorted(part["files"].items()):
+                    if content is None:
+                        deleted.append(path)
+                    else:
+                        files.append({"name": path, "content": content})
+            elif "content" in part:
+                notes.append(str(part["content"]))
+        markdown = "\n\n".join(notes)
+        if deleted:
+            markdown += "\n\n## Deleted files\n\n" + "\n".join(f"- `{p}`" for p in deleted)
+        return markdown.strip(), files, "files" if files else "report"
+
+    def dispatch(self, operation_id, target, payload, expected):
+        from pheasant.services import artifacts as artifact_service
+        from pheasant_harness.connections import _who
+
+        found = self._find(operation_id)
+        if found:
+            return {"downstream_id": found, "downstream_revision": digest_bytes(payload)}
+        markdown, files, kind = self._content(payload)
+        heading = next(
+            (line.lstrip("# ").strip() for line in markdown.splitlines() if line.strip()), ""
+        )
+        title = (target or heading or "Harness result")[:120]
+        saved = artifact_service.save(
+            self.harness.services,
+            artifact_service.SaveRequest(
+                title=title,
+                kind=kind,
+                markdown=markdown or None,
+                files=files or None,
+                summary=f"Built and verified by the Pheasant harness ({operation_id}).",
+                principal=_who().get("actor"),
+                conversation_id=operation_id,
+                channel="api",
+            ),
+        )
+        faults.hit("after_sink_commit")
+        return {"downstream_id": saved["id"], "downstream_revision": digest_bytes(payload)}
+
+    def reconcile(self, operation_id, target, payload_digest):
+        found = self._find(operation_id)
+        if found:
+            return {
+                "status": "committed",
+                "downstream_id": found,
+                "downstream_revision": payload_digest,
+            }
+        return {"status": "absent"}
+
+
 ADAPTERS = {
     cls.name: cls
-    for cls in (RecordAdapter, TestSinkAdapter, BlindSinkAdapter, FileAdapter, ConnectionAdapter)
+    for cls in (
+        RecordAdapter,
+        TestSinkAdapter,
+        BlindSinkAdapter,
+        FileAdapter,
+        ConnectionAdapter,
+        ArtifactAdapter,
+    )
 }
 
 

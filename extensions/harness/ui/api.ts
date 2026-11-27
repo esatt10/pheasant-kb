@@ -1,7 +1,7 @@
-import { request, qs } from "@pheasant/ui/api/client";
+import { apiBase, errorDetail, qs, request, requestHeaders, uploadPath } from "@pheasant/ui/api/client";
 import type {
-  ArtifactContent, ConnectionCall, ConnectionPolicy, ConnectionsOverview, Registration, RunDetail, RunEvent,
-  RunStatus, RunSummary,
+  ArtifactContent, AttachResult, BrowseResult, ConnectionCall, ConnectionPolicy, ConnectionsOverview, Registration,
+  RunDetail, RunEvent, RunStatus, RunSummary, UsableConnection,
 } from "./types";
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -29,6 +29,25 @@ export const harnessApi = {
     request<RunStatus>(`/harness/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(operationId)}`,
       json({ decision, note })),
   connections: () => request<ConnectionsOverview>("/harness/connections"),
+  usable: () => request<{ connections: UsableConnection[] }>("/harness/connections/usable"),
+  browse: (connection: string, params: { location?: string; path?: string; ref?: string }) =>
+    request<BrowseResult>(`/harness/connections/${encodeURIComponent(connection)}/browse${qs(params)}`),
+  registerWith: (body: { uri: string; label?: string; scope?: Record<string, unknown> }) =>
+    request<Registration>("/harness/registrations", json(body)),
+  // Multipart, so not `request()`: the browser sets the boundary; the bearer token is still sent.
+  attach: async (files: File[], options: { label?: string; keepInUploads?: boolean } = {}): Promise<AttachResult> => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file, uploadPath(file));
+    if (options.label) form.append("label", options.label);
+    form.append("keep_in_uploads", String(options.keepInUploads ?? true));
+    form.append("sync", "true");
+    const response = await fetch(`${apiBase()}/harness/attachments`, {
+      method: "POST", headers: requestHeaders(undefined, false), body: form,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorDetail(body, `${response.status} ${response.statusText}`));
+    return body as AttachResult;
+  },
   setPolicy: (name: string, body: Omit<ConnectionPolicy, "connection" | "provider" | "version" | "updated_by" | "updated_at">) =>
     request<{ policy: ConnectionPolicy; previous_version: number }>(
       `/harness/connections/${encodeURIComponent(name)}/policy`, { method: "PUT", body: JSON.stringify(body) }),

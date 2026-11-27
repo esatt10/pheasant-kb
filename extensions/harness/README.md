@@ -12,7 +12,7 @@ One service layer (`service.py`) backs three surfaces:
 | Surface | Where | What |
 | --- | --- | --- |
 | HTTP | `http.py`, `/harness/*` | registrations, grep/read/discover, runs, events (JSON + SSE), artifacts, effects, sandboxes |
-| MCP | `mcp.py`, 26 `harness_*` tools | the same operations, same refusal text and codes |
+| MCP | `mcp.py`, 29 `harness_*` tools | the same operations, same refusal text and codes |
 | UI | `ui/`, route `/harness` | run list, composer, lifecycle, budget, fences, delivery receipt, deliverable with clickable `[E…]` citations, verification matrix per candidate digest, evidence, steps/attempts, per-run connection audit, journal, sandboxes; the Connections view (policies, audit) and the approval card for a write through a connection |
 | CLI | `pheasant harness worker\|reap\|status\|contract\|isolation` | a coordinator process of its own, the reaper |
 
@@ -81,6 +81,47 @@ adapter's root, default `<exports>/harness`), `PHEASANT_HARNESS_RUNNER=off`
   from run lineage, target and payload digest; an ambiguous outcome is
   reconciled before anything is sent again, and an unknowable one waits for
   an operator (`harness_resolve_effect`).
+
+## The workspace: what a person does
+
+The Harness page opens on a composer (`ui/Composer.tsx`), modelled on how a
+coding agent's task composer works: say what to build, choose where it works,
+choose where the result goes.
+
+* **Change code** or **Build content.** The harness is an optional build layer,
+  not the way questions are answered: nothing routes a chat or a search here.
+  (`answer` and `summarize` remain in the API for the acceptance fixtures; the
+  composer does not offer them.)
+* **Work in a repository, branch and folder.** Pick a connection, a repository
+  (or Drive folder, or OneDrive drive), a branch and a directory by browsing
+  them (`GET /harness/connections/{name}/browse`, `harness_browse_connection`;
+  every listing is a `list` under the connection's policy, and
+  `/harness/connections/usable` offers only what a policy enables). The pick is
+  registered as `connection://<name>/<repo>/<folder>` pinned to that branch.
+* **Attach files** of any format (`POST /harness/attachments` multipart,
+  `harness_attach_files` with base64; `attachments.py`). They become one
+  immutable input, `attachment://<batch>`, stored by digest so any replica can
+  read them; PDF, Word, PowerPoint, Excel, RTF and EPUB also get a text twin
+  (`<name>.txt`, from Pheasant's own extractor) so they can be searched and
+  cited, while materialize copies the originals into the sandbox. The same files
+  land in Pheasant's **uploads** source under `harness/<batch>/` through the
+  ordinary submission path, and that source is synced, so an attachment is also
+  knowledge. Attaching the same files again is the same batch.
+* **Where the result goes:**
+  * **a Pheasant artifact** (adapter `artifact`, the default): a document as a
+    report, a code change as the files it changed with its release note, filed
+    in the `artifacts` source; found again by its operation id, so a crash after
+    the save does not save twice;
+  * **a branch** (adapter `connection`, `connection://gh/<owner>/<repo>/[folder/]?branch=b&base=main&pr=1`):
+    a missing branch is created from `base`; a code change is **one commit** of
+    every changed file through the Git Data API (blobs, a tree on the branch
+    head, a commit naming the operation, a fast-forward of the ref, never
+    forced); every path the commit touches is checked against the policy's write
+    resources before anything is sent; `pr=1` opens a pull request once, found
+    again by its head branch, also when the worker died between the commit and
+    the pull request. A single document can go to one file on a branch the same
+    way;
+  * **a Drive folder**, or the run's own record.
 
 ## Working through connected accounts
 
@@ -184,6 +225,7 @@ and a real MCP client session:
 | A21 durable wait, revocation, fresh sandbox | `test_a21_*` |
 | HTTP ≡ MCP | `tests/test_harness_surfaces.py` (runs, and connections: policies, approvals, audit) |
 | Connections: results and grounding | `tests/test_harness_connections.py`: cited commit/checksum, moved branch, Drive export pinning, OneDrive download without the token, truncated listing, policy-limited grep, approved delivery, crash reconciliation, teammate edit kept, conflict, Drive delivery, sandboxed code change |
+| Workspace | `tests/test_harness_workspace.py`: attachments of five formats (Markdown, PDF, Word, PNG, Python) pinned and text-extracted, landed and indexed in `uploads`, path escapes refused, a run citing an attached PDF; browsing branches, folders, Drive and OneDrive under policy; a registration pinned to a branch and folder; one commit on a new branch with a pull request, crashes before the PR, after the commit and after the receipt, a teammate's later edit kept, a forbidden path sending nothing, a moved branch never forced; documents and code changes kept as artifacts once; no credential in any of it |
 | Connections: safety | `tests/test_harness_connection_safety.py`: no policy, resources, list-only, never-actions, unsupported providers, credentials in URIs, disable/remove/revoke mid-run, verifier and cached reads re-checked, write refused at start and at delivery, self-approval, approval cannot widen, exact payload, pinned hosts, redirects, foreign next links, echoed credential, tampered blob, quotas, item size, no URL-taking tool, poisoned content plus a compromised model, a leak scan (with a planted positive control) over every harness table, blob, file, view and log line, permissions |
 
 Fakes for GitHub, Drive and Graph (`tests/harness_connection_fakes.py`) check
@@ -191,7 +233,14 @@ the credential the way the services do and record every request. A mutation
 pass breaks each safety mechanism in turn (27 mutants, among them redaction,
 redirect refusal, host pinning, the cached-read check, the broker's policy
 check, the approval gate and self-approval, quotas, checksum and hash checks,
-and reconciliation by operation id), and every one fails a test.
+and reconciliation by operation id), and every one fails a test. The workspace
+features had their own pass: of nine mutants (per-file write checks, forced ref
+updates, branch-from-base, a second pull request, reconciliation by operation id,
+browsing outside the policy, path escapes, the receipt's PR link) two survived the
+first tests, which exposed a real gap -- a crash between the commit and the pull
+request left no PR -- now fixed and covered; one remaining survivor (the artifact
+adapter's own duplicate check) is equivalent, because reconciliation finds the
+saved artifact first.
 
 ## What this build does not claim
 
@@ -211,9 +260,9 @@ and reconciliation by operation id), and every one fails a test.
 * **Connections are exercised against fakes**, not against live GitHub, Drive
   or Graph: the fakes implement the endpoints the adapters call and check the
   credential, but provider quirks beyond them (rate limits, Drive shortcuts,
-  SharePoint lists and pages) are not covered. Writes are one file per
-  delivery; a multi-file commit or a pull request is not offered. Microsoft 365
-  is read-only here. A sign-in whose refresh fails surfaces as
+  SharePoint lists and pages) are not covered. A code change is committed on the
+  branch's current head (created from `base` when new), not rebased onto the
+  exact commit the run pinned; Microsoft 365 is read-only here. A sign-in whose refresh fails surfaces as
   `HARNESS_CONNECTION_FAILED`; the harness does not start a sign-in itself.
 
 ## Dependencies

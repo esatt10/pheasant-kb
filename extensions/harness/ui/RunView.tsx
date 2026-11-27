@@ -425,6 +425,13 @@ export function RunView({ runId }: { runId: string }) {
               {effect.disposition ? <div className="kv__row"><span className="kv__key">Disposition</span><span className="kv__value">{effect.disposition}</span></div> : null}
             </div>
           )) : <p className="muted">Nothing delivered. Delivery waits for every required check on the exact candidate.</p>}
+          {result?.receipt?.pull_request ? (
+            <p className="hx-receipt-link">Pull request: <a href={String(result.receipt.pull_request)} target="_blank" rel="noreferrer">{String(result.receipt.pull_request)}</a></p>
+          ) : null}
+          {result?.receipt?.files_changed ? <p className="muted">{String(result.receipt.files_changed)} file(s) in one commit</p> : null}
+          {run.effects.some((e) => e.adapter === "artifact" && e.state === "committed") ? (
+            <p className="hx-receipt-link">Kept as artifact <span className="mono">{String(result?.receipt?.downstream_id ?? "")}</span> in the Artifacts tab.</p>
+          ) : null}
           {handoff ? <p className="hx-handoff"><Pill value={`${handoff.verified_criteria.length} verified`} />{" "}
             {handoff.unverified_criteria.length ? <Pill value={`${handoff.unverified_criteria.length} unverified`} /> : null}{" "}
             {handoff.coverage_gaps.length ? <span className="muted">gap: {handoff.coverage_gaps.join(", ")}</span> : null}</p> : null}

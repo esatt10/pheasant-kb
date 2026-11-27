@@ -425,6 +425,74 @@ def connection_calls(
     }
 
 
+def usable_connections(services: Any, knowledge_base: str | None = None) -> dict:
+    """The connections a run may work through now, as a composer offers them.
+
+    Only connections whose harness policy is enabled, with what each allows and
+    the locations its resource patterns name. No limits, no audit, no secret:
+    this is what a person picking a repository needs, not what an operator
+    reviewing the policy does.
+    """
+    _kb(services, knowledge_base)
+    gateway = harness_for(services).connections
+    out = []
+    for item in gateway.connections():
+        policy = item.get("policy")
+        if not item["supported"] or not policy or not policy["enabled"]:
+            continue
+        if item["status"] != "connected":
+            continue
+        out.append(
+            {
+                "name": item["name"],
+                "provider": item["provider"],
+                "account": item["account"],
+                "actions": policy["actions"],
+                "locations": connections_mod.suggestions(item["provider"], policy["resources"]),
+                "write_resources": policy["write_resources"],
+                "approval": policy["approval"],
+                "resource_grammar": item["resource_grammar"],
+            }
+        )
+    return {"connections": out}
+
+
+def browse_connection(
+    services: Any,
+    connection: str,
+    location: str = "",
+    path: str = "",
+    ref: str | None = None,
+    knowledge_base: str | None = None,
+) -> dict:
+    """Branches, folders and files reachable through a connection, under its policy."""
+    _kb(services, knowledge_base)
+    with _direct("browse"):
+        return connections_mod.browse(harness_for(services), connection, location, path, ref)
+
+
+def attach_files(
+    services: Any,
+    files: list[tuple[str, bytes]],
+    label: str | None = None,
+    sync: bool = True,
+    keep_in_uploads: bool = True,
+    knowledge_base: str | None = None,
+) -> dict:
+    """Attach files to future runs; keep them in Pheasant's uploads source too."""
+    from pheasant_harness import attachments
+
+    _kb(services, knowledge_base)
+    return attachments.attach(
+        harness_for(services),
+        files,
+        actor(),
+        label=label,
+        sync=sync,
+        keep_in_uploads=keep_in_uploads,
+    )
+
+
 def advance_run(services: Any, run_id: str, knowledge_base: str | None = None) -> dict:
     _kb(services, knowledge_base)
     return _owned(services, run_id).tick(run_id)
@@ -544,7 +612,7 @@ def contract(services: Any, knowledge_base: str | None = None) -> dict:
         "delivery_adapters": {
             name: cls(harness_for(services)).describe() for name, cls in ADAPTERS.items()
         },
-        "resolvers": ["git", "folder", "pheasant", "connection"],
+        "resolvers": ["git", "folder", "pheasant", "connection", "attachment"],
         "connections": {
             "actions": connections_mod.ACTIONS,
             "never": list(connections_mod.NEVER),

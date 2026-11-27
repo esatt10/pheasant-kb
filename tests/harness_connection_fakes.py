@@ -71,14 +71,24 @@ class Commit:
     message: str
     date: str
     parent: str | None
+    tree: str = ""
 
 
 class FakeGitHub:
+    """GitHub's REST surface as the adapter uses it: contents, Git Data, branches, pulls.
+
+    A contents write to a branch that does not exist is a 404, as on GitHub, and a
+    ref update that is not a fast-forward is a 422 unless forced -- so the adapter's
+    own branch creation and its refusal to force are what is exercised.
+    """
+
     host = "api.github.com"
 
     def __init__(self, token: str = GITHUB_TOKEN):
         self.token = token
         self.repos: dict[str, dict] = {}
+        self.trees: dict[str, dict[str, bytes]] = {}
+        self.blobs: dict[str, bytes] = {}
         self.truncate_trees = False
         self.corrupt_blobs: set[str] = set()
         self.echo_token = False
@@ -89,16 +99,33 @@ class FakeGitHub:
         self._clock += 1
         return f"2026-11-{10 + self._clock // 50:02d}T09:{self._clock % 60:02d}:00Z"
 
+    def _new_commit(
+        self, repo: str, files: dict[str, bytes], message: str, parent: str | None
+    ) -> Commit:
+        self._clock += 1
+        sha = hashlib.sha1(
+            f"{repo}{message}{sorted(files.items())}{self._clock}".encode()
+        ).hexdigest()
+        tree = "t" + sha[1:]
+        self.trees[tree] = dict(files)
+        for data in files.values():
+            self.blobs[git_sha(data)] = data
+        commit = Commit(sha, dict(files), message, self._stamp(), parent, tree)
+        self.repos[repo]["commits"][sha] = commit
+        return commit
+
     def commit(
         self,
         repo: str,
         branch: str,
-        files: dict[str, str | bytes],
+        files: dict[str, str | bytes | None],
         message: str = "edit",
         *,
         replace: bool = False,
     ) -> str:
-        state = self.repos.setdefault(repo, {"branches": {}, "commits": {}})
+        state = self.repos.setdefault(
+            repo, {"branches": {}, "commits": {}, "default": "main", "pulls": []}
+        )
         parent = state["branches"].get(branch)
         current = {} if replace or parent is None else dict(state["commits"][parent].files)
         for path, content in files.items():
@@ -106,81 +133,106 @@ class FakeGitHub:
                 current.pop(path, None)
             else:
                 current[path] = content.encode() if isinstance(content, str) else content
-        sha = hashlib.sha1(
-            f"{repo}{branch}{message}{sorted(current.items())}{self._clock}".encode()
-        ).hexdigest()
-        state["commits"][sha] = Commit(sha, current, message, self._stamp(), parent)
-        state["branches"][branch] = sha
-        return sha
+        made = self._new_commit(repo, current, message, parent)
+        state["branches"][branch] = made.sha
+        return made.sha
 
     def head(self, repo: str, branch: str) -> Commit:
         state = self.repos[repo]
         return state["commits"][state["branches"][branch]]
 
-    def _find_blob(self, repo: str, oid: str) -> bytes | None:
-        for commit in self.repos[repo]["commits"].values():
-            for data in commit.files.values():
-                if git_sha(data) == oid:
-                    return data
-        return None
+    def history(self, repo: str, branch: str) -> list[Commit]:
+        state, out = self.repos[repo], []
+        sha = state["branches"].get(branch)
+        while sha:
+            out.append(state["commits"][sha])
+            sha = state["commits"][sha].parent
+        return out
 
     def handle(self, call: Call) -> Response:
         if call.authorization != f"Bearer {self.token}":
             return _json(401, {"message": "Bad credentials"})
         parts = urlsplit(call.url)
         query = parse_qs(parts.query)
-        match = re.match(r"^/repos/([^/]+)/([^/]+)/(.*)$", parts.path)
+        match = re.match(r"^/repos/([^/]+)/([^/]+)(?:/(.*))?$", parts.path)
         if not match:
             return _json(404, {"message": "Not Found"})
         repo = f"{unquote(match[1])}/{unquote(match[2])}"
-        rest = match[3]
+        rest = match[3] or ""
         if repo not in self.repos:
             return _json(404, {"message": "Not Found"})
         state = self.repos[repo]
+        body = json.loads(call.body or b"{}") if call.body else {}
+        branches = state["branches"]
+        commits = state["commits"]
+        if call.method == "GET" and rest == "":
+            return _json(200, {"full_name": repo, "default_branch": state["default"]})
+        if call.method == "GET" and rest == "branches":
+            return _json(
+                200, [{"name": b, "commit": {"sha": s}} for b, s in sorted(branches.items())]
+            )
+        if call.method == "GET" and rest.startswith("branches/"):
+            name = unquote(rest[len("branches/") :])
+            if name not in branches:
+                return _json(404, {"message": "Branch not found"})
+            return _json(200, {"name": name, "commit": {"sha": branches[name]}})
         if call.method == "GET" and rest.startswith("commits/"):
             ref = unquote(rest[len("commits/") :])
-            sha = state["branches"].get(ref) or (ref if ref in state["commits"] else None)
             if ref == "HEAD":
-                sha = state["branches"].get("main")
+                ref = state["default"]
+            sha = branches.get(ref) or (ref if ref in commits else None)
             if sha is None:
                 return _json(422, {"message": "No commit found"})
-            commit = state["commits"][sha]
+            commit = commits[sha]
             return _json(
                 200,
                 {
                     "sha": sha,
                     "commit": {
-                        "tree": {"sha": "t" + sha[1:]},
+                        "tree": {"sha": commit.tree},
                         "message": commit.message,
                         "committer": {"date": commit.date},
                     },
                 },
             )
-        if call.method == "GET" and rest.startswith("git/trees/"):
-            sha = "c" + rest[len("git/trees/") :][1:]
-            commit = next((c for s, c in state["commits"].items() if s[1:] == sha[1:]), None)
+        if call.method == "GET" and rest == "commits":
+            branch = (query.get("sha") or [state["default"]])[0]
+            path = (query.get("path") or [None])[0]
+            out = []
+            for commit in self.history(repo, branch) if branch in branches else []:
+                parent = commits.get(commit.parent) if commit.parent else None
+                if path is None or commit.files.get(path) != (
+                    parent.files.get(path) if parent else None
+                ):
+                    out.append({"sha": commit.sha, "commit": {"message": commit.message}})
+            return _json(200, out[: int((query.get("per_page") or ["30"])[0])])
+        if call.method == "GET" and rest.startswith("git/commits/"):
+            commit = commits.get(rest[len("git/commits/") :])
             if commit is None:
                 return _json(404, {"message": "Not Found"})
+            return _json(
+                200, {"sha": commit.sha, "tree": {"sha": commit.tree}, "message": commit.message}
+            )
+        if call.method == "GET" and rest.startswith("git/trees/"):
+            files = self.trees.get(rest[len("git/trees/") :])
+            if files is None:
+                return _json(404, {"message": "Not Found"})
             dirs = sorted(
-                {
-                    "/".join(p.split("/")[:i])
-                    for p in commit.files
-                    for i in range(1, p.count("/") + 1)
-                }
+                {"/".join(p.split("/")[:i]) for p in files for i in range(1, p.count("/") + 1)}
             )
             tree = [{"path": d, "mode": "040000", "type": "tree", "sha": "d" * 40} for d in dirs]
             tree += [
                 {"path": p, "mode": "100644", "type": "blob", "sha": git_sha(d), "size": len(d)}
-                for p, d in sorted(commit.files.items())
+                for p, d in sorted(files.items())
             ]
             if self.truncate_trees:
                 tree = tree[: max(1, len(tree) // 2)]
-            return _json(200, {"sha": sha, "tree": tree, "truncated": self.truncate_trees})
+            return _json(200, {"sha": rest, "tree": tree, "truncated": self.truncate_trees})
         if call.method == "GET" and rest.startswith("git/blobs/"):
             oid = rest[len("git/blobs/") :]
             if self.redirect_blobs_to:
                 return Response(302, {"Location": self.redirect_blobs_to + oid}, b"")
-            data = self._find_blob(repo, oid)
+            data = self.blobs.get(oid)
             if data is None:
                 return _json(404, {"message": "Not Found"})
             if oid in self.corrupt_blobs:
@@ -188,35 +240,121 @@ class FakeGitHub:
             if self.echo_token:
                 data = data + f"\n<!-- debug: Authorization {call.authorization} -->\n".encode()
             return Response(200, {"Content-Type": "application/vnd.github.raw"}, data)
-        if rest.startswith("contents/"):
-            path = unquote(rest[len("contents/") :])
+        if call.method == "POST" and rest == "git/refs":
+            name = str(body.get("ref", "")).removeprefix("refs/heads/")
+            if name in branches:
+                return _json(422, {"message": "Reference already exists"})
+            if body.get("sha") not in commits:
+                return _json(422, {"message": "Object does not exist"})
+            branches[name] = body["sha"]
+            return _json(201, {"ref": body["ref"], "object": {"sha": body["sha"]}})
+        if call.method == "POST" and rest == "git/blobs":
+            data = base64.b64decode(body["content"])
+            self.blobs[git_sha(data)] = data
+            return _json(201, {"sha": git_sha(data)})
+        if call.method == "POST" and rest == "git/trees":
+            files = dict(self.trees.get(body.get("base_tree"), {}))
+            for item in body.get("tree") or []:
+                if item.get("sha") is None:
+                    files.pop(item["path"], None)
+                else:
+                    files[item["path"]] = self.blobs[item["sha"]]
+            tree = "t" + hashlib.sha1(repr(sorted(files.items())).encode()).hexdigest()[1:]
+            self.trees[tree] = files
+            return _json(201, {"sha": tree})
+        if call.method == "POST" and rest == "git/commits":
+            parents = body.get("parents") or [None]
+            self._clock += 1
+            sha = hashlib.sha1(
+                f"{body['message']}{body['tree']}{parents}{self._clock}".encode()
+            ).hexdigest()
+            commits[sha] = Commit(
+                sha,
+                dict(self.trees[body["tree"]]),
+                body["message"],
+                self._stamp(),
+                parents[0],
+                body["tree"],
+            )
+            return _json(201, {"sha": sha, "tree": {"sha": body["tree"]}})
+        if call.method == "PATCH" and rest.startswith("git/refs/heads/"):
+            name = unquote(rest[len("git/refs/heads/") :])
+            new = commits.get(body.get("sha"))
+            if name not in branches or new is None:
+                return _json(422, {"message": "Reference does not exist"})
+            if new.parent != branches[name] and not body.get("force"):
+                return _json(422, {"message": "Update is not a fast forward"})
+            branches[name] = new.sha
+            return _json(200, {"ref": f"refs/heads/{name}", "object": {"sha": new.sha}})
+        if rest == "pulls":
             if call.method == "GET":
-                branch = (query.get("ref") or ["main"])[0]
-                head = state["branches"].get(branch)
-                data = state["commits"][head].files.get(path) if head else None
-                if data is None:
-                    return _json(404, {"message": "Not Found"})
+                head = (query.get("head") or [""])[0].split(":", 1)[-1]
                 return _json(
-                    200,
-                    {
-                        "path": path,
-                        "sha": git_sha(data),
-                        "content": base64.b64encode(data).decode(),
-                    },
+                    200, [p for p in state["pulls"] if p["head"] == head and p["state"] == "open"]
                 )
+            pull = {
+                "number": len(state["pulls"]) + 1,
+                "html_url": f"https://github.com/{repo}/pull/{len(state['pulls']) + 1}",
+                "head": body["head"],
+                "base": body["base"],
+                "title": body["title"],
+                "body": body.get("body", ""),
+                "state": "open",
+            }
+            state["pulls"].append(pull)
+            return _json(201, pull)
+        if rest.startswith("contents"):
+            path = unquote(rest[len("contents") :].lstrip("/"))
+            if call.method == "GET":
+                branch = (query.get("ref") or [state["default"]])[0]
+                head = branches.get(branch) or (branch if branch in commits else None)
+                files = commits[head].files if head else {}
+                if path in files:
+                    data = files[path]
+                    return _json(
+                        200,
+                        {
+                            "type": "file",
+                            "name": path.rsplit("/", 1)[-1],
+                            "path": path,
+                            "sha": git_sha(data),
+                            "size": len(data),
+                            "content": base64.b64encode(data).decode(),
+                        },
+                    )
+                prefix = path + "/" if path else ""
+                children: dict[str, dict] = {}
+                for name, data in files.items():
+                    if not name.startswith(prefix):
+                        continue
+                    first = name[len(prefix) :].split("/", 1)
+                    if len(first) == 2:
+                        children[first[0]] = {
+                            "type": "dir",
+                            "name": first[0],
+                            "path": prefix + first[0],
+                        }
+                    else:
+                        children[first[0]] = {
+                            "type": "file",
+                            "name": first[0],
+                            "path": name,
+                            "size": len(data),
+                        }
+                if not children:
+                    return _json(404, {"message": "Not Found"})
+                return _json(200, [children[k] for k in sorted(children)])
             if call.method == "PUT":
-                body = json.loads(call.body or b"{}")
                 branch = body["branch"]
-                head = state["branches"].get(branch)
-                existing = state["commits"][head].files.get(path) if head else None
+                head = branches.get(branch)
+                if head is None:
+                    return _json(404, {"message": f"Branch {branch} not found"})
+                existing = commits[head].files.get(path)
                 if existing is not None and body.get("sha") != git_sha(existing):
                     return _json(409, {"message": "sha does not match"})
                 if existing is None and body.get("sha"):
                     return _json(422, {"message": "sha given for a file that does not exist"})
                 data = base64.b64decode(body["content"])
-                if head is None:
-                    base = state["branches"]["main"]
-                    state["branches"][branch] = base
                 sha = self.commit(repo, branch, {path: data}, body["message"])
                 return _json(
                     201 if existing is None else 200,
@@ -225,18 +363,6 @@ class FakeGitHub:
                         "commit": {"sha": sha, "message": body["message"]},
                     },
                 )
-        if call.method == "GET" and rest == "commits":
-            branch = (query.get("sha") or ["main"])[0]
-            path = (query.get("path") or [""])[0]
-            sha = state["branches"].get(branch)
-            out = []
-            while sha:
-                commit = state["commits"][sha]
-                parent = state["commits"].get(commit.parent) if commit.parent else None
-                if commit.files.get(path) != (parent.files.get(path) if parent else None):
-                    out.append({"sha": sha, "commit": {"message": commit.message}})
-                sha = commit.parent
-            return _json(200, out)
         return _json(404, {"message": "Not Found"})
 
 

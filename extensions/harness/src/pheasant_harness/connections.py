@@ -1062,34 +1062,141 @@ class GitHubAdapter(Adapter):
             audit=(self.name, self.provider, self.item_resource(scope, entry)),
         )
 
+    # browsing ---------------------------------------------------------------------------
+
+    def browse(self, scope: dict, path: str = "", ref: str | None = None) -> dict:
+        """A repository's branches and one directory's children, under ``list``."""
+        resource = self.list_resource({**scope, "prefix": path.strip("/")})
+        accept = {"Accept": "application/vnd.github+json"}
+        repo = self.call("list", resource, "GET", self._repo(scope), headers=accept).json()
+        default = str(repo.get("default_branch") or "main")
+        branches = self.call(
+            "list",
+            resource,
+            "GET",
+            f"{self._repo(scope)}/branches?" + urlencode({"per_page": 100}),
+            headers=accept,
+        ).json()
+        chosen = ref or default
+        url = f"{self._repo(scope)}/contents/{quote(path.strip('/'))}?" + urlencode({"ref": chosen})
+        listing = self.call("list", resource, "GET", url, headers=accept, accept_status=(200, 404))
+        children = listing.json() if listing.status == 200 else []
+        if isinstance(children, dict):  # a file, not a directory
+            children = [children]
+        return {
+            "kind": "repository",
+            "repository": f"{scope['owner']}/{scope['repo']}",
+            "default_branch": default,
+            "branches": sorted(str(b.get("name")) for b in branches or [] if b.get("name")),
+            "ref": chosen,
+            "path": path.strip("/"),
+            "entries": [
+                {
+                    "name": c.get("name"),
+                    "path": c.get("path"),
+                    "type": "dir" if c.get("type") == "dir" else "file",
+                    "size": c.get("size"),
+                }
+                for c in children
+            ],
+        }
+
     # writes --------------------------------------------------------------------------
+    #
+    # Two shapes. A target naming a file (``.../<path>?branch=b``) writes that one
+    # file through the contents API. A target naming the repository or a folder
+    # and ending in ``/`` (``.../<owner>/<repo>/?branch=b``) commits a code
+    # change's whole tree in ONE commit through the Git Data API: blobs for what
+    # changed, a tree on the branch head, a commit naming the operation, and a
+    # fast-forward of the ref -- never a force. Either way a missing branch is
+    # created from ``base`` (default: the repository's default branch) and
+    # ``pr=1`` opens a pull request into ``base`` once, found again by its head.
 
     @staticmethod
     def parse_target(path: str, query: dict) -> dict:
+        tree = path.endswith("/") or len([p for p in path.strip("/").split("/") if p]) == 2
         scope = GitHubAdapter.parse(path)
-        if not scope["prefix"]:
-            raise HarnessError("a GitHub delivery target names a file: <owner>/<repo>/<path>")
         branch = (query.get("branch") or [""])[0]
         if not branch:
             raise HarnessError("a GitHub delivery target names its branch: ...?branch=<name>")
-        return {**scope, "path": scope["prefix"], "branch": branch}
+        base = (query.get("base") or [""])[0] or None
+        pull = (query.get("pr") or ["0"])[0].lower() in ("1", "true", "yes")
+        return {
+            **scope,
+            "path": scope["prefix"],
+            "tree": tree,
+            "branch": branch,
+            "base": base,
+            "pr": pull,
+        }
 
     @staticmethod
     def write_resource(target: dict) -> str:
-        return f"{target['owner']}/{target['repo']}@{target['branch']}:{target['path']}"
+        path = target["path"] + ("/" if target.get("tree") and target["path"] else "")
+        return f"{target['owner']}/{target['repo']}@{target['branch']}:{path}"
+
+    @staticmethod
+    def _file_resource(target: dict, path: str) -> str:
+        prefix = target["path"].strip("/")
+        full = f"{prefix}/{path}" if prefix else path
+        return f"{target['owner']}/{target['repo']}@{target['branch']}:{full}"
+
+    def _json_call(self, target: dict, method: str, url: str, body: Any = None, **kwargs):
+        return self.call(
+            "write",
+            self.write_resource(target),
+            method,
+            url,
+            body=json.dumps(body).encode() if body is not None else None,
+            headers={"Accept": "application/vnd.github+json", "Content-Type": "application/json"},
+            **kwargs,
+        )
+
+    def _head(self, target: dict) -> str | None:
+        response = self._json_call(
+            target,
+            "GET",
+            f"{self._repo(target)}/branches/{quote(target['branch'], safe='')}",
+            accept_status=(200, 404),
+        )
+        if response.status == 404:
+            return None
+        return ((response.json().get("commit") or {}).get("sha")) or None
+
+    def _base_sha(self, target: dict) -> tuple[str, str]:
+        base = target.get("base")
+        if not base:
+            repo = self._json_call(target, "GET", self._repo(target)).json()
+            base = str(repo.get("default_branch") or "main")
+        response = self._json_call(
+            target, "GET", f"{self._repo(target)}/branches/{quote(base, safe='')}"
+        )
+        return base, str((response.json().get("commit") or {}).get("sha"))
+
+    def _ensure_branch(self, target: dict) -> tuple[str, bool]:
+        """The branch head, creating the branch from its base when it does not exist."""
+        head = self._head(target)
+        if head:
+            return head, False
+        _, sha = self._base_sha(target)
+        response = self._json_call(
+            target,
+            "POST",
+            f"{self._repo(target)}/git/refs",
+            {"ref": f"refs/heads/{target['branch']}", "sha": sha},
+            accept_status=(201, 422),
+        )
+        if response.status == 422:  # created by someone else meanwhile: use theirs
+            head = self._head(target)
+            if head:
+                return head, False
+        return sha, True
 
     def _current(self, target: dict) -> dict | None:
         url = f"{self._repo(target)}/contents/{quote(target['path'])}?" + urlencode(
             {"ref": target["branch"]}
         )
-        response = self.call(
-            "write",
-            self.write_resource(target),
-            "GET",
-            url,
-            headers={"Accept": "application/vnd.github+json"},
-            accept_status=(200, 404),
-        )
+        response = self._json_call(target, "GET", url, accept_status=(200, 404))
         if response.status == 404:
             return None
         found = response.json()
@@ -1097,13 +1204,20 @@ class GitHubAdapter(Adapter):
         return {"sha": found.get("sha"), "digest": digest_bytes(content)}
 
     def write(self, target: dict, payload: bytes, operation_id: str, expected: str | None) -> dict:
-        current = self._current(target)
+        if target.get("tree"):
+            return self._write_tree(target, payload, operation_id, expected)
+        if expected == "absent" and self._head(target) is None:
+            current = None
+        else:
+            self._ensure_branch(target)
+            current = self._current(target)
         blob = _git_blob_sha(payload)
         if current is not None and current["sha"] == blob:
-            return {
+            receipt = {
                 "downstream_id": self.write_resource(target),
                 "downstream_revision": "git:" + blob,
             }
+            return self._maybe_pull(target, operation_id, receipt, payload)
         if expected is not None:
             held = current["digest"] if current else "absent"
             if held != expected:
@@ -1113,6 +1227,7 @@ class GitHubAdapter(Adapter):
                     f"{self.write_resource(target)} is at {held[:19]}, not the expected "
                     f"{expected[:19]}; the intervening change is preserved"
                 )
+        self._ensure_branch(target)
         body = {
             "message": f"pheasant harness delivery {operation_id}",
             "content": base64.b64encode(payload).decode(),
@@ -1120,13 +1235,11 @@ class GitHubAdapter(Adapter):
         }
         if current is not None:
             body["sha"] = current["sha"]
-        response = self.call(
-            "write",
-            self.write_resource(target),
+        response = self._json_call(
+            target,
             "PUT",
             f"{self._repo(target)}/contents/{quote(target['path'])}",
-            body=json.dumps(body).encode(),
-            headers={"Accept": "application/vnd.github+json", "Content-Type": "application/json"},
+            body,
             accept_status=(200, 201, 409, 422),
         )
         if response.status in (409, 422):
@@ -1138,34 +1251,192 @@ class GitHubAdapter(Adapter):
             )
         result = response.json()
         commit = (result.get("commit") or {}).get("sha")
-        return {
+        receipt = {
             "downstream_id": f"{target['owner']}/{target['repo']}@{commit}:{target['path']}",
             "downstream_revision": "git:" + ((result.get("content") or {}).get("sha") or blob),
         }
+        return self._maybe_pull(target, operation_id, receipt, payload)
+
+    @staticmethod
+    def _tree_files(payload: bytes) -> tuple[dict[str, str | None], str]:
+        try:
+            bundle = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise HarnessError(
+                "a repository target takes a code change (a tree); name a file to deliver "
+                "a document"
+            ) from exc
+        tree = bundle.get("tree") if isinstance(bundle, dict) else None
+        if not isinstance(tree, dict) or not isinstance(tree.get("files"), dict):
+            raise HarnessError(
+                "a repository target takes a code change (a tree); name a file to deliver "
+                "a document"
+            )
+        note = (bundle.get("note") or {}).get("content") or ""
+        return tree["files"], str(note)
+
+    def _write_tree(
+        self, target: dict, payload: bytes, operation_id: str, expected: str | None
+    ) -> dict:
+        from pheasant_harness.delivery import DeliveryConflict
+
+        files, note = self._tree_files(payload)
+        # Every file the commit touches is checked against the write resources first:
+        # a commit that would include one forbidden path sends nothing at all.
+        for path in files:
+            self.gw.check(self.name, self.provider, "write", self._file_resource(target, path))
+        existed = self._head(target)
+        if expected is not None:
+            held = existed or "absent"
+            if held != expected.removeprefix("git:"):
+                raise DeliveryConflict(
+                    f"{self.write_resource(target)} is at {held[:12]}, not the expected "
+                    f"{expected[:16]}; the intervening change is preserved"
+                )
+        head, _ = self._ensure_branch(target)
+        commit = self._json_call(target, "GET", f"{self._repo(target)}/git/commits/{head}").json()
+        base_tree = str((commit.get("tree") or {}).get("sha"))
+        listing = self._json_call(
+            target, "GET", f"{self._repo(target)}/git/trees/{base_tree}?recursive=1"
+        ).json()
+        if listing.get("truncated"):
+            raise HarnessError(
+                "GitHub truncated the branch's tree; a commit built on it could drop files, so "
+                "nothing was written"
+            )
+        known = {
+            str(i.get("path")): str(i.get("sha"))
+            for i in listing.get("tree") or []
+            if i.get("type") == "blob"
+        }
+        prefix = target["path"].strip("/")
+        entries = []
+        for path, content in sorted(files.items()):
+            full = f"{prefix}/{path}" if prefix else path
+            if content is None:
+                if full in known:
+                    entries.append({"path": full, "mode": "100644", "type": "blob", "sha": None})
+                continue
+            data = str(content).encode("utf-8")
+            if known.get(full) == _git_blob_sha(data):
+                continue
+            blob = self._json_call(
+                target,
+                "POST",
+                f"{self._repo(target)}/git/blobs",
+                {"content": base64.b64encode(data).decode(), "encoding": "base64"},
+                accept_status=(201,),
+            ).json()
+            entries.append({"path": full, "mode": "100644", "type": "blob", "sha": blob.get("sha")})
+        if not entries:
+            receipt = {
+                "downstream_id": f"{target['owner']}/{target['repo']}@{head}",
+                "downstream_revision": "git:" + head,
+                "unchanged": True,
+            }
+            return self._maybe_pull(target, operation_id, receipt, note.encode())
+        tree = self._json_call(
+            target,
+            "POST",
+            f"{self._repo(target)}/git/trees",
+            {"base_tree": base_tree, "tree": entries},
+            accept_status=(201,),
+        ).json()
+        title = next(
+            (line.lstrip("# ").strip() for line in note.splitlines() if line.strip()),
+            "Change prepared by the Pheasant harness",
+        )
+        made = self._json_call(
+            target,
+            "POST",
+            f"{self._repo(target)}/git/commits",
+            {
+                "message": f"{title[:72]}\n\npheasant harness delivery {operation_id}",
+                "tree": tree.get("sha"),
+                "parents": [head],
+            },
+            accept_status=(201,),
+        ).json()
+        moved = self._json_call(
+            target,
+            "PATCH",
+            f"{self._repo(target)}/git/refs/heads/{quote(target['branch'], safe='/')}",
+            {"sha": made.get("sha"), "force": False},
+            accept_status=(200, 409, 422),
+        )
+        if moved.status != 200:
+            raise DeliveryConflict(
+                f"{target['owner']}/{target['repo']}@{target['branch']} moved while the commit "
+                "was being made; it was not forced, and nothing was overwritten"
+            )
+        receipt = {
+            "downstream_id": f"{target['owner']}/{target['repo']}@{made.get('sha')}",
+            "downstream_revision": "git:" + str(made.get("sha")),
+            "files_changed": len(entries),
+        }
+        return self._maybe_pull(target, operation_id, receipt, note.encode())
+
+    def _maybe_pull(self, target: dict, operation_id: str, receipt: dict, body: bytes) -> dict:
+        if not target.get("pr"):
+            return receipt
+        from pheasant_harness import faults
+
+        faults.hit("before_pull_request")
+        base, _ = self._base_sha(target)
+        head = f"{target['owner']}:{target['branch']}"
+        found = self._json_call(
+            target,
+            "GET",
+            f"{self._repo(target)}/pulls?" + urlencode({"head": head, "state": "open"}),
+        ).json()
+        if found:
+            return {**receipt, "pull_request": found[0].get("html_url") or found[0].get("url")}
+        text = body.decode("utf-8", errors="replace")
+        title = next(
+            (line.lstrip("# ").strip() for line in text.splitlines() if line.strip()),
+            "Change prepared by the Pheasant harness",
+        )
+        made = self._json_call(
+            target,
+            "POST",
+            f"{self._repo(target)}/pulls",
+            {
+                "title": title[:120],
+                "head": target["branch"],
+                "base": base,
+                "body": f"{text[:60000]}\n\n---\npheasant harness delivery {operation_id}",
+            },
+            accept_status=(201, 422),
+        ).json()
+        return {**receipt, "pull_request": made.get("html_url") or made.get("url")}
 
     def reconcile(self, target: dict, operation_id: str, payload_digest: str) -> dict:
-        url = f"{self._repo(target)}/commits?" + urlencode(
-            {"sha": target["branch"], "path": target["path"], "per_page": 20}
-        )
-        response = self.call(
-            "write",
-            self.write_resource(target),
+        params = {"sha": target["branch"], "per_page": 20}
+        if not target.get("tree"):
+            params["path"] = target["path"]
+        response = self._json_call(
+            target,
             "GET",
-            url,
-            headers={"Accept": "application/vnd.github+json"},
+            f"{self._repo(target)}/commits?" + urlencode(params),
             accept_status=(200, 404, 409),
         )
         if response.status == 200:
             for item in response.json() or []:
                 message = ((item.get("commit") or {}).get("message")) or ""
                 if operation_id in message:
-                    return {
+                    where = "" if target.get("tree") else f":{target['path']}"
+                    found = {
                         "status": "committed",
-                        "downstream_id": f"{target['owner']}/{target['repo']}@{item.get('sha')}:"
-                        f"{target['path']}",
+                        "downstream_id": f"{target['owner']}/{target['repo']}@{item.get('sha')}"
+                        f"{where}",
                         "downstream_revision": payload_digest,
                     }
-        current = self._current(target)
+                    # The commit landed; the pull request may not have (a crash between
+                    # the two). Opening it here is safe: it is found again by its head.
+                    return self._maybe_pull(target, operation_id, found, message.encode())
+        if target.get("tree"):
+            return {"status": "absent"}
+        current = self._current(target) if self._head(target) else None
         if current is not None and current["digest"] == payload_digest:
             return {
                 "status": "committed",
@@ -1323,6 +1594,30 @@ class DriveAdapter(Adapter):
         return Pinned(
             digest_value(entries), "drive-manifest", entries, _iso(latest), time_bound=True
         )
+
+    def browse(self, scope: dict, path: str = "", ref: str | None = None) -> dict:
+        """One folder's children (``path`` is a folder id under the registered one)."""
+        folder = path.strip("/") or scope["folder"]
+        resource = (
+            f"{scope['folder']}/" if folder == scope["folder"] else f"{scope['folder']}/{folder}/"
+        )
+        items, complete = self._list(
+            resource, folder, self.gw.policy(self.name).limits["max_entries"]
+        )
+        return {
+            "kind": "folder",
+            "folder": folder,
+            "complete": complete,
+            "entries": [
+                {
+                    "name": i.get("name"),
+                    "path": i.get("id"),
+                    "type": "dir" if i.get("mimeType") == DRIVE_FOLDER else "file",
+                    "size": int(i.get("size") or 0) or None,
+                }
+                for i in items
+            ],
+        }
 
     def _modified(self, resource: str, entry: dict) -> str | None:
         meta = self.call(
@@ -1524,6 +1819,27 @@ class GraphAdapter(Adapter):
             return f"{GRAPH}/drives/{quote(drive)}/root:/{quote(path)}:/children?{select}"
         return f"{GRAPH}/drives/{quote(drive)}/root/children?{select}"
 
+    def browse(self, scope: dict, path: str = "", ref: str | None = None) -> dict:
+        """One folder's children, ``path`` relative to the drive's root."""
+        folder = path.strip("/")
+        resource = f"{scope['drive']}:{folder + '/' if folder else ''}"
+        body = self.call("list", resource, "GET", self._children_url(scope["drive"], folder)).json()
+        return {
+            "kind": "drive",
+            "drive": scope["drive"],
+            "path": folder,
+            "complete": not body.get("@odata.nextLink"),
+            "entries": [
+                {
+                    "name": i.get("name"),
+                    "path": f"{folder}/{i.get('name')}" if folder else i.get("name"),
+                    "type": "dir" if "folder" in i else "file",
+                    "size": i.get("size"),
+                }
+                for i in body.get("value") or []
+            ],
+        }
+
     def resolve(self, scope: dict, selector: str | None) -> Pinned:
         if selector:
             raise Unsupported(
@@ -1700,6 +2016,48 @@ def write_reason(harness: Any, target: str) -> str | None:
     return harness.connections.reason(
         adapter.name, adapter.provider, "write", adapter.write_resource(parsed)
     )
+
+
+def browse(
+    harness: Any, connection: str, location: str = "", path: str = "", ref: str | None = None
+) -> dict:
+    """What a person may pick through a connection: branches, folders, files.
+
+    ``location`` is what a registration URI names after the connection
+    (``owner/repo`` on GitHub, a folder id on Drive, a drive id on Microsoft 365);
+    ``path`` walks below it. Every request is a ``list`` under the policy, so a
+    picker can never show what a run could not read.
+    """
+    row = harness.connections.connection(connection)
+    if row is None:
+        raise ConnectionMissing(f"connection {connection!r} is not connected on this region")
+    cls = ADAPTERS.get(row.provider)
+    if cls is None:
+        raise Unsupported(f"the harness does not work through {row.provider} connections")
+    if not location:
+        policy = harness.connections.policy(connection)
+        return {
+            "kind": "locations",
+            "provider": row.provider,
+            "suggestions": suggestions(row.provider, policy.resources if policy else ()),
+        }
+    adapter = cls(harness.connections, connection)
+    scope = {"connection": connection, "provider": row.provider, **adapter.parse(location)}
+    return {"connection": connection, "provider": row.provider, **adapter.browse(scope, path, ref)}
+
+
+def suggestions(provider: str, patterns: tuple[str, ...] | list[str]) -> list[str]:
+    """Locations a policy names outright (``acme/handbook:*`` gives acme/handbook)."""
+    out: list[str] = []
+    for pattern in patterns:
+        head = (
+            pattern.split(":", 1)[0]
+            if provider in ("github", "microsoft_365")
+            else pattern.split("/", 1)[0]
+        )
+        if head and not any(ch in head for ch in "*?[") and head not in out:
+            out.append(head)
+    return out
 
 
 def adapter_for(harness: Any, scope: dict) -> Adapter:

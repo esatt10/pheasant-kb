@@ -194,6 +194,51 @@ def register_harness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
 
     @mcp.tool()
     @anticipated
+    def harness_usable_connections(knowledge_base: str) -> dict:
+        """Connections a run may work through now: what each allows and the repositories,
+        folders or drives its policy names. Pick one to browse or register as an input."""
+        return service.usable_connections(services, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_browse_connection(
+        knowledge_base: str,
+        connection: str,
+        location: str = "",
+        path: str = "",
+        ref: str | None = None,
+    ) -> dict:
+        """Browse through a connection under its policy: a GitHub repository's branches and
+        one directory (location owner/repo, path a folder, ref a branch), a Drive folder's
+        children (location a folder id) or a OneDrive folder (location a drive id)."""
+        return service.browse_connection(services, connection, location, path, ref, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_attach_files(
+        knowledge_base: str,
+        files: list[dict],
+        label: str | None = None,
+        sync: bool = True,
+        keep_in_uploads: bool = True,
+    ) -> dict:
+        """Attach files to a run: [{name, content, encoding: utf-8|base64}]. Returns a
+        registration id to pass as an input. Documents (PDF, Word, PowerPoint, Excel, RTF,
+        EPUB) also get extracted text; the originals are kept in Pheasant's uploads source
+        and synced, so they are searchable there too."""
+        import base64 as _b64
+
+        decoded = []
+        for item in files:
+            content = item.get("content") or ""
+            if item.get("encoding") == "base64":
+                decoded.append((str(item.get("name") or ""), _b64.b64decode(content)))
+            else:
+                decoded.append((str(item.get("name") or ""), str(content).encode("utf-8")))
+        return service.attach_files(services, decoded, label, sync, keep_in_uploads, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
     def harness_list_connections(knowledge_base: str) -> dict:
         """Connected accounts (never their secrets), what the harness could do through each,
         and the policy that says what it may: actions, resources, quotas, approval."""

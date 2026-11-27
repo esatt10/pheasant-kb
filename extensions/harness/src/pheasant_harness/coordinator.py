@@ -1489,7 +1489,21 @@ class Coordinator:
         )
         return self.status(run_id)
 
+    def _receipt_extras(self, run_id: str, operation_id: str) -> dict:
+        """What the target said beyond an id: a pull request, how many files changed."""
+        extras: dict = {}
+        for event in self.runs.events(run_id, operator=True, limit=100000):
+            data = event["data"]
+            if event["type"] in ("effect.committed", "effect.reconciled") and (
+                data.get("operation_id") == operation_id
+            ):
+                for key in ("pull_request", "files_changed", "unchanged"):
+                    if data.get(key) is not None:
+                        extras[key] = data[key]
+        return extras
+
     def _succeed(self, run: dict, fence: int, effect: dict) -> bool:
+        extras = self._receipt_extras(run["id"], effect["operation_id"])
         self._finish(
             run,
             fence,
@@ -1503,6 +1517,7 @@ class Coordinator:
                     "downstream_id": effect["downstream_id"],
                     "downstream_revision": effect["downstream_revision"],
                     "disposition": effect["disposition"],
+                    **extras,
                 },
             },
         )

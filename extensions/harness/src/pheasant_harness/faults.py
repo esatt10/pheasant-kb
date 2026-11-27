@@ -17,6 +17,7 @@ POINTS = (
     "before_effect_dispatch",
     "after_sink_commit",
     "after_receipt",
+    "before_pull_request",
     "between_dispatch_and_commit",
     "before_checkpoint_commit",
     "after_checkpoint_commit",

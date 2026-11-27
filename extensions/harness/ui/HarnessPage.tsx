@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { harnessApi } from "./api";
 import { ConnectionsPanel } from "./Connections";
-import { NewRun } from "./NewRun";
+import { Composer } from "./Composer";
 import { Pill, RunView } from "./RunView";
 import type { Registration } from "./types";
 
@@ -74,7 +74,7 @@ export function HarnessPage() {
       <header className="page__header">
         <div>
           <h1>Harness</h1>
-          <p className="muted">Durable, verified runs. The runtime investigates the sources, builds the result and proves it before delivering.</p>
+          <p className="muted">Build and change things from what Pheasant knows: work in a repository, branch and folder, attach files, and keep the verified result as an artifact or a commit.</p>
         </div>
         <div className="hx-head-actions">
           <button className={`btn${viewingConnections ? " btn--active" : ""}`} data-permission="sources.manage"
@@ -103,7 +103,7 @@ export function HarnessPage() {
         </aside>
         <main className="hx-main">
           {viewingConnections ? <ConnectionsPanel />
-            : composing ? <NewRun registrations={regs} onStarted={(runId) => setSearch({ run: runId })} />
+            : composing ? <Composer registrations={regs} onStarted={(runId) => setSearch({ run: runId })} />
             : <RunView key={selected!} runId={selected!} />}
         </main>
       </div>
