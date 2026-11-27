@@ -168,7 +168,14 @@ def execute(harness: Any, run: dict, step: dict, cancelled=None) -> dict:
     except EntryUnreadable as exc:
         result = {"outcome": "partial", "observation": {"error": str(exc)}}
     except HarnessError as exc:
-        kind = "denied" if exc.status == 403 else "invalid_input"
+        if exc.status == 403:
+            kind = "denied"
+        elif exc.retryable:
+            kind = "transient_error"
+        elif exc.code == "HARNESS_CONNECTION_UNAVAILABLE":
+            kind = "permanent_error"
+        else:
+            kind = "invalid_input"
         result = {"outcome": kind, "observation": {"error": str(exc), "code": exc.code}}
     result.setdefault("evidence", [])
     result.setdefault("artifacts", [])

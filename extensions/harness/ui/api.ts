@@ -1,6 +1,7 @@
 import { request, qs } from "@pheasant/ui/api/client";
 import type {
-  ArtifactContent, Registration, RunDetail, RunEvent, RunStatus, RunSummary,
+  ArtifactContent, ConnectionCall, ConnectionPolicy, ConnectionsOverview, Registration, RunDetail, RunEvent,
+  RunStatus, RunSummary,
 } from "./types";
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -24,6 +25,17 @@ export const harnessApi = {
   resolveEffect: (runId: string, operationId: string, disposition: "applied" | "not_applied") =>
     request<RunStatus>(`/harness/runs/${encodeURIComponent(runId)}/effects/${encodeURIComponent(operationId)}/resolve`,
       json({ disposition })),
+  decide: (runId: string, operationId: string, decision: "approve" | "reject", note = "") =>
+    request<RunStatus>(`/harness/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(operationId)}`,
+      json({ decision, note })),
+  connections: () => request<ConnectionsOverview>("/harness/connections"),
+  setPolicy: (name: string, body: Omit<ConnectionPolicy, "connection" | "provider" | "version" | "updated_by" | "updated_at">) =>
+    request<{ policy: ConnectionPolicy; previous_version: number }>(
+      `/harness/connections/${encodeURIComponent(name)}/policy`, { method: "PUT", body: JSON.stringify(body) }),
+  disablePolicy: (name: string) =>
+    request<{ policy: ConnectionPolicy }>(`/harness/connections/${encodeURIComponent(name)}/policy/disable`, { method: "POST" }),
+  connectionCalls: (params: { run_id?: string; connection?: string; limit?: number } = {}) =>
+    request<{ calls: ConnectionCall[]; summary: Record<string, number> }>(`/harness/connections/calls${qs(params)}`),
   artifact: (runId: string, digest: string) =>
     request<ArtifactContent>(`/harness/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(digest)}`),
 };

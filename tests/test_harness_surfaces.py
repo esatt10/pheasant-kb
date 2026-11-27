@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from tests.harness_connection_support import world  # noqa: F401
 from tests.harness_support import build_region, write_tree
 
 pytest.importorskip("pheasant_harness")
@@ -151,3 +152,175 @@ def test_http_and_mcp_drive_the_same_runs_with_the_same_refusals(tmp_path, monke
                     assert {"id": "harness", "ui_routes": ["/harness"]} in discovered["extensions"]
 
     asyncio.run(scenario())
+
+
+def test_connections_policies_approvals_and_the_audit_agree_over_http_and_mcp(world):
+    """The same connection operations, refusals and audit, whichever surface asks."""
+    import httpx2
+    from mcp import Client
+    from mcp.client.streamable_http import streamable_http_client
+
+    from tests.harness_connection_fakes import SECRETS
+
+    region = world.region
+    kb = region.config.knowledge_base_id
+    app = create_app(region.config)
+    target = "connection://gh/acme/handbook/answers/badges.md?branch=harness/answers"
+    seen: list[str] = []
+
+    async def scenario():
+        base = "http://localhost:8765"
+        async with app.router.lifespan_context(app):
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url=base
+            ) as http:
+                transport = streamable_http_client(f"{base}/mcp/", http_client=http)
+                async with Client(transport) as client:
+
+                    async def call(name, **arguments):
+                        result = await client.call_tool(name, {"knowledge_base": kb, **arguments})
+                        seen.append(result.content[0].text if result.content else "")
+                        if result.structured_content is None and not result.is_error:
+                            result.structured_content = json.loads(result.content[0].text)
+                        return result
+
+                    async def get(path, **params):
+                        response = await http.get(path, params=params)
+                        seen.append(response.text)
+                        return response
+
+                    # No policy yet: unusable through either door, with one refusal text.
+                    blocked = await http.post(
+                        "/harness/registrations", json={"uri": "connection://gh/acme/handbook"}
+                    )
+                    blocked_mcp = await call(
+                        "harness_register", request={"uri": "connection://gh/acme/handbook"}
+                    )
+                    assert blocked.status_code == 403
+                    assert blocked.json()["code"] == "HARNESS_CONNECTION_DENIED"
+                    assert blocked_mcp.is_error
+                    assert blocked.json()["detail"] in blocked_mcp.content[0].text
+
+                    policy = {
+                        "actions": ["list", "read", "write"],
+                        "resources": ["acme/handbook:*"],
+                        "write_resources": ["acme/handbook@harness/*:answers/*"],
+                    }
+                    put = await http.put("/harness/connections/gh/policy", json=policy)
+                    assert put.status_code == 200 and put.json()["policy"]["version"] == 1
+                    again = await call(
+                        "harness_set_connection_policy", connection="gh", policy=policy
+                    )
+                    assert again.structured_content["policy"]["version"] == 2
+                    never = await http.put(
+                        "/harness/connections/gh/policy",
+                        json={**policy, "actions": ["list", "delete"]},
+                    )
+                    never_mcp = await call(
+                        "harness_set_connection_policy",
+                        connection="gh",
+                        policy={**policy, "actions": ["list", "delete"]},
+                    )
+                    assert never.status_code == 422
+                    assert never.json()["code"] == "HARNESS_OPERATION_UNSUPPORTED"
+                    assert never.json()["detail"] in never_mcp.content[0].text
+
+                    listed = (await get("/harness/connections")).json()
+                    listed_mcp = (await call("harness_list_connections")).structured_content
+                    assert listed == listed_mcp
+                    gh = next(c for c in listed["connections"] if c["name"] == "gh")
+                    assert gh["policy"]["actions"] == ["list", "read", "write"]
+                    history = (await get("/harness/connections/gh/policy/history")).json()
+                    assert [v["version"] for v in history["versions"]] == [1, 2]
+
+                    reg = (
+                        await http.post(
+                            "/harness/registrations",
+                            json={"uri": "connection://gh/acme/handbook"},
+                        )
+                    ).json()["id"]
+                    request = {
+                        "workload": "answer",
+                        "question": "Which orders need an exception badge?",
+                        "inputs": [reg],
+                        "identifiers": ["exception badge"],
+                        "discovery": "off",
+                        "destination": {"adapter": "connection", "target": target},
+                    }
+                    run_id = (
+                        await http.post(
+                            "/harness/runs", json={"request": request, "client_key": "c1"}
+                        )
+                    ).json()["run_id"]
+                    for _ in range(10):
+                        stepped = (await http.post(f"/harness/runs/{run_id}/step")).json()
+                        if stepped["state"] == "waiting":
+                            break
+                    assert stepped["wait"]["kind"] == "approval", stepped
+                    op = stepped["wait"]["operation_id"]
+
+                    # The requester is the local operator here: self-approval is refused
+                    # on both surfaces until the policy allows it.
+                    own = await http.post(
+                        f"/harness/runs/{run_id}/approvals/{op}", json={"decision": "approve"}
+                    )
+                    own_mcp = await call(
+                        "harness_decide_approval",
+                        run_id=run_id,
+                        operation_id=op,
+                        decision="approve",
+                    )
+                    assert (
+                        own.status_code == 403 and own.json()["detail"] in own_mcp.content[0].text
+                    )
+                    await call(
+                        "harness_set_connection_policy",
+                        connection="gh",
+                        policy={**policy, "approval": {"self_approval": True}},
+                    )
+                    approved = await call(
+                        "harness_decide_approval",
+                        run_id=run_id,
+                        operation_id=op,
+                        decision="approve",
+                    )
+                    assert approved.structured_content["state"] == "delivering"
+                    for _ in range(10):
+                        stepped = (await http.post(f"/harness/runs/{run_id}/step")).json()
+                        if stepped["state"] == "succeeded":
+                            break
+                    assert stepped["state"] == "succeeded", stepped
+                    late = await http.post(
+                        f"/harness/runs/{run_id}/approvals/{op}", json={"decision": "approve"}
+                    )
+                    late_mcp = await call(
+                        "harness_decide_approval",
+                        run_id=run_id,
+                        operation_id=op,
+                        decision="approve",
+                    )
+                    assert late.status_code == 400
+                    assert late.json()["detail"] in late_mcp.content[0].text
+
+                    audit = (await get("/harness/connections/calls", run_id=run_id)).json()
+                    audit_mcp = (
+                        await call("harness_connection_calls", run_id=run_id)
+                    ).structured_content
+                    assert audit == audit_mcp and audit["summary"]["allowed"] > 0
+                    assert {"list", "read", "write"} <= {c["action"] for c in audit["calls"]}
+                    detail = (await get(f"/harness/runs/{run_id}/detail")).json()
+                    assert detail["connection_calls"]
+                    events = (await get(f"/harness/runs/{run_id}/events")).json()
+                    assert "effect.approved" in {e["type"] for e in events["events"]}
+                    disabled = await http.post("/harness/connections/gh/policy/disable")
+                    assert disabled.json()["policy"]["enabled"] is False
+                    contract = (await get("/harness/contract")).json()
+                    assert "connection" in contract["resolvers"]
+                    assert "connection" in contract["delivery_adapters"]
+                    assert set(contract["connections"]["never"]) >= {"delete", "share"}
+
+    asyncio.run(scenario())
+    assert len([c for c in world.net.writes() if c.method == "PUT"]) == 1
+    for text in seen:
+        for secret in SECRETS:
+            assert secret not in text

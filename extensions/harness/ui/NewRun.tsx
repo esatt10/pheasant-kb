@@ -99,9 +99,11 @@ export function NewRun({ registrations, onStarted }: { registrations: Registrati
             <option value="file">File (conditional write)</option>
             <option value="test_sink">Idempotent sink</option>
             <option value="blind_sink">Sink without dedup</option>
+            <option value="connection">Through a connection (policy + approval)</option>
           </select></label>
         <label className="field"><span>Target</span>
-          <input className="text-input" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="reports/answer.md" /></label>
+          <input className="text-input" value={target} onChange={(e) => setTarget(e.target.value)}
+            placeholder={adapter === "connection" ? "connection://gh/owner/repo/answers/x.md?branch=harness/x" : "reports/answer.md"} /></label>
       </div>
       <label className="hx-check"><input type="checkbox" checked={discovery} onChange={(e) => setDiscovery(e.target.checked)} />
         <span>Use the region's search index for candidate locations</span></label>

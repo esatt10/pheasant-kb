@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { harnessApi } from "./api";
+import { ConnectionsPanel } from "./Connections";
 import { NewRun } from "./NewRun";
 import { Pill, RunView } from "./RunView";
 import type { Registration } from "./types";
@@ -45,7 +46,7 @@ function Registrations({ registrations }: { registrations: Registration[] }) {
       </ul>
       <form className="hx-reg__form" onSubmit={(event) => { event.preventDefault(); setError(null); register.mutate(); }}>
         <input className="text-input" value={uri} onChange={(e) => setUri(e.target.value)}
-          placeholder="file:///data/repo or pheasant://source/prefix" aria-label="URI to register" />
+          placeholder="file:///data/repo, pheasant://source/prefix or connection://name/owner/repo" aria-label="URI to register" />
         <label className="hx-check"><input type="checkbox" checked={pointerOnly} onChange={(e) => setPointerOnly(e.target.checked)} />
           <span>Pointer only (read by locator, no enumeration)</span></label>
         <button className="btn btn--small" data-permission="sources.manage" disabled={!uri || register.isPending}>Register</button>
@@ -58,7 +59,8 @@ function Registrations({ registrations }: { registrations: Registration[] }) {
 export function HarnessPage() {
   const [search, setSearch] = useSearchParams();
   const selected = search.get("run");
-  const composing = search.get("new") === "1" || !selected;
+  const viewingConnections = search.get("view") === "connections";
+  const composing = !viewingConnections && (search.get("new") === "1" || !selected);
   const runs = useQuery({
     queryKey: ["harness-runs"],
     queryFn: harnessApi.runs,
@@ -74,7 +76,11 @@ export function HarnessPage() {
           <h1>Harness</h1>
           <p className="muted">Durable, verified runs. The runtime investigates the sources, builds the result and proves it before delivering.</p>
         </div>
-        <button className="btn btn--primary" onClick={() => setSearch({ new: "1" })}>New run</button>
+        <div className="hx-head-actions">
+          <button className={`btn${viewingConnections ? " btn--active" : ""}`} data-permission="sources.manage"
+            onClick={() => setSearch({ view: "connections" })}>Connections</button>
+          <button className="btn btn--primary" onClick={() => setSearch({ new: "1" })}>New run</button>
+        </div>
       </header>
       <div className="hx-layout">
         <aside className="hx-rail">
@@ -83,7 +89,7 @@ export function HarnessPage() {
           <ul className="hx-runlist">
             {(runs.data?.runs ?? []).map((run) => (
               <li key={run.run_id}>
-                <button className={`hx-runitem${run.run_id === selected && !composing ? " is-active" : ""}`}
+                <button className={`hx-runitem${run.run_id === selected && !composing && !viewingConnections ? " is-active" : ""}`}
                   onClick={() => setSearch({ run: run.run_id })}>
                   <span className="hx-runitem__top"><Pill value={run.state} /><span className="muted">{run.workload.replace("_", " ")}</span>
                     <span className="muted hx-runitem__time">{ago(run.updated_at)}</span></span>
@@ -96,7 +102,9 @@ export function HarnessPage() {
           <Registrations registrations={regs} />
         </aside>
         <main className="hx-main">
-          {composing ? <NewRun registrations={regs} onStarted={(runId) => setSearch({ run: runId })} /> : <RunView key={selected!} runId={selected!} />}
+          {viewingConnections ? <ConnectionsPanel />
+            : composing ? <NewRun registrations={regs} onStarted={(runId) => setSearch({ run: runId })} />
+            : <RunView key={selected!} runId={selected!} />}
         </main>
       </div>
     </div>

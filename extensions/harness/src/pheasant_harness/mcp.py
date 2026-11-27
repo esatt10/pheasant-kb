@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pheasant_harness import service
 from pheasant_harness.models import (
+    ApprovalRequest,
+    ConnectionPolicyRequest,
     DiscoverRequest,
     GrepRequest,
     ReadRequest,
@@ -169,6 +171,66 @@ def register_harness_tools(mcp: Any, tools: Any, anticipated: Any) -> None:
         """Record an operator's finding about an uncertain external effect, so the run can finish
         without blindly repeating a write the target cannot deduplicate."""
         return service.resolve_effect(services, run_id, operation_id, disposition, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_decide_approval(
+        knowledge_base: str,
+        run_id: str,
+        operation_id: str,
+        decision: Literal["approve", "reject"],
+        note: str = "",
+    ) -> dict:
+        """Approve or reject the one write a waiting run would make through a connection.
+        Approving is an operator's decision and never the requester's own unless the
+        connection's policy allows self-approval; an approval cannot widen the policy."""
+        return service.decide_approval(
+            services,
+            run_id,
+            operation_id,
+            ApprovalRequest(decision=decision, note=note),
+            knowledge_base,
+        )
+
+    @mcp.tool()
+    @anticipated
+    def harness_list_connections(knowledge_base: str) -> dict:
+        """Connected accounts (never their secrets), what the harness could do through each,
+        and the policy that says what it may: actions, resources, quotas, approval."""
+        return service.connections(services, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_set_connection_policy(
+        knowledge_base: str, connection: str, policy: ConnectionPolicyRequest
+    ) -> dict:
+        """Set what the harness may do through one connection. Until a policy exists the
+        connection is unusable here; delete, share and similar actions can never be enabled."""
+        return service.set_connection_policy(services, connection, policy, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_disable_connection_policy(knowledge_base: str, connection: str) -> dict:
+        """Stop every harness use of a connection at its next request, in-flight runs included."""
+        return service.disable_connection_policy(services, connection, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_connection_policy_history(knowledge_base: str, connection: str) -> dict:
+        """Every version of a connection's harness policy, who set it and when."""
+        return service.connection_policy_history(services, connection, knowledge_base)
+
+    @mcp.tool()
+    @anticipated
+    def harness_connection_calls(
+        knowledge_base: str,
+        run_id: str | None = None,
+        connection: str | None = None,
+        limit: int = 200,
+    ) -> dict:
+        """The audit of requests made or refused through connections: action, resource,
+        outcome, status and bytes, and why a denial was one. Never a credential."""
+        return service.connection_calls(services, run_id, connection, limit, knowledge_base)
 
     @mcp.tool()
     @anticipated

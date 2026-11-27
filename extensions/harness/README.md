@@ -12,8 +12,8 @@ One service layer (`service.py`) backs three surfaces:
 | Surface | Where | What |
 | --- | --- | --- |
 | HTTP | `http.py`, `/harness/*` | registrations, grep/read/discover, runs, events (JSON + SSE), artifacts, effects, sandboxes |
-| MCP | `mcp.py`, 20 `harness_*` tools | the same operations, same refusal text and codes |
-| UI | `ui/`, route `/harness` | run list, composer, lifecycle, budget, fences, delivery receipt, deliverable with clickable `[E…]` citations, verification matrix per candidate digest, evidence, steps/attempts, journal, sandboxes |
+| MCP | `mcp.py`, 26 `harness_*` tools | the same operations, same refusal text and codes |
+| UI | `ui/`, route `/harness` | run list, composer, lifecycle, budget, fences, delivery receipt, deliverable with clickable `[E…]` citations, verification matrix per candidate digest, evidence, steps/attempts, per-run connection audit, journal, sandboxes; the Connections view (policies, audit) and the approval card for a write through a connection |
 | CLI | `pheasant harness worker\|reap\|status\|contract\|isolation` | a coordinator process of its own, the reaper |
 
 ## Install
@@ -82,6 +82,78 @@ adapter's root, default `<exports>/harness`), `PHEASANT_HARNESS_RUNNER=off`
   reconciled before anything is sent again, and an unknowable one waits for
   an operator (`harness_resolve_effect`).
 
+## Working through connected accounts
+
+`connections.py`. A run can read, and deliver into, places the region reaches
+through its connected accounts (`pheasant.connections`: the vault behind
+Sources > Connect), registered as `connection://<name>/<path>`:
+
+| Provider | Read (`list`, `read`) | Write (`write`) | Pinned to |
+| --- | --- | --- | --- |
+| `github` | `connection://gh/<owner>/<repo>[/<path>]` | one file on a named branch: `connection://gh/<owner>/<repo>/<path>?branch=<b>` | the commit; every blob is checked against its git hash |
+| `google_drive` | `connection://drive/<folder id>[/<path>]` (Google Docs exported as text) | one file in a folder: `connection://drive/<folder id>/<name>` | each file's MD5, each Doc's edit time (checked before and after the export) |
+| `microsoft_365` | `connection://m365/<drive id>[/<folder>]` (OneDrive, SharePoint libraries) | not offered | each file's SHA-256 (else its cTag) |
+
+**Nothing is allowed until an operator says so.** A connection with no harness
+policy is unusable here. A policy (`PUT /harness/connections/{name}/policy`,
+`harness_set_connection_policy`, the Connections view; `security.manage`)
+names:
+
+* **actions**: any of `list`, `read`, `write`. `delete`, `share`,
+  `permissions`, `admin`, `comment`, `merge` and `invite` can never be enabled;
+* **resources** that `list`/`read` may touch, and **write_resources** where a
+  delivery may land: glob patterns over `owner/repo:path`,
+  `owner/repo@branch:path`, `<folder id>/<path>` or `<drive id>:<path>`;
+* **limits** per run: requests, bytes, item size, listing entries. Running out
+  stops the run as a budget does; it never reads as "nothing found";
+* **approval** for writes: `required` by default, by an operator who is not the
+  run's own requester unless `self_approval` is on.
+
+Every change is versioned with who made it (`.../policy/history`).
+
+**The policy is checked at every door, on every call.** At registration (a
+pointer outside the policy is refused). In the broker before a tool call is
+admitted. At the gateway before every request, including the verifier's re-reads
+and reads served from cache. At the start of a run whose destination is a
+connection. And again when a write is approved and when it is dispatched. A
+narrowed or disabled policy, a removed connection or a revoked grant therefore
+stops a run that is already in flight at its next call. A grep reports the files
+the policy kept it from reading as unreadable, and says so.
+
+**The credential stays in the gateway.** It is attached as an `Authorization`
+header at the last moment, and only to the provider's own API host, over HTTPS.
+The gateway also enforces:
+
+* A read may only `GET`. No agent tool takes a URL, a connection or a header.
+* A redirect is never followed with the credential. Graph's pre-signed
+  download is fetched without it, and only from Microsoft download hosts.
+* A next-page link to another host is not followed, and the listing is then
+  marked incomplete, so a grep over it cannot support a count or an absence.
+* A response that echoes the credential has it removed before anything reads
+  the bytes.
+
+Each request, whether allowed, served from cache, denied or failed, is one row
+in `harness_connection_calls`: who, which run and purpose, which action on
+which resource, the HTTP status, the bytes, and the policy version. Headers are
+never recorded. The audit is at `GET /harness/connections/calls` and
+`harness_connection_calls`; a run's own rows are on its detail.
+
+**A write is the delivery, once.** A write goes through the `connection`
+delivery adapter with a stable operation id:
+
+* GitHub: a conditional contents `PUT` whose commit message names the
+  operation.
+* Drive: an upload tagged with `appProperties.pheasantOperation`.
+
+After a crash, reconciliation looks for the operation id, so it never writes
+again. It finds the commit even if a teammate has since edited the file, and
+the teammate's edit is kept. `expected_target_version` makes the write
+conditional. A run whose policy wants approval waits in `waiting` with the
+exact resource, payload digest and a preview, and
+`POST /harness/runs/{id}/approvals/{op}` or `harness_decide_approval` decides
+it. An approval binds that payload digest and cannot widen a policy that was
+narrowed in the meantime. A rejection writes nothing.
+
 ## Acceptance fixtures
 
 `tests/test_harness_*.py`, against real PostgreSQL, real subprocess sandboxes
@@ -110,7 +182,16 @@ and a real MCP client session:
 | A19 required vs optional branches, late results | `test_a19_*` |
 | A20 coordinator failover, duplicate callbacks | `test_a20_*` |
 | A21 durable wait, revocation, fresh sandbox | `test_a21_*` |
-| HTTP ≡ MCP | `tests/test_harness_surfaces.py` |
+| HTTP ≡ MCP | `tests/test_harness_surfaces.py` (runs, and connections: policies, approvals, audit) |
+| Connections: results and grounding | `tests/test_harness_connections.py`: cited commit/checksum, moved branch, Drive export pinning, OneDrive download without the token, truncated listing, policy-limited grep, approved delivery, crash reconciliation, teammate edit kept, conflict, Drive delivery, sandboxed code change |
+| Connections: safety | `tests/test_harness_connection_safety.py`: no policy, resources, list-only, never-actions, unsupported providers, credentials in URIs, disable/remove/revoke mid-run, verifier and cached reads re-checked, write refused at start and at delivery, self-approval, approval cannot widen, exact payload, pinned hosts, redirects, foreign next links, echoed credential, tampered blob, quotas, item size, no URL-taking tool, poisoned content plus a compromised model, a leak scan (with a planted positive control) over every harness table, blob, file, view and log line, permissions |
+
+Fakes for GitHub, Drive and Graph (`tests/harness_connection_fakes.py`) check
+the credential the way the services do and record every request. A mutation
+pass breaks each safety mechanism in turn (27 mutants, among them redaction,
+redirect refusal, host pinning, the cached-read check, the broker's policy
+check, the approval gate and self-approval, quotas, checksum and hash checks,
+and reconciliation by operation id), and every one fails a test.
 
 ## What this build does not claim
 
@@ -127,6 +208,13 @@ and a real MCP client session:
   evaluated. Without a model, code changes apply caller-supplied candidate
   edits (`proposals`) in order.
 * **Serving SLOs, load, regional recovery (§10)** are not exercised.
+* **Connections are exercised against fakes**, not against live GitHub, Drive
+  or Graph: the fakes implement the endpoints the adapters call and check the
+  credential, but provider quirks beyond them (rate limits, Drive shortcuts,
+  SharePoint lists and pages) are not covered. Writes are one file per
+  delivery; a multi-file commit or a pull request is not offered. Microsoft 365
+  is read-only here. A sign-in whose refresh fails surfaces as
+  `HARNESS_CONNECTION_FAILED`; the harness does not start a sign-in itself.
 
 ## Dependencies
 

@@ -30,7 +30,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from pheasant_harness import budget, delivery, faults, tools
+from pheasant_harness import budget, connections, delivery, faults, tools
 from pheasant_harness import ledger as ledger_mod
 from pheasant_harness.broker import TOOLS, WORKLOAD_CAPABILITIES
 from pheasant_harness.common import (
@@ -139,7 +139,14 @@ class Coordinator:
                 reg, actor
             ):
                 raise AccessDenied(f"{actor} is not authorized to read {reg_id}")
-        delivery.adapter(self.harness, (view.get("destination") or {}).get("adapter", "record"))
+        destination = view.get("destination") or {}
+        delivery.adapter(self.harness, destination.get("adapter", "record"))
+        if destination.get("adapter") == "connection":
+            # A write the connection's policy forbids is refused before any work is spent.
+            connections.parse_target(self.harness, destination.get("target") or "")
+            why = connections.write_reason(self.harness, destination.get("target") or "")
+            if why:
+                raise connections.ConnectionDenied(why)
         tenant = tenant or view.get("tenant") or actor
         active = self.harness.state.rows(
             "SELECT COUNT(*) AS n FROM harness_runs WHERE kb_id=? AND tenant=? AND state IN "
@@ -231,14 +238,16 @@ class Coordinator:
         if fence is None:
             return {**self.status(run_id), "busy": True}
         self._local.fence = fence
+        owner = self.runs.get(run_id)["actor"]
         try:
-            for _ in range(max_rounds):
-                run = self._view(self.runs.get(run_id))
-                if run["fence"] != fence:
-                    break
-                if not self._advance(run, fence):
-                    break
-                self.runs.renew(run_id, fence, self.lease_seconds)
+            with connections.caller(actor=owner, run_id=run_id, purpose="coordinator"):
+                for _ in range(max_rounds):
+                    run = self._view(self.runs.get(run_id))
+                    if run["fence"] != fence:
+                        break
+                    if not self._advance(run, fence):
+                        break
+                    self.runs.renew(run_id, fence, self.lease_seconds)
         except StaleFence:
             return {**self.status(run_id), "stale": True}
         except HarnessError as exc:
@@ -586,6 +595,10 @@ class Coordinator:
         self, run: dict, step_id: str, action: str, args: dict, cancelled=None
     ) -> dict:
         """Run one attempt. Pure with respect to run state: nothing is committed here."""
+        with connections.caller(actor=run["actor"], run_id=run["id"], purpose=action):
+            return self._execute_attempt(run, step_id, action, args, cancelled)
+
+    def _execute_attempt(self, run, step_id, action, args, cancelled) -> dict:
         if action == "verify":
             check = self.verifier.check(run, args["criterion"], args["digest"], cancelled)
             return {
@@ -1133,6 +1146,8 @@ class Coordinator:
                 updates={"state": "reconciling"},
             )
             return True
+        if sink.name == "connection" and not self._approved(run, op, payload_digest):
+            return self._await_approval(run, fence, op, payload_digest, destination)
         faults.hit("before_effect_dispatch")
         self.runs.append(
             run["id"],
@@ -1182,6 +1197,41 @@ class Coordinator:
                 },
             )
             return False
+        except (connections.ConnectionDenied, connections.ConnectionMissing) as exc:
+            # Refused before the request left: provably not applied.
+            self.runs.append(
+                run["id"],
+                "effect.refused",
+                {"operation_id": op, "detail": str(exc), "code": exc.code},
+                fence=fence,
+                statements=(
+                    (
+                        "UPDATE harness_effects SET state='refused', disposition=?, updated_at=? "
+                        "WHERE operation_id=?",
+                        (str(exc), now(), op),
+                    ),
+                ),
+            )
+            self._finish(
+                run,
+                fence,
+                {
+                    "status": "partial",
+                    "reason": f"delivery refused: {exc}",
+                    "candidate": candidates,
+                },
+            )
+            return False
+        except connections.ConnectionFailed as exc:
+            # The request may or may not have reached the service: reconcile, never repeat blind.
+            self.runs.append(
+                run["id"],
+                "effect.ambiguous",
+                {"operation_id": op, "error": exc.code},
+                fence=fence,
+                updates={"state": "reconciling"},
+            )
+            return True
         except HarnessError:
             raise
         except Exception as exc:  # noqa: BLE001 - an ambiguous outcome is reconciled, not retried
@@ -1227,7 +1277,13 @@ class Coordinator:
             return True
         effect = dict(effects[0])
         sink = delivery.adapter(self.harness, effect["adapter"])
-        found = sink.reconcile(effect["operation_id"], effect["target"], effect["payload_hash"])
+        try:
+            found = sink.reconcile(effect["operation_id"], effect["target"], effect["payload_hash"])
+        except (connections.ConnectionDenied, connections.ConnectionMissing) as exc:
+            # The target cannot be observed any more: an operator decides, nothing is resent.
+            found = {"status": "unknown", "reason": str(exc)}
+        except connections.ConnectionFailed:
+            return False  # unreachable for now; a later tick reconciles
         op = effect["operation_id"]
         if found["status"] == "committed":
             self.runs.append(
@@ -1317,6 +1373,122 @@ class Coordinator:
         )
         return self.tick(run_id)
 
+    # --------------------------------------------------------------- approvals
+
+    def _approved(self, run: dict, operation_id: str, payload_digest: str) -> bool:
+        destination = run["request"].get("destination") or {}
+        adapter, _ = connections.parse_target(self.harness, destination.get("target") or "")
+        if self.harness.connections.approval(adapter.name).get("write") == "none":
+            return True
+        return any(
+            e["type"] == "effect.approved"
+            and e["data"].get("operation_id") == operation_id
+            and e["data"].get("payload_digest") == payload_digest
+            for e in self.runs.events(run["id"], operator=True, limit=100000)
+        )
+
+    def _await_approval(
+        self, run: dict, fence: int, operation_id: str, payload_digest: str, destination: dict
+    ) -> bool:
+        adapter, parsed = connections.parse_target(self.harness, destination.get("target") or "")
+        approval = self.harness.connections.approval(adapter.name)
+        preview = self._payload(run, (run["result"] or {}).get("candidates") or {})
+        wait = {
+            "kind": "approval",
+            "operation_id": operation_id,
+            "payload_digest": payload_digest,
+            "connection": adapter.name,
+            "provider": adapter.provider,
+            "action": "write",
+            "resource": adapter.write_resource(parsed),
+            "target": destination.get("target"),
+            "expected_target_version": destination.get("expected_target_version"),
+            "requested_by": run["actor"],
+            "self_approval": bool(approval.get("self_approval")),
+            "preview": preview[:2000].decode("utf-8", errors="replace"),
+            "next_action": "an operator approves or rejects this write",
+        }
+        self.runs.append(
+            run["id"],
+            "run.waiting",
+            wait,
+            fence=fence,
+            updates={"state": "waiting", "wait_json": wait},
+        )
+        return False
+
+    def decide_approval(
+        self,
+        run_id: str,
+        operation_id: str,
+        decision: str,
+        actor: str,
+        *,
+        operator: bool,
+        note: str = "",
+    ) -> dict:
+        """A person's decision on one write through a connection. Nothing else can make it."""
+        run = self._view(self.runs.get(run_id))
+        wait = run.get("wait") or {}
+        if run["state"] != "waiting" or wait.get("kind") != "approval":
+            raise HarnessError(f"run {run_id} is {run['state']}, not waiting for an approval")
+        if wait.get("operation_id") != operation_id:
+            raise NotFound(f"run {run_id} is not waiting on operation {operation_id}")
+        if decision not in ("approve", "reject"):
+            raise HarnessError("decision is approve or reject")
+        record = {
+            "operation_id": operation_id,
+            "payload_digest": wait.get("payload_digest"),
+            "connection": wait.get("connection"),
+            "resource": wait.get("resource"),
+            "by": actor,
+            "note": note[:2000],
+        }
+        if decision == "reject":
+            if not operator and actor != run["actor"]:
+                raise AccessDenied("only an operator or the run's requester may reject its write")
+            self.runs.append(
+                run_id,
+                "effect.rejected",
+                record,
+                updates={"wait_json": None},
+                require_state=("waiting",),
+                statements=(
+                    (
+                        "UPDATE harness_effects SET state='rejected', disposition=?, updated_at=? "
+                        "WHERE operation_id=? AND state='intended'",
+                        (f"rejected by {actor}", now(), operation_id),
+                    ),
+                ),
+            )
+            self._finish(
+                self._view(self.runs.get(run_id)),
+                None,
+                {"status": "partial", "reason": f"the write was rejected by {actor}"},
+            )
+            return self.status(run_id)
+        if not operator:
+            raise AccessDenied("approving a write through a connection is an operator's decision")
+        # The policy in force now decides, not the one the wait was opened under.
+        approval = self.harness.connections.approval(wait.get("connection") or "")
+        if actor == run["actor"] and not approval.get("self_approval"):
+            raise AccessDenied(
+                "the run's own requester may not approve its write (the connection's policy "
+                "has approval.self_approval off)"
+            )
+        # An approval cannot widen the policy: it is asked again, now.
+        why = connections.write_reason(self.harness, wait.get("target") or "")
+        if why:
+            raise connections.ConnectionDenied(why)
+        self.runs.append(
+            run_id,
+            "effect.approved",
+            record,
+            updates={"state": "delivering", "wait_json": None},
+            require_state=("waiting",),
+        )
+        return self.status(run_id)
+
     def _succeed(self, run: dict, fence: int, effect: dict) -> bool:
         self._finish(
             run,
@@ -1338,8 +1510,28 @@ class Coordinator:
 
     # --------------------------------------------------------------- endings
 
+    def _policy_refusals(self, run_id: str) -> list[str]:
+        """What a connection's policy refused in this run, so a short result says why."""
+        reasons: list[str] = []
+        for event in self.runs.events(run_id, operator=True, limit=100000):
+            if event["type"] != "step.denied":
+                continue
+            reason = (event["data"].get("decision") or {}).get("reason") or ""
+            if reason.startswith("connection policy: ") and reason not in reasons:
+                reasons.append(reason)
+        return reasons
+
     def _finish(self, run: dict, fence: int | None, outcome: dict) -> None:
         status = outcome["status"]
+        if status in ("partial", "failed"):
+            refused = self._policy_refusals(run["id"])
+            if refused:
+                # A run cut short by policy says so first, not by its downstream symptom.
+                outcome = {
+                    **outcome,
+                    "reason": f"{refused[0]} (and then: {outcome.get('reason')})",
+                    "policy_refusals": refused,
+                }
         current = ledger_mod.load(self.harness, run)
         prior = run.get("result") or {}
         candidates = outcome.get("candidate") or prior.get("candidates")
@@ -1473,6 +1665,11 @@ class Coordinator:
         run = self._view(self.runs.get(run_id))
         if run["state"] != "waiting":
             raise HarnessError(f"run {run_id} is {run['state']}, not waiting")
+        if (run.get("wait") or {}).get("kind") == "approval":
+            raise HarnessError(
+                f"run {run_id} waits for a write to be approved; decide it with "
+                "harness_decide_approval (POST /harness/runs/{run_id}/approvals/{operation_id})"
+            )
         blocked = self._blocked(run)
         self.runs.append(
             run_id,

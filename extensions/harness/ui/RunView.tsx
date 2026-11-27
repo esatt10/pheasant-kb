@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { harnessApi } from "./api";
 import { renderMarkdown } from "./markdown";
-import type { Artifact, Evidence, RunDetail, RunEvent, Verification } from "./types";
+import { CallsTable } from "./Connections";
+import type { Artifact, Evidence, RunDetail, RunEvent, RunWait, Verification } from "./types";
 
 const ACTIVE = new Set(["accepted", "running", "verifying", "delivering", "reconciling"]);
 const LIFECYCLE = ["accepted", "running", "verifying", "delivering", "succeeded"] as const;
-const TABS = ["Deliverable", "Verification", "Evidence", "Steps", "Journal", "Sandboxes"] as const;
+const TABS = ["Deliverable", "Verification", "Evidence", "Steps", "Connections", "Journal", "Sandboxes"] as const;
 type Tab = (typeof TABS)[number];
 
 const short = (digest: string | null | undefined, size = 12) =>
@@ -14,9 +15,9 @@ const short = (digest: string | null | undefined, size = 12) =>
 const when = (stamp: number | null | undefined) => (stamp ? new Date(stamp * 1000).toLocaleTimeString() : "—");
 
 function tone(state: string): string {
-  if (["succeeded", "pass", "committed", "destroyed", "success"].includes(state)) return "pill--ok";
-  if (["partial", "waiting", "reconciling", "skipped", "inconclusive", "uncertain", "superseded", "closed"].includes(state)) return "pill--warn";
-  if (["failed", "fail", "cancelled", "denied", "conflict", "quarantined", "permanent_error"].includes(state)) return "pill--danger";
+  if (["succeeded", "pass", "committed", "destroyed", "success", "allowed", "approved", "enabled"].includes(state)) return "pill--ok";
+  if (["partial", "waiting", "reconciling", "skipped", "inconclusive", "uncertain", "superseded", "closed", "no policy", "unsupported"].includes(state)) return "pill--warn";
+  if (["failed", "fail", "cancelled", "denied", "conflict", "quarantined", "permanent_error", "refused", "rejected", "disabled"].includes(state)) return "pill--danger";
   return "pill--accent";
 }
 
@@ -305,6 +306,40 @@ function Sandboxes({ detail }: { detail: RunDetail }) {
   );
 }
 
+function ApprovalCard({ runId, wait, onDone }: { runId: string; wait: RunWait; onDone: () => void }) {
+  const [note, setNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const decide = useMutation({
+    mutationFn: (decision: "approve" | "reject") => harnessApi.decide(runId, wait.operation_id!, decision, note),
+    onSuccess: () => { setError(null); onDone(); },
+    onError: (failure: Error) => setError(failure.message),
+  });
+  return (
+    <div className="card hx-approval" role="region" aria-label="Write awaiting approval">
+      <div className="hx-approval__head">
+        <Pill value="waiting" />
+        <strong>One write through <span className="mono">{wait.connection}</span> waits for an operator</strong>
+      </div>
+      <div className="kv">
+        <div className="kv__row"><span className="kv__key">Action</span><span className="kv__value">{wait.action} on {wait.provider}</span></div>
+        <div className="kv__row"><span className="kv__key">Resource</span><span className="kv__value mono">{wait.resource}</span></div>
+        <div className="kv__row"><span className="kv__key">Exact payload</span><span className="kv__value mono">{wait.payload_digest}</span></div>
+        <div className="kv__row"><span className="kv__key">Operation</span><span className="kv__value mono">{wait.operation_id}</span></div>
+        <div className="kv__row"><span className="kv__key">Requested by</span><span className="kv__value">{wait.requested_by}{wait.self_approval ? "" : " (may not approve it)"}</span></div>
+        <div className="kv__row"><span className="kv__key">Condition</span><span className="kv__value">{wait.expected_target_version ? `target still at ${wait.expected_target_version}` : "none; recorded on the commit"}</span></div>
+      </div>
+      {wait.preview ? <pre className="code-view hx-pre hx-approval__preview">{wait.preview}</pre> : null}
+      <div className="hx-approval__bar">
+        <input className="text-input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the journal (optional)" aria-label="Approval note" />
+        <button className="btn btn--small btn--primary" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>Approve this write</button>
+        <button className="btn btn--small btn--danger" disabled={decide.isPending} onClick={() => decide.mutate("reject")}>Reject</button>
+      </div>
+      <p className="muted hx-approval__fine">Approving cannot widen the connection's policy: it is checked again before the request is sent.</p>
+      {error ? <p className="error" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
 export function RunView({ runId }: { runId: string }) {
   const client = useQueryClient();
   const [tab, setTab] = useState<Tab>("Deliverable");
@@ -341,7 +376,8 @@ export function RunView({ runId }: { runId: string }) {
         </div>
       </header>
       <Lifecycle state={run.state} />
-      {run.state === "waiting" && run.wait ? (
+      {run.state === "waiting" && run.wait?.kind === "approval" ? <ApprovalCard runId={run.run_id} wait={run.wait} onDone={refresh} /> : null}
+      {run.state === "waiting" && run.wait && run.wait.kind !== "approval" ? (
         <div className="hx-banner hx-banner--warn"><span>Waiting: {run.wait.reason}. The workspace was released; resuming checks authority again.</span>
           <button className="btn btn--small btn--primary" onClick={() => resume.mutate()}>Approve and resume</button></div>
       ) : null}
@@ -397,7 +433,7 @@ export function RunView({ runId }: { runId: string }) {
       <div className="tabs hx-tabs" role="tablist">
         {TABS.map((name) => (
           <button key={name} role="tab" aria-selected={tab === name} className={`tab${tab === name ? " active" : ""}`} onClick={() => setTab(name)}>
-            {name}{name === "Evidence" ? ` ${run.evidence.length}` : name === "Steps" ? ` ${run.steps.length}` : ""}
+            {name}{name === "Evidence" ? ` ${run.evidence.length}` : name === "Steps" ? ` ${run.steps.length}` : name === "Connections" ? ` ${run.connection_calls?.length ?? 0}` : ""}
           </button>
         ))}
       </div>
@@ -406,6 +442,7 @@ export function RunView({ runId }: { runId: string }) {
         {tab === "Verification" ? <VerificationMatrix detail={run} /> : null}
         {tab === "Evidence" ? <EvidenceList detail={run} focus={focus} /> : null}
         {tab === "Steps" ? <StepsTable detail={run} /> : null}
+        {tab === "Connections" ? <CallsTable calls={run.connection_calls ?? []} showRun={false} /> : null}
         {tab === "Journal" ? <Journal runId={run.run_id} live={ACTIVE.has(run.state)} /> : null}
         {tab === "Sandboxes" ? <Sandboxes detail={run} /> : null}
       </div>

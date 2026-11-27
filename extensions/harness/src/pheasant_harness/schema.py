@@ -227,4 +227,61 @@ CREATE INDEX IF NOT EXISTS idx_harness_effects_run ON harness_effects (run_id);
 CREATE INDEX IF NOT EXISTS idx_harness_sandboxes_state ON harness_sandboxes (state, lease_until);
 """
 
-MIGRATIONS = (tuple(s.strip() for s in _TABLES.split(";") if s.strip()),)
+#: Revision 2: working through connected accounts. A connection's harness policy
+#: (what may be done through it, where), its history, and one audit row per call.
+_CONNECTIONS = """
+CREATE TABLE IF NOT EXISTS harness_connection_policies (
+  kb_id TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  actions_json TEXT NOT NULL,
+  resources_json TEXT NOT NULL,
+  write_resources_json TEXT NOT NULL,
+  limits_json TEXT NOT NULL,
+  approval_json TEXT NOT NULL,
+  enabled INTEGER NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (kb_id, connection)
+);
+CREATE TABLE IF NOT EXISTS harness_connection_policy_history (
+  kb_id TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  policy_json TEXT NOT NULL,
+  changed_by TEXT NOT NULL,
+  changed_at DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (kb_id, connection, version)
+);
+CREATE TABLE IF NOT EXISTS harness_connection_calls (
+  kb_id TEXT NOT NULL,
+  id TEXT PRIMARY KEY,
+  run_id TEXT,
+  purpose TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  action TEXT NOT NULL,
+  method TEXT NOT NULL,
+  host TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  status_code INTEGER,
+  bytes BIGINT NOT NULL DEFAULT 0,
+  reason TEXT,
+  policy_version INTEGER,
+  flags_json TEXT NOT NULL DEFAULT '{}',
+  at DOUBLE PRECISION NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_harness_connection_calls_run
+  ON harness_connection_calls (run_id, connection);
+CREATE INDEX IF NOT EXISTS idx_harness_connection_calls_at ON harness_connection_calls (kb_id, at)
+"""
+
+
+def _statements(text: str) -> tuple[str, ...]:
+    return tuple(s.strip() for s in text.split(";") if s.strip())
+
+
+MIGRATIONS = (_statements(_TABLES), _statements(_CONNECTIONS))

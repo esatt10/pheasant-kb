@@ -6,6 +6,7 @@ from typing import Any
 
 from pheasant_harness.blobs import BlobStore
 from pheasant_harness.broker import Broker
+from pheasant_harness.connections import Gateway
 from pheasant_harness.registry import Registry
 from pheasant_harness.sandbox import SandboxManager
 from pheasant_harness.store import RunStore
@@ -21,6 +22,7 @@ class Harness:
         self.registry = Registry(self)
         self.sandboxes = SandboxManager(self, sandbox_root)
         self.broker = Broker(self)
+        self.connections = Gateway(self)
         self.runs = RunStore(self.state, self.kb_id)
 
 

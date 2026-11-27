@@ -150,6 +150,18 @@ class Broker:
                 return deny(f"{reg_id} is not a registration")
             if not self.harness.registry.authorized(reg, run["actor"]):
                 return deny(f"{run['actor']} may no longer read {reg_id}")
+            if reg.resolver == "connection":
+                # The connection's policy is asked now, by the code, for this call.
+                from pheasant_harness import connections
+
+                why = connections.operation_reason(
+                    self.harness, reg.scope, action, args.get("path")
+                )
+                if why:
+                    self._audit_denial(run, reg.scope, action, args.get("path"), why)
+                    if why.startswith("quota: "):
+                        return deny(f"budget: {why[len('quota: ') :]}")
+                    return deny(f"connection policy: {why}")
         if action == "verify":
             for fixture in (args.get("criterion") or {}).get("fixtures") or []:
                 if fixture not in set(request.get("fixtures") or []):
@@ -168,9 +180,37 @@ class Broker:
                 "adapter"
             ) or asked != destination.get("target"):
                 return deny("delivery target differs from the authorized destination")
+            if destination.get("adapter") == "connection":
+                from pheasant_harness import connections
+
+                why = connections.write_reason(self.harness, destination.get("target") or "")
+                if why:
+                    return deny(f"connection policy: {why}")
         if action == "discover" and request.get("discovery") == "off":
             return deny("discovery is disabled for this run")
         ok, why = budget.admit(run["limits"], usage, action)
         if not ok:
             return deny(why or "budget")
         return Decision(True, action, effect, capability, None)
+
+    def _audit_denial(self, run: dict, scope: dict, action: str, path: str | None, why: str):
+        from pheasant_harness import connections
+
+        try:
+            adapter = connections.adapter_for(self.harness, scope)
+            needed = connections.OPERATION_ACTION.get(action, action)
+            resource = (
+                adapter.list_resource(scope)
+                if needed == "list"
+                else (adapter.item_resource(scope, {"path": path}) if path else None)
+            )
+            self.harness.connections.record_denial(
+                scope["connection"],
+                scope["provider"],
+                needed,
+                resource,
+                why,
+                {"actor": run["actor"], "run_id": run["id"], "purpose": "broker"},
+            )
+        except Exception:  # noqa: BLE001 - the denial stands whether or not it was audited
+            pass

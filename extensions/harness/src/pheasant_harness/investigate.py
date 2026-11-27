@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 from pheasant_harness.common import HarnessError, digest_bytes, digest_value
+from pheasant_harness.connections import ConnectionDenied, QuotaExhausted
 from pheasant_harness.registry import EntryUnreadable, Revision, RevisionMoved
 
 MAX_READ_LINES = 400
@@ -133,6 +134,7 @@ def grep(
             "too_large": [],
             "unreadable": [],
             "changed": [],
+            "listing_gaps": [],
         }
     )
     matches: list[dict] = []
@@ -168,6 +170,13 @@ def grep(
             continue
         except RevisionMoved:
             coverage["changed"].append(path)
+            index += 1
+            continue
+        except QuotaExhausted:
+            raise  # the run's budget, not this file: the scan stops and says why
+        except ConnectionDenied as exc:
+            # A file the connection's policy does not let us read is not scanned, and says so.
+            coverage["unreadable"].append({"path": path, "reason": f"denied by policy: {exc}"})
             index += 1
             continue
         lines = data.decode("utf-8", errors="replace").splitlines()
@@ -218,10 +227,12 @@ def grep(
     if timed_out_from is not None:
         next_cursor = {"entry": index, "after": None, "file_matches": 0}
 
-    complete = next_cursor is None
+    listing_gaps = coverage.setdefault("listing_gaps", [])
+    complete = next_cursor is None and not listing_gaps
     coverage_out = {
         **coverage,
         "complete": complete,
+        "more_pages": next_cursor is not None,
         "timed_out_from": timed_out_from,
         "matches_returned": len(matches),
         "options": {
@@ -263,6 +274,8 @@ def grep(
 
 def _skip_reason(entry, include, exclude, options, generated_policy, max_file_bytes) -> str | None:
     path = entry["path"]
+    if entry.get("listing_gap"):
+        return "listing_gap:" + str(entry.get("reason"))
     if entry["kind"] == "unreadable":
         return "unreadable:" + str(entry.get("reason"))
     if include and not _matches_globs(path, include):
@@ -283,7 +296,9 @@ def _skip_reason(entry, include, exclude, options, generated_policy, max_file_by
 
 
 def _count_skip(coverage: dict, reason: str, path: str) -> None:
-    if reason.startswith("unreadable:"):
+    if reason.startswith("listing_gap:"):
+        coverage.setdefault("listing_gaps", []).append(reason.split(":", 1)[1])
+    elif reason.startswith("unreadable:"):
         coverage["unreadable"].append({"path": path, "reason": reason.split(":", 1)[1]})
     elif reason == "too_large":
         coverage["too_large"].append(path)
@@ -318,6 +333,17 @@ def coverage_statement(pattern: str, revision: Revision, coverage: dict) -> str:
         skipped.append(f"{len(coverage['changed'])} changed since resolve")
     tail = f" Not scanned: {', '.join(skipped)}." if skipped else ""
     scanned = coverage["scanned_files"]
+    if (
+        coverage.get("listing_gaps")
+        and not coverage.get("timed_out_from")
+        and not coverage.get("more_pages")
+    ):
+        return (
+            f"Scan for {pattern!r} at revision {rev} covered only what the provider listed "
+            f"({'; '.join(coverage['listing_gaps'])}): matches in "
+            f"{coverage['files_with_matches']} of {scanned} scanned text files. No count or "
+            f"absence over the whole source follows.{tail}"
+        )
     if not coverage["complete"]:
         why = (
             f"timed out at {coverage['timed_out_from']}"

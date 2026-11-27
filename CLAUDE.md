@@ -67,7 +67,9 @@ pheasant-kb/
 │                                pheasant-kb/ the primary guide
 ├── examples/                  ← demo-agent-framework, vscode MCP config
 ├── extensions/                ← optional Pheasant packages and UI contributions (GTM,
-│                                harness: the agentic runtime, extensions/harness/README.md)
+│                                harness: the agentic runtime, extensions/harness/README.md;
+│                                it works through connected accounts only under
+│                                an operator's per-connection action policy)
 ├── scripts/                   ← release_version.py, sync_version.py
 ├── src/pheasant/
 │   ├── cli.py                 ← setup/start/serve/worker/sync/scan/queue/
@@ -264,7 +266,7 @@ pheasant-kb/
 │   └── telemetry/             ← metrics.py (Prometheus exposition),
 │                                interactions.py (the observation plane)
 ├── ui/                        ← React + Vite workspace (baked into the image)
-└── tests/                     ← 241 pytest modules, on PostgreSQL + NATS, no network
+└── tests/                     ← 243 pytest modules, on PostgreSQL + NATS, no network
 ```
 
 Key entities: **knowledge base** (`kb_id` = `pheasant.name`) → **sources** →

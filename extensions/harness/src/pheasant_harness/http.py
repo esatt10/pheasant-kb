@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from pheasant_harness import service
 from pheasant_harness.common import QueueFull
 from pheasant_harness.models import (
+    ApprovalRequest,
+    ConnectionPolicyRequest,
     DiscoverRequest,
     GrepRequest,
     ReadRequest,
@@ -189,6 +191,32 @@ def register_harness_routes(app: FastAPI, *, services: Any) -> None:
     @app.post("/harness/runs/{run_id}/effects/{operation_id}/resolve")
     def resolve_effect(run_id: str, operation_id: str, body: EffectBody) -> dict:
         return service.resolve_effect(services, run_id, operation_id, body.disposition)
+
+    @app.post("/harness/runs/{run_id}/approvals/{operation_id}")
+    def decide_approval(run_id: str, operation_id: str, body: ApprovalRequest) -> dict:
+        return service.decide_approval(services, run_id, operation_id, body)
+
+    @app.get("/harness/connections")
+    def connections() -> dict:
+        return service.connections(services)
+
+    @app.get("/harness/connections/calls")
+    def connection_calls(
+        run_id: str | None = None, connection: str | None = None, limit: int = 200
+    ) -> dict:
+        return service.connection_calls(services, run_id, connection, limit)
+
+    @app.put("/harness/connections/{connection}/policy")
+    def set_connection_policy(connection: str, body: ConnectionPolicyRequest) -> dict:
+        return service.set_connection_policy(services, connection, body)
+
+    @app.post("/harness/connections/{connection}/policy/disable")
+    def disable_connection_policy(connection: str) -> dict:
+        return service.disable_connection_policy(services, connection)
+
+    @app.get("/harness/connections/{connection}/policy/history")
+    def connection_policy_history(connection: str) -> dict:
+        return service.connection_policy_history(services, connection)
 
     @app.get("/harness/sandboxes")
     def sandboxes(run_id: str | None = None) -> dict:

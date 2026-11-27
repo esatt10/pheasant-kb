@@ -6,6 +6,7 @@ import base64
 from typing import Any
 
 from pheasant.security.identity import current_identity
+from pheasant_harness import connections as connections_mod
 from pheasant_harness import discovery as discovery_mod
 from pheasant_harness import investigate, runner
 from pheasant_harness.broker import TOOLS
@@ -14,6 +15,8 @@ from pheasant_harness.context import harness_for
 from pheasant_harness.coordinator import Coordinator
 from pheasant_harness.delivery import ADAPTERS
 from pheasant_harness.models import (
+    ApprovalRequest,
+    ConnectionPolicyRequest,
     DiscoverRequest,
     GrepRequest,
     ReadRequest,
@@ -57,8 +60,18 @@ def _kb(services: Any, knowledge_base: str | None) -> None:
 # -- registry ------------------------------------------------------------------
 
 
+def _direct(purpose: str):
+    """Requests a person makes through the API are audited as theirs."""
+    return connections_mod.caller(actor=actor(), purpose=purpose)
+
+
 def register(services: Any, request: RegisterRequest, knowledge_base: str | None = None) -> dict:
     _kb(services, knowledge_base)
+    with _direct("register"):
+        return _register(services, request)
+
+
+def _register(services: Any, request: RegisterRequest) -> dict:
     return harness_for(services).registry.register(
         request.uri,
         actor(),
@@ -83,7 +96,10 @@ def resolve(
     knowledge_base: str | None = None,
 ) -> dict:
     _kb(services, knowledge_base)
-    revision = harness_for(services).registry.resolve(registration_id, actor(), version_selector)
+    with _direct("resolve"):
+        revision = harness_for(services).registry.resolve(
+            registration_id, actor(), version_selector
+        )
     return {
         **revision.handle(),
         "unreadable": [e["path"] for e in revision.entries if e["kind"] == "unreadable"],
@@ -132,35 +148,38 @@ def enumerate_entries(
     _kb(services, knowledge_base)
     harness = harness_for(services)
     harness.registry.require(registration_id, actor(), "enumerate")
-    return investigate.enumerate_entries(
-        _revision(services, registration_id, revision), prefix, cursor, limit
-    )
+    with _direct("enumerate"):
+        return investigate.enumerate_entries(
+            _revision(services, registration_id, revision), prefix, cursor, limit
+        )
 
 
 def grep(services: Any, request: GrepRequest, knowledge_base: str | None = None) -> dict:
     _kb(services, knowledge_base)
     harness = harness_for(services)
     reg = harness.registry.require(request.registration_id, actor(), "grep")
-    return investigate.grep(
-        harness.registry.resolver(reg),
-        _revision(services, reg.id, request.revision),
-        request.pattern,
-        request.options,
-        request.cursor,
-    )
+    with _direct("grep"):
+        return investigate.grep(
+            harness.registry.resolver(reg),
+            _revision(services, reg.id, request.revision),
+            request.pattern,
+            request.options,
+            request.cursor,
+        )
 
 
 def read(services: Any, request: ReadRequest, knowledge_base: str | None = None) -> dict:
     _kb(services, knowledge_base)
     harness = harness_for(services)
     reg = harness.registry.require(request.registration_id, actor(), "read")
-    return investigate.read_range(
-        harness.registry.resolver(reg),
-        _revision(services, reg.id, request.revision),
-        request.path,
-        request.start_line,
-        request.end_line,
-    )
+    with _direct("read"):
+        return investigate.read_range(
+            harness.registry.resolver(reg),
+            _revision(services, reg.id, request.revision),
+            request.path,
+            request.start_line,
+            request.end_line,
+        )
 
 
 def discover(services: Any, request: DiscoverRequest, knowledge_base: str | None = None) -> dict:
@@ -187,9 +206,13 @@ def start_run(
 ) -> dict:
     _kb(services, knowledge_base)
     coordinator = _coordinator(services)
-    status = coordinator.start(
-        request.request, actor=actor(), client_key=request.client_key, tenant=request.request.tenant
-    )
+    with _direct("start"):
+        status = coordinator.start(
+            request.request,
+            actor=actor(),
+            client_key=request.client_key,
+            tenant=request.request.tenant,
+        )
     if background:
         runner.ensure_runner(coordinator.harness, coordinator.llm)
     return status
@@ -260,7 +283,10 @@ def _redact(detail: dict, readable: set[str]) -> dict:
 
 def run_detail(services: Any, run_id: str, knowledge_base: str | None = None) -> dict:
     _kb(services, knowledge_base)
-    return _redact(_owned(services, run_id).detail(run_id), _readable(services))
+    coordinator = _owned(services, run_id)
+    detail = _redact(coordinator.detail(run_id), _readable(services))
+    detail["connection_calls"] = coordinator.harness.connections.calls(run_id=run_id, limit=500)
+    return detail
 
 
 def run_events(
@@ -278,6 +304,124 @@ def run_events(
         "events": events,
         "next_after_seq": events[-1]["seq"] if events else after_seq,
         "state": coordinator.runs.get(run_id)["state"],
+    }
+
+
+def decide_approval(
+    services: Any,
+    run_id: str,
+    operation_id: str,
+    request: ApprovalRequest,
+    knowledge_base: str | None = None,
+) -> dict:
+    _kb(services, knowledge_base)
+    coordinator = _owned(services, run_id)
+    with _direct("approval"):
+        status = coordinator.decide_approval(
+            run_id,
+            operation_id,
+            request.decision,
+            actor(),
+            operator=is_operator(),
+            note=request.note,
+        )
+    if status["state"] == "delivering":
+        runner.ensure_runner(coordinator.harness, coordinator.llm)
+    return status
+
+
+# -- connections -----------------------------------------------------------------------
+
+
+def _require_policy_admin() -> None:
+    from pheasant.security.authorization import allowed
+
+    if not allowed("security.manage"):
+        raise AccessDenied(
+            "setting what the harness may do through a connection needs security.manage"
+        )
+
+
+def connections(services: Any, knowledge_base: str | None = None) -> dict:
+    """Connected accounts, what the harness could do through each, and what it may."""
+    _kb(services, knowledge_base)
+    if not is_operator():
+        raise AccessDenied("listing connections and their policies is an operator's view")
+    gateway = harness_for(services).connections
+    return {
+        "connections": gateway.connections(),
+        "actions": connections_mod.ACTIONS,
+        "never": list(connections_mod.NEVER),
+        "providers": {
+            name: {
+                "actions": list(cls.actions),
+                "resource_grammar": cls.grammar,
+                "download_hosts": list(cls.download_hosts),
+            }
+            for name, cls in connections_mod.ADAPTERS.items()
+        },
+        "defaults": {
+            "limits": connections_mod.DEFAULT_LIMITS,
+            "approval": connections_mod.DEFAULT_APPROVAL,
+        },
+    }
+
+
+def set_connection_policy(
+    services: Any,
+    connection: str,
+    request: ConnectionPolicyRequest,
+    knowledge_base: str | None = None,
+) -> dict:
+    _kb(services, knowledge_base)
+    _require_policy_admin()
+    return harness_for(services).connections.set_policy(
+        connection, request.model_dump(mode="json"), actor()
+    )
+
+
+def disable_connection_policy(
+    services: Any, connection: str, knowledge_base: str | None = None
+) -> dict:
+    _kb(services, knowledge_base)
+    _require_policy_admin()
+    return harness_for(services).connections.disable(connection, actor())
+
+
+def connection_policy_history(
+    services: Any, connection: str, knowledge_base: str | None = None
+) -> dict:
+    _kb(services, knowledge_base)
+    if not is_operator():
+        raise AccessDenied("a connection's policy history is an operator's view")
+    gateway = harness_for(services).connections
+    if gateway.policy(connection) is None:
+        raise NotFound(f"connection {connection!r} has no harness policy")
+    return {"connection": connection, "versions": gateway.history(connection)}
+
+
+def connection_calls(
+    services: Any,
+    run_id: str | None = None,
+    connection: str | None = None,
+    limit: int = 200,
+    knowledge_base: str | None = None,
+) -> dict:
+    """Every request the harness made, or refused to make, through a connection."""
+    _kb(services, knowledge_base)
+    if run_id:
+        _owned(services, run_id)
+    elif not is_operator():
+        raise AccessDenied("the region-wide connection audit is an operator's view; name a run")
+    calls = harness_for(services).connections.calls(
+        run_id=run_id, connection=connection, limit=limit
+    )
+    return {
+        "calls": calls,
+        "summary": {
+            outcome: sum(1 for c in calls if c["outcome"] == outcome)
+            for outcome in ("allowed", "cached", "denied", "failed")
+        },
     }
 
 
@@ -400,7 +544,16 @@ def contract(services: Any, knowledge_base: str | None = None) -> dict:
         "delivery_adapters": {
             name: cls(harness_for(services)).describe() for name, cls in ADAPTERS.items()
         },
-        "resolvers": ["git", "folder", "pheasant"],
+        "resolvers": ["git", "folder", "pheasant", "connection"],
+        "connections": {
+            "actions": connections_mod.ACTIONS,
+            "never": list(connections_mod.NEVER),
+            "providers": {
+                name: {"actions": list(cls.actions), "resource_grammar": cls.grammar}
+                for name, cls in connections_mod.ADAPTERS.items()
+            },
+            "default": "nothing: a connection is unusable until an operator sets its policy",
+        },
         "isolation": isolation_manifest(),
         "states": [
             "accepted",

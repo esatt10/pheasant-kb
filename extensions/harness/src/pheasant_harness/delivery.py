@@ -179,8 +179,46 @@ class FileAdapter(Adapter):
         return {"status": "absent"}
 
 
+class ConnectionAdapter(Adapter):
+    """A file in a repository or folder, written through a connected account.
+
+    Only what the connection's harness policy allows (``write`` on the target's
+    resource), only after the approval the policy asks for, conditional on the
+    expected version, and tagged with the operation id so reconciliation can find
+    it: a GitHub commit whose message names the operation, a Drive file whose
+    ``appProperties`` carry it.
+    """
+
+    name = "connection"
+    idempotent = True
+    observable = True
+
+    def describe(self) -> dict:
+        return {
+            **super().describe(),
+            "writes_through": "a connected account, under its harness policy",
+            "approval": "as the connection's policy requires (default: an operator approves)",
+            "providers": ["github", "google_drive"],
+        }
+
+    def dispatch(self, operation_id, target, payload, expected):
+        from pheasant_harness import connections
+
+        adapter, parsed = connections.parse_target(self.harness, target)
+        receipt = adapter.write(parsed, payload, operation_id, expected)
+        faults.hit("after_sink_commit")
+        return receipt
+
+    def reconcile(self, operation_id, target, payload_digest):
+        from pheasant_harness import connections
+
+        adapter, parsed = connections.parse_target(self.harness, target)
+        return adapter.reconcile(parsed, operation_id, payload_digest)
+
+
 ADAPTERS = {
-    cls.name: cls for cls in (RecordAdapter, TestSinkAdapter, BlindSinkAdapter, FileAdapter)
+    cls.name: cls
+    for cls in (RecordAdapter, TestSinkAdapter, BlindSinkAdapter, FileAdapter, ConnectionAdapter)
 }
 
 

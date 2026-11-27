@@ -5,7 +5,7 @@ export type RunState =
 export interface Registration {
   id: string;
   uri: string;
-  resolver: "git" | "folder" | "pheasant";
+  resolver: "git" | "folder" | "pheasant" | "connection";
   label: string;
   operations: string[];
   classification: string;
@@ -83,13 +83,83 @@ export interface RunStatus {
   cancel_requested: boolean;
   workflow_version: number;
   versions: Record<string, string | number>;
-  wait: { reason: string; input?: string[] } | null;
+  wait: RunWait | null;
   result: RunResult | null;
   steps: Record<string, number>;
   budget: Budget;
   effects: Effect[];
   created_at: number;
   updated_at: number;
+}
+
+export interface RunWait {
+  kind?: "approval" | string;
+  reason?: string;
+  input?: string[];
+  operation_id?: string;
+  payload_digest?: string;
+  connection?: string;
+  provider?: string;
+  action?: string;
+  resource?: string;
+  target?: string;
+  expected_target_version?: string | null;
+  requested_by?: string;
+  self_approval?: boolean;
+  preview?: string;
+}
+
+export interface ConnectionCall {
+  id: string;
+  run_id: string | null;
+  purpose: string;
+  actor: string;
+  connection: string;
+  provider: string;
+  action: string;
+  method: string;
+  host: string;
+  resource: string;
+  outcome: "allowed" | "cached" | "denied" | "failed";
+  status_code: number | null;
+  bytes: number;
+  reason: string | null;
+  policy_version: number | null;
+  flags: Record<string, unknown>;
+  at: number;
+}
+
+export interface ConnectionPolicy {
+  connection: string;
+  provider: string;
+  version: number;
+  actions: string[];
+  resources: string[];
+  write_resources: string[];
+  limits: Record<string, number>;
+  approval: { write: "required" | "none"; self_approval: boolean };
+  enabled: boolean;
+  updated_by: string;
+  updated_at: number;
+}
+
+export interface ConnectionInfo {
+  name: string;
+  provider: string;
+  status: string;
+  account: string | null;
+  supported: boolean;
+  offers: string[];
+  resource_grammar: string | null;
+  policy: ConnectionPolicy | null;
+}
+
+export interface ConnectionsOverview {
+  connections: ConnectionInfo[];
+  actions: Record<string, { kind: string; methods: string[]; description: string }>;
+  never: string[];
+  providers: Record<string, { actions: string[]; resource_grammar: string; download_hosts: string[] }>;
+  defaults: { limits: Record<string, number>; approval: { write: string; self_approval: boolean } };
 }
 
 export interface Step {
@@ -184,6 +254,7 @@ export interface RunDetail extends Omit<RunStatus, "steps"> {
   isolation: Record<string, unknown>;
   integrity: { ok: boolean; missing: { object: string; kind: string }[] };
   withheld_evidence?: string[];
+  connection_calls?: ConnectionCall[];
 }
 
 export interface RunEvent {

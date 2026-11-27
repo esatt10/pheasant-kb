@@ -146,18 +146,26 @@ def _exception(text: str) -> str:
     return quoted if quoted.lower().startswith("exception") else f"Exception: {quoted}"
 
 
-def _matching_line(text: str, patterns: list) -> str:
+def _matching_line(text: str, patterns: list, quoted: set[str] | None = None) -> str:
     """The sentence of a read window that the search matched, else its first line.
 
     One sentence, without its closing period, so the citation that follows stays
-    inside the sentence it supports.
+    inside the sentence it supports. Windows around nearby matches overlap, so a
+    sentence an earlier finding already quoted gives way to the next one this
+    window matched: two findings never repeat one line while dropping another.
     """
-    for line in text.splitlines():
-        if any(p.search(line) for p in patterns):
-            for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
-                if any(p.search(sentence) for p in patterns):
-                    return _quote(sentence)[:220]
-    return _quote(_first_line(text))
+    found = [
+        _quote(sentence)[:220]
+        for line in text.splitlines()
+        if any(p.search(line) for p in patterns)
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip())
+        if any(p.search(sentence) for p in patterns)
+    ]
+    fresh = [sentence for sentence in found if sentence not in (quoted or set())]
+    chosen = (fresh or found or [_quote(_first_line(text))])[0]
+    if quoted is not None:
+        quoted.add(chosen)
+    return chosen
 
 
 def _first_line(text: str) -> str:
@@ -429,6 +437,7 @@ class RulePlanner:
             searched.append(
                 re.compile(pattern if options.get("regex") else re.escape(pattern), flags)
             )
+        quoted: set[str] = set()
         for ev in ledger.evidence:
             if ev["method"] != "read":
                 continue
@@ -439,7 +448,7 @@ class RulePlanner:
             first, last = ev["locator"].get("lines", [1, 1])
             out.append(
                 f"- `{ev['locator']['path']}` lines {first}-{last}: "
-                f"{_matching_line(ev['extract'], searched)} [{ev['id']}]"
+                f"{_matching_line(ev['extract'], searched, quoted)} [{ev['id']}]"
             )
         if len(out) == 6:
             for step in ledger.done("grep"):

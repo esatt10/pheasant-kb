@@ -21,8 +21,12 @@ class BudgetLimits(BaseModel):
 
 
 class Destination(BaseModel):
-    adapter: Literal["record", "file", "test_sink", "blind_sink"] = "record"
-    target: str = ""
+    adapter: Literal["record", "file", "test_sink", "blind_sink", "connection"] = "record"
+    target: str = Field(
+        "",
+        description="For 'connection': connection://<name>/<owner>/<repo>/<path>?branch=<b> "
+        "(GitHub) or connection://<name>/<folder id>/<file name> (Drive).",
+    )
     expected_target_version: str | None = Field(
         None, description="Digest the target must still hold, or 'absent' to create only."
     )
@@ -104,7 +108,7 @@ class ResumeRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     uri: str
-    resolver: Literal["git", "folder", "pheasant"] | None = None
+    resolver: Literal["git", "folder", "pheasant", "connection"] | None = None
     label: str | None = None
     scope: dict[str, Any] = Field(default_factory=dict)
     freshness_policy: dict[str, Any] = Field(default_factory=dict)
@@ -126,6 +130,36 @@ class ReadRequest(BaseModel):
     revision: str | None = None
     start_line: int | None = None
     end_line: int | None = None
+
+
+class ConnectionPolicyRequest(BaseModel):
+    """What the harness may do through one connected account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actions: list[str] = Field(
+        default_factory=list, description="Any of list, read, write. Nothing else can be enabled."
+    )
+    resources: list[str] = Field(
+        default_factory=list,
+        description="Glob patterns over the provider's resource names that list and read may "
+        "touch: owner/repo:path (GitHub), <folder id>/<path> (Drive), <drive id>:<path> (365).",
+    )
+    write_resources: list[str] = Field(
+        default_factory=list,
+        description="Where writes may land: owner/repo@branch:path (GitHub), <folder id>/<name>.",
+    )
+    limits: dict[str, int] = Field(default_factory=dict)
+    approval: dict[str, Any] = Field(
+        default_factory=dict,
+        description="write: required|none (default required); self_approval: false by default.",
+    )
+    enabled: bool = True
+
+
+class ApprovalRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    note: str = Field("", max_length=2000)
 
 
 class DiscoverRequest(BaseModel):

@@ -3,7 +3,10 @@
 Reading, investigating and running are ``knowledge.use``: a run executes only
 with its caller's own grants, which the broker checks on every tool call.
 Changing what may be read (registrations, grants), resolving an uncertain
-external effect and operating sandboxes are ``sources.manage``.
+external effect and operating sandboxes are ``sources.manage``. Deciding what
+the harness may do through a connected account is ``security.manage``, the
+permission that connects accounts in the first place; approving a write through
+one is an operator's decision, which the service checks itself.
 """
 
 HTTP = {
@@ -29,6 +32,12 @@ HTTP = {
     ("GET", "/harness/runs/{run_id}/artifacts/{digest}"): "knowledge.use",
     ("GET", "/harness/runs/{run_id}/artifacts/{digest}/raw"): "knowledge.use",
     ("POST", "/harness/runs/{run_id}/effects/{operation_id}/resolve"): "sources.manage",
+    ("POST", "/harness/runs/{run_id}/approvals/{operation_id}"): "knowledge.use",
+    ("GET", "/harness/connections"): "sources.manage",
+    ("GET", "/harness/connections/calls"): "knowledge.use",
+    ("PUT", "/harness/connections/{connection}/policy"): "security.manage",
+    ("POST", "/harness/connections/{connection}/policy/disable"): "security.manage",
+    ("GET", "/harness/connections/{connection}/policy/history"): "sources.manage",
     ("GET", "/harness/sandboxes"): "sources.manage",
     ("POST", "/harness/sandboxes/reap"): "sources.manage",
 }
@@ -54,4 +63,10 @@ MCP = {
     "harness_get_artifact": "knowledge.use",
     "harness_resolve_effect": "sources.manage",
     "harness_reap_sandboxes": "sources.manage",
+    "harness_decide_approval": "knowledge.use",
+    "harness_list_connections": "sources.manage",
+    "harness_set_connection_policy": "security.manage",
+    "harness_disable_connection_policy": "security.manage",
+    "harness_connection_policy_history": "sources.manage",
+    "harness_connection_calls": "knowledge.use",
 }
